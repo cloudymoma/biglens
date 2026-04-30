@@ -2,6 +2,8 @@
 
 [![Build](https://github.com/cloudymoma/biglens/actions/workflows/build.yml/badge.svg)](https://github.com/cloudymoma/biglens/actions/workflows/build.yml)
 
+English | [简体中文](README_cn.md)
+
 A real-time BigQuery observability dashboard. BigLens queries BigQuery's `INFORMATION_SCHEMA` views to surface storage costs, compute slot usage, per-user spend, and optimization recommendations — all from a single dark-themed web UI.
 
 ![Storage Analysis](miscs/biglens_1.png)
