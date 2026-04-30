@@ -121,7 +121,3 @@ BigLens is built entirely on BigQuery's `INFORMATION_SCHEMA` — a set of read-o
 
 For full documentation, see the official Google Cloud reference:
 [BigQuery INFORMATION_SCHEMA Introduction](https://cloud.google.com/bigquery/docs/information-schema-intro)
-
-## License
-
-This project is provided as-is for internal use.
