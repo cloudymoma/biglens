@@ -1,6 +1,6 @@
-[![Build](https://github.com/OWNER/biglens/actions/workflows/build.yml/badge.svg)](https://github.com/OWNER/biglens/actions/workflows/build.yml)
-
 # BigLens
+
+[![Build](https://github.com/OWNER/biglens/actions/workflows/build.yml/badge.svg)](https://github.com/OWNER/biglens/actions/workflows/build.yml)
 
 A real-time BigQuery observability dashboard. BigLens queries BigQuery's `INFORMATION_SCHEMA` views to surface storage costs, compute slot usage, per-user spend, and optimization recommendations — all from a single dark-themed web UI.
 
