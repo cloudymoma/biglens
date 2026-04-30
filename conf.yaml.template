@@ -1,0 +1,7 @@
+server:
+  port: 1983
+  mode: "debug" # or "release"
+
+bigquery:
+  project_id: "your-gcp-project-id"
+  credentials_path: "/path/to/service-account.json" # Optional
