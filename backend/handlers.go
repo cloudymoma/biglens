@@ -215,6 +215,187 @@ func (h *APIHandler) InsightsDashboard(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, data)
 }
 
+// --- Dashboard 5: IAM Security ---
+
+type IAMDashboardData struct {
+	Summary   *IAMSummary      `json:"summary"`
+	Timeline  []UsageTimepoint `json:"timeline"`
+	TopCallers []TopCaller     `json:"top_callers"`
+	Inactive7  []InactiveEmail `json:"inactive_7d"`
+	Inactive30 []InactiveEmail `json:"inactive_30d"`
+	Inactive90 []InactiveEmail `json:"inactive_90d"`
+}
+
+func (h *APIHandler) IAMDashboard(w http.ResponseWriter, r *http.Request) {
+	filters := ParseFilters(r)
+	emails := parseEmails(r)
+	key := filters.CacheKey("iam_dashboard") + ":" + joinEmails(emails)
+
+	if cached, ok := h.cache.Get(key); ok {
+		writeJSON(w, cached)
+		return
+	}
+
+	var data IAMDashboardData
+	g, ctx := errgroup.WithContext(r.Context())
+
+	g.Go(func() error {
+		s, err := h.bq.GetIAMSummary(ctx, filters.Region, filters.TimeRange)
+		if err != nil {
+			return err
+		}
+		data.Summary = s
+		return nil
+	})
+
+	g.Go(func() error {
+		t, err := h.bq.GetUsageTimeline(ctx, filters.Region, emails, filters.TimeRange)
+		if err != nil {
+			return err
+		}
+		data.Timeline = t
+		return nil
+	})
+
+	g.Go(func() error {
+		tc, err := h.bq.GetTopCallers(ctx, filters.Region, emails, filters.TimeRange, 20)
+		if err != nil {
+			return err
+		}
+		data.TopCallers = tc
+		return nil
+	})
+
+	g.Go(func() error {
+		i, err := h.bq.GetInactiveEmails(ctx, filters.Region, 7)
+		if err != nil {
+			return err
+		}
+		data.Inactive7 = i
+		return nil
+	})
+
+	g.Go(func() error {
+		i, err := h.bq.GetInactiveEmails(ctx, filters.Region, 30)
+		if err != nil {
+			return err
+		}
+		data.Inactive30 = i
+		return nil
+	})
+
+	g.Go(func() error {
+		i, err := h.bq.GetInactiveEmails(ctx, filters.Region, 90)
+		if err != nil {
+			return err
+		}
+		data.Inactive90 = i
+		return nil
+	})
+
+	if err := g.Wait(); err != nil {
+		writeError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	h.cache.Set(key, &data)
+	writeJSON(w, &data)
+}
+
+func (h *APIHandler) SearchEmails(w http.ResponseWriter, r *http.Request) {
+	region := r.URL.Query().Get("region")
+	if region == "" {
+		region = "us"
+	}
+	prefix := r.URL.Query().Get("q")
+
+	emails, err := h.bq.SearchEmails(r.Context(), region, prefix, 20)
+	if err != nil {
+		writeError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if emails == nil {
+		emails = []string{}
+	}
+	writeJSON(w, emails)
+}
+
+func parseEmails(r *http.Request) []string {
+	raw := r.URL.Query().Get("emails")
+	if raw == "" {
+		return nil
+	}
+	var out []string
+	for _, e := range splitTrimmed(raw, ",") {
+		if e != "" {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+func joinEmails(emails []string) string {
+	if len(emails) == 0 {
+		return ""
+	}
+	result := ""
+	for i, e := range emails {
+		if i > 0 {
+			result += ","
+		}
+		result += e
+	}
+	return result
+}
+
+func splitTrimmed(s, sep string) []string {
+	parts := make([]string, 0)
+	for _, p := range splitString(s, sep) {
+		trimmed := trimSpace(p)
+		if trimmed != "" {
+			parts = append(parts, trimmed)
+		}
+	}
+	return parts
+}
+
+func splitString(s, sep string) []string {
+	if s == "" {
+		return nil
+	}
+	var result []string
+	for {
+		i := indexOf(s, sep)
+		if i < 0 {
+			result = append(result, s)
+			break
+		}
+		result = append(result, s[:i])
+		s = s[i+len(sep):]
+	}
+	return result
+}
+
+func indexOf(s, sub string) int {
+	for i := 0; i <= len(s)-len(sub); i++ {
+		if s[i:i+len(sub)] == sub {
+			return i
+		}
+	}
+	return -1
+}
+
+func trimSpace(s string) string {
+	start, end := 0, len(s)
+	for start < end && (s[start] == ' ' || s[start] == '\t') {
+		start++
+	}
+	for end > start && (s[end-1] == ' ' || s[end-1] == '\t') {
+		end--
+	}
+	return s[start:end]
+}
+
 // --- Regions ---
 
 var bqRegions = []string{

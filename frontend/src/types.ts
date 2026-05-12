@@ -75,3 +75,43 @@ export interface Recommendation {
 export interface InsightsDashboardData {
   recommendations: Recommendation[] | null;
 }
+
+// --- IAM Security ---
+
+export interface IAMSummary {
+  total_emails: number;
+  service_accounts: number;
+  human_users: number;
+  total_calls: number;
+}
+
+export interface UsageTimepoint {
+  bucket: string;
+  email: string;
+  call_count: number;
+}
+
+export interface TopCaller {
+  email: string;
+  total_calls: number;
+  total_slot_ms: number;
+  total_bytes: number;
+  avg_duration_sec: number;
+  last_active: string;
+}
+
+export interface InactiveEmail {
+  email: string;
+  last_active: string;
+  days_idle: number;
+  total_calls: number;
+}
+
+export interface IAMDashboardData {
+  summary: IAMSummary | null;
+  timeline: UsageTimepoint[] | null;
+  top_callers: TopCaller[] | null;
+  inactive_7d: InactiveEmail[] | null;
+  inactive_30d: InactiveEmail[] | null;
+  inactive_90d: InactiveEmail[] | null;
+}

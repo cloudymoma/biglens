@@ -5,6 +5,7 @@ import type {
   ComputeDashboardData,
   CostDashboardData,
   InsightsDashboardData,
+  IAMDashboardData,
 } from './types';
 
 function filterParams(filters: QueryFilters): Record<string, string> {
@@ -35,6 +36,22 @@ export async function fetchCostDashboard(filters: QueryFilters): Promise<CostDas
 export async function fetchInsightsDashboard(filters: QueryFilters): Promise<InsightsDashboardData> {
   const { data } = await axios.get('/api/dashboard/insights', { params: filterParams(filters) });
   return data;
+}
+
+export async function fetchIAMDashboard(region: string, emails: string[], timeRange: string): Promise<IAMDashboardData> {
+  const params: Record<string, string> = { region, time_range: timeRange };
+  if (emails.length > 0) params.emails = emails.join(',');
+  const { data } = await axios.get('/api/dashboard/iam', { params });
+  return data;
+}
+
+export async function fetchEmailSuggestions(region: string, query: string): Promise<string[]> {
+  try {
+    const { data } = await axios.get('/api/iam/emails', { params: { region, q: query } });
+    return data || [];
+  } catch {
+    return [];
+  }
 }
 
 export async function fetchRegions(): Promise<string[]> {
