@@ -15,6 +15,14 @@ type Config struct {
 		ProjectID       string `yaml:"project_id"`
 		CredentialsPath string `yaml:"credentials_path"`
 	} `yaml:"bigquery"`
+	Catalog struct {
+		BundlePath string `yaml:"bundle_path"`
+		Dataplex   struct {
+			ProjectID string `yaml:"project_id"`
+			Location  string `yaml:"location"`
+		} `yaml:"dataplex"`
+		LineageLocation string `yaml:"lineage_location"`
+	} `yaml:"catalog"`
 }
 
 func LoadConfig(path string) (*Config, error) {

@@ -17,6 +17,7 @@ export default defineConfig({
         manualChunks(id) {
           if (id.includes('node_modules')) {
             if (id.includes('echarts') || id.includes('zrender')) return 'echarts-vendor';
+            if (id.includes('three') || id.includes('force-graph') || id.includes('d3-')) return 'graph-vendor';
             if (id.includes('react')) return 'react-vendor';
             if (id.includes('lucide')) return 'lucide-vendor';
             return 'vendor';

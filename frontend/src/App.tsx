@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
   ChevronDown, ChevronLeft, ChevronRight, Server, Layers, Search, RefreshCw,
-  Database, BarChart3, DollarSign, Lightbulb, Clock, Shield,
+  Database, BarChart3, DollarSign, Lightbulb, Clock, Shield, Network,
 } from 'lucide-react';
 import type { QueryFilters } from './types';
 import { fetchConfig, fetchDatasets, fetchTables, fetchRegions } from './api';
@@ -10,6 +10,7 @@ import ComputeDashboard from './dashboards/ComputeDashboard';
 import CostDashboard from './dashboards/CostDashboard';
 import InsightsDashboard from './dashboards/InsightsDashboard';
 import IAMDashboard from './dashboards/IAMDashboard';
+import CatalogView from './catalog/CatalogView';
 
 type Tab = 'storage' | 'compute' | 'cost' | 'insights';
 
@@ -23,6 +24,7 @@ const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
 const PRODUCTS: { id: string; label: string; icon: React.ReactNode }[] = [
   { id: 'bigquery', label: 'BigQuery', icon: <Database size={20} /> },
   { id: 'iam',      label: 'IAM Security', icon: <Shield size={20} /> },
+  { id: 'dataplex', label: 'Dataplex', icon: <Network size={20} /> },
 ];
 
 function App() {
@@ -153,7 +155,9 @@ function App() {
             <div className="flex items-center gap-2.5">
               {activeProduct === 'bigquery'
                 ? <Database size={15} className="text-cyan-400" />
-                : <Shield size={15} className="text-amber-400" />
+                : activeProduct === 'iam'
+                  ? <Shield size={15} className="text-amber-400" />
+                  : <Network size={15} className="text-cyan-400" />
               }
               <h2 className="text-sm font-semibold text-white tracking-tight">
                 {PRODUCTS.find(p => p.id === activeProduct)?.label}
@@ -230,6 +234,21 @@ function App() {
             </div>
           )}
 
+          {activeProduct === 'dataplex' && (
+            <div className="px-3 mt-4">
+              <div className="p-3 rounded-xl border border-cyan-500/10" style={{ background: '#111114' }}>
+                <p className="text-[10px] font-semibold text-cyan-400/70 uppercase tracking-wider mb-2">Knowledge Catalog</p>
+                <p className="text-[11px] text-zinc-500 leading-relaxed">
+                  Explore your Dataplex catalog as an Open Knowledge Format graph. Import live entries, then search, browse, and edit concepts. Nodes are colored by type; edges are relationships.
+                </p>
+              </div>
+              <div className="mt-3 p-3 rounded-xl border border-zinc-800/40" style={{ background: '#111114' }}>
+                <p className="text-[9px] text-zinc-600 uppercase font-semibold tracking-wider mb-1">Bundle</p>
+                <p className="text-[11px] font-mono text-zinc-400 truncate">{config?.Catalog?.BundlePath || 'okf-bundle'}</p>
+              </div>
+            </div>
+          )}
+
           <div className="mt-auto px-3 pb-4">
             <div className="p-3 rounded-xl border border-zinc-800/40 flex items-center gap-3" style={{ background: '#111114' }}>
               <div className="p-2 rounded-lg border border-emerald-500/15" style={{ background: '#052e1610' }}>
@@ -258,26 +277,37 @@ function App() {
               <h2 className="text-2xl font-bold tracking-tight text-white">
                 {activeProduct === 'bigquery'
                   ? `${TABS.find(t => t.id === activeTab)?.label} Analysis`
-                  : 'IAM Security'
+                  : activeProduct === 'iam'
+                    ? 'IAM Security'
+                    : 'Dataplex Knowledge Catalog'
                 }
               </h2>
-              <p className="text-xs text-zinc-500 mt-1 flex items-center gap-1.5">
-                <Clock size={11} />
-                <span className="text-zinc-600">region-{selectedRegion}</span>
-                <span>|</span>
-                {timeRange === '1d' ? 'Last 24 hours' : timeRange === '7d' ? 'Last 7 days' : timeRange === '30d' ? 'Last 30 days' : 'Last 90 days'}
-                {activeProduct === 'bigquery' && selectedDataset && <span className="text-zinc-600">| {selectedDataset}{selectedTable ? `.${selectedTable}` : ''}</span>}
-              </p>
+              {activeProduct === 'dataplex' ? (
+                <p className="text-xs text-zinc-500 mt-1 flex items-center gap-1.5">
+                  <Network size={11} />
+                  <span className="text-zinc-600">Open Knowledge Format graph</span>
+                </p>
+              ) : (
+                <p className="text-xs text-zinc-500 mt-1 flex items-center gap-1.5">
+                  <Clock size={11} />
+                  <span className="text-zinc-600">region-{selectedRegion}</span>
+                  <span>|</span>
+                  {timeRange === '1d' ? 'Last 24 hours' : timeRange === '7d' ? 'Last 7 days' : timeRange === '30d' ? 'Last 30 days' : 'Last 90 days'}
+                  {activeProduct === 'bigquery' && selectedDataset && <span className="text-zinc-600">| {selectedDataset}{selectedTable ? `.${selectedTable}` : ''}</span>}
+                </p>
+              )}
             </div>
 
-            <button
-              onClick={() => setRefreshKey(k => k + 1)}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all border cursor-pointer"
-              style={{ background: 'linear-gradient(135deg, #0e7490, #164e63)', borderColor: '#0e749060', color: '#e0f2fe' }}
-            >
-              <RefreshCw size={14} />
-              Refresh
-            </button>
+            {activeProduct !== 'dataplex' && (
+              <button
+                onClick={() => setRefreshKey(k => k + 1)}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all border cursor-pointer"
+                style={{ background: 'linear-gradient(135deg, #0e7490, #164e63)', borderColor: '#0e749060', color: '#e0f2fe' }}
+              >
+                <RefreshCw size={14} />
+                Refresh
+              </button>
+            )}
           </header>
 
           {/* Dashboard content */}
@@ -292,6 +322,7 @@ function App() {
           {activeProduct === 'iam' && (
             <IAMDashboard region={selectedRegion} timeRange={timeRange} />
           )}
+          {activeProduct === 'dataplex' && <CatalogView />}
         </div>
       </main>
     </div>

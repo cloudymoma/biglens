@@ -82,6 +82,13 @@ func main() {
 	mux.Handle("/api/dashboard/iam", h(api.IAMDashboard))
 	mux.Handle("/api/iam/emails", h(api.SearchEmails))
 
+	// Dataplex / Knowledge Catalog (OKF bundle) endpoints
+	mux.Handle("/api/catalog/graph", h(api.CatalogGraph))
+	mux.Handle("/api/catalog/search", h(api.CatalogSearch))
+	mux.Handle("/api/catalog/concept", h(api.CatalogConcept))
+	mux.Handle("/api/catalog/types", h(api.CatalogTypes))
+	mux.Handle("/api/catalog/import", h(api.CatalogImport))
+
 	// Individual endpoints
 	mux.Handle("/api/storage", h(api.StorageStats))
 	mux.Handle("/api/slots", h(api.SlotUsage))

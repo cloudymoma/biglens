@@ -100,17 +100,63 @@ BigLens 提供四个仪表盘视图，均基于 `INFORMATION_SCHEMA` 查询驱�
 - **用户邮箱** — 按用户或服务账号隔离指标
 - **时间范围** — 24 小时、7 天、30 天或 90 天回溯
 
+## Dataplex 知识目录
+
+**Dataplex** 视图将数据目录呈现为可搜索、可浏览、可编辑的 2D/3D 交互式图谱。
+它基于
+[开放知识格式（OKF）](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md)：
+一个对 git 友好的 markdown 文件集合，每个文件是一个*概念*（节点），文件之间的
+markdown 链接即为*边*。
+
+- **图谱** — 力导向布局，可在 **2D** 与 **3D** 间切换。节点按 `type` 着色
+  （BigQuery 表 / 视图 / 数据集、术语、指标等），边表示关系。
+- **底部标签页** — **搜索**（按名称、类型或标签）、**详情**（所选节点的
+  frontmatter、正文与关联）、**编辑**（创建、更新、删除概念，直接写入 markdown 包）。
+- **从 Dataplex 导入** — 通过 Dataplex 通用目录的 `SearchEntries` 拉取实时条目
+  写入 OKF 包，并生成两类边：
+  - **包含关系** — `数据集 ⊃ 表`，由条目层级推导。
+  - **血缘关系** — 源表 → 派生表的 ETL 数据流，来自
+    [Data Lineage API](https://cloud.google.com/data-catalog/docs/concepts/about-data-lineage)
+    （尽力而为；若该 API 未启用或无血缘记录，导入仍会成功并生成包含关系边，
+    同时提示血缘已跳过）。
+  编辑仅保存在本地包中（可通过 git 回滚），**不会**写回 Dataplex。
+
+在 `conf.yaml` 中配置：
+
+```yaml
+catalog:
+  bundle_path: "okf-bundle"   # OKF markdown 包所在目录
+  dataplex:
+    project_id: ""            # 为空时回退到 bigquery.project_id
+    location: "global"        # Dataplex 搜索区域，如 "global" 或 "us"
+  lineage_location: "us"      # Data Lineage API 区域（区域性，不可为 "global"）
+```
+
+运行时目录 `okf-bundle/` 已被 git 忽略（可能含导入的元数据）。仓库自带参考示例
+`okf-bundle.sample/`，导入前可复制进来查看图谱：
+
+```bash
+cp -r okf-bundle.sample/. okf-bundle/
+```
+
+导入需要 `roles/dataplex.catalogViewer`；血缘边还需启用 Data Lineage API 并具备
+`roles/datalineage.viewer` 权限。
+
 ## 架构
 
 ```
-frontend/          React 19 + Vite + ECharts + Tailwind CSS v4
-backend/           Go net/http 服务
-  main.go          HTTP 服务、路由、中间件
-  bigquery.go      所有 INFORMATION_SCHEMA 查询
-  handlers.go      仪表盘接口，使用 errgroup 并发查询
-  cache.go         内存 TTL 缓存（sync.Map，10 分钟过期）
-  filters.go       全局筛选器解析与 SQL 条件构建
-  config.go        YAML 配置加载
+frontend/            React 19 + Vite + ECharts + Tailwind CSS v4
+  catalog/           Dataplex 图谱视图（react-force-graph 2D/3D、three.js）
+backend/             Go net/http 服务
+  main.go            HTTP 服务、路由、中间件
+  bigquery.go        所有 INFORMATION_SCHEMA 查询
+  handlers.go        仪表盘接口，使用 errgroup 并发查询
+  catalog_handlers.go  OKF 图谱/搜索/概念/导入接口
+  okf.go             OKF 包引擎（解析、构图、读写概念）
+  catalog_dataplex.go  Dataplex SearchEntries -> OKF 概念映射
+  cache.go           内存 TTL 缓存（sync.Map，10 分钟过期）
+  filters.go         全局筛选器解析与 SQL 条件构建
+  config.go          YAML 配置加载
 ```
 
 后端使用 `errgroup` 对同一仪表盘的所有组件查询并行执行，并将结果缓存 10 分钟以减少 BigQuery API 调用。

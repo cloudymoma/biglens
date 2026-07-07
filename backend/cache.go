@@ -38,3 +38,7 @@ func (c *Cache) Set(key string, data any) {
 		expiresAt: time.Now().Add(c.ttl),
 	})
 }
+
+func (c *Cache) Delete(key string) {
+	c.store.Delete(key)
+}

@@ -5,3 +5,10 @@ server:
 bigquery:
   project_id: "your-gcp-project-id"
   credentials_path: "/path/to/service-account.json" # Optional
+
+catalog:
+  bundle_path: "okf-bundle"   # directory holding the OKF knowledge bundle (markdown)
+  dataplex:
+    project_id: ""            # defaults to bigquery.project_id when empty
+    location: "global"        # Dataplex search location, e.g. "global" or "us"
+  lineage_location: "us"      # Data Lineage API region (regional, not "global") — usually your BQ job region

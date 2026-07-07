@@ -1,0 +1,415 @@
+package main
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+
+	"gopkg.in/yaml.v3"
+)
+
+// OKF (Open Knowledge Format) bundle engine.
+//
+// A bundle is a directory tree of UTF-8 markdown files. Each non-reserved
+// .md file is a Concept (a graph node); its kind is the free-text `type`
+// frontmatter field. Markdown links between concepts are directed edges.
+// Reserved filenames (index.md, log.md) are not concepts.
+
+const (
+	okfExt      = ".md"
+	indexFile   = "index.md"
+	logFile     = "log.md"
+	frontDelim  = "---"
+)
+
+// Concept is one OKF knowledge document.
+type Concept struct {
+	ID          string   `json:"id"`          // path minus .md, forward-slashed
+	Type        string   `json:"type"`        // free-text kind -> drives node color
+	Title       string   `json:"title"`
+	Description string   `json:"description"`
+	Resource    string   `json:"resource"`    // canonical URI of the underlying asset
+	Tags        []string `json:"tags"`
+	Timestamp   string   `json:"timestamp"`
+	Body        string   `json:"body"`        // markdown after frontmatter
+	Links       []string `json:"links"`       // resolved target concept IDs
+}
+
+type frontmatter struct {
+	Type        string   `yaml:"type"`
+	Title       string   `yaml:"title,omitempty"`
+	Description string   `yaml:"description,omitempty"`
+	Resource    string   `yaml:"resource,omitempty"`
+	Tags        []string `yaml:"tags,omitempty"`
+	Timestamp   string   `yaml:"timestamp,omitempty"`
+}
+
+// GraphNode / GraphEdge / Graph are the serialized shapes consumed by the
+// force-graph frontend.
+type GraphNode struct {
+	ID          string   `json:"id"`
+	Title       string   `json:"title"`
+	Type        string   `json:"type"`
+	Description string   `json:"description"`
+	Resource    string   `json:"resource"`
+	Tags        []string `json:"tags"`
+}
+
+type GraphEdge struct {
+	Source string `json:"source"`
+	Target string `json:"target"`
+}
+
+type Graph struct {
+	Nodes []GraphNode `json:"nodes"`
+	Edges []GraphEdge `json:"edges"`
+}
+
+// ConceptDetail is a single concept plus its immediate neighbors.
+type ConceptDetail struct {
+	Concept   Concept     `json:"concept"`
+	Neighbors []GraphNode `json:"neighbors"`
+}
+
+// OKFBundle is a handle to a bundle directory on disk.
+type OKFBundle struct {
+	root string
+}
+
+func NewOKFBundle(path string) *OKFBundle {
+	if path == "" {
+		path = "okf-bundle"
+	}
+	return &OKFBundle{root: path}
+}
+
+var linkRe = regexp.MustCompile(`\[[^\]]*\]\(([^)]+)\)`)
+
+// safePath resolves a concept ID to an absolute .md path inside the bundle
+// root, rejecting any path that escapes the root (traversal protection).
+func (b *OKFBundle) safePath(id string) (string, error) {
+	id = strings.TrimSuffix(strings.TrimPrefix(id, "/"), okfExt)
+	if id == "" {
+		return "", fmt.Errorf("empty concept id")
+	}
+	rootAbs, err := filepath.Abs(b.root)
+	if err != nil {
+		return "", err
+	}
+	full := filepath.Clean(filepath.Join(rootAbs, filepath.FromSlash(id)+okfExt))
+	rel, err := filepath.Rel(rootAbs, full)
+	if err != nil {
+		return "", err
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return "", fmt.Errorf("concept id escapes bundle root: %q", id)
+	}
+	return full, nil
+}
+
+// idFromPath turns an absolute/relative .md file path into a bundle concept ID.
+func (b *OKFBundle) idFromPath(path string) (string, error) {
+	rootAbs, err := filepath.Abs(b.root)
+	if err != nil {
+		return "", err
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(rootAbs, abs)
+	if err != nil {
+		return "", err
+	}
+	return filepath.ToSlash(strings.TrimSuffix(rel, okfExt)), nil
+}
+
+func isReserved(name string) bool {
+	return name == indexFile || name == logFile
+}
+
+// splitFrontmatter separates a leading YAML frontmatter block (delimited by
+// "---") from the markdown body. Returns the raw YAML and the body.
+func splitFrontmatter(content string) (string, string) {
+	s := strings.TrimPrefix(content, string(rune(0xFEFF))) // strip BOM
+	if !strings.HasPrefix(s, frontDelim) {
+		return "", content
+	}
+	rest := s[len(frontDelim):]
+	if !strings.HasPrefix(rest, "\n") && !strings.HasPrefix(rest, "\r\n") {
+		return "", content
+	}
+	// Find the closing delimiter on its own line.
+	lines := strings.Split(rest, "\n")
+	var yamlLines []string
+	for i := 1; i < len(lines); i++ {
+		if strings.TrimRight(lines[i], "\r") == frontDelim {
+			body := strings.Join(lines[i+1:], "\n")
+			return strings.Join(yamlLines, "\n"), strings.TrimPrefix(body, "\n")
+		}
+		yamlLines = append(yamlLines, lines[i])
+	}
+	return "", content // no closing delimiter; treat all as body
+}
+
+// resolveLink converts a markdown href into a target concept ID relative to
+// the linking concept. Returns "" for external links (http, mailto, etc.).
+func resolveLink(href, fromID string) string {
+	href = strings.TrimSpace(href)
+	if href == "" {
+		return ""
+	}
+	if i := strings.IndexAny(href, "#?"); i >= 0 {
+		href = href[:i]
+	}
+	if href == "" {
+		return ""
+	}
+	lower := strings.ToLower(href)
+	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") ||
+		strings.HasPrefix(lower, "mailto:") || strings.Contains(href, "://") {
+		return ""
+	}
+	href = strings.TrimSuffix(href, okfExt)
+
+	var target string
+	if strings.HasPrefix(href, "/") {
+		target = strings.TrimPrefix(href, "/") // bundle-absolute
+	} else {
+		target = filepath.ToSlash(filepath.Join(filepath.Dir(fromID), href)) // relative
+	}
+	target = strings.TrimPrefix(target, "./")
+	return target
+}
+
+// extractLinks returns the de-duplicated resolved target IDs found in a body.
+func extractLinks(body, fromID string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, m := range linkRe.FindAllStringSubmatch(body, -1) {
+		if t := resolveLink(m[1], fromID); t != "" && t != fromID && !seen[t] {
+			seen[t] = true
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+func (b *OKFBundle) parseContent(id, content string) Concept {
+	yamlPart, body := splitFrontmatter(content)
+	var fm frontmatter
+	if yamlPart != "" {
+		_ = yaml.Unmarshal([]byte(yamlPart), &fm)
+	}
+	title := fm.Title
+	if title == "" {
+		title = filepath.Base(id)
+	}
+	return Concept{
+		ID:          id,
+		Type:        fm.Type,
+		Title:       title,
+		Description: fm.Description,
+		Resource:    fm.Resource,
+		Tags:        fm.Tags,
+		Timestamp:   fm.Timestamp,
+		Body:        body,
+		Links:       extractLinks(body, id),
+	}
+}
+
+// ListConcepts walks the bundle and parses every non-reserved markdown file.
+func (b *OKFBundle) ListConcepts() ([]Concept, error) {
+	if _, err := os.Stat(b.root); os.IsNotExist(err) {
+		return nil, nil // empty bundle is valid
+	}
+	var concepts []Concept
+	err := filepath.Walk(b.root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() || filepath.Ext(path) != okfExt || isReserved(info.Name()) {
+			return nil
+		}
+		raw, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return rerr
+		}
+		id, ierr := b.idFromPath(path)
+		if ierr != nil {
+			return ierr
+		}
+		concepts = append(concepts, b.parseContent(id, string(raw)))
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("walk bundle: %w", err)
+	}
+	sort.Slice(concepts, func(i, j int) bool { return concepts[i].ID < concepts[j].ID })
+	return concepts, nil
+}
+
+func conceptNode(c Concept) GraphNode {
+	return GraphNode{
+		ID: c.ID, Title: c.Title, Type: c.Type,
+		Description: c.Description, Resource: c.Resource, Tags: c.Tags,
+	}
+}
+
+// BuildGraph returns nodes for every concept and edges for every markdown
+// link whose target is also a concept (dangling links are dropped so the
+// force-graph never references a missing node).
+func (b *OKFBundle) BuildGraph() (*Graph, error) {
+	concepts, err := b.ListConcepts()
+	if err != nil {
+		return nil, err
+	}
+	exists := make(map[string]bool, len(concepts))
+	for _, c := range concepts {
+		exists[c.ID] = true
+	}
+	g := &Graph{Nodes: []GraphNode{}, Edges: []GraphEdge{}}
+	for _, c := range concepts {
+		g.Nodes = append(g.Nodes, conceptNode(c))
+		for _, t := range c.Links {
+			if exists[t] {
+				g.Edges = append(g.Edges, GraphEdge{Source: c.ID, Target: t})
+			}
+		}
+	}
+	return g, nil
+}
+
+// GetConcept loads one concept plus its immediate neighbors (out-links and
+// in-links).
+func (b *OKFBundle) GetConcept(id string) (*ConceptDetail, error) {
+	path, err := b.safePath(id)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	cid, err := b.idFromPath(path)
+	if err != nil {
+		return nil, err
+	}
+	c := b.parseContent(cid, string(raw))
+
+	concepts, err := b.ListConcepts()
+	if err != nil {
+		return nil, err
+	}
+	byID := make(map[string]Concept, len(concepts))
+	for _, x := range concepts {
+		byID[x.ID] = x
+	}
+	seen := map[string]bool{c.ID: true}
+	var neighbors []GraphNode
+	for _, t := range c.Links { // out-links
+		if n, ok := byID[t]; ok && !seen[t] {
+			seen[t] = true
+			neighbors = append(neighbors, conceptNode(n))
+		}
+	}
+	for _, x := range concepts { // in-links
+		if seen[x.ID] {
+			continue
+		}
+		for _, t := range x.Links {
+			if t == c.ID {
+				seen[x.ID] = true
+				neighbors = append(neighbors, conceptNode(x))
+				break
+			}
+		}
+	}
+	return &ConceptDetail{Concept: c, Neighbors: neighbors}, nil
+}
+
+// Search returns nodes matching a case-insensitive query over id/title/
+// description/tags, optionally filtered by exact type.
+func (b *OKFBundle) Search(query, typeFilter string) ([]GraphNode, error) {
+	concepts, err := b.ListConcepts()
+	if err != nil {
+		return nil, err
+	}
+	q := strings.ToLower(strings.TrimSpace(query))
+	out := []GraphNode{}
+	for _, c := range concepts {
+		if typeFilter != "" && c.Type != typeFilter {
+			continue
+		}
+		if q != "" && !conceptMatches(c, q) {
+			continue
+		}
+		out = append(out, conceptNode(c))
+	}
+	return out, nil
+}
+
+// serializeConcept renders a concept back to OKF markdown (frontmatter + body).
+func serializeConcept(c Concept) string {
+	if c.Type == "" {
+		c.Type = "Untyped"
+	}
+	fm := frontmatter{
+		Type:        c.Type,
+		Title:       c.Title,
+		Description: c.Description,
+		Resource:    c.Resource,
+		Tags:        c.Tags,
+		Timestamp:   c.Timestamp,
+	}
+	y, _ := yaml.Marshal(&fm)
+	body := strings.TrimLeft(c.Body, "\n")
+	return frontDelim + "\n" + string(y) + frontDelim + "\n\n" + body + "\n"
+}
+
+// WriteConcept upserts a concept to disk atomically (temp file + rename),
+// constrained to the bundle root.
+func (b *OKFBundle) WriteConcept(c Concept) error {
+	path, err := b.safePath(c.ID)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create concept dir: %w", err)
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(serializeConcept(c)), 0o644); err != nil {
+		return fmt.Errorf("write concept: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return fmt.Errorf("commit concept: %w", err)
+	}
+	return nil
+}
+
+// DeleteConcept removes a concept file, constrained to the bundle root.
+func (b *OKFBundle) DeleteConcept(id string) error {
+	path, err := b.safePath(id)
+	if err != nil {
+		return err
+	}
+	return os.Remove(path)
+}
+
+func conceptMatches(c Concept, q string) bool {
+	if strings.Contains(strings.ToLower(c.ID), q) ||
+		strings.Contains(strings.ToLower(c.Title), q) ||
+		strings.Contains(strings.ToLower(c.Description), q) ||
+		strings.Contains(strings.ToLower(c.Type), q) {
+		return true
+	}
+	for _, t := range c.Tags {
+		if strings.Contains(strings.ToLower(t), q) {
+			return true
+		}
+	}
+	return false
+}

@@ -100,17 +100,67 @@ All dashboards share a sidebar filter panel:
 - **User Email** — Isolate metrics to a specific user or service account
 - **Time Range** — 24h, 7d, 30d, or 90d lookback
 
+## Dataplex Knowledge Catalog
+
+The **Dataplex** view turns your data catalog into an interactive 2D/3D graph
+you can search, explore, and edit. It is built on the
+[Open Knowledge Format (OKF)](https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md):
+a git-friendly bundle of markdown files where each file is a *concept* (a node)
+and markdown links between them are *edges*.
+
+- **Graph** — force-directed, toggle between **2D** and **3D**. Nodes are
+  colored by their `type` (BigQuery Table / View / Dataset, Glossary Term,
+  Metric, …); edges are relationships.
+- **Bottom tabs** — **Search** (by name, type, or tag), **Details** (frontmatter,
+  body, and connections of the selected node), and **Edit** (create, update, or
+  delete concepts — written straight to the markdown bundle).
+- **Import from Dataplex** — pulls live entries from the Dataplex Universal
+  Catalog (`SearchEntries`) into the OKF bundle and wires two kinds of edges:
+  - **Containment** — `dataset ⊃ table`, derived from the entry hierarchy.
+  - **Lineage** — source → derived table ETL data flow, from the
+    [Data Lineage API](https://cloud.google.com/data-catalog/docs/concepts/about-data-lineage)
+    (best-effort; if the API is disabled or untracked, import still succeeds
+    with containment edges and reports lineage as skipped).
+  Edits stay local in the bundle (reversible via git); they are **not** written
+  back to Dataplex.
+
+Configure the bundle and import source in `conf.yaml`:
+
+```yaml
+catalog:
+  bundle_path: "okf-bundle"   # directory holding the OKF markdown bundle
+  dataplex:
+    project_id: ""            # defaults to bigquery.project_id when empty
+    location: "global"        # Dataplex search location, e.g. "global" or "us"
+  lineage_location: "us"      # Data Lineage API region (regional, not "global")
+```
+
+The runtime bundle `okf-bundle/` is git-ignored (it may hold imported
+metadata). A reference sample ships in `okf-bundle.sample/` — copy it in to see
+the graph before importing:
+
+```bash
+cp -r okf-bundle.sample/. okf-bundle/
+```
+
+Importing requires `roles/dataplex.catalogViewer`; lineage edges additionally
+require the Data Lineage API enabled and `roles/datalineage.viewer`.
+
 ## Architecture
 
 ```
-frontend/          React 19 + Vite + ECharts + Tailwind CSS v4
-backend/           Go net/http server
-  main.go          HTTP server, routing, middleware
-  bigquery.go      All INFORMATION_SCHEMA queries
-  handlers.go      Dashboard endpoints with errgroup concurrency
-  cache.go         In-memory TTL cache (sync.Map, 10-min TTL)
-  filters.go       Global filter parsing & SQL clause builders
-  config.go        YAML config loader
+frontend/            React 19 + Vite + ECharts + Tailwind CSS v4
+  catalog/           Dataplex graph view (react-force-graph 2D/3D, three.js)
+backend/             Go net/http server
+  main.go            HTTP server, routing, middleware
+  bigquery.go        All INFORMATION_SCHEMA queries
+  handlers.go        Dashboard endpoints with errgroup concurrency
+  catalog_handlers.go  OKF graph/search/concept/import endpoints
+  okf.go             OKF bundle engine (parse, graph, read/write concepts)
+  catalog_dataplex.go  Dataplex SearchEntries -> OKF concept mapping
+  cache.go           In-memory TTL cache (sync.Map, 10-min TTL)
+  filters.go         Global filter parsing & SQL clause builders
+  config.go          YAML config loader
 ```
 
 The backend uses `errgroup` to run all widget queries for a dashboard in parallel, and caches results for 10 minutes to reduce BigQuery API calls.

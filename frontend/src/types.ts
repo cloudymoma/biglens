@@ -115,3 +115,56 @@ export interface IAMDashboardData {
   inactive_30d: InactiveEmail[] | null;
   inactive_90d: InactiveEmail[] | null;
 }
+
+// --- Dataplex / Knowledge Catalog (OKF) ---
+
+export interface GraphNode {
+  id: string;
+  title: string;
+  type: string;
+  description: string;
+  resource: string;
+  tags: string[] | null;
+}
+
+export interface GraphEdge {
+  source: string;
+  target: string;
+}
+
+export interface CatalogGraph {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
+
+export interface Concept {
+  id: string;
+  type: string;
+  title: string;
+  description: string;
+  resource: string;
+  tags: string[] | null;
+  timestamp: string;
+  body: string;
+  links: string[] | null;
+}
+
+export interface ConceptDetail {
+  concept: Concept;
+  neighbors: GraphNode[] | null;
+}
+
+export interface CatalogTypeCount {
+  type: string;
+  count: number;
+}
+
+export interface ImportResult {
+  imported: number;
+  edges: number;
+  containment_edges: number;
+  lineage_edges: number;
+  truncated: boolean;
+  lineage_error?: string;
+  type_counts: Record<string, number>;
+}

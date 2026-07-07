@@ -6,6 +6,12 @@ import type {
   CostDashboardData,
   InsightsDashboardData,
   IAMDashboardData,
+  CatalogGraph,
+  GraphNode,
+  Concept,
+  ConceptDetail,
+  CatalogTypeCount,
+  ImportResult,
 } from './types';
 
 function filterParams(filters: QueryFilters): Record<string, string> {
@@ -80,6 +86,46 @@ export async function fetchDatasets(): Promise<string[]> {
 export async function fetchTables(datasetId: string): Promise<string[]> {
   try {
     const { data } = await axios.get(`/api/tables?datasetId=${datasetId}`);
+    return data || [];
+  } catch {
+    return [];
+  }
+}
+
+// --- Dataplex / Knowledge Catalog (OKF) ---
+
+export async function fetchCatalogGraph(): Promise<CatalogGraph> {
+  const { data } = await axios.get('/api/catalog/graph');
+  return { nodes: data.nodes || [], edges: data.edges || [] };
+}
+
+export async function searchCatalog(q: string, type: string): Promise<GraphNode[]> {
+  const { data } = await axios.get('/api/catalog/search', { params: { q, type } });
+  return data || [];
+}
+
+export async function fetchConcept(id: string): Promise<ConceptDetail> {
+  const { data } = await axios.get('/api/catalog/concept', { params: { id } });
+  return data;
+}
+
+export async function saveConcept(concept: Concept): Promise<ConceptDetail> {
+  const { data } = await axios.put('/api/catalog/concept', concept);
+  return data;
+}
+
+export async function deleteConcept(id: string): Promise<void> {
+  await axios.delete('/api/catalog/concept', { params: { id } });
+}
+
+export async function importCatalog(q: string): Promise<ImportResult> {
+  const { data } = await axios.post('/api/catalog/import', null, { params: { q } });
+  return data;
+}
+
+export async function fetchCatalogTypes(): Promise<CatalogTypeCount[]> {
+  try {
+    const { data } = await axios.get('/api/catalog/types');
     return data || [];
   } catch {
     return [];

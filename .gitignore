@@ -8,6 +8,10 @@ node_modules/
 
 # Runtime
 logs/
+
+# OKF knowledge bundle — runtime/user data (may contain imported catalog metadata)
+okf-bundle/
+!okf-bundle.sample/
 *.log
 
 # Config with credentials (template is tracked, actual config is not)

@@ -10,14 +10,16 @@ import (
 )
 
 type APIHandler struct {
-	bq    *BQClient
-	cache *Cache
+	bq     *BQClient
+	cache  *Cache
+	bundle *OKFBundle
 }
 
 func NewAPIHandler(bq *BQClient) *APIHandler {
 	return &APIHandler{
-		bq:    bq,
-		cache: NewCache(10 * time.Minute),
+		bq:     bq,
+		cache:  NewCache(10 * time.Minute),
+		bundle: NewOKFBundle(bq.config.Catalog.BundlePath),
 	}
 }
 
