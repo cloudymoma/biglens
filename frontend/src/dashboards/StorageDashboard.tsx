@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import ReactECharts from 'echarts-for-react';
-import { Database, HardDrive, Box } from 'lucide-react';
+import { Database, HardDrive, Box, Search } from 'lucide-react';
 import type { QueryFilters, StorageDashboardData } from '../types';
 import { fetchStorageDashboard } from '../api';
 import { formatBytes, MetricCard, EmptyState, ErrorBanner } from './shared';
@@ -29,6 +29,7 @@ export default function StorageDashboard({ filters }: { filters: QueryFilters })
   const billing = data.billing;
   const breakdown = data.breakdown;
   const topTables = data.top_tables || [];
+  const searchIndexes = data.search_indexes || [];
 
   const logicalCost = billing ? (billing.logical_bytes / Math.pow(1024, 4)) * LOGICAL_RATE * 1000 : 0;
   const physicalCost = billing ? (billing.physical_bytes / Math.pow(1024, 4)) * PHYSICAL_RATE * 1000 : 0;
@@ -149,6 +150,69 @@ export default function StorageDashboard({ filters }: { filters: QueryFilters })
             <EmptyState text="No table data available" />
           )}
         </div>
+      </div>
+
+      {/* Search Indexes (Widget 1.4) */}
+      <div className="rounded-2xl border border-zinc-800/50 p-6" style={{ background: '#111114' }}>
+        <div className="flex items-center gap-2 mb-1">
+          <Search size={16} className="text-cyan-400" />
+          <h3 className="text-sm font-semibold text-white">Search Indexes</h3>
+        </div>
+        <p className="text-xs text-zinc-500 mb-4">Search indexes configuration, status and storage size</p>
+        {searchIndexes.length > 0 ? (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-zinc-500 border-b border-zinc-800/50">
+                  <th className="text-left py-2 px-3 font-medium">#</th>
+                  <th className="text-left py-2 px-3 font-medium">Dataset</th>
+                  <th className="text-left py-2 px-3 font-medium">Table</th>
+                  <th className="text-left py-2 px-3 font-medium">Index Name</th>
+                  <th className="text-left py-2 px-3 font-medium">Status</th>
+                  <th className="text-left py-2 px-3 font-medium">Coverage</th>
+                  <th className="text-right py-2 px-3 font-medium text-nowrap">Logical Size</th>
+                  <th className="text-right py-2 px-3 font-medium text-nowrap">Billing Storage Size</th>
+                </tr>
+              </thead>
+              <tbody>
+                {searchIndexes.map((idx, i) => {
+                  const statusColors: Record<string, string> = {
+                    ACTIVE: 'text-emerald-400 bg-emerald-500/5 border-emerald-500/15',
+                    PENDING: 'text-amber-400 bg-amber-500/5 border-amber-500/15',
+                    TEMPORARILY_DISABLED: 'text-rose-400 bg-rose-500/5 border-rose-500/15',
+                  };
+                  const statusStyle = statusColors[idx.index_status] || 'text-zinc-400 bg-zinc-500/5 border-zinc-500/15';
+
+                  return (
+                    <tr key={i} className="border-b border-zinc-800/30 hover:bg-zinc-800/20 transition-colors">
+                      <td className="py-2.5 px-3 text-zinc-600 font-mono">{i + 1}</td>
+                      <td className="py-2.5 px-3 text-zinc-400 font-mono">{idx.dataset}</td>
+                      <td className="py-2.5 px-3 text-white font-mono">{idx.table_name}</td>
+                      <td className="py-2.5 px-3 text-cyan-400 font-mono">{idx.index_name}</td>
+                      <td className="py-2.5 px-3">
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border ${statusStyle}`}>
+                          {idx.index_status}
+                        </span>
+                      </td>
+                      <td className="py-2.5 px-3">
+                        <div className="flex items-center gap-2">
+                          <span className="text-zinc-300 font-mono w-8 text-right">{idx.coverage_percentage}%</span>
+                          <div className="w-20 h-1.5 rounded-full bg-zinc-800">
+                            <div className="h-full rounded-full" style={{ width: `${idx.coverage_percentage}%`, background: 'linear-gradient(90deg, #06b6d4, #3b82f6)' }} />
+                          </div>
+                        </div>
+                      </td>
+                      <td className="py-2.5 px-3 text-right text-zinc-300 font-mono">{formatBytes(idx.total_logical_bytes)}</td>
+                      <td className="py-2.5 px-3 text-right text-zinc-300 font-mono">{formatBytes(idx.total_storage_bytes)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <EmptyState text="No search indexes found" />
+        )}
       </div>
     </div>
   );

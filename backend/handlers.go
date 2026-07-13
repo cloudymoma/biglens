@@ -36,9 +36,10 @@ func writeError(w http.ResponseWriter, msg string, code int) {
 // --- Dashboard 1: Storage Analysis ---
 
 type StorageDashboardData struct {
-	Billing   *StorageStats     `json:"billing"`
-	Breakdown *StorageBreakdown `json:"breakdown"`
-	TopTables []TopTable        `json:"top_tables"`
+	Billing       *StorageStats     `json:"billing"`
+	Breakdown     *StorageBreakdown `json:"breakdown"`
+	TopTables     []TopTable        `json:"top_tables"`
+	SearchIndexes []SearchIndexInfo `json:"search_indexes"`
 }
 
 func (h *APIHandler) StorageDashboard(w http.ResponseWriter, r *http.Request) {
@@ -77,6 +78,15 @@ func (h *APIHandler) StorageDashboard(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		data.TopTables = tables
+		return nil
+	})
+
+	g.Go(func() error {
+		indexes, err := h.bq.GetSearchIndexes(ctx, filters)
+		if err != nil {
+			return err
+		}
+		data.SearchIndexes = indexes
 		return nil
 	})
 

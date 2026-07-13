@@ -3,8 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"sync"
 
 	"cloud.google.com/go/bigquery"
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
 )
@@ -126,6 +129,98 @@ func (b *BQClient) GetTopTables(ctx context.Context, filters QueryFilters) ([]To
 
 	return collectRows[TopTable](q, ctx)
 }
+
+// --- Widget 1.4: Search Indexes Info ---
+
+type SearchIndexInfo struct {
+	Dataset            string `json:"dataset" bigquery:"index_schema"`
+	TableName          string `json:"table_name" bigquery:"table_name"`
+	IndexName          string `json:"index_name" bigquery:"index_name"`
+	IndexStatus        string `json:"index_status" bigquery:"index_status"`
+	CoveragePercentage int64  `json:"coverage_percentage" bigquery:"coverage_percentage"`
+	TotalLogicalBytes  int64  `json:"total_logical_bytes" bigquery:"total_logical_bytes"`
+	TotalStorageBytes  int64  `json:"total_storage_bytes" bigquery:"total_storage_bytes"`
+}
+
+func (b *BQClient) GetSearchIndexes(ctx context.Context, filters QueryFilters) ([]SearchIndexInfo, error) {
+	var datasets []string
+	if filters.Dataset != "" {
+		datasets = []string{filters.Dataset}
+	} else {
+		// Fetch datasets in the region
+		q := b.client.Query(fmt.Sprintf(
+			`SELECT schema_name FROM %s.INFORMATION_SCHEMA.SCHEMATA`,
+			b.regionRef(filters.Region)))
+		rows, err := collectRows[struct {
+			SchemaName string `bigquery:"schema_name"`
+		}](q, ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch datasets for region %s: %w", filters.Region, err)
+		}
+		for _, row := range rows {
+			datasets = append(datasets, row.SchemaName)
+		}
+	}
+
+	if len(datasets) == 0 {
+		return nil, nil
+	}
+
+	var results []SearchIndexInfo
+	var mu sync.Mutex
+	g, ctx := errgroup.WithContext(ctx)
+	// Limit concurrency to 10 to be gentle to BigQuery rate limits
+	sem := make(chan struct{}, 10)
+
+	for _, ds := range datasets {
+		ds := ds // capture loop variable
+		g.Go(func() error {
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			queryStr := fmt.Sprintf(
+				`SELECT 
+					index_schema, 
+					table_name, 
+					index_name, 
+					index_status, 
+					coverage_percentage, 
+					total_logical_bytes, 
+					total_storage_bytes
+				FROM `+"`"+`%s.%s.INFORMATION_SCHEMA.SEARCH_INDEXES`+"`"+``,
+				b.config.BigQuery.ProjectID, ds,
+			)
+
+			var params []bigquery.QueryParameter
+			if filters.Table != "" {
+				queryStr += " WHERE table_name = @table_name"
+				params = append(params, bigquery.QueryParameter{Name: "table_name", Value: filters.Table})
+			}
+
+			q := b.client.Query(queryStr)
+			q.Parameters = params
+
+			rows, err := collectRows[SearchIndexInfo](q, ctx)
+			if err != nil {
+				// Warn and ignore (e.g. linked datasets or permission issues on specific datasets)
+				slog.Warn("skipping search indexes query for dataset due to error", "dataset", ds, "error", err)
+				return nil
+			}
+
+			mu.Lock()
+			results = append(results, rows...)
+			mu.Unlock()
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+
+	return results, nil
+}
+
 
 // --- Widget 2.1: Concurrent Slot Usage (Time-Series) ---
 

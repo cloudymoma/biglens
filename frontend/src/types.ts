@@ -23,10 +23,21 @@ export interface TopTable {
   total_bytes: number;
 }
 
+export interface SearchIndexInfo {
+  dataset: string;
+  table_name: string;
+  index_name: string;
+  index_status: string;
+  coverage_percentage: number;
+  total_logical_bytes: number;
+  total_storage_bytes: number;
+}
+
 export interface StorageDashboardData {
   billing: StorageStats | null;
   breakdown: StorageBreakdown | null;
   top_tables: TopTable[] | null;
+  search_indexes: SearchIndexInfo[] | null;
 }
 
 export interface SlotTimepoint {
