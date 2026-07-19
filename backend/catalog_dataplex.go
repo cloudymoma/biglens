@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	dataplex "cloud.google.com/go/dataplex/apiv1"
 	"cloud.google.com/go/dataplex/apiv1/dataplexpb"
@@ -59,7 +60,36 @@ type ImportResult struct {
 	LineageEdges     int            `json:"lineage_edges"`
 	Truncated        bool           `json:"truncated"`
 	LineageError     string         `json:"lineage_error,omitempty"`
+	AspectError      string         `json:"aspect_error,omitempty"`
+	AspectFailed     int            `json:"aspect_failed,omitempty"`
+	ElapsedMs        int64          `json:"elapsed_ms,omitempty"`
 	TypeCounts       map[string]int `json:"type_counts"`
+}
+
+// aspectTypeFilter lists the aspect types fetched per entry. The API requires
+// full aspect-type resource names; the system aspect types (schema, overview,
+// descriptions) live in the Google-managed "dataplex-types" project.
+var aspectTypeFilter = []string{
+	"projects/dataplex-types/locations/global/aspectTypes/schema",
+	"projects/dataplex-types/locations/global/aspectTypes/overview",
+	"projects/dataplex-types/locations/global/aspectTypes/descriptions",
+}
+
+// LookupEntry fetches detailed entry aspects (schema, overview, descriptions)
+// via GetEntry on the entry's own resource name. GetEntry is used (not the
+// LookupEntry RPC) because search results span regional locations, while
+// LookupEntry requires the request Name's location to match the entry's.
+func (c *CatalogClient) LookupEntry(ctx context.Context, entryName string) (*dataplexpb.Entry, error) {
+	req := &dataplexpb.GetEntryRequest{
+		Name:        entryName,
+		View:        dataplexpb.EntryView_CUSTOM,
+		AspectTypes: aspectTypeFilter,
+	}
+	entry, err := c.client.GetEntry(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("get entry %q: %w", entryName, err)
+	}
+	return entry, nil
 }
 
 // Import searches the catalog for entries matching query and writes each as an
@@ -68,21 +98,44 @@ type ImportResult struct {
 //   - lineage: source -> target ETL data flow, from the Data Lineage API
 //     (best-effort; a missing/disabled Lineage API does not fail the import)
 func (c *CatalogClient) Import(ctx context.Context, bundle *OKFBundle, query string) (*ImportResult, error) {
+	start := time.Now()
 	entries, truncated, err := c.searchEntries(ctx, query)
 	if err != nil {
 		return nil, err
+	}
+
+	result := &ImportResult{TypeCounts: map[string]int{}, Truncated: truncated}
+
+	// Fetch detailed aspects per entry (best-effort).
+	fullEntries := make([]*dataplexpb.Entry, len(entries))
+	for i, e := range entries {
+		entryKey := e.GetName()
+		if entryKey == "" {
+			entryKey = e.GetFullyQualifiedName()
+		}
+		fe, aErr := c.LookupEntry(ctx, entryKey)
+		if aErr != nil {
+			result.AspectFailed++
+			if result.AspectError == "" {
+				result.AspectError = aErr.Error()
+			}
+			fullEntries[i] = e
+		} else {
+			fullEntries[i] = fe
+		}
 	}
 
 	// Base concepts (frontmatter only; bodies/links assembled below).
 	type item struct {
 		concept Concept
 		fqn     string
+		entry   *dataplexpb.Entry
 	}
 	items := make([]*item, 0, len(entries))
 	idSet := make(map[string]bool, len(entries))
-	for _, e := range entries {
+	for _, e := range fullEntries {
 		base := entryBaseConcept(e)
-		items = append(items, &item{concept: base, fqn: e.GetFullyQualifiedName()})
+		items = append(items, &item{concept: base, fqn: e.GetFullyQualifiedName(), entry: e})
 		idSet[base.ID] = true
 	}
 
@@ -95,8 +148,6 @@ func (c *CatalogClient) Import(ctx context.Context, bundle *OKFBundle, query str
 		}
 	}
 
-	result := &ImportResult{TypeCounts: map[string]int{}, Truncated: truncated}
-
 	// Lineage edges: best-effort. Failure to reach the Lineage API is recorded
 	// but does not abort the import.
 	fqnByID := make(map[string]string, len(items))
@@ -105,11 +156,11 @@ func (c *CatalogClient) Import(ctx context.Context, bundle *OKFBundle, query str
 	}
 	lineageByID := c.fetchLineage(ctx, fqnByID, idSet, result)
 
-	// Assemble bodies (containment parent + lineage sources) and write.
+	// Assemble bodies (overview + schema + containment parent + lineage sources) and write.
 	for _, it := range items {
 		parent := containment[it.concept.ID]
 		sources := lineageByID[it.concept.ID]
-		body := buildRelationshipBody(parent, sources)
+		body := buildConceptBody(it.entry, parent, sources)
 
 		fc := it.concept
 		fc.Body = body
@@ -125,6 +176,7 @@ func (c *CatalogClient) Import(ctx context.Context, bundle *OKFBundle, query str
 		result.LineageEdges += len(sources)
 	}
 	result.Edges = result.ContainmentEdges + result.LineageEdges
+	result.ElapsedMs = time.Since(start).Milliseconds()
 	return result, nil
 }
 
@@ -250,6 +302,140 @@ func longestPrefixIn(id string, set map[string]bool) string {
 	return ""
 }
 
+// buildConceptBody assembles OKF body sections in order:
+// 1. # Overview (from overview / descriptions aspect)
+// 2. # Schema (from schema aspect fields)
+// 3. # Relationships (containment parent + lineage sources)
+func buildConceptBody(entry *dataplexpb.Entry, parentID string, sources []string) string {
+	var sections []string
+
+	if overviewSec := renderOverviewSection(entry); overviewSec != "" {
+		sections = append(sections, overviewSec)
+	}
+	if schemaSec := renderSchemaSection(entry); schemaSec != "" {
+		sections = append(sections, schemaSec)
+	}
+	if relSec := buildRelationshipBody(parentID, sources); relSec != "" {
+		sections = append(sections, relSec)
+	}
+
+	return strings.Join(sections, "\n\n")
+}
+
+func renderOverviewSection(entry *dataplexpb.Entry) string {
+	overviewData := extractAspectData(entry, "overview")
+	descData := extractAspectData(entry, "descriptions")
+
+	var overviewText string
+	if overviewData != nil {
+		if content, ok := overviewData["content"].(string); ok && strings.TrimSpace(content) != "" {
+			overviewText = strings.TrimSpace(content)
+		}
+	}
+	if overviewText == "" && descData != nil {
+		for _, k := range []string{"description", "overview", "summary", "content"} {
+			if v, ok := descData[k].(string); ok && strings.TrimSpace(v) != "" {
+				overviewText = strings.TrimSpace(v)
+				break
+			}
+		}
+	}
+
+	if overviewText == "" {
+		return ""
+	}
+	return "# Overview\n\n" + overviewText
+}
+
+func renderSchemaSection(entry *dataplexpb.Entry) string {
+	schemaData := extractAspectData(entry, "schema")
+	if schemaData == nil {
+		return ""
+	}
+	rawFields, ok := schemaData["fields"].([]interface{})
+	if !ok || len(rawFields) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("# Schema\n\n")
+	renderFieldList(&b, rawFields, 0)
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func renderFieldList(b *strings.Builder, fields []interface{}, indentLevel int) {
+	indent := strings.Repeat("  ", indentLevel)
+	for _, item := range fields {
+		fMap, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		name, _ := fMap["name"].(string)
+		if name == "" {
+			continue
+		}
+		// The dataplex-types schema aspect uses "dataType"; "type" kept as a
+		// fallback for custom schema aspects.
+		fType, _ := fMap["dataType"].(string)
+		if fType == "" {
+			fType, _ = fMap["type"].(string)
+		}
+		mode, _ := fMap["mode"].(string)
+		desc, _ := fMap["description"].(string)
+
+		typeMode := fType
+		if mode != "" && mode != "NULLABLE" {
+			if typeMode != "" {
+				typeMode += ", " + mode
+			} else {
+				typeMode = mode
+			}
+		} else if mode == "NULLABLE" {
+			if typeMode != "" {
+				typeMode += ", NULLABLE"
+			} else {
+				typeMode = "NULLABLE"
+			}
+		}
+
+		line := indent + fmt.Sprintf("- `%s`", name)
+		if typeMode != "" {
+			line += fmt.Sprintf(" (%s)", typeMode)
+		}
+		if desc != "" {
+			line += ": " + desc
+		}
+		b.WriteString(line + "\n")
+
+		if sub, ok := fMap["fields"].([]interface{}); ok && len(sub) > 0 {
+			renderFieldList(b, sub, indentLevel+1)
+		} else if sub, ok := fMap["subfields"].([]interface{}); ok && len(sub) > 0 {
+			renderFieldList(b, sub, indentLevel+1)
+		}
+	}
+}
+
+func extractAspectData(entry *dataplexpb.Entry, aspectKind string) map[string]interface{} {
+	if entry == nil || entry.Aspects == nil {
+		return nil
+	}
+	for key, aspect := range entry.Aspects {
+		aType := aspect.GetAspectType()
+		if isAspectKind(key, aspectKind) || isAspectKind(aType, aspectKind) {
+			if aspect.GetData() != nil {
+				return aspect.GetData().AsMap()
+			}
+		}
+	}
+	return nil
+}
+
+func isAspectKind(name, kind string) bool {
+	name = strings.ToLower(name)
+	kind = strings.ToLower(kind)
+	return name == kind || strings.HasSuffix(name, "."+kind) || strings.HasSuffix(name, "/"+kind)
+}
+
 // buildRelationshipBody renders the markdown body with containment and lineage
 // links (which BuildGraph turns into edges).
 func buildRelationshipBody(parentID string, sources []string) string {
@@ -264,7 +450,7 @@ func buildRelationshipBody(parentID string, sources []string) string {
 	for _, s := range sources {
 		b.WriteString(fmt.Sprintf("- Derived from: [%s](/%s)\n", s, s))
 	}
-	return b.String()
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // prettyEntryType turns an EntryType resource name into a human-readable type

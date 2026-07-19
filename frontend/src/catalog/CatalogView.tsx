@@ -101,6 +101,8 @@ export default function CatalogView() {
       let msg = `Imported ${res.imported} concepts · ${res.containment_edges} containment + ${res.lineage_edges} lineage edges`;
       if (res.truncated) msg += ` · result truncated at ${res.imported}`;
       if (res.lineage_error) msg += ` · lineage skipped: ${res.lineage_error}`;
+      if (res.aspect_error) msg += ` · aspects skipped: ${res.aspect_error}`;
+      if (res.elapsed_ms) msg += ` (${res.elapsed_ms}ms)`;
       setNotice(msg);
       setRefreshKey(k => k + 1);
     } catch (e: any) {

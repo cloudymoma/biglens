@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"cloud.google.com/go/dataplex/apiv1/dataplexpb"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 func TestPrettyEntryType(t *testing.T) {
@@ -95,3 +96,76 @@ func TestBuildRelationshipBody(t *testing.T) {
 		t.Error("empty relationships should produce empty body")
 	}
 }
+
+func TestBuildConceptBody(t *testing.T) {
+	overviewStruct, err := structpb.NewStruct(map[string]interface{}{
+		"content": "This table stores user profile info.",
+	})
+	if err != nil {
+		t.Fatalf("NewStruct overview: %v", err)
+	}
+
+	// "dataType" is what the real dataplex-types schema aspect emits;
+	// "profile" uses legacy "type" to cover the fallback.
+	schemaStruct, err := structpb.NewStruct(map[string]interface{}{
+		"fields": []interface{}{
+			map[string]interface{}{
+				"name":        "user_id",
+				"dataType":    "INT64",
+				"mode":        "REQUIRED",
+				"description": "Unique ID of user",
+			},
+			map[string]interface{}{
+				"name": "profile",
+				"type": "RECORD",
+				"mode": "NULLABLE",
+				"fields": []interface{}{
+					map[string]interface{}{
+						"name":        "email",
+						"dataType":    "STRING",
+						"mode":        "NULLABLE",
+						"description": "User email address",
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewStruct schema: %v", err)
+	}
+
+	entry := &dataplexpb.Entry{
+		Aspects: map[string]*dataplexpb.Aspect{
+			"dataplex-types.global.overview": {
+				AspectType: "projects/p/locations/global/aspectTypes/overview",
+				Data:       overviewStruct,
+			},
+			"dataplex-types.global.schema": {
+				AspectType: "projects/p/locations/global/aspectTypes/schema",
+				Data:       schemaStruct,
+			},
+		},
+	}
+
+	body := buildConceptBody(entry, "bigquery/proj/ds", []string{"bigquery/proj/ds/raw_users"})
+
+	expected := `# Overview
+
+This table stores user profile info.
+
+# Schema
+
+- ` + "`user_id`" + ` (INT64, REQUIRED): Unique ID of user
+- ` + "`profile`" + ` (RECORD, NULLABLE)
+  - ` + "`email`" + ` (STRING, NULLABLE): User email address
+
+# Relationships
+
+- Parent: [bigquery/proj/ds](/bigquery/proj/ds)
+- Derived from: [bigquery/proj/ds/raw_users](/bigquery/proj/ds/raw_users)`
+
+	if body != expected {
+		t.Errorf("buildConceptBody mismatch.\nGot:\n%s\n\nWant:\n%s", body, expected)
+	}
+}
+

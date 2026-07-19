@@ -136,7 +136,7 @@ function DetailsTab({ detail, onSelect }: { detail: ConceptDetail | null; onSele
         </div>
       )}
       {c.body && (
-        <pre className="text-[11px] text-zinc-400 whitespace-pre-wrap font-mono p-3 rounded-lg border border-zinc-800/50" style={{ background: '#09090b' }}>{c.body}</pre>
+        <MarkdownRenderer content={c.body} onSelect={onSelect} />
       )}
       {detail.neighbors && detail.neighbors.length > 0 && (
         <div>
@@ -259,4 +259,129 @@ function Field({ label, value, onChange, placeholder, mono, disabled }: {
       />
     </div>
   );
+}
+
+function MarkdownRenderer({ content, onSelect }: { content: string; onSelect: (id: string) => void }) {
+  if (!content) return null;
+
+  const lines = content.split('\n');
+  const elements: React.ReactNode[] = [];
+  let currentList: React.ReactNode[] = [];
+  let keyIndex = 0;
+
+  const flushList = () => {
+    if (currentList.length > 0) {
+      elements.push(
+        <ul key={`ul-${keyIndex++}`} className="list-disc list-inside space-y-1 my-2 text-xs text-zinc-300">
+          {currentList}
+        </ul>
+      );
+      currentList = [];
+    }
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    if (!trimmed) {
+      flushList();
+      continue;
+    }
+
+    if (trimmed.startsWith('# ')) {
+      flushList();
+      elements.push(
+        <h3 key={`h-${keyIndex++}`} className="text-xs font-semibold text-cyan-400 uppercase tracking-wider mt-4 mb-2 pb-1 border-b border-zinc-800/60">
+          {trimmed.substring(2)}
+        </h3>
+      );
+    } else if (trimmed.startsWith('## ')) {
+      flushList();
+      elements.push(
+        <h4 key={`h-${keyIndex++}`} className="text-xs font-semibold text-zinc-200 mt-3 mb-1.5">
+          {trimmed.substring(3)}
+        </h4>
+      );
+    } else if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
+      const itemContent = line.substring(line.indexOf('- ') + 2);
+      const leadingSpaces = line.search(/\S/);
+      const indentClass = leadingSpaces > 0 ? 'ml-4' : '';
+      currentList.push(
+        <li key={`li-${keyIndex++}`} className={`text-[11px] text-zinc-300 leading-relaxed ${indentClass}`}>
+          {renderFormattedInline(itemContent, onSelect)}
+        </li>
+      );
+    } else {
+      flushList();
+      elements.push(
+        <p key={`p-${keyIndex++}`} className="text-[11px] text-zinc-300 leading-relaxed my-1">
+          {renderFormattedInline(trimmed, onSelect)}
+        </p>
+      );
+    }
+  }
+  flushList();
+
+  return (
+    <div className="p-3 rounded-lg border border-zinc-800/50 space-y-1" style={{ background: '#09090b' }}>
+      {elements}
+    </div>
+  );
+}
+
+function renderFormattedInline(text: string, onSelect: (id: string) => void): React.ReactNode[] {
+  const parts: React.ReactNode[] = [];
+  const regex = /\[([^\]]+)\]\(([^)]+)\)|`([^`]+)`/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push(text.substring(lastIndex, match.index));
+    }
+
+    if (match[1] !== undefined && match[2] !== undefined) {
+      const label = match[1];
+      const target = match[2].replace(/^\//, '').replace(/\.md$/, '');
+      const isInternal = match[2].startsWith('/') || !match[2].includes('://');
+      if (isInternal) {
+        parts.push(
+          <button
+            key={match.index}
+            onClick={() => onSelect(target)}
+            className="text-cyan-400 hover:text-cyan-300 underline font-mono text-[11px] cursor-pointer inline-flex items-center gap-0.5 px-0.5"
+          >
+            {label}
+          </button>
+        );
+      } else {
+        parts.push(
+          <a
+            key={match.index}
+            href={match[2]}
+            target="_blank"
+            rel="noreferrer"
+            className="text-cyan-400 hover:underline"
+          >
+            {label}
+          </a>
+        );
+      }
+    } else if (match[3] !== undefined) {
+      parts.push(
+        <code key={match.index} className="font-mono text-[11px] px-1 py-0.5 rounded bg-zinc-800/60 text-cyan-300">
+          {match[3]}
+        </code>
+      );
+    }
+
+    lastIndex = regex.lastIndex;
+  }
+
+  if (lastIndex < text.length) {
+    parts.push(text.substring(lastIndex));
+  }
+
+  return parts;
 }

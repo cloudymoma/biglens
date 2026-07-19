@@ -177,5 +177,8 @@ export interface ImportResult {
   lineage_edges: number;
   truncated: boolean;
   lineage_error?: string;
+  aspect_error?: string;
+  aspect_failed?: number;
+  elapsed_ms?: number;
   type_counts: Record<string, number>;
 }
