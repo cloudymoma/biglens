@@ -136,6 +136,7 @@ export interface GraphNode {
   description: string;
   resource: string;
   fqn?: string;
+  user_managed?: boolean;
   tags: string[] | null;
 }
 
@@ -156,6 +157,7 @@ export interface Concept {
   description: string;
   resource: string;
   fqn?: string;
+  user_managed?: boolean;
   tags: string[] | null;
   timestamp: string;
   body: string;
@@ -178,8 +180,11 @@ export interface ImportResult {
   containment_edges: number;
   lineage_edges: number;
   lineage_dropped: number;
+  preserved: number;
+  pruned: number;
   truncated: boolean;
   lineage_error?: string;
+  prune_error?: string;
   aspect_error?: string;
   aspect_failed?: number;
   elapsed_ms?: number;

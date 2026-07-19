@@ -59,8 +59,11 @@ type ImportResult struct {
 	ContainmentEdges int            `json:"containment_edges"`
 	LineageEdges     int            `json:"lineage_edges"`
 	LineageDropped   int            `json:"lineage_dropped"`
+	Preserved        int            `json:"preserved"`
+	Pruned           int            `json:"pruned"`
 	Truncated        bool           `json:"truncated"`
 	LineageError     string         `json:"lineage_error,omitempty"`
+	PruneError       string         `json:"prune_error,omitempty"`
 	AspectError      string         `json:"aspect_error,omitempty"`
 	AspectFailed     int            `json:"aspect_failed,omitempty"`
 	ElapsedMs        int64          `json:"elapsed_ms,omitempty"`
@@ -161,15 +164,31 @@ func (c *CatalogClient) Import(ctx context.Context, bundle *OKFBundle, query str
 	}
 	lineageByID := c.fetchLineage(ctx, assets, result)
 
+	// Existing concepts map to detect user_managed entries.
+	existingConcepts, _ := bundle.ListConcepts()
+	existingByID := make(map[string]Concept, len(existingConcepts))
+	for _, x := range existingConcepts {
+		existingByID[x.ID] = x
+	}
+
 	// Assemble bodies (overview + schema + containment parent + lineage sources) and write.
 	for _, it := range items {
 		parent := containment[it.concept.ID]
 		sources := lineageByID[it.concept.ID]
-		body := buildConceptBody(it.entry, parent, sources)
+		relBody := buildRelationshipBody(parent, sources)
 
 		fc := it.concept
-		fc.Body = body
-		fc.Links = extractLinks(body, fc.ID)
+
+		if existing, ok := existingByID[fc.ID]; ok && existing.UserManaged {
+			// User-managed concept: keep user's body, refresh frontmatter metadata and # Relationships.
+			fc.UserManaged = true
+			fc.Body = updateRelationshipsSection(existing.Body, relBody)
+			result.Preserved++
+		} else {
+			fc.Body = buildConceptBody(it.entry, parent, sources)
+		}
+
+		fc.Links = extractLinks(fc.Body, fc.ID)
 		if err := bundle.WriteConcept(fc); err != nil {
 			return nil, fmt.Errorf("write concept %q: %w", fc.ID, err)
 		}
@@ -180,6 +199,29 @@ func (c *CatalogClient) Import(ctx context.Context, bundle *OKFBundle, query str
 		}
 		result.LineageEdges += len(sources)
 	}
+
+	// Prune on import: delete any existing concept that is NOT user_managed
+	// and NOT in the new import result. Skipped when the search was truncated:
+	// concepts beyond the cap are still live in the catalog, not stale, and
+	// pruning them would silently shrink the graph.
+	if !truncated {
+		importedSet := make(map[string]bool, len(items))
+		for _, it := range items {
+			importedSet[it.concept.ID] = true
+		}
+		for _, existing := range existingConcepts {
+			if !importedSet[existing.ID] && !existing.UserManaged {
+				if err := bundle.DeleteConcept(existing.ID); err != nil {
+					if result.PruneError == "" {
+						result.PruneError = err.Error()
+					}
+				} else {
+					result.Pruned++
+				}
+			}
+		}
+	}
+
 	result.Edges = result.ContainmentEdges + result.LineageEdges
 	result.ElapsedMs = time.Since(start).Milliseconds()
 	return result, nil
@@ -541,6 +583,49 @@ func isAspectKind(name, kind string) bool {
 	name = strings.ToLower(name)
 	kind = strings.ToLower(kind)
 	return name == kind || strings.HasSuffix(name, "."+kind) || strings.HasSuffix(name, "/"+kind)
+}
+
+// updateRelationshipsSection replaces the "# Relationships" section of an
+// existing body (its heading line through the next top-level "# " heading or
+// EOF) with newRelBody, preserving user content before AND after it. The
+// section is appended when absent. The heading match is line-anchored so
+// prose mentions or deeper headings ("## Relationships") are not treated as
+// the section.
+func updateRelationshipsSection(existingBody, newRelBody string) string {
+	lines := strings.Split(existingBody, "\n")
+	start, end := -1, len(lines)
+	for i, ln := range lines {
+		t := strings.TrimRight(ln, " \t")
+		if start < 0 {
+			if t == "# Relationships" {
+				start = i
+			}
+			continue
+		}
+		if strings.HasPrefix(t, "# ") {
+			end = i
+			break
+		}
+	}
+
+	before := lines
+	var after []string
+	if start >= 0 {
+		before = lines[:start]
+		after = lines[end:]
+	}
+
+	var parts []string
+	if pre := strings.TrimRight(strings.Join(before, "\n"), "\n "); pre != "" {
+		parts = append(parts, pre)
+	}
+	if newRelBody != "" {
+		parts = append(parts, newRelBody)
+	}
+	if post := strings.Trim(strings.Join(after, "\n"), "\n "); post != "" {
+		parts = append(parts, post)
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 // buildRelationshipBody renders the markdown body with containment and lineage

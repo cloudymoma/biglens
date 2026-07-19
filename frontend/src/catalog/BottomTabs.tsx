@@ -120,6 +120,9 @@ function DetailsTab({ detail, onSelect }: { detail: ConceptDetail | null; onSele
         <span className="w-3 h-3 rounded-full" style={{ background: colorForType(c.type) }} />
         <h3 className="text-sm font-semibold text-white">{c.title || c.id}</h3>
         <span className="text-[10px] px-2 py-0.5 rounded-full border border-zinc-700/50 text-zinc-400">{c.type || 'Untyped'}</span>
+        {c.user_managed && (
+          <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-400 font-medium">user managed</span>
+        )}
       </div>
       <p className="text-[11px] font-mono text-zinc-600">{c.id}</p>
       {c.description && <p className="text-xs text-zinc-400">{c.description}</p>}

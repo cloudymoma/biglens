@@ -76,6 +76,7 @@ func (h *APIHandler) upsertConcept(w http.ResponseWriter, r *http.Request) {
 		writeError(w, "concept id is required", http.StatusBadRequest)
 		return
 	}
+	c.UserManaged = true
 	if err := h.bundle.WriteConcept(c); err != nil {
 		writeError(w, err.Error(), http.StatusBadRequest)
 		return

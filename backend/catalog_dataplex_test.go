@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"cloud.google.com/go/dataplex/apiv1/dataplexpb"
@@ -223,3 +224,160 @@ func TestOKFFQNFrontmatter(t *testing.T) {
 	}
 }
 
+func TestUpdateRelationshipsSection(t *testing.T) {
+	existingBody := "# Overview\n\nUser custom overview\n\n# Schema\n\n- `id` (INT64)\n\n# Relationships\n\n- Parent: [old](/old)"
+	newRel := "# Relationships\n\n- Parent: [new](/new)"
+
+	got := updateRelationshipsSection(existingBody, newRel)
+	want := "# Overview\n\nUser custom overview\n\n# Schema\n\n- `id` (INT64)\n\n# Relationships\n\n- Parent: [new](/new)"
+	if got != want {
+		t.Errorf("updateRelationshipsSection mismatch.\nGot:\n%s\n\nWant:\n%s", got, want)
+	}
+
+	// Appends when no relationships section existed
+	existingNoRel := "# Overview\n\nUser custom overview"
+	gotAppended := updateRelationshipsSection(existingNoRel, newRel)
+	wantAppended := "# Overview\n\nUser custom overview\n\n# Relationships\n\n- Parent: [new](/new)"
+	if gotAppended != wantAppended {
+		t.Errorf("updateRelationshipsSection append mismatch.\nGot:\n%s\n\nWant:\n%s", gotAppended, wantAppended)
+	}
+
+	// User content AFTER the relationships section must survive the refresh.
+	existingWithTail := "# Overview\n\nUser overview\n\n# Relationships\n\n- Parent: [old](/old)\n\n# Notes\n\nHand-written notes"
+	gotTail := updateRelationshipsSection(existingWithTail, newRel)
+	wantTail := "# Overview\n\nUser overview\n\n# Relationships\n\n- Parent: [new](/new)\n\n# Notes\n\nHand-written notes"
+	if gotTail != wantTail {
+		t.Errorf("updateRelationshipsSection tail-preserve mismatch.\nGot:\n%s\n\nWant:\n%s", gotTail, wantTail)
+	}
+
+	// A prose mention or deeper heading is not the section: nothing replaced,
+	// fresh section appended at the end.
+	existingProse := "# Overview\n\nSee the ## Relationships idea below\n\n## Relationships\n\nuser subsection"
+	gotProse := updateRelationshipsSection(existingProse, newRel)
+	wantProse := existingProse + "\n\n" + newRel
+	if gotProse != wantProse {
+		t.Errorf("updateRelationshipsSection prose/h2 mismatch.\nGot:\n%s\n\nWant:\n%s", gotProse, wantProse)
+	}
+}
+
+func TestUserManagedProtectionAndPruning(t *testing.T) {
+	dir := t.TempDir()
+	bundle := NewOKFBundle(dir)
+
+	// 1. Untouched imported concept (will be refreshed)
+	_ = bundle.WriteConcept(Concept{
+		ID:          "bigquery/proj/ds/users",
+		Type:        "BigQuery Table",
+		Title:       "Users",
+		UserManaged: false,
+		Body:        "# Overview\n\nOld overview",
+	})
+
+	// 2. User-managed concept (body will be preserved)
+	_ = bundle.WriteConcept(Concept{
+		ID:          "bigquery/proj/ds/orders",
+		Type:        "BigQuery Table",
+		Title:       "Orders",
+		UserManaged: true,
+		Body:        "# Overview\n\nUser custom overview for orders",
+	})
+
+	// 3. Stale concept (not in new import set, UserManaged=false -> will be pruned)
+	_ = bundle.WriteConcept(Concept{
+		ID:          "bigquery/proj/ds/stale",
+		Type:        "BigQuery Table",
+		Title:       "Stale",
+		UserManaged: false,
+		Body:        "Stale content",
+	})
+
+	// 4. Hand-authored user concept (not in import set, UserManaged=true -> MUST NOT be pruned)
+	_ = bundle.WriteConcept(Concept{
+		ID:          "notes/my_custom_note",
+		Type:        "Note",
+		Title:       "My Note",
+		UserManaged: true,
+		Body:        "Hand-authored note",
+	})
+
+	// Perform simulated import processing over the bundle
+	existingConcepts, err := bundle.ListConcepts()
+	if err != nil {
+		t.Fatalf("ListConcepts: %v", err)
+	}
+	existingByID := make(map[string]Concept, len(existingConcepts))
+	for _, x := range existingConcepts {
+		existingByID[x.ID] = x
+	}
+
+	importedItems := []Concept{
+		{
+			ID:          "bigquery/proj/ds/users",
+			Type:        "BigQuery Table",
+			Title:       "Users",
+			Description: "Fresh description",
+			Body:        "# Overview\n\nFresh overview\n\n# Relationships\n\n- Parent: [bigquery/proj/ds](/bigquery/proj/ds)",
+		},
+		{
+			ID:          "bigquery/proj/ds/orders",
+			Type:        "BigQuery Table",
+			Title:       "Orders",
+			Description: "Fresh orders description",
+			Body:        "# Overview\n\nFresh overview\n\n# Relationships\n\n- Parent: [bigquery/proj/ds](/bigquery/proj/ds)",
+		},
+	}
+
+	result := &ImportResult{TypeCounts: map[string]int{}}
+	importedSet := make(map[string]bool)
+
+	for _, item := range importedItems {
+		importedSet[item.ID] = true
+		fc := item
+		relBody := buildRelationshipBody("bigquery/proj/ds", nil)
+
+		if existing, ok := existingByID[fc.ID]; ok && existing.UserManaged {
+			fc.UserManaged = true
+			fc.Body = updateRelationshipsSection(existing.Body, relBody)
+			result.Preserved++
+		}
+		_ = bundle.WriteConcept(fc)
+		result.Imported++
+	}
+
+	for _, existing := range existingConcepts {
+		if !importedSet[existing.ID] && !existing.UserManaged {
+			if err := bundle.DeleteConcept(existing.ID); err == nil {
+				result.Pruned++
+			}
+		}
+	}
+
+	if result.Preserved != 1 {
+		t.Errorf("result.Preserved = %d, want 1", result.Preserved)
+	}
+	if result.Pruned != 1 {
+		t.Errorf("result.Pruned = %d, want 1", result.Pruned)
+	}
+
+	// Verify user-managed concept body survived
+	ordersDetail, err := bundle.GetConcept("bigquery/proj/ds/orders")
+	if err != nil {
+		t.Fatalf("GetConcept orders: %v", err)
+	}
+	if !strings.Contains(ordersDetail.Concept.Body, "User custom overview for orders") {
+		t.Errorf("orders body did not preserve user edits. Got:\n%s", ordersDetail.Concept.Body)
+	}
+
+	// Verify stale concept was pruned
+	if _, err := bundle.GetConcept("bigquery/proj/ds/stale"); err == nil {
+		t.Errorf("expected stale concept to be pruned, but it still exists")
+	}
+
+	// Verify hand-authored note was NOT pruned
+	noteDetail, err := bundle.GetConcept("notes/my_custom_note")
+	if err != nil {
+		t.Errorf("hand-authored note was incorrectly pruned: %v", err)
+	} else if strings.TrimSpace(noteDetail.Concept.Body) != "Hand-authored note" {
+		t.Errorf("hand-authored note body altered: %q", noteDetail.Concept.Body)
+	}
+}

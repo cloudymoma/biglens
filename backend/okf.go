@@ -33,6 +33,7 @@ type Concept struct {
 	Description string   `json:"description"`
 	Resource    string   `json:"resource"`    // canonical URI of the underlying asset
 	FQN         string   `json:"fqn,omitempty"` // fully qualified name of the asset
+	UserManaged bool     `json:"user_managed,omitempty"`
 	Tags        []string `json:"tags"`
 	Timestamp   string   `json:"timestamp"`
 	Body        string   `json:"body"`        // markdown after frontmatter
@@ -45,6 +46,7 @@ type frontmatter struct {
 	Description string   `yaml:"description,omitempty"`
 	Resource    string   `yaml:"resource,omitempty"`
 	FQN         string   `yaml:"fqn,omitempty"`
+	UserManaged bool     `yaml:"user_managed,omitempty"`
 	Tags        []string `yaml:"tags,omitempty"`
 	Timestamp   string   `yaml:"timestamp,omitempty"`
 }
@@ -58,6 +60,7 @@ type GraphNode struct {
 	Description string   `json:"description"`
 	Resource    string   `json:"resource"`
 	FQN         string   `json:"fqn,omitempty"`
+	UserManaged bool     `json:"user_managed,omitempty"`
 	Tags        []string `json:"tags"`
 }
 
@@ -218,6 +221,7 @@ func (b *OKFBundle) parseContent(id, content string) Concept {
 		Description: fm.Description,
 		Resource:    fm.Resource,
 		FQN:         fm.FQN,
+		UserManaged: fm.UserManaged,
 		Tags:        fm.Tags,
 		Timestamp:   fm.Timestamp,
 		Body:        body,
@@ -259,7 +263,8 @@ func (b *OKFBundle) ListConcepts() ([]Concept, error) {
 func conceptNode(c Concept) GraphNode {
 	return GraphNode{
 		ID: c.ID, Title: c.Title, Type: c.Type,
-		Description: c.Description, Resource: c.Resource, FQN: c.FQN, Tags: c.Tags,
+		Description: c.Description, Resource: c.Resource, FQN: c.FQN,
+		UserManaged: c.UserManaged, Tags: c.Tags,
 	}
 }
 
@@ -367,6 +372,7 @@ func serializeConcept(c Concept) string {
 		Description: c.Description,
 		Resource:    c.Resource,
 		FQN:         c.FQN,
+		UserManaged: c.UserManaged,
 		Tags:        c.Tags,
 		Timestamp:   c.Timestamp,
 	}
