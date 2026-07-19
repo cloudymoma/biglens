@@ -135,6 +135,7 @@ export interface GraphNode {
   type: string;
   description: string;
   resource: string;
+  fqn?: string;
   tags: string[] | null;
 }
 
@@ -154,6 +155,7 @@ export interface Concept {
   title: string;
   description: string;
   resource: string;
+  fqn?: string;
   tags: string[] | null;
   timestamp: string;
   body: string;
@@ -175,6 +177,7 @@ export interface ImportResult {
   edges: number;
   containment_edges: number;
   lineage_edges: number;
+  lineage_dropped: number;
   truncated: boolean;
   lineage_error?: string;
   aspect_error?: string;

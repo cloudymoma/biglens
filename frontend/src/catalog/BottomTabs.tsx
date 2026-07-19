@@ -128,6 +128,11 @@ function DetailsTab({ detail, onSelect }: { detail: ConceptDetail | null; onSele
           <span className="text-zinc-600">resource: </span>{c.resource}
         </p>
       )}
+      {c.fqn && (
+        <p className="text-[11px] text-zinc-500 font-mono break-all">
+          <span className="text-zinc-600">fqn: </span>{c.fqn}
+        </p>
+      )}
       {c.tags && c.tags.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
           {c.tags.map(t => (
@@ -160,7 +165,7 @@ function DetailsTab({ detail, onSelect }: { detail: ConceptDetail | null; onSele
 }
 
 const EMPTY: Concept = {
-  id: '', type: '', title: '', description: '', resource: '',
+  id: '', type: '', title: '', description: '', resource: '', fqn: '',
   tags: [], timestamp: '', body: '', links: [],
 };
 
@@ -205,7 +210,10 @@ function EditTab({ detail, onSave, onDelete, saving, onNew }: {
       </div>
       <Field label="Title" value={form.title} onChange={v => set('title', v)} placeholder="Users" />
       <Field label="Description" value={form.description} onChange={v => set('description', v)} placeholder="One-line summary" />
-      <Field label="Resource URI" value={form.resource} onChange={v => set('resource', v)} placeholder="bigquery:proj.ds.users" mono />
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Resource URI" value={form.resource} onChange={v => set('resource', v)} placeholder="//bigquery.googleapis.com/..." mono />
+        <Field label="Fully Qualified Name (FQN)" value={form.fqn ?? ''} onChange={v => set('fqn', v)} placeholder="bigquery:proj.ds.users" mono />
+      </div>
       <Field label="Tags (comma-separated)" value={tagsText} onChange={setTagsText} placeholder="pii, core" />
 
       <div>

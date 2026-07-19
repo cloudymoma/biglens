@@ -32,6 +32,7 @@ type Concept struct {
 	Title       string   `json:"title"`
 	Description string   `json:"description"`
 	Resource    string   `json:"resource"`    // canonical URI of the underlying asset
+	FQN         string   `json:"fqn,omitempty"` // fully qualified name of the asset
 	Tags        []string `json:"tags"`
 	Timestamp   string   `json:"timestamp"`
 	Body        string   `json:"body"`        // markdown after frontmatter
@@ -43,6 +44,7 @@ type frontmatter struct {
 	Title       string   `yaml:"title,omitempty"`
 	Description string   `yaml:"description,omitempty"`
 	Resource    string   `yaml:"resource,omitempty"`
+	FQN         string   `yaml:"fqn,omitempty"`
 	Tags        []string `yaml:"tags,omitempty"`
 	Timestamp   string   `yaml:"timestamp,omitempty"`
 }
@@ -55,6 +57,7 @@ type GraphNode struct {
 	Type        string   `json:"type"`
 	Description string   `json:"description"`
 	Resource    string   `json:"resource"`
+	FQN         string   `json:"fqn,omitempty"`
 	Tags        []string `json:"tags"`
 }
 
@@ -214,6 +217,7 @@ func (b *OKFBundle) parseContent(id, content string) Concept {
 		Title:       title,
 		Description: fm.Description,
 		Resource:    fm.Resource,
+		FQN:         fm.FQN,
 		Tags:        fm.Tags,
 		Timestamp:   fm.Timestamp,
 		Body:        body,
@@ -255,7 +259,7 @@ func (b *OKFBundle) ListConcepts() ([]Concept, error) {
 func conceptNode(c Concept) GraphNode {
 	return GraphNode{
 		ID: c.ID, Title: c.Title, Type: c.Type,
-		Description: c.Description, Resource: c.Resource, Tags: c.Tags,
+		Description: c.Description, Resource: c.Resource, FQN: c.FQN, Tags: c.Tags,
 	}
 }
 
@@ -362,6 +366,7 @@ func serializeConcept(c Concept) string {
 		Title:       c.Title,
 		Description: c.Description,
 		Resource:    c.Resource,
+		FQN:         c.FQN,
 		Tags:        c.Tags,
 		Timestamp:   c.Timestamp,
 	}
@@ -403,7 +408,8 @@ func conceptMatches(c Concept, q string) bool {
 	if strings.Contains(strings.ToLower(c.ID), q) ||
 		strings.Contains(strings.ToLower(c.Title), q) ||
 		strings.Contains(strings.ToLower(c.Description), q) ||
-		strings.Contains(strings.ToLower(c.Type), q) {
+		strings.Contains(strings.ToLower(c.Type), q) ||
+		strings.Contains(strings.ToLower(c.FQN), q) {
 		return true
 	}
 	for _, t := range c.Tags {

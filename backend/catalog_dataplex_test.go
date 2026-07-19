@@ -169,3 +169,57 @@ This table stores user profile info.
 	}
 }
 
+func TestFQNLineageMatch(t *testing.T) {
+	idByFQN := map[string]string{
+		"bigquery:proj.ds.orders": "bigquery/proj/ds/orders",
+		"bigquery:proj.ds.users":  "bigquery/proj/ds/users",
+	}
+
+	// Add normalized keys as done in fetchLineage
+	for id, fqn := range map[string]string{"bigquery/proj/ds/orders": "bigquery:proj.ds.orders", "bigquery/proj/ds/users": "bigquery:proj.ds.users"} {
+		if norm := normalizeFQN(fqn); norm != "" {
+			idByFQN[norm] = id
+		}
+	}
+
+	tests := []struct {
+		srcFQN    string
+		wantID    string
+		wantFound bool
+	}{
+		{"bigquery:proj.ds.orders", "bigquery/proj/ds/orders", true},
+		{"bigquery:proj:ds.orders", "bigquery/proj/ds/orders", true},
+		{"bigquery:`proj.ds.orders`", "bigquery/proj/ds/orders", true},
+		{"bigquery:proj.ds.orders_20260719", "bigquery/proj/ds/orders", true},
+		{"bigquery:proj.ds.orders@20260719", "bigquery/proj/ds/orders", true},
+		{"bigquery:other_proj.ds.table", "", false},
+	}
+
+	for _, tt := range tests {
+		gotID, found := matchFQN(tt.srcFQN, idByFQN)
+		if found != tt.wantFound || gotID != tt.wantID {
+			t.Errorf("matchFQN(%q) = (%q, %v), want (%q, %v)", tt.srcFQN, gotID, found, tt.wantID, tt.wantFound)
+		}
+	}
+}
+
+func TestOKFFQNFrontmatter(t *testing.T) {
+	c := Concept{
+		ID:          "bigquery/proj/ds/users",
+		Type:        "BigQuery Table",
+		Title:       "Users",
+		Description: "User accounts",
+		Resource:    "//bigquery.googleapis.com/projects/proj/datasets/ds/tables/users",
+		FQN:         "bigquery:proj.ds.users",
+		Body:        "# Overview\n\nUser table",
+	}
+
+	serialized := serializeConcept(c)
+	bundle := NewOKFBundle(t.TempDir())
+	parsed := bundle.parseContent(c.ID, serialized)
+
+	if parsed.FQN != "bigquery:proj.ds.users" {
+		t.Errorf("parsed.FQN = %q, want bigquery:proj.ds.users", parsed.FQN)
+	}
+}
+

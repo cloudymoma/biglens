@@ -14,10 +14,14 @@ const maxLinksPerAsset = 100
 
 // LineageClient wraps the Data Lineage API, which exposes source->target data
 // flow (e.g. ETL/query transformations between tables). Lineage is regional
-// and lives in a separate API from the catalog.
+// and lives in a separate API from the catalog: every search names one
+// location, and links live wherever the producing job ran.
 type LineageClient struct {
-	client *lineage.Client
-	parent string
+	client  *lineage.Client
+	project string
+	// fixedLocation, when non-empty, overrides per-asset location derivation
+	// (set from config for users who want to pin the lineage region).
+	fixedLocation string
 }
 
 func NewLineageClient(ctx context.Context, cfg *Config) (*LineageClient, error) {
@@ -28,12 +32,11 @@ func NewLineageClient(ctx context.Context, cfg *Config) (*LineageClient, error) 
 	if project == "" {
 		return nil, fmt.Errorf("no project configured for lineage")
 	}
-	loc := cfg.Catalog.LineageLocation
-	if loc == "" {
-		loc = cfg.Catalog.Dataplex.Location
-	}
-	if loc == "" || loc == "global" {
-		loc = "us" // lineage is regional; "global" is not valid
+	fixed := cfg.Catalog.LineageLocation
+	if fixed == "" {
+		if loc := cfg.Catalog.Dataplex.Location; loc != "" && loc != "global" {
+			fixed = loc // an explicit regional catalog location pins lineage too
+		}
 	}
 
 	var opts []option.ClientOption
@@ -44,19 +47,30 @@ func NewLineageClient(ctx context.Context, cfg *Config) (*LineageClient, error) 
 	if err != nil {
 		return nil, fmt.Errorf("create lineage client: %w", err)
 	}
-	return &LineageClient{
-		client: c,
-		parent: fmt.Sprintf("projects/%s/locations/%s", project, loc),
-	}, nil
+	return &LineageClient{client: c, project: project, fixedLocation: fixed}, nil
 }
 
 func (l *LineageClient) Close() error { return l.client.Close() }
 
+// locationFor picks the lineage location to query for an asset: the configured
+// override if set, else the asset's own region, else "us" ("global" is not a
+// valid lineage location).
+func (l *LineageClient) locationFor(assetLocation string) string {
+	if l.fixedLocation != "" {
+		return l.fixedLocation
+	}
+	if assetLocation != "" && assetLocation != "global" {
+		return assetLocation
+	}
+	return "us"
+}
+
 // UpstreamFQNs returns the fully-qualified names of assets that flow INTO the
-// given target asset (its direct upstream sources).
-func (l *LineageClient) UpstreamFQNs(ctx context.Context, targetFQN string) ([]string, error) {
+// given target asset (its direct upstream sources), searching lineage in the
+// given location.
+func (l *LineageClient) UpstreamFQNs(ctx context.Context, location, targetFQN string) ([]string, error) {
 	req := &lineagepb.SearchLinksRequest{
-		Parent: l.parent,
+		Parent: fmt.Sprintf("projects/%s/locations/%s", l.project, location),
 		Criteria: &lineagepb.SearchLinksRequest_Target{
 			Target: &lineagepb.EntityReference{FullyQualifiedName: targetFQN},
 		},

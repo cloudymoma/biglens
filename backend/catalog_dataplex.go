@@ -58,6 +58,7 @@ type ImportResult struct {
 	Edges            int            `json:"edges"`
 	ContainmentEdges int            `json:"containment_edges"`
 	LineageEdges     int            `json:"lineage_edges"`
+	LineageDropped   int            `json:"lineage_dropped"`
 	Truncated        bool           `json:"truncated"`
 	LineageError     string         `json:"lineage_error,omitempty"`
 	AspectError      string         `json:"aspect_error,omitempty"`
@@ -149,12 +150,16 @@ func (c *CatalogClient) Import(ctx context.Context, bundle *OKFBundle, query str
 	}
 
 	// Lineage edges: best-effort. Failure to reach the Lineage API is recorded
-	// but does not abort the import.
-	fqnByID := make(map[string]string, len(items))
+	// but does not abort the import. Lineage is regional, so each asset carries
+	// its own region (derived from the entry resource name).
+	assets := make(map[string]lineageAsset, len(items))
 	for _, it := range items {
-		fqnByID[it.concept.ID] = it.fqn
+		assets[it.concept.ID] = lineageAsset{
+			FQN:      it.fqn,
+			Location: entryLocation(it.entry.GetName()),
+		}
 	}
-	lineageByID := c.fetchLineage(ctx, fqnByID, idSet, result)
+	lineageByID := c.fetchLineage(ctx, assets, result)
 
 	// Assemble bodies (overview + schema + containment parent + lineage sources) and write.
 	for _, it := range items {
@@ -210,10 +215,17 @@ func (c *CatalogClient) searchEntries(ctx context.Context, query string) ([]*dat
 	return entries, false, nil
 }
 
+// lineageAsset carries what fetchLineage needs per imported concept: identity
+// (FQN) and the region whose lineage store holds the asset's links.
+type lineageAsset struct {
+	FQN      string
+	Location string
+}
+
 // fetchLineage queries the Data Lineage API for upstream sources of each asset
 // and returns targetConceptID -> []sourceConceptID for sources present in the
 // imported set. Best-effort: errors are recorded on result.LineageError.
-func (c *CatalogClient) fetchLineage(ctx context.Context, fqnByID map[string]string, idSet map[string]bool, result *ImportResult) map[string][]string {
+func (c *CatalogClient) fetchLineage(ctx context.Context, assets map[string]lineageAsset, result *ImportResult) map[string][]string {
 	out := map[string][]string{}
 	lc, err := NewLineageClient(ctx, c.cfg)
 	if err != nil {
@@ -222,36 +234,130 @@ func (c *CatalogClient) fetchLineage(ctx context.Context, fqnByID map[string]str
 	}
 	defer lc.Close()
 
-	for id, fqn := range fqnByID {
-		if fqn == "" {
+	idByFQN := make(map[string]string, len(assets))
+	for id, a := range assets {
+		if a.FQN != "" {
+			idByFQN[a.FQN] = id
+			if norm := normalizeFQN(a.FQN); norm != "" {
+				idByFQN[norm] = id
+			}
+		}
+	}
+
+	for id, a := range assets {
+		if a.FQN == "" {
 			continue
 		}
-		ups, err := lc.UpstreamFQNs(ctx, fqn)
+		ups, err := lc.UpstreamFQNs(ctx, lc.locationFor(a.Location), a.FQN)
 		if err != nil {
 			result.LineageError = err.Error()
 			break // stop on first hard error (e.g. API disabled / no IAM)
 		}
 		for _, srcFQN := range ups {
-			srcID := slugifyFQN(srcFQN)
-			if idSet[srcID] && srcID != id {
-				out[id] = append(out[id], srcID)
+			srcID, found := matchFQN(srcFQN, idByFQN)
+			if found {
+				if srcID != id && !containsString(out[id], srcID) {
+					out[id] = append(out[id], srcID)
+				}
+			} else {
+				result.LineageDropped++
 			}
 		}
 	}
 	return out
 }
 
+func normalizeFQN(fqn string) string {
+	s := strings.TrimSpace(fqn)
+	s = strings.ReplaceAll(s, "`", "")
+	if idx := strings.Index(s, ":"); idx >= 0 {
+		prefix := s[:idx+1]
+		rest := s[idx+1:]
+		rest = strings.ReplaceAll(rest, ":", ".")
+		s = prefix + rest
+	}
+	return s
+}
+
+func stripPartitionOrShardSuffix(fqn string) string {
+	if idx := strings.Index(fqn, "@"); idx >= 0 {
+		fqn = fqn[:idx]
+	}
+	parts := strings.Split(fqn, ".")
+	if len(parts) > 0 {
+		last := parts[len(parts)-1]
+		if i := strings.LastIndex(last, "_20"); i >= 0 && len(last[i:]) >= 9 {
+			suffix := last[i+1:]
+			allDigits := true
+			for _, r := range suffix {
+				if r < '0' || r > '9' {
+					allDigits = false
+					break
+				}
+			}
+			if allDigits {
+				parts[len(parts)-1] = last[:i]
+				fqn = strings.Join(parts, ".")
+			}
+		}
+	}
+	return fqn
+}
+
+func matchFQN(srcFQN string, idByFQN map[string]string) (string, bool) {
+	if srcFQN == "" {
+		return "", false
+	}
+	if id, ok := idByFQN[srcFQN]; ok {
+		return id, true
+	}
+	norm := normalizeFQN(srcFQN)
+	if id, ok := idByFQN[norm]; ok {
+		return id, true
+	}
+	stripped := stripPartitionOrShardSuffix(norm)
+	if id, ok := idByFQN[stripped]; ok {
+		return id, true
+	}
+	return "", false
+}
+
+func containsString(slice []string, val string) bool {
+	for _, s := range slice {
+		if s == val {
+			return true
+		}
+	}
+	return false
+}
+
 // --- mapping helpers ---
 
-// slugifyFQN converts a fully-qualified name into a bundle concept path.
+// slugifyFQN converts a fully-qualified name into a bundle concept path (ID).
+// Note: IDs are path locations within the OKF bundle; FQNs are canonical identity.
 // e.g. "bigquery:proj.ds.tbl" -> "bigquery/proj/ds/tbl".
 func slugifyFQN(fqn string) string {
-	repl := strings.NewReplacer(":", "/", ".", "/", " ", "_")
+	repl := strings.NewReplacer(":", "/", ".", "/", " ", "_", "`", "")
 	slug := strings.Trim(repl.Replace(fqn), "/")
 	if slug == "" {
 		return "entry"
 	}
 	return slug
+}
+
+// entryLocation extracts the location segment from an entry resource name
+// (projects/P/locations/LOC/entryGroups/...). Returns "" when absent.
+func entryLocation(name string) string {
+	const marker = "/locations/"
+	i := strings.Index(name, marker)
+	if i < 0 {
+		return ""
+	}
+	rest := name[i+len(marker):]
+	if j := strings.Index(rest, "/"); j >= 0 {
+		return rest[:j]
+	}
+	return rest
 }
 
 // entryConceptID derives a stable bundle path from an entry's fully-qualified
@@ -286,6 +392,7 @@ func entryBaseConcept(e *dataplexpb.Entry) Concept {
 		Title:       title,
 		Description: description,
 		Resource:    resource,
+		FQN:         e.GetFullyQualifiedName(),
 	}
 }
 
