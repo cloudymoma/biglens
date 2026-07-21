@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
   ChevronDown, ChevronLeft, ChevronRight, Server, Layers, Search, RefreshCw,
-  Database, BarChart3, DollarSign, Lightbulb, Clock, Shield, Network,
+  Database, BarChart3, DollarSign, Lightbulb, Clock, Shield, Network, Globe,
 } from 'lucide-react';
 import type { QueryFilters } from './types';
 import { fetchConfig, fetchDatasets, fetchTables, fetchRegions } from './api';
@@ -11,6 +11,7 @@ import CostDashboard from './dashboards/CostDashboard';
 import InsightsDashboard from './dashboards/InsightsDashboard';
 import IAMDashboard from './dashboards/IAMDashboard';
 import CatalogView from './catalog/CatalogView';
+import { OPEN_DATASETS } from './opendata/registry';
 
 type Tab = 'storage' | 'compute' | 'cost' | 'insights';
 
@@ -25,6 +26,7 @@ const PRODUCTS: { id: string; label: string; icon: React.ReactNode }[] = [
   { id: 'bigquery', label: 'BigQuery', icon: <Database size={20} /> },
   { id: 'iam',      label: 'IAM Security', icon: <Shield size={20} /> },
   { id: 'dataplex', label: 'Dataplex', icon: <Network size={20} /> },
+  { id: 'opendata', label: 'BigQuery Open Data', icon: <Globe size={20} /> },
 ];
 
 function App() {
@@ -45,6 +47,7 @@ function App() {
 
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [activeProduct, setActiveProduct] = useState('bigquery');
+  const [activeDataset, setActiveDataset] = useState(OPEN_DATASETS[0].id);
 
   useEffect(() => {
     Promise.all([fetchConfig(), fetchDatasets(), fetchRegions()])
@@ -157,7 +160,9 @@ function App() {
                 ? <Database size={15} className="text-cyan-400" />
                 : activeProduct === 'iam'
                   ? <Shield size={15} className="text-amber-400" />
-                  : <Network size={15} className="text-cyan-400" />
+                  : activeProduct === 'opendata'
+                    ? <Globe size={15} className="text-emerald-400" />
+                    : <Network size={15} className="text-cyan-400" />
               }
               <h2 className="text-sm font-semibold text-white tracking-tight">
                 {PRODUCTS.find(p => p.id === activeProduct)?.label}
@@ -249,6 +254,43 @@ function App() {
             </div>
           )}
 
+          {activeProduct === 'opendata' && (
+            <>
+              <nav className="flex flex-col gap-0.5 px-3 mt-4">
+                {OPEN_DATASETS.map(ds => (
+                  <button
+                    key={ds.id}
+                    onClick={() => setActiveDataset(ds.id)}
+                    className={`flex items-center gap-2.5 px-3 py-2 rounded-lg cursor-pointer transition-all text-sm text-left w-full ${
+                      activeDataset === ds.id
+                        ? 'text-white font-medium'
+                        : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/30'
+                    }`}
+                    style={activeDataset === ds.id ? { background: '#18181b', boxShadow: 'inset 0 0 0 1px rgba(63,63,70,0.4)' } : undefined}
+                  >
+                    <span className={activeDataset === ds.id ? 'text-emerald-400' : ''}>{ds.icon}</span>
+                    <span>{ds.label}</span>
+                  </button>
+                ))}
+              </nav>
+
+              <div className="px-3 mt-4">
+                <div className="p-3 rounded-xl border border-emerald-500/10" style={{ background: '#111114' }}>
+                  <p className="text-[10px] font-semibold text-emerald-400/70 uppercase tracking-wider mb-2">Public Dataset</p>
+                  <p className="text-[11px] text-zinc-500 leading-relaxed">
+                    {OPEN_DATASETS.find(ds => ds.id === activeDataset)?.description}
+                  </p>
+                </div>
+                <div className="mt-3 p-3 rounded-xl border border-zinc-800/40" style={{ background: '#111114' }}>
+                  <p className="text-[9px] text-zinc-600 uppercase font-semibold tracking-wider mb-1">Source</p>
+                  <p className="text-[11px] font-mono text-zinc-400 truncate">
+                    {OPEN_DATASETS.find(ds => ds.id === activeDataset)?.sourceTable}
+                  </p>
+                </div>
+              </div>
+            </>
+          )}
+
           <div className="mt-auto px-3 pb-4">
             <div className="p-3 rounded-xl border border-zinc-800/40 flex items-center gap-3" style={{ background: '#111114' }}>
               <div className="p-2 rounded-lg border border-emerald-500/15" style={{ background: '#052e1610' }}>
@@ -279,13 +321,22 @@ function App() {
                   ? `${TABS.find(t => t.id === activeTab)?.label} Analysis`
                   : activeProduct === 'iam'
                     ? 'IAM Security'
-                    : 'Dataplex Knowledge Catalog'
+                    : activeProduct === 'opendata'
+                      ? OPEN_DATASETS.find(ds => ds.id === activeDataset)?.label
+                      : 'Dataplex Knowledge Catalog'
                 }
               </h2>
               {activeProduct === 'dataplex' ? (
                 <p className="text-xs text-zinc-500 mt-1 flex items-center gap-1.5">
                   <Network size={11} />
                   <span className="text-zinc-600">Open Knowledge Format graph</span>
+                </p>
+              ) : activeProduct === 'opendata' ? (
+                <p className="text-xs text-zinc-500 mt-1 flex items-center gap-1.5">
+                  <Globe size={11} />
+                  <span className="text-zinc-600 font-mono">
+                    {OPEN_DATASETS.find(ds => ds.id === activeDataset)?.sourceTable}
+                  </span>
                 </p>
               ) : (
                 <p className="text-xs text-zinc-500 mt-1 flex items-center gap-1.5">
@@ -323,6 +374,12 @@ function App() {
             <IAMDashboard region={selectedRegion} timeRange={timeRange} />
           )}
           {activeProduct === 'dataplex' && <CatalogView />}
+          {activeProduct === 'opendata' && (() => {
+            const ds = OPEN_DATASETS.find(d => d.id === activeDataset) ?? OPEN_DATASETS[0];
+            const DatasetDashboard = ds.component;
+            // Remounting on refreshKey makes the header Refresh button re-fetch.
+            return <DatasetDashboard key={`${ds.id}-${refreshKey}`} />;
+          })()}
         </div>
       </main>
     </div>

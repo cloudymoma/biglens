@@ -90,6 +90,11 @@ func main() {
 	mux.Handle("/api/catalog/import", h(api.CatalogImport))
 	mux.Handle("/api/catalog/manifest", h(api.CatalogManifest))
 
+	// BigQuery Open Data endpoints (public datasets; namespaced per dataset)
+	mux.Handle("/api/opendata/trends/meta", h(api.TrendsMetaHandler))
+	mux.Handle("/api/opendata/trends/dashboard", h(api.TrendsDashboard))
+	mux.Handle("/api/opendata/trends/term", h(api.TrendsTerm))
+
 	// Individual endpoints
 	mux.Handle("/api/storage", h(api.StorageStats))
 	mux.Handle("/api/slots", h(api.SlotUsage))

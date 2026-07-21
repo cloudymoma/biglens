@@ -142,6 +142,57 @@ cp -r okf-bundle.sample/. okf-bundle/
 导入需要 `roles/dataplex.catalogViewer`；血缘边还需启用 Data Lineage API 并具备
 `roles/datalineage.viewer` 权限。
 
+## BigQuery 公共数据 (Open Data)
+
+**BigQuery Open Data** 视图承载基于
+[Google Cloud 公共数据集](https://cloud.google.com/bigquery/public-data)
+的仪表盘。查询在你配置的项目中执行（计费在该项目），访问
+`bigquery-public-data`；所有查询均带分区键过滤以控制扫描量，结果复用与其他
+仪表盘相同的 10 分钟缓存。
+
+### Google Trends
+
+首个仪表盘，基于 `bigquery-public-data.google_trends`
+（`international_top_terms` / `international_top_rising_terms`）：
+
+| 组件 | 说明 |
+|---|---|
+| **热词榜单** | 各国家 Top 25 热词，行内分数进度条 |
+| **词云** | 字号随 score 变化，Top 5 高亮 |
+| **飙升热词** | 按 `percent_gain` 排序的 Top 10 飙升词及明细表 |
+| **跨国热度对比** | 某个词在所有进入 Top 25 国家的最新分数 |
+| **历史趋势** | 5 年周度历史，最多同时对比 5 个词，支持拖拽缩放 |
+
+筛选器：国家、快照日期（`refresh_date` 分区）、当日榜单内的关键词搜索。
+点击任意热词即可查看其跨国分布，并加入趋势对比图。
+
+#### 指标说明
+
+仪表盘展示的三个数字直接来自数据集，各自度量的维度不同，因此不会同步变化：
+
+- **排名 Rank（1–25）** — 该词在所在国家当日热榜中的位置，按当天的
+  *绝对搜索量*排序。热词榜单即按此排序。
+- **分数 Score（0–100）** — Google 的*相对*搜索热度指数，基于最新一周数据：
+  每个词以自身历史峰值做归一化，100 表示"本周正处于（或追平）该词的
+  热度巅峰"。数据集按地区（region）粒度提供该值，BigLens 会对国家内
+  所有地区取平均并取整（`CAST(COALESCE(AVG(score), 0) AS INT64)`，
+  score 为 NULL 时按 0 计）。榜单每行的内嵌进度条可视化的就是这个值。
+- **涨幅 Gain（%）** — 仅飙升热词有此指标：搜索量的周环比增长率
+  （`percent_gain`）。全新爆发的查询词涨幅可达数千个百分点。
+
+由于排名反映的是*当日绝对搜索量*，而分数反映的是*相对该词自身历史的
+热度*，一个排在第 14 位的词可能分数为 100（刚创下历史新高），而第 1 名
+的词分数反而更低（搜索量巨大，但已过热度峰值周）。因此榜单刻意按排名
+而非分数排序。
+
+### 新增公共数据集仪表盘
+
+1. 后端：新建 `backend/opendata_<name>.go`（行类型 + `BQClient` 方法），在
+   `backend/opendata_handlers.go` 中添加 handler，路由挂在
+   `/api/opendata/<name>/*` 下。
+2. 前端：在 `frontend/src/opendata/` 中实现仪表盘组件，并在
+   `frontend/src/opendata/registry.tsx` 注册 —— 侧边栏入口、标题与路由自动生效。
+
 ## 架构
 
 ```

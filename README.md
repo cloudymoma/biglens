@@ -146,6 +146,65 @@ cp -r okf-bundle.sample/. okf-bundle/
 Importing requires `roles/dataplex.catalogViewer`; lineage edges additionally
 require the Data Lineage API enabled and `roles/datalineage.viewer`.
 
+## BigQuery Open Data
+
+The **BigQuery Open Data** view hosts dashboards built on
+[Google Cloud public datasets](https://cloud.google.com/bigquery/public-data).
+Queries run in your configured project (billed there) against
+`bigquery-public-data`; every query filters on the partition key to keep scans
+small, and results are served through the same 10-minute cache as the other
+dashboards.
+
+### Google Trends
+
+The first dashboard, powered by `bigquery-public-data.google_trends`
+(`international_top_terms` / `international_top_rising_terms`):
+
+| Widget | Description |
+|---|---|
+| **Top Terms Leaderboard** | Top 25 terms per country with inline score bars |
+| **Term Cloud** | Tag cloud sized by score, top-5 ranks highlighted |
+| **Surging Terms** | Top 10 rising queries by `percent_gain`, plus a breakdown table |
+| **Cross-Country Interest** | A term's latest score wherever it charts in the top 25 |
+| **Interest Over Time** | 5-year weekly history, compare up to 5 terms, drag to zoom |
+
+Filters: country, snapshot date (`refresh_date` partition), and a term search
+over the day's charts. Clicking any term focuses the geographic view and adds
+it to the comparison chart.
+
+#### Reading the numbers
+
+The dashboard surfaces three metrics straight from the dataset — they measure
+different things, so they don't move together:
+
+- **Rank (1–25)** — the term's position in the country's daily top chart,
+  ordered by raw search volume for that snapshot. This is what sorts the
+  leaderboard.
+- **Score (0–100)** — Google's *relative* search-interest index for the latest
+  week: each term is normalized against its own all-time peak, where 100 means
+  "this week is (or ties) the term's peak popularity". The dataset reports it
+  per region, so BigLens averages it across all of a country's regions and
+  rounds to an integer (`CAST(COALESCE(AVG(score), 0) AS INT64)`; a NULL score
+  counts as 0). The inline bar next to each leaderboard row visualizes this
+  value.
+- **Gain (%)** — for rising terms only: the week-over-week percentage increase
+  in search volume (`percent_gain`). A brand-new breakout query can show gains
+  of several thousand percent.
+
+Because rank reflects *absolute daily volume* while score reflects *interest
+relative to the term's own history*, a #14 term can score 100 (it just hit its
+all-time high) while the #1 term scores lower (huge volume, but past its peak
+week). The leaderboard therefore intentionally sorts by rank, not score.
+
+### Adding another public dataset
+
+1. Backend: create `backend/opendata_<name>.go` (typed rows + `BQClient`
+   methods) and handlers in `backend/opendata_handlers.go`, routed under
+   `/api/opendata/<name>/*`.
+2. Frontend: build the dashboard component in `frontend/src/opendata/` and
+   register it in `frontend/src/opendata/registry.tsx` — the sidebar entry,
+   header, and routing come for free.
+
 ## Architecture
 
 ```

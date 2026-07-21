@@ -206,3 +206,52 @@ export interface ImportResult {
   elapsed_ms?: number;
   type_counts: Record<string, number>;
 }
+
+// --- BigQuery Open Data: Google Trends ---
+
+export interface TrendsCountry {
+  name: string;
+  code: string;
+}
+
+export interface TrendsMeta {
+  latest_refresh_date: string;
+  refresh_dates: string[];
+  countries: TrendsCountry[];
+}
+
+export interface TrendsTopTerm {
+  term: string;
+  rank: number;
+  score: number;
+}
+
+export interface TrendsRisingTerm {
+  term: string;
+  rank: number;
+  percent_gain: number;
+  score: number;
+}
+
+export interface TrendsDashboardData {
+  top_terms: TrendsTopTerm[];
+  rising_terms: TrendsRisingTerm[];
+}
+
+export interface TrendsGeoPoint {
+  country_code: string;
+  country_name: string;
+  score: number;
+  rank: number;
+}
+
+export interface TrendsHistoryPoint {
+  term: string;
+  week: string;
+  score: number;
+}
+
+export interface TrendsTermData {
+  geo: TrendsGeoPoint[];
+  history: TrendsHistoryPoint[];
+}

@@ -13,6 +13,9 @@ import type {
   CatalogTypeCount,
   CatalogManifest,
   ImportResult,
+  TrendsMeta,
+  TrendsDashboardData,
+  TrendsTermData,
 } from './types';
 
 function filterParams(filters: QueryFilters): Record<string, string> {
@@ -147,4 +150,34 @@ export async function fetchCatalogTypes(): Promise<CatalogTypeCount[]> {
   } catch {
     return [];
   }
+}
+
+// --- BigQuery Open Data: Google Trends ---
+
+export async function fetchTrendsMeta(): Promise<TrendsMeta> {
+  const { data } = await axios.get('/api/opendata/trends/meta');
+  return data;
+}
+
+export async function fetchTrendsDashboard(refreshDate: string, countryCode: string): Promise<TrendsDashboardData> {
+  const { data } = await axios.get('/api/opendata/trends/dashboard', {
+    params: { refresh_date: refreshDate, country_code: countryCode },
+  });
+  return data;
+}
+
+export async function fetchTrendsTerm(
+  refreshDate: string,
+  countryCode: string,
+  term: string,
+  terms: string[],
+): Promise<TrendsTermData> {
+  const params: Record<string, string> = { refresh_date: refreshDate };
+  if (term) params.term = term;
+  if (terms.length > 0) {
+    params.terms = terms.join(',');
+    params.country_code = countryCode;
+  }
+  const { data } = await axios.get('/api/opendata/trends/term', { params });
+  return data;
 }
