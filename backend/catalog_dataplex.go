@@ -907,7 +907,7 @@ func updateRelationshipsSection(existingBody, newRelBody string) string {
 	lines := strings.Split(existingBody, "\n")
 	start, end := -1, len(lines)
 	for i, ln := range lines {
-		t := strings.TrimRight(ln, " \t")
+		t := strings.TrimRight(ln, " \t\r")
 		if start < 0 {
 			if t == "# Relationships" {
 				start = i
