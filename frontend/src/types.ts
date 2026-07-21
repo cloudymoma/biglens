@@ -174,6 +174,16 @@ export interface CatalogTypeCount {
   count: number;
 }
 
+export interface CatalogManifest {
+  project: string;
+  location: string;
+  query: string;
+  lineage_location?: string;
+  imported_at: string;
+  truncated?: boolean;
+  entry_type_counts?: Record<string, number>;
+}
+
 export interface ImportResult {
   imported: number;
   edges: number;

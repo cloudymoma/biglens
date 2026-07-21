@@ -88,6 +88,7 @@ func main() {
 	mux.Handle("/api/catalog/concept", h(api.CatalogConcept))
 	mux.Handle("/api/catalog/types", h(api.CatalogTypes))
 	mux.Handle("/api/catalog/import", h(api.CatalogImport))
+	mux.Handle("/api/catalog/manifest", h(api.CatalogManifest))
 
 	// Individual endpoints
 	mux.Handle("/api/storage", h(api.StorageStats))

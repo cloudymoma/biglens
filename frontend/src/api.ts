@@ -11,6 +11,7 @@ import type {
   Concept,
   ConceptDetail,
   CatalogTypeCount,
+  CatalogManifest,
   ImportResult,
 } from './types';
 
@@ -121,6 +122,22 @@ export async function deleteConcept(id: string): Promise<void> {
 export async function importCatalog(q: string): Promise<ImportResult> {
   const { data } = await axios.post('/api/catalog/import', null, { params: { q } });
   return data;
+}
+
+// Re-run the import recorded in the bundle manifest.
+export async function refreshCatalogImport(): Promise<ImportResult> {
+  const { data } = await axios.post('/api/catalog/import', null, { params: { refresh: '1' } });
+  return data;
+}
+
+// null = no import recorded yet (404) or manifest unavailable.
+export async function fetchCatalogManifest(): Promise<CatalogManifest | null> {
+  try {
+    const { data } = await axios.get('/api/catalog/manifest');
+    return data;
+  } catch {
+    return null;
+  }
 }
 
 export async function fetchCatalogTypes(): Promise<CatalogTypeCount[]> {

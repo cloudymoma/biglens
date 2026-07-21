@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"os"
 	"sort"
 	"time"
 )
@@ -120,6 +121,13 @@ func (h *APIHandler) CatalogImport(w http.ResponseWriter, r *http.Request) {
 	_ = rc.SetWriteDeadline(deadline)
 	_ = rc.SetReadDeadline(deadline)
 
+	// refresh=1 re-runs the import recorded in manifest.yaml.
+	query, err := importQueryFor(r, h.bundle)
+	if err != nil {
+		writeError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	cc, err := NewCatalogClient(r.Context(), h.bq.config)
 	if err != nil {
 		writeError(w, err.Error(), http.StatusBadRequest)
@@ -127,13 +135,28 @@ func (h *APIHandler) CatalogImport(w http.ResponseWriter, r *http.Request) {
 	}
 	defer cc.Close()
 
-	result, err := cc.Import(r.Context(), h.bundle, r.URL.Query().Get("q"))
+	result, err := cc.Import(r.Context(), h.bundle, query)
 	if err != nil {
 		writeError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	h.cache.Delete(catalogGraphCacheKey)
 	writeJSON(w, result)
+}
+
+// CatalogManifest: GET /api/catalog/manifest — the recorded scope of the last
+// import (404 when nothing has been imported yet).
+func (h *APIHandler) CatalogManifest(w http.ResponseWriter, r *http.Request) {
+	m, err := h.bundle.ReadManifest()
+	if err != nil {
+		if os.IsNotExist(err) {
+			writeError(w, "no import recorded yet", http.StatusNotFound)
+			return
+		}
+		writeError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, m)
 }
 
 // CatalogTypes: GET /api/catalog/types — distinct concept types with counts,

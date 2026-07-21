@@ -1,9 +1,10 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Square, RefreshCw, DownloadCloud, Network } from 'lucide-react';
-import type { CatalogGraph, ConceptDetail, GraphNode, CatalogTypeCount, Concept } from '../types';
+import type { CatalogGraph, ConceptDetail, GraphNode, CatalogTypeCount, Concept, CatalogManifest, ImportResult } from '../types';
 import {
   fetchCatalogGraph, fetchCatalogTypes, searchCatalog,
   fetchConcept, saveConcept, deleteConcept, importCatalog,
+  fetchCatalogManifest, refreshCatalogImport,
 } from '../api';
 import { colorForType } from './colors';
 import BottomTabs, { type CatalogTab } from './BottomTabs';
@@ -31,6 +32,7 @@ export default function CatalogView() {
 
   const [importQ, setImportQ] = useState('');
   const [importing, setImporting] = useState(false);
+  const [manifest, setManifest] = useState<CatalogManifest | null>(null);
   const [notice, setNotice] = useState('');
   const [saving, setSaving] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -45,6 +47,7 @@ export default function CatalogView() {
       .then(([g, t]) => { setGraph(g); setTypes(t); })
       .catch(e => setError(e.response?.data || e.message))
       .finally(() => setLoading(false));
+    fetchCatalogManifest().then(setManifest); // null when nothing imported yet
   }, [refreshKey]);
 
   // Debounced search.
@@ -92,12 +95,12 @@ export default function CatalogView() {
 
   const handleNew = () => { setDetail(null); setSelectedId(null); setTab('edit'); };
 
-  const handleImport = async () => {
+  const runImport = async (run: () => Promise<ImportResult>) => {
     setImporting(true);
     setError('');
     setNotice('');
     try {
-      const res = await importCatalog(importQ);
+      const res = await run();
       let msg = `Imported ${res.imported} concepts · ${res.containment_edges} containment + ${res.lineage_edges} lineage edges`;
       if (res.preserved > 0) msg += ` · ${res.preserved} preserved (user-managed)`;
       if (res.pruned > 0) msg += ` · ${res.pruned} pruned`;
@@ -115,6 +118,10 @@ export default function CatalogView() {
       setImporting(false);
     }
   };
+
+  const handleImport = () => runImport(() => importCatalog(importQ));
+  // Re-run the import recorded in the bundle manifest (same query/scope).
+  const handleRefreshImport = () => runImport(refreshCatalogImport);
 
   return (
     <div className="space-y-4">
@@ -164,6 +171,24 @@ export default function CatalogView() {
           <RefreshCw size={13} /> Refresh
         </button>
       </div>
+
+      {/* Last-import manifest line */}
+      {manifest && (
+        <div className="flex flex-wrap items-center gap-2 text-[11px] text-zinc-600">
+          <span>
+            Last imported {new Date(manifest.imported_at).toLocaleString()} · query “{manifest.query}” ·{' '}
+            {manifest.project} ({manifest.location}){manifest.truncated ? ' · truncated' : ''}
+          </span>
+          <button
+            onClick={handleRefreshImport}
+            disabled={importing}
+            className="flex items-center gap-1 text-cyan-500 hover:text-cyan-300 cursor-pointer disabled:opacity-40"
+            title="Re-run the recorded import with the same query and scope"
+          >
+            <RefreshCw size={11} /> {importing ? 'Re-importing…' : 'Re-import'}
+          </button>
+        </div>
+      )}
 
       {error && <ErrorBanner message={error} />}
       {notice && (

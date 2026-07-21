@@ -108,6 +108,9 @@ func (c *CatalogClient) LookupEntry(ctx context.Context, entryName string) (*dat
 //     (best-effort; a missing/disabled Lineage API does not fail the import)
 func (c *CatalogClient) Import(ctx context.Context, bundle *OKFBundle, query string) (*ImportResult, error) {
 	start := time.Now()
+	if query == "" {
+		query = "*" // record the effective query in the manifest, not ""
+	}
 	entries, truncated, err := c.searchEntries(ctx, query)
 	if err != nil {
 		return nil, err
@@ -251,6 +254,22 @@ func (c *CatalogClient) Import(ctx context.Context, bundle *OKFBundle, query str
 
 	result.Edges = result.ContainmentEdges + result.LineageEdges
 	result.ElapsedMs = time.Since(start).Milliseconds()
+
+	// Record the import scope so it can be reproduced (Refresh) and shown
+	// ("last imported …"). Concepts are already on disk, so a manifest
+	// failure is surfaced as an error rather than silently ignored.
+	manifest := Manifest{
+		Project:         c.project,
+		Location:        c.location,
+		Query:           query,
+		LineageLocation: c.cfg.Catalog.LineageLocation,
+		ImportedAt:      time.Now().UTC().Format(time.RFC3339),
+		Truncated:       truncated,
+		EntryTypeCounts: result.TypeCounts,
+	}
+	if err := bundle.WriteManifest(manifest); err != nil {
+		return nil, fmt.Errorf("import succeeded but manifest write failed: %w", err)
+	}
 	return result, nil
 }
 
