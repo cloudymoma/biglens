@@ -387,7 +387,11 @@ func (b *OKFBundle) Search(query, typeFilter, tagFilter string) ([]GraphNode, er
 	q := strings.ToLower(strings.TrimSpace(query))
 	out := []GraphNode{}
 	for _, c := range concepts {
-		if typeFilter != "" && c.Type != typeFilter {
+		cType := c.Type
+		if cType == "" {
+			cType = "Untyped" // match CatalogTypes' bucket for empty types
+		}
+		if typeFilter != "" && cType != typeFilter {
 			continue
 		}
 		if tagFilter != "" && !containsString(c.Tags, tagFilter) {
