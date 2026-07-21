@@ -380,7 +380,7 @@ function renderFormattedInline(text: string, onSelect: (id: string) => void): Re
     if (match[1] !== undefined && match[2] !== undefined) {
       const label = match[1];
       const href = match[2];
-      const target = href.replace(/^\//, '').replace(/\.md$/, '');
+      const target = href.replace(/^\//, '').replace(/\.md$/, '').split(/[#?]/)[0];
       const isInternal = !href.includes('://') && !href.toLowerCase().startsWith('mailto:');
       if (isInternal) {
         parts.push(
