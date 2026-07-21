@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"os"
 	"sort"
@@ -41,9 +42,10 @@ func (h *APIHandler) CatalogSearch(w http.ResponseWriter, r *http.Request) {
 }
 
 // CatalogConcept handles /api/catalog/concept:
-//   GET    ?id=   -> one concept + neighbors
-//   PUT           -> upsert a concept (JSON body, writes OKF markdown)
-//   DELETE ?id=   -> delete a concept
+//
+//	GET    ?id=   -> one concept + neighbors
+//	PUT           -> upsert a concept (JSON body, writes OKF markdown)
+//	DELETE ?id=   -> delete a concept
 func (h *APIHandler) CatalogConcept(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPut:
@@ -119,8 +121,12 @@ func (h *APIHandler) CatalogImport(w http.ResponseWriter, r *http.Request) {
 	// the response isn't cut off mid-import ("Network Error" in the UI).
 	rc := http.NewResponseController(w)
 	deadline := time.Now().Add(10 * time.Minute)
-	_ = rc.SetWriteDeadline(deadline)
-	_ = rc.SetReadDeadline(deadline)
+	if err := rc.SetWriteDeadline(deadline); err != nil {
+		slog.Warn("import: cannot extend write deadline; long imports may be cut off", "err", err)
+	}
+	if err := rc.SetReadDeadline(deadline); err != nil {
+		slog.Warn("import: cannot extend read deadline", "err", err)
+	}
 
 	// refresh=1 re-runs the import recorded in manifest.yaml.
 	query, err := importQueryFor(r, h.bundle)

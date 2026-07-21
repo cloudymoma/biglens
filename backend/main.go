@@ -129,6 +129,12 @@ type statusWriter struct {
 	status int
 }
 
+// Unwrap lets http.ResponseController reach the underlying writer; without
+// it, per-request deadline extensions (long imports) silently fail.
+func (w *statusWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
 func (w *statusWriter) WriteHeader(status int) {
 	w.status = status
 	w.ResponseWriter.WriteHeader(status)

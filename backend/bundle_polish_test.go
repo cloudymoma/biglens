@@ -90,6 +90,40 @@ func TestSafeConceptID(t *testing.T) {
 	}
 }
 
+// CRLF bodies (browser textarea edits) must still match the Relationships
+// heading; otherwise every re-import appends a duplicate section.
+func TestUpdateRelationshipsSectionCRLF(t *testing.T) {
+	body := "intro\r\n\r\n# Relationships\r\n\r\n- Parent: [old](/old)\r\n\r\n# Notes\r\nkeep\r\n"
+	got := updateRelationshipsSection(body, "# Relationships\n\n- Parent: [new](/new)")
+	if strings.Count(got, "# Relationships") != 1 {
+		t.Errorf("duplicate Relationships section:\n%s", got)
+	}
+	if !strings.Contains(got, "[new](/new)") || strings.Contains(got, "[old](/old)") {
+		t.Errorf("section not replaced:\n%s", got)
+	}
+	if !strings.Contains(got, "# Notes") {
+		t.Errorf("trailing section lost:\n%s", got)
+	}
+}
+
+// Filtering by the "Untyped" bucket (as shown in the types dropdown) must
+// match concepts whose frontmatter has no type.
+func TestSearchUntypedFilter(t *testing.T) {
+	b := NewOKFBundle(t.TempDir())
+	// Write raw content: WriteConcept would default the type on serialize.
+	path, _ := b.safePath("bare")
+	if err := os.WriteFile(path, []byte("---\ntitle: bare\n---\n\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := b.Search("", "Untyped", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != "bare" {
+		t.Errorf("Untyped filter = %+v, want the bare concept", got)
+	}
+}
+
 // Search must support an exact tag facet alongside the text query and type.
 func TestSearchTagFilter(t *testing.T) {
 	b := NewOKFBundle(t.TempDir())
