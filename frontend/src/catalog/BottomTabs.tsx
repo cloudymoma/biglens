@@ -14,6 +14,9 @@ interface Props {
   onQuery: (q: string) => void;
   typeFilter: string;
   onTypeFilter: (t: string) => void;
+  tagFilter: string;
+  onTagFilter: (t: string) => void;
+  tags: string[];
   types: CatalogTypeCount[];
   results: GraphNode[];
   onSelect: (id: string) => void;
@@ -88,6 +91,19 @@ function SearchTab(p: Props) {
             <option key={t.type} value={t.type}>{t.type} ({t.count})</option>
           ))}
         </select>
+        {p.tags.length > 0 && (
+          <select
+            value={p.tagFilter}
+            onChange={e => p.onTagFilter(e.target.value)}
+            className="text-xs text-zinc-400 rounded-lg px-3 py-2 outline-none border border-zinc-800/50 cursor-pointer"
+            style={{ background: '#09090b' }}
+          >
+            <option value="">All tags</option>
+            {p.tags.map(t => (
+              <option key={t} value={t}>{t}</option>
+            ))}
+          </select>
+        )}
       </div>
 
       {p.results.length === 0 ? (
@@ -134,6 +150,12 @@ function DetailsTab({ detail, onSelect }: { detail: ConceptDetail | null; onSele
       {c.fqn && (
         <p className="text-[11px] text-zinc-500 font-mono break-all">
           <span className="text-zinc-600">fqn: </span>{c.fqn}
+        </p>
+      )}
+      {c.timestamp && (
+        <p className="text-[11px] text-zinc-500 font-mono">
+          <span className="text-zinc-600">last updated: </span>
+          {new Date(c.timestamp).toLocaleString()}
         </p>
       )}
       {c.tags && c.tags.length > 0 && (

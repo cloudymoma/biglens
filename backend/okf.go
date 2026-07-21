@@ -67,6 +67,7 @@ type GraphNode struct {
 type GraphEdge struct {
 	Source string `json:"source"`
 	Target string `json:"target"`
+	Kind   string `json:"kind,omitempty"` // containment | lineage | definition | reference
 }
 
 type Graph struct {
@@ -191,15 +192,51 @@ func resolveLink(href, fromID string) string {
 	return target
 }
 
+// typedLink is a resolved body link plus the edge kind derived from the
+// Relationships bullet label on its line.
+type typedLink struct {
+	Target string
+	Kind   string
+}
+
+// edgeKindForLine classifies a body line into an edge kind by its
+// Relationships bullet label. Anything else is a plain reference.
+func edgeKindForLine(line string) string {
+	t := strings.TrimSpace(line)
+	switch {
+	case strings.HasPrefix(t, "- Parent:"):
+		return "containment"
+	case strings.HasPrefix(t, "- Derived from:"):
+		return "lineage"
+	case strings.HasPrefix(t, "- Defined by:"):
+		return "definition"
+	}
+	return "reference"
+}
+
+// classifyLinks returns the de-duplicated resolved links found in a body,
+// each tagged with its edge kind (first occurrence wins).
+func classifyLinks(body, fromID string) []typedLink {
+	seen := map[string]bool{}
+	var out []typedLink
+	for _, line := range strings.Split(body, "\n") {
+		kind := edgeKindForLine(line)
+		for _, m := range linkRe.FindAllStringSubmatch(line, -1) {
+			if t := resolveLink(m[1], fromID); t != "" && t != fromID && !seen[t] {
+				seen[t] = true
+				out = append(out, typedLink{Target: t, Kind: kind})
+			}
+		}
+	}
+	return out
+}
+
 // extractLinks returns the de-duplicated resolved target IDs found in a body.
 func extractLinks(body, fromID string) []string {
-	seen := map[string]bool{}
-	var out []string
-	for _, m := range linkRe.FindAllStringSubmatch(body, -1) {
-		if t := resolveLink(m[1], fromID); t != "" && t != fromID && !seen[t] {
-			seen[t] = true
-			out = append(out, t)
-		}
+	typed := classifyLinks(body, fromID)
+	out := make([]string, 0, len(typed))
+	for _, tl := range typed {
+		out = append(out, tl.Target)
 	}
 	return out
 }
@@ -283,9 +320,9 @@ func (b *OKFBundle) BuildGraph() (*Graph, error) {
 	g := &Graph{Nodes: []GraphNode{}, Edges: []GraphEdge{}}
 	for _, c := range concepts {
 		g.Nodes = append(g.Nodes, conceptNode(c))
-		for _, t := range c.Links {
-			if exists[t] {
-				g.Edges = append(g.Edges, GraphEdge{Source: c.ID, Target: t})
+		for _, tl := range classifyLinks(c.Body, c.ID) {
+			if exists[tl.Target] {
+				g.Edges = append(g.Edges, GraphEdge{Source: c.ID, Target: tl.Target, Kind: tl.Kind})
 			}
 		}
 	}
@@ -341,8 +378,8 @@ func (b *OKFBundle) GetConcept(id string) (*ConceptDetail, error) {
 }
 
 // Search returns nodes matching a case-insensitive query over id/title/
-// description/tags, optionally filtered by exact type.
-func (b *OKFBundle) Search(query, typeFilter string) ([]GraphNode, error) {
+// description/tags, optionally filtered by exact type and exact tag.
+func (b *OKFBundle) Search(query, typeFilter, tagFilter string) ([]GraphNode, error) {
 	concepts, err := b.ListConcepts()
 	if err != nil {
 		return nil, err
@@ -353,12 +390,55 @@ func (b *OKFBundle) Search(query, typeFilter string) ([]GraphNode, error) {
 		if typeFilter != "" && c.Type != typeFilter {
 			continue
 		}
+		if tagFilter != "" && !containsString(c.Tags, tagFilter) {
+			continue
+		}
 		if q != "" && !conceptMatches(c, q) {
 			continue
 		}
 		out = append(out, conceptNode(c))
 	}
 	return out, nil
+}
+
+// WriteIndexes regenerates a reserved index.md navigation file in the bundle
+// root and in every directory holding concepts, each listing its direct child
+// concepts. Reserved files never become concepts or graph nodes.
+func (b *OKFBundle) WriteIndexes() error {
+	concepts, err := b.ListConcepts()
+	if err != nil {
+		return err
+	}
+	if len(concepts) == 0 {
+		return nil
+	}
+	byDir := map[string][]Concept{}
+	for _, c := range concepts {
+		dir := filepath.ToSlash(filepath.Dir(c.ID))
+		byDir[dir] = append(byDir[dir], c)
+	}
+	if _, ok := byDir["."]; !ok {
+		byDir["."] = nil // always write a root index
+	}
+	for dir, children := range byDir {
+		var sb strings.Builder
+		label := dir
+		if dir == "." {
+			label = "bundle root"
+		}
+		sb.WriteString(fmt.Sprintf("# Index of %s\n\nGenerated on import — navigation aid, not a concept.\n", label))
+		if len(children) > 0 {
+			sb.WriteString("\n")
+			for _, c := range children {
+				sb.WriteString(fmt.Sprintf("- [%s](/%s) — %s\n", c.Title, c.ID, c.Type))
+			}
+		}
+		path := filepath.Join(b.root, filepath.FromSlash(dir), indexFile)
+		if err := os.WriteFile(path, []byte(sb.String()), 0o644); err != nil {
+			return fmt.Errorf("write index %q: %w", path, err)
+		}
+	}
+	return nil
 }
 
 // serializeConcept renders a concept back to OKF markdown (frontmatter + body).

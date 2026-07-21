@@ -100,8 +100,8 @@ export async function fetchCatalogGraph(): Promise<CatalogGraph> {
   return { nodes: data.nodes || [], edges: data.edges || [] };
 }
 
-export async function searchCatalog(q: string, type: string): Promise<GraphNode[]> {
-  const { data } = await axios.get('/api/catalog/search', { params: { q, type } });
+export async function searchCatalog(q: string, type: string, tag = ''): Promise<GraphNode[]> {
+  const { data } = await axios.get('/api/catalog/search', { params: { q, type, tag } });
   return data || [];
 }
 

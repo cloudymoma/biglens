@@ -31,7 +31,8 @@ func (h *APIHandler) CatalogGraph(w http.ResponseWriter, r *http.Request) {
 func (h *APIHandler) CatalogSearch(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query().Get("q")
 	typeFilter := r.URL.Query().Get("type")
-	nodes, err := h.bundle.Search(q, typeFilter)
+	tagFilter := r.URL.Query().Get("tag")
+	nodes, err := h.bundle.Search(q, typeFilter, tagFilter)
 	if err != nil {
 		writeError(w, err.Error(), http.StatusInternalServerError)
 		return

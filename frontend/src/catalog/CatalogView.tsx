@@ -6,7 +6,7 @@ import {
   fetchConcept, saveConcept, deleteConcept, importCatalog,
   fetchCatalogManifest, refreshCatalogImport,
 } from '../api';
-import { colorForType } from './colors';
+import { colorForEdge, colorForType } from './colors';
 import BottomTabs, { type CatalogTab } from './BottomTabs';
 import GraphErrorBoundary from './GraphErrorBoundary';
 import { ErrorBanner } from '../dashboards/shared';
@@ -21,6 +21,11 @@ export default function CatalogView() {
   const [error, setError] = useState('');
 
   const webglOK = useMemo(webglAvailable, []);
+  // Edge kinds present in the graph, in a stable display order, for the legend.
+  const edgeKinds = useMemo(() => {
+    const present = new Set(graph.edges.map(e => e.kind || 'reference'));
+    return ['containment', 'lineage', 'definition', 'reference'].filter(k => present.has(k));
+  }, [graph.edges]);
   const [mode, setMode] = useState<'2d' | '3d'>('2d');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<ConceptDetail | null>(null);
@@ -28,6 +33,7 @@ export default function CatalogView() {
   const [tab, setTab] = useState<CatalogTab>('search');
   const [query, setQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
+  const [tagFilter, setTagFilter] = useState('');
   const [results, setResults] = useState<GraphNode[]>([]);
 
   const [importQ, setImportQ] = useState('');
@@ -54,9 +60,15 @@ export default function CatalogView() {
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
-      searchCatalog(query, typeFilter).then(setResults).catch(() => setResults([]));
+      searchCatalog(query, typeFilter, tagFilter).then(setResults).catch(() => setResults([]));
     }, 200);
-  }, [query, typeFilter, refreshKey]);
+  }, [query, typeFilter, tagFilter, refreshKey]);
+
+  // Distinct tags across the graph, for the search facet dropdown.
+  const allTags = useMemo(
+    () => [...new Set(graph.nodes.flatMap(n => n.tags ?? []))].sort(),
+    [graph.nodes],
+  );
 
   const select = useCallback((id: string) => {
     setSelectedId(id);
@@ -101,10 +113,14 @@ export default function CatalogView() {
     setNotice('');
     try {
       const res = await run();
-      let msg = `Imported ${res.imported} concepts · ${res.containment_edges} containment + ${res.lineage_edges} lineage edges`;
+      let msg = `Imported ${res.imported} concepts · ${res.containment_edges} containment + ${res.lineage_edges} lineage + ${res.definition_edges} definition edges`;
+      if (res.duplicate_entries) msg += ` · ${res.duplicate_entries} duplicate search results skipped`;
+      if (res.id_collisions) msg += ` · ${res.id_collisions} path collisions disambiguated`;
       if (res.preserved > 0) msg += ` · ${res.preserved} preserved (user-managed)`;
       if (res.pruned > 0) msg += ` · ${res.pruned} pruned`;
       if (res.lineage_dropped > 0) msg += ` · ${res.lineage_dropped} lineage edges dropped (out of scope)`;
+      if (res.definition_dropped > 0) msg += ` · ${res.definition_dropped} definition links dropped (term or asset not imported)`;
+      if (res.definition_error) msg += ` · entry links skipped: ${res.definition_error}`;
       if (res.truncated) msg += ` · result truncated at ${res.imported}`;
       if (res.lineage_error) msg += ` · lineage skipped: ${res.lineage_error}`;
       if (res.prune_error) msg += ` · prune failed: ${res.prune_error}`;
@@ -230,6 +246,22 @@ export default function CatalogView() {
                 </div>
               ))}
             </div>
+            {edgeKinds.length > 0 && (
+              <>
+                <p className="text-[9px] font-semibold text-zinc-600 uppercase tracking-wider mt-2 mb-1.5">Edges</p>
+                <div className="flex flex-col gap-1">
+                  {edgeKinds.map(k => (
+                    <div key={k} className="flex items-center gap-1.5 text-[10px] text-zinc-400">
+                      <span
+                        className="w-3"
+                        style={{ borderTop: `2px ${k === 'definition' ? 'dashed' : 'solid'} ${colorForEdge(k)}` }}
+                      />
+                      <span className="capitalize">{k}</span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
           </div>
         )}
       </div>
@@ -242,6 +274,9 @@ export default function CatalogView() {
         onQuery={setQuery}
         typeFilter={typeFilter}
         onTypeFilter={setTypeFilter}
+        tagFilter={tagFilter}
+        onTagFilter={setTagFilter}
+        tags={allTags}
         types={types}
         results={results}
         onSelect={select}

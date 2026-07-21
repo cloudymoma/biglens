@@ -143,6 +143,7 @@ export interface GraphNode {
 export interface GraphEdge {
   source: string;
   target: string;
+  kind?: string; // containment | lineage | definition | reference
 }
 
 export interface CatalogGraph {
@@ -190,6 +191,11 @@ export interface ImportResult {
   containment_edges: number;
   lineage_edges: number;
   lineage_dropped: number;
+  definition_edges: number;
+  definition_dropped: number;
+  definition_error?: string;
+  duplicate_entries?: number;
+  id_collisions?: number;
   preserved: number;
   pruned: number;
   truncated: boolean;

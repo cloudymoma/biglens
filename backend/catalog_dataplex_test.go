@@ -87,13 +87,13 @@ func TestSlugifyFQNMatchesConceptID(t *testing.T) {
 }
 
 func TestBuildRelationshipBody(t *testing.T) {
-	body := buildRelationshipBody("bigquery/proj/ds", []string{"bigquery/proj/ds/orders"})
+	body := buildRelationshipBody("bigquery/proj/ds", []string{"bigquery/proj/ds/orders"}, nil)
 	links := extractLinks(body, "bigquery/proj/ds/revenue")
 	// containment parent + one lineage source = 2 edges
 	if len(links) != 2 {
 		t.Fatalf("links = %v, want 2", links)
 	}
-	if buildRelationshipBody("", nil) != "" {
+	if buildRelationshipBody("", nil, nil) != "" {
 		t.Error("empty relationships should produce empty body")
 	}
 }
@@ -148,7 +148,7 @@ func TestBuildConceptBody(t *testing.T) {
 		},
 	}
 
-	body := buildConceptBody(entry, "bigquery/proj/ds", []string{"bigquery/proj/ds/raw_users"})
+	body := buildConceptBody(entry, "bigquery/proj/ds", []string{"bigquery/proj/ds/raw_users"}, nil)
 
 	expected := `# Overview
 
@@ -335,7 +335,7 @@ func TestUserManagedProtectionAndPruning(t *testing.T) {
 	for _, item := range importedItems {
 		importedSet[item.ID] = true
 		fc := item
-		relBody := buildRelationshipBody("bigquery/proj/ds", nil)
+		relBody := buildRelationshipBody("bigquery/proj/ds", nil, nil)
 
 		if existing, ok := existingByID[fc.ID]; ok && existing.UserManaged {
 			// Mirrors Import: keep body + annotations, refresh identity metadata.

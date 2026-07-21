@@ -3,7 +3,7 @@ import ForceGraph2D from 'react-force-graph-2d';
 import ForceGraph3D from 'react-force-graph-3d';
 import SpriteText from 'three-spritetext';
 import type { CatalogGraph } from '../types';
-import { colorForType } from './colors';
+import { colorForEdge, colorForType } from './colors';
 
 interface Props {
   graph: CatalogGraph;
@@ -36,7 +36,7 @@ export default function GraphCanvas({ graph, mode, selectedId, onSelect }: Props
   // Clone into the {nodes, links} shape the lib mutates internally.
   const data = useMemo(() => ({
     nodes: graph.nodes.map(n => ({ ...n })),
-    links: graph.edges.map(e => ({ source: e.source, target: e.target })),
+    links: graph.edges.map(e => ({ source: e.source, target: e.target, kind: e.kind })),
   }), [graph]);
 
   const common = {
@@ -48,7 +48,7 @@ export default function GraphCanvas({ graph, mode, selectedId, onSelect }: Props
     nodeRelSize: 5,
     nodeLabel: (n: any) => `${n.title || n.id} · ${n.type || 'Untyped'}`,
     nodeColor: (n: any) => (n.id === selectedId ? '#ffffff' : colorForType(n.type)),
-    linkColor: () => 'rgba(113,113,122,0.3)',
+    linkColor: (l: any) => colorForEdge(l.kind),
     linkDirectionalParticles: 0,
     onNodeClick: (n: any) => onSelect(n.id),
     cooldownTicks: 120,
@@ -71,6 +71,7 @@ export default function GraphCanvas({ graph, mode, selectedId, onSelect }: Props
         ) : (
           <ForceGraph2D
             {...common}
+            linkLineDash={(l: any) => (l.kind === 'definition' ? [3, 2] : null)}
             nodeCanvasObjectMode={() => 'after'}
             nodeCanvasObject={(n: any, ctx: CanvasRenderingContext2D, scale: number) => {
               if (scale < 1.2) return; // only label when zoomed in enough

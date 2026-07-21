@@ -18,6 +18,18 @@ const PALETTE = [
   '#f59e0b', '#60a5fa', '#e879f9', '#2dd4bf',
 ];
 
+// Edge kinds carry distinct colors so containment, lineage, and glossary
+// definition links are visually distinguishable in the graph and legend.
+export const EDGE_COLORS: Record<string, string> = {
+  containment: 'rgba(113,113,122,0.35)',
+  lineage: 'rgba(34,211,238,0.45)',
+  definition: 'rgba(192,132,252,0.6)',
+};
+
+export function colorForEdge(kind?: string): string {
+  return EDGE_COLORS[kind ?? ''] ?? 'rgba(113,113,122,0.3)';
+}
+
 export function colorForType(type: string): string {
   const t = type || 'Untyped';
   if (TYPE_COLORS[t]) return TYPE_COLORS[t];

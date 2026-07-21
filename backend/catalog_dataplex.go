@@ -3,6 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"path"
+	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -59,20 +62,25 @@ func (c *CatalogClient) Close() error { return c.client.Close() }
 
 // ImportResult summarizes an import run.
 type ImportResult struct {
-	Imported         int            `json:"imported"`
-	Edges            int            `json:"edges"`
-	ContainmentEdges int            `json:"containment_edges"`
-	LineageEdges     int            `json:"lineage_edges"`
-	LineageDropped   int            `json:"lineage_dropped"`
-	Preserved        int            `json:"preserved"`
-	Pruned           int            `json:"pruned"`
-	Truncated        bool           `json:"truncated"`
-	LineageError     string         `json:"lineage_error,omitempty"`
-	PruneError       string         `json:"prune_error,omitempty"`
-	AspectError      string         `json:"aspect_error,omitempty"`
-	AspectFailed     int            `json:"aspect_failed,omitempty"`
-	ElapsedMs        int64          `json:"elapsed_ms,omitempty"`
-	TypeCounts       map[string]int `json:"type_counts"`
+	Imported          int            `json:"imported"`
+	Edges             int            `json:"edges"`
+	ContainmentEdges  int            `json:"containment_edges"`
+	LineageEdges      int            `json:"lineage_edges"`
+	LineageDropped    int            `json:"lineage_dropped"`
+	DefinitionEdges   int            `json:"definition_edges"`
+	DefinitionDropped int            `json:"definition_dropped"`
+	DuplicateEntries  int            `json:"duplicate_entries,omitempty"`
+	IDCollisions      int            `json:"id_collisions,omitempty"`
+	Preserved         int            `json:"preserved"`
+	Pruned            int            `json:"pruned"`
+	Truncated         bool           `json:"truncated"`
+	LineageError      string         `json:"lineage_error,omitempty"`
+	DefinitionError   string         `json:"definition_error,omitempty"`
+	PruneError        string         `json:"prune_error,omitempty"`
+	AspectError       string         `json:"aspect_error,omitempty"`
+	AspectFailed      int            `json:"aspect_failed,omitempty"`
+	ElapsedMs         int64          `json:"elapsed_ms,omitempty"`
+	TypeCounts        map[string]int `json:"type_counts"`
 }
 
 // aspectTypeFilter lists the aspect types fetched per entry. The API requires
@@ -115,8 +123,9 @@ func (c *CatalogClient) Import(ctx context.Context, bundle *OKFBundle, query str
 	if err != nil {
 		return nil, err
 	}
+	entries, duplicates := dedupeEntries(entries)
 
-	result := &ImportResult{TypeCounts: map[string]int{}, Truncated: truncated}
+	result := &ImportResult{TypeCounts: map[string]int{}, Truncated: truncated, DuplicateEntries: duplicates}
 
 	// Fetch detailed aspects per entry (best-effort), bounded-parallel: one
 	// RPC per entry done serially takes minutes on real projects and blows
@@ -164,6 +173,7 @@ func (c *CatalogClient) Import(ctx context.Context, bundle *OKFBundle, query str
 	idSet := make(map[string]bool, len(entries))
 	for _, e := range fullEntries {
 		base := entryBaseConcept(e)
+		base.ID = safeConceptID(base.ID, idSet, result)
 		items = append(items, &item{concept: base, fqn: e.GetFullyQualifiedName(), entry: e})
 		idSet[base.ID] = true
 	}
@@ -189,6 +199,14 @@ func (c *CatalogClient) Import(ctx context.Context, bundle *OKFBundle, query str
 	}
 	lineageByID := c.fetchLineage(ctx, assets, result)
 
+	// Definition edges: glossary term links from the catalog's own
+	// relationship model (EntryLinks), best-effort like lineage.
+	entryNameByID := make(map[string]string, len(items))
+	for _, it := range items {
+		entryNameByID[it.concept.ID] = it.entry.GetName()
+	}
+	defsByID := c.fetchDefinitionLinks(ctx, entryNameByID, result)
+
 	// Existing concepts map to detect user_managed entries.
 	existingConcepts, _ := bundle.ListConcepts()
 	existingByID := make(map[string]Concept, len(existingConcepts))
@@ -200,7 +218,8 @@ func (c *CatalogClient) Import(ctx context.Context, bundle *OKFBundle, query str
 	for _, it := range items {
 		parent := containment[it.concept.ID]
 		sources := lineageByID[it.concept.ID]
-		relBody := buildRelationshipBody(parent, sources)
+		terms := defsByID[it.concept.ID]
+		relBody := buildRelationshipBody(parent, sources, terms)
 
 		fc := it.concept
 
@@ -215,7 +234,7 @@ func (c *CatalogClient) Import(ctx context.Context, bundle *OKFBundle, query str
 			fc.Body = updateRelationshipsSection(existing.Body, relBody)
 			result.Preserved++
 		} else {
-			fc.Body = buildConceptBody(it.entry, parent, sources)
+			fc.Body = buildConceptBody(it.entry, parent, sources, terms)
 		}
 
 		fc.Links = extractLinks(fc.Body, fc.ID)
@@ -228,6 +247,7 @@ func (c *CatalogClient) Import(ctx context.Context, bundle *OKFBundle, query str
 			result.ContainmentEdges++
 		}
 		result.LineageEdges += len(sources)
+		result.DefinitionEdges += len(terms)
 	}
 
 	// Prune on import: delete any existing concept that is NOT user_managed
@@ -252,7 +272,13 @@ func (c *CatalogClient) Import(ctx context.Context, bundle *OKFBundle, query str
 		}
 	}
 
-	result.Edges = result.ContainmentEdges + result.LineageEdges
+	// Regenerate per-directory index.md navigation files (reserved, never
+	// concepts) now that the bundle contents are final.
+	if err := bundle.WriteIndexes(); err != nil {
+		return nil, fmt.Errorf("write indexes: %w", err)
+	}
+
+	result.Edges = result.ContainmentEdges + result.LineageEdges + result.DefinitionEdges
 	result.ElapsedMs = time.Since(start).Milliseconds()
 
 	// Record the import scope so it can be reproduced (Refresh) and shown
@@ -301,6 +327,149 @@ func (c *CatalogClient) searchEntries(ctx context.Context, query string) ([]*dat
 		}
 	}
 	return entries, false, nil
+}
+
+// definitionLinkType is the Google-managed EntryLink type connecting an asset
+// (SOURCE) to the glossary term that defines it (TARGET).
+const definitionLinkType = "projects/dataplex-types/locations/global/entryLinkTypes/definition"
+
+// definitionEdge resolves an EntryLink into (asset, term) entry resource
+// names. Either side may be empty when the link is malformed; callers skip
+// those.
+func definitionEdge(link *dataplexpb.EntryLink) (asset, term string) {
+	for _, ref := range link.GetEntryReferences() {
+		switch ref.GetType() {
+		case dataplexpb.EntryLink_EntryReference_SOURCE:
+			asset = ref.GetName()
+		case dataplexpb.EntryLink_EntryReference_TARGET:
+			term = ref.GetName()
+		}
+	}
+	return asset, term
+}
+
+// safeConceptID makes an entry's bundle path usable: slugifyFQN is lossy, so
+// distinct FQNs can collide on the same path, and some entries slug to
+// reserved filenames (a Dataform asset named ".../index" would land on
+// index.md — never listed as a concept and overwritten by WriteIndexes).
+// Adjustments are counted on result.IDCollisions, never silent; FQN in
+// frontmatter remains the real identity.
+func safeConceptID(id string, idSet map[string]bool, result *ImportResult) string {
+	if isReserved(path.Base(id) + okfExt) {
+		result.IDCollisions++
+		id += "-asset"
+	}
+	if idSet[id] {
+		result.IDCollisions++
+		id = uniqueID(id, idSet)
+	}
+	return id
+}
+
+// uniqueID appends the smallest -N suffix that makes id unused in set.
+func uniqueID(id string, set map[string]bool) string {
+	for n := 2; ; n++ {
+		candidate := fmt.Sprintf("%s-%d", id, n)
+		if !set[candidate] {
+			return candidate
+		}
+	}
+}
+
+// entryScope derives the projects/P/locations/L scope LookupEntryLinks
+// requires from an entry's own resource name.
+func entryScope(entryName string) string {
+	if i := strings.Index(entryName, "/entryGroups/"); i >= 0 {
+		return entryName[:i]
+	}
+	return entryName
+}
+
+// fetchDefinitionLinks queries glossary definition EntryLinks for each
+// imported entry and returns assetConceptID -> []termConceptID for terms that
+// are also in the imported set. Best-effort: the first error is recorded on
+// result.DefinitionError; links whose other side is not imported are counted
+// as DefinitionDropped. To avoid double-counting (both endpoints of a link
+// are queried), an edge is added only from the asset (SOURCE) side, and a
+// drop is counted only by the endpoint that IS imported.
+func (c *CatalogClient) fetchDefinitionLinks(ctx context.Context, entryNameByID map[string]string, result *ImportResult) map[string][]string {
+	idByEntryName := make(map[string]string, len(entryNameByID))
+	type defQuery struct{ id, entryName string }
+	var queries []defQuery
+	for id, name := range entryNameByID {
+		if name == "" {
+			continue
+		}
+		idByEntryName[name] = id
+		queries = append(queries, defQuery{id: id, entryName: name})
+	}
+
+	type defReply struct {
+		links []*dataplexpb.EntryLink
+		err   error
+	}
+	replies := make([]defReply, len(queries))
+	sem := make(chan struct{}, importConcurrency)
+	var wg sync.WaitGroup
+	for i, q := range queries {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			req := &dataplexpb.LookupEntryLinksRequest{
+				Name:           entryScope(q.entryName),
+				Entry:          q.entryName,
+				EntryLinkTypes: []string{definitionLinkType},
+			}
+			it := c.client.LookupEntryLinks(ctx, req)
+			for {
+				link, err := it.Next()
+				if err == iterator.Done {
+					break
+				}
+				if err != nil {
+					replies[i].err = fmt.Errorf("lookup entry links for %q: %w", q.entryName, err)
+					break
+				}
+				replies[i].links = append(replies[i].links, link)
+			}
+		}()
+	}
+	wg.Wait()
+
+	// Sequential post-processing after wg.Wait(): safe to mutate result here.
+	out := map[string][]string{}
+	for i, q := range queries {
+		r := replies[i]
+		if r.err != nil {
+			if result.DefinitionError == "" {
+				result.DefinitionError = r.err.Error()
+			}
+			continue
+		}
+		for _, link := range r.links {
+			asset, term := definitionEdge(link)
+			if asset == "" || term == "" {
+				continue
+			}
+			if asset == q.entryName { // asset side owns the edge
+				termID, ok := idByEntryName[term]
+				if !ok {
+					result.DefinitionDropped++
+					continue
+				}
+				if assetID := idByEntryName[asset]; !containsString(out[assetID], termID) {
+					out[assetID] = append(out[assetID], termID)
+				}
+			} else if _, ok := idByEntryName[asset]; !ok {
+				// Queried from the term side and the asset is not imported:
+				// the asset side will never run, so count the drop here.
+				result.DefinitionDropped++
+			}
+		}
+	}
+	return out
 }
 
 // lineageAsset carries what fetchLineage needs per imported concept: identity
@@ -512,7 +681,73 @@ func entryBaseConcept(e *dataplexpb.Entry) Concept {
 		Description: description,
 		Resource:    resource,
 		FQN:         e.GetFullyQualifiedName(),
+		Tags:        entryTags(e),
+		Timestamp:   entryTimestamp(e),
 	}
+}
+
+// labelKeyRe is GCP label-key syntax (lowercase start, ≤63 chars), further
+// requiring ≥2 chars. Custom catalog entries can carry junk labels (seen
+// live: one key per character of a sentence, each "true"); anything outside
+// this syntax is dropped.
+var labelKeyRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{1,62}$`)
+
+// entryTags maps entry-source labels to sorted "key:value" tags (bare key
+// when the label value is empty). Keys not matching GCP label syntax are
+// skipped.
+func entryTags(e *dataplexpb.Entry) []string {
+	labels := e.GetEntrySource().GetLabels()
+	if len(labels) == 0 {
+		return nil
+	}
+	tags := make([]string, 0, len(labels))
+	for k, v := range labels {
+		if !labelKeyRe.MatchString(k) {
+			continue
+		}
+		if v == "" {
+			tags = append(tags, k)
+		} else {
+			tags = append(tags, k+":"+v)
+		}
+	}
+	sort.Strings(tags)
+	return tags
+}
+
+// dedupeEntries drops repeated entries (same resource name, falling back to
+// FQN), preserving first-seen order. SearchEntries pages can overlap, and an
+// un-deduplicated import overwrites concepts — losing whichever relationship
+// edges the earlier write carried.
+func dedupeEntries(entries []*dataplexpb.Entry) ([]*dataplexpb.Entry, int) {
+	seen := make(map[string]bool, len(entries))
+	out := entries[:0:0]
+	dups := 0
+	for _, e := range entries {
+		key := e.GetName()
+		if key == "" {
+			key = e.GetFullyQualifiedName()
+		}
+		if key != "" && seen[key] {
+			dups++
+			continue
+		}
+		seen[key] = true
+		out = append(out, e)
+	}
+	return out, dups
+}
+
+// entryTimestamp is the asset's last-updated time in RFC3339 UTC: the source
+// system's update time when known, else the catalog entry's own.
+func entryTimestamp(e *dataplexpb.Entry) string {
+	if ts := e.GetEntrySource().GetUpdateTime(); ts != nil {
+		return ts.AsTime().UTC().Format(time.RFC3339)
+	}
+	if ts := e.GetUpdateTime(); ts != nil {
+		return ts.AsTime().UTC().Format(time.RFC3339)
+	}
+	return ""
 }
 
 // longestPrefixIn returns the longest proper path-prefix of id that exists in
@@ -532,7 +767,7 @@ func longestPrefixIn(id string, set map[string]bool) string {
 // 1. # Overview (from overview / descriptions aspect)
 // 2. # Schema (from schema aspect fields)
 // 3. # Relationships (containment parent + lineage sources)
-func buildConceptBody(entry *dataplexpb.Entry, parentID string, sources []string) string {
+func buildConceptBody(entry *dataplexpb.Entry, parentID string, sources, terms []string) string {
 	var sections []string
 
 	if overviewSec := renderOverviewSection(entry); overviewSec != "" {
@@ -541,7 +776,7 @@ func buildConceptBody(entry *dataplexpb.Entry, parentID string, sources []string
 	if schemaSec := renderSchemaSection(entry); schemaSec != "" {
 		sections = append(sections, schemaSec)
 	}
-	if relSec := buildRelationshipBody(parentID, sources); relSec != "" {
+	if relSec := buildRelationshipBody(parentID, sources, terms); relSec != "" {
 		sections = append(sections, relSec)
 	}
 
@@ -705,10 +940,10 @@ func updateRelationshipsSection(existingBody, newRelBody string) string {
 	return strings.Join(parts, "\n\n")
 }
 
-// buildRelationshipBody renders the markdown body with containment and lineage
-// links (which BuildGraph turns into edges).
-func buildRelationshipBody(parentID string, sources []string) string {
-	if parentID == "" && len(sources) == 0 {
+// buildRelationshipBody renders the markdown body with containment, lineage,
+// and glossary-definition links (which BuildGraph turns into typed edges).
+func buildRelationshipBody(parentID string, sources, terms []string) string {
+	if parentID == "" && len(sources) == 0 && len(terms) == 0 {
 		return ""
 	}
 	var b strings.Builder
@@ -718,6 +953,9 @@ func buildRelationshipBody(parentID string, sources []string) string {
 	}
 	for _, s := range sources {
 		b.WriteString(fmt.Sprintf("- Derived from: [%s](/%s)\n", s, s))
+	}
+	for _, t := range terms {
+		b.WriteString(fmt.Sprintf("- Defined by: [%s](/%s)\n", t, t))
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
