@@ -273,11 +273,13 @@ func TestUserManagedProtectionAndPruning(t *testing.T) {
 		Body:        "# Overview\n\nOld overview",
 	})
 
-	// 2. User-managed concept (body will be preserved)
+	// 2. User-managed concept (body + annotations will be preserved)
 	_ = bundle.WriteConcept(Concept{
 		ID:          "bigquery/proj/ds/orders",
 		Type:        "BigQuery Table",
 		Title:       "Orders",
+		Description: "User-edited description",
+		Tags:        []string{"pii", "core"},
 		UserManaged: true,
 		Body:        "# Overview\n\nUser custom overview for orders",
 	})
@@ -336,7 +338,11 @@ func TestUserManagedProtectionAndPruning(t *testing.T) {
 		relBody := buildRelationshipBody("bigquery/proj/ds", nil)
 
 		if existing, ok := existingByID[fc.ID]; ok && existing.UserManaged {
+			// Mirrors Import: keep body + annotations, refresh identity metadata.
 			fc.UserManaged = true
+			fc.Description = existing.Description
+			fc.Tags = existing.Tags
+			fc.Timestamp = existing.Timestamp
 			fc.Body = updateRelationshipsSection(existing.Body, relBody)
 			result.Preserved++
 		}
@@ -366,6 +372,12 @@ func TestUserManagedProtectionAndPruning(t *testing.T) {
 	}
 	if !strings.Contains(ordersDetail.Concept.Body, "User custom overview for orders") {
 		t.Errorf("orders body did not preserve user edits. Got:\n%s", ordersDetail.Concept.Body)
+	}
+	if ordersDetail.Concept.Description != "User-edited description" {
+		t.Errorf("orders description not preserved: %q", ordersDetail.Concept.Description)
+	}
+	if len(ordersDetail.Concept.Tags) != 2 || ordersDetail.Concept.Tags[0] != "pii" {
+		t.Errorf("orders tags not preserved: %v", ordersDetail.Concept.Tags)
 	}
 
 	// Verify stale concept was pruned

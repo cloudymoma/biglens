@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"sort"
+	"time"
 )
 
 const catalogGraphCacheKey = "catalog_graph"
@@ -111,6 +112,14 @@ func (h *APIHandler) CatalogImport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	// Imports legitimately outlive the server-wide 60s WriteTimeout (one
+	// aspect + one lineage RPC per entry); extend this request's deadline so
+	// the response isn't cut off mid-import ("Network Error" in the UI).
+	rc := http.NewResponseController(w)
+	deadline := time.Now().Add(10 * time.Minute)
+	_ = rc.SetWriteDeadline(deadline)
+	_ = rc.SetReadDeadline(deadline)
+
 	cc, err := NewCatalogClient(r.Context(), h.bq.config)
 	if err != nil {
 		writeError(w, err.Error(), http.StatusBadRequest)

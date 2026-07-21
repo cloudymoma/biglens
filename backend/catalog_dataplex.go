@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	dataplex "cloud.google.com/go/dataplex/apiv1"
@@ -15,6 +16,10 @@ import (
 // maxImportEntries caps a single import to keep the graph and the bundle
 // manageable. Truncation is surfaced to the caller, never silent.
 const maxImportEntries = 1000
+
+// importConcurrency bounds the parallel per-entry RPCs (aspect fetch and
+// lineage search) during an import.
+const importConcurrency = 16
 
 // CatalogClient wraps the Dataplex Universal Catalog search API.
 type CatalogClient struct {
@@ -110,22 +115,39 @@ func (c *CatalogClient) Import(ctx context.Context, bundle *OKFBundle, query str
 
 	result := &ImportResult{TypeCounts: map[string]int{}, Truncated: truncated}
 
-	// Fetch detailed aspects per entry (best-effort).
+	// Fetch detailed aspects per entry (best-effort), bounded-parallel: one
+	// RPC per entry done serially takes minutes on real projects and blows
+	// past HTTP timeouts. Each goroutine writes only its own slice slot.
 	fullEntries := make([]*dataplexpb.Entry, len(entries))
+	aspectErrs := make([]error, len(entries))
+	sem := make(chan struct{}, importConcurrency)
+	var wg sync.WaitGroup
 	for i, e := range entries {
-		entryKey := e.GetName()
-		if entryKey == "" {
-			entryKey = e.GetFullyQualifiedName()
-		}
-		fe, aErr := c.LookupEntry(ctx, entryKey)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			entryKey := e.GetName()
+			if entryKey == "" {
+				entryKey = e.GetFullyQualifiedName()
+			}
+			fe, aErr := c.LookupEntry(ctx, entryKey)
+			if aErr != nil {
+				aspectErrs[i] = aErr
+				fullEntries[i] = e
+				return
+			}
+			fullEntries[i] = fe
+		}()
+	}
+	wg.Wait()
+	for _, aErr := range aspectErrs {
 		if aErr != nil {
 			result.AspectFailed++
 			if result.AspectError == "" {
 				result.AspectError = aErr.Error()
 			}
-			fullEntries[i] = e
-		} else {
-			fullEntries[i] = fe
 		}
 	}
 
@@ -180,8 +202,13 @@ func (c *CatalogClient) Import(ctx context.Context, bundle *OKFBundle, query str
 		fc := it.concept
 
 		if existing, ok := existingByID[fc.ID]; ok && existing.UserManaged {
-			// User-managed concept: keep user's body, refresh frontmatter metadata and # Relationships.
+			// User-managed concept: keep the user's body and annotations
+			// (description, tags, timestamp); refresh only identity metadata
+			// (type/title/resource/fqn) and the # Relationships section.
 			fc.UserManaged = true
+			fc.Description = existing.Description
+			fc.Tags = existing.Tags
+			fc.Timestamp = existing.Timestamp
 			fc.Body = updateRelationshipsSection(existing.Body, relBody)
 			result.Preserved++
 		} else {
@@ -286,20 +313,51 @@ func (c *CatalogClient) fetchLineage(ctx context.Context, assets map[string]line
 		}
 	}
 
+	// One lineage search per asset, bounded-parallel (serial RPCs take
+	// minutes on real projects). Goroutines write only their own slice slot;
+	// results are aggregated serially afterwards.
+	type lineageQuery struct {
+		id string
+		a  lineageAsset
+	}
+	var queries []lineageQuery
 	for id, a := range assets {
-		if a.FQN == "" {
+		if a.FQN != "" {
+			queries = append(queries, lineageQuery{id: id, a: a})
+		}
+	}
+	type lineageReply struct {
+		ups []string
+		err error
+	}
+	replies := make([]lineageReply, len(queries))
+	sem := make(chan struct{}, importConcurrency)
+	var wg sync.WaitGroup
+	for i, q := range queries {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			ups, err := lc.UpstreamFQNs(ctx, lc.locationFor(q.a.Location), q.a.FQN)
+			replies[i] = lineageReply{ups: ups, err: err}
+		}()
+	}
+	wg.Wait()
+
+	for i, q := range queries {
+		r := replies[i]
+		if r.err != nil {
+			if result.LineageError == "" {
+				result.LineageError = r.err.Error() // record first hard error (e.g. API disabled / no IAM)
+			}
 			continue
 		}
-		ups, err := lc.UpstreamFQNs(ctx, lc.locationFor(a.Location), a.FQN)
-		if err != nil {
-			result.LineageError = err.Error()
-			break // stop on first hard error (e.g. API disabled / no IAM)
-		}
-		for _, srcFQN := range ups {
+		for _, srcFQN := range r.ups {
 			srcID, found := matchFQN(srcFQN, idByFQN)
 			if found {
-				if srcID != id && !containsString(out[id], srcID) {
-					out[id] = append(out[id], srcID)
+				if srcID != q.id && !containsString(out[q.id], srcID) {
+					out[q.id] = append(out[q.id], srcID)
 				}
 			} else {
 				result.LineageDropped++

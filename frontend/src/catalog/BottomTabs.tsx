@@ -315,11 +315,14 @@ function MarkdownRenderer({ content, onSelect }: { content: string; onSelect: (i
         </h4>
       );
     } else if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
-      const itemContent = line.substring(line.indexOf('- ') + 2);
+      const itemContent = trimmed.substring(2);
       const leadingSpaces = line.search(/\S/);
-      const indentClass = leadingSpaces > 0 ? 'ml-4' : '';
       currentList.push(
-        <li key={`li-${keyIndex++}`} className={`text-[11px] text-zinc-300 leading-relaxed ${indentClass}`}>
+        <li
+          key={`li-${keyIndex++}`}
+          className="text-[11px] text-zinc-300 leading-relaxed"
+          style={leadingSpaces > 0 ? { marginLeft: leadingSpaces * 8 } : undefined}
+        >
           {renderFormattedInline(itemContent, onSelect)}
         </li>
       );
@@ -354,8 +357,9 @@ function renderFormattedInline(text: string, onSelect: (id: string) => void): Re
 
     if (match[1] !== undefined && match[2] !== undefined) {
       const label = match[1];
-      const target = match[2].replace(/^\//, '').replace(/\.md$/, '');
-      const isInternal = match[2].startsWith('/') || !match[2].includes('://');
+      const href = match[2];
+      const target = href.replace(/^\//, '').replace(/\.md$/, '');
+      const isInternal = !href.includes('://') && !href.toLowerCase().startsWith('mailto:');
       if (isInternal) {
         parts.push(
           <button
