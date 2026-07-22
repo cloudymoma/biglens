@@ -324,3 +324,55 @@ export interface GdeltGkgData {
   persons: GdeltNamedCount[];
   sources: GdeltMediaSource[];
 }
+
+// --- BigQuery Open Data: NOAA GHCN-Daily weather ---
+
+export interface WeatherMeta {
+  latest_date: string;
+  // Freshest day with settled station coverage — the newest 1-2 days can be
+  // nearly empty while GHCN backfills, so dashboards default to this.
+  default_date: string;
+}
+
+// Metric fields are null when the station did not report that element.
+export interface WeatherStation {
+  name: string;
+  state: string;
+  country: string;
+  latitude: number;
+  longitude: number;
+  tmax_c: number | null;
+  tmin_c: number | null;
+  prcp_mm: number | null;
+  snow_mm: number | null;
+}
+
+export interface WeatherExtreme {
+  station: string;
+  country_state: string;
+  value: number;
+}
+
+export interface WeatherOverall {
+  stations_reporting: number;
+  hottest: WeatherExtreme | null;
+  coldest: WeatherExtreme | null;
+  wettest: WeatherExtreme | null;
+  snow_stations: number;
+}
+
+export interface WeatherDaily {
+  date: string;
+  avg_tmax_c: number | null;
+  avg_tmin_c: number | null;
+  avg_prcp_mm: number | null;
+  tmax_stations: number;
+  prcp_stations: number;
+}
+
+export interface WeatherDashboardData {
+  snapshot_date: string;
+  overall: WeatherOverall;
+  stations: WeatherStation[];
+  daily: WeatherDaily[];
+}

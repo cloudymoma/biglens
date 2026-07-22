@@ -18,6 +18,8 @@ import type {
   TrendsTermData,
   GdeltEventsData,
   GdeltGkgData,
+  WeatherMeta,
+  WeatherDashboardData,
 } from './types';
 
 function filterParams(filters: QueryFilters): Record<string, string> {
@@ -196,6 +198,20 @@ export async function fetchGdeltEvents(startDate: string, endDate: string): Prom
 export async function fetchGdeltGkg(startDate: string, endDate: string): Promise<GdeltGkgData> {
   const { data } = await axios.get('/api/opendata/gdelt/gkg', {
     params: { start_date: startDate, end_date: endDate },
+  });
+  return data;
+}
+
+// --- BigQuery Open Data: NOAA GHCN-Daily weather ---
+
+export async function fetchWeatherMeta(): Promise<WeatherMeta> {
+  const { data } = await axios.get('/api/opendata/weather/meta');
+  return data;
+}
+
+export async function fetchWeatherDashboard(date: string, days: number): Promise<WeatherDashboardData> {
+  const { data } = await axios.get('/api/opendata/weather/dashboard', {
+    params: { date, days: String(days) },
   });
   return data;
 }

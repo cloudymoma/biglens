@@ -1,7 +1,8 @@
 import React from 'react';
-import { TrendingUp, Globe2 } from 'lucide-react';
+import { TrendingUp, Globe2, CloudSun } from 'lucide-react';
 import GoogleTrendsDashboard from './GoogleTrendsDashboard';
 import GdeltDashboard from './GdeltDashboard';
+import WeatherDashboard from './WeatherDashboard';
 
 // Registry of BigQuery Open Data dashboards. To add a new public dataset:
 // build its component in this directory, add an entry here, and expose its
@@ -33,5 +34,15 @@ export const OPEN_DATASETS: OpenDataset[] = [
       'Real-time global news sentiment and geopolitical events: tone, conflict hotspots, themes and actors, refreshed every 15 minutes.',
     sourceTable: 'gdelt-bq.gdeltv2',
     component: GdeltDashboard,
+  },
+  {
+    id: 'weather',
+    label: 'Global Weather',
+    icon: <CloudSun size={16} />,
+    description:
+      'Daily station observations from NOAA GHCN-Daily: temperatures, precipitation and snow ' +
+      'from ~20,000 stations worldwide, about one day behind real time.',
+    sourceTable: 'bigquery-public-data.ghcn_d',
+    component: WeatherDashboard,
   },
 ];
