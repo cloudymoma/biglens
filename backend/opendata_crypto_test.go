@@ -41,3 +41,30 @@ func TestCryptoPulseSQLPartitionFilters(t *testing.T) {
 		})
 	}
 }
+
+func TestCryptoFeeSQLPartitionFilters(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+		want []string
+	}{
+		{"btc fees", btcFeesSQL(), []string{
+			"block_timestamp_month", "APPROX_QUANTILES", "virtual_size", "NOT is_coinbase"}},
+		{"btc coinbase", btcCoinbaseSQL(), []string{
+			"block_timestamp_month", "is_coinbase", "output_value"}},
+		{"eth fees", ethFeesSQL(), []string{
+			"block_timestamp >= TIMESTAMP(@start_date)", "receipt_gas_used", "SAFE_DIVIDE"}},
+		{"eth burn", ethBurnSQL(), []string{
+			"t.block_timestamp >= TIMESTAMP(@start_date)", "b.timestamp >= TIMESTAMP(@start_date)",
+			"base_fee_per_gas", "JOIN"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, want := range tt.want {
+				if !strings.Contains(tt.sql, want) {
+					t.Errorf("%s: missing %q in SQL:\n%s", tt.name, want, tt.sql)
+				}
+			}
+		})
+	}
+}

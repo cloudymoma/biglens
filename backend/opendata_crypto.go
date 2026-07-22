@@ -162,3 +162,113 @@ func (b *BQClient) GetCryptoBlockStats(ctx context.Context, chain string, start,
 	q.Parameters = cryptoDateParams(start, end)
 	return collectRows[CryptoBlockRow](q, ctx)
 }
+
+// --- /fees: fee rates, miner revenue, EIP-1559 burn split ---
+
+// BtcFeeRow is one day's BTC fee economics. SubsidyBTC is filled by
+// mergeBtcFees (coinbase revenue − fees), not by SQL.
+type BtcFeeRow struct {
+	Date         string  `json:"date" bigquery:"date"`
+	MedianFeeVB  float64 `json:"median_fee_vb" bigquery:"median_fee_vb"`
+	TotalFeesBTC float64 `json:"total_fees_btc" bigquery:"total_fees_btc"`
+	SubsidyBTC   float64 `json:"subsidy_btc" bigquery:"-"`
+}
+
+func btcFeesSQL() string {
+	return fmt.Sprintf(`
+		SELECT
+			FORMAT_DATE('%%Y-%%m-%%d', DATE(block_timestamp)) AS date,
+			ROUND(APPROX_QUANTILES(CAST(fee AS FLOAT64) / NULLIF(virtual_size, 0), 100)[OFFSET(50)], 2) AS median_fee_vb,
+			ROUND(CAST(SUM(fee) AS FLOAT64) / 1e8, 4) AS total_fees_btc
+		FROM %s
+		WHERE NOT is_coinbase AND %s
+		GROUP BY date ORDER BY date`, btcTxTable, btcTxWindow)
+}
+
+func (b *BQClient) GetBtcFees(ctx context.Context, start, end civil.Date) ([]BtcFeeRow, error) {
+	q := b.client.Query(btcFeesSQL())
+	q.Parameters = cryptoDateParams(start, end)
+	return collectRows[BtcFeeRow](q, ctx)
+}
+
+// BtcCoinbaseRow is one day's total miner revenue (subsidy + fees), read
+// from the coinbase transactions' outputs.
+type BtcCoinbaseRow struct {
+	Date        string  `json:"date" bigquery:"date"`
+	CoinbaseBTC float64 `json:"coinbase_btc" bigquery:"coinbase_btc"`
+}
+
+func btcCoinbaseSQL() string {
+	return fmt.Sprintf(`
+		SELECT
+			FORMAT_DATE('%%Y-%%m-%%d', DATE(block_timestamp)) AS date,
+			ROUND(CAST(SUM(output_value) AS FLOAT64) / 1e8, 4) AS coinbase_btc
+		FROM %s
+		WHERE is_coinbase AND %s
+		GROUP BY date ORDER BY date`, btcTxTable, btcTxWindow)
+}
+
+func (b *BQClient) GetBtcCoinbase(ctx context.Context, start, end civil.Date) ([]BtcCoinbaseRow, error) {
+	q := b.client.Query(btcCoinbaseSQL())
+	q.Parameters = cryptoDateParams(start, end)
+	return collectRows[BtcCoinbaseRow](q, ctx)
+}
+
+// EthFeeRow is one day's ETH fee economics; the gas price average is
+// gas-weighted. BurnedETH/TipsETH are filled by mergeEthFees.
+type EthFeeRow struct {
+	Date         string  `json:"date" bigquery:"date"`
+	AvgGasGwei   float64 `json:"avg_gas_gwei" bigquery:"avg_gas_gwei"`
+	TotalFeesETH float64 `json:"total_fees_eth" bigquery:"total_fees_eth"`
+	BurnedETH    float64 `json:"burned_eth" bigquery:"-"`
+	TipsETH      float64 `json:"tips_eth" bigquery:"-"`
+}
+
+func ethFeesSQL() string {
+	return fmt.Sprintf(`
+		SELECT
+			FORMAT_DATE('%%Y-%%m-%%d', DATE(block_timestamp)) AS date,
+			ROUND(SAFE_DIVIDE(
+				SUM(receipt_gas_used * CAST(COALESCE(receipt_effective_gas_price, gas_price) AS FLOAT64)),
+				SUM(receipt_gas_used)) / 1e9, 2) AS avg_gas_gwei,
+			ROUND(SUM(receipt_gas_used * CAST(COALESCE(receipt_effective_gas_price, gas_price) AS FLOAT64)) / 1e18, 4) AS total_fees_eth
+		FROM %s
+		WHERE %s
+		GROUP BY date ORDER BY date`, ethTxTable, ethTxWindow)
+}
+
+func (b *BQClient) GetEthFees(ctx context.Context, start, end civil.Date) ([]EthFeeRow, error) {
+	q := b.client.Query(ethFeesSQL())
+	q.Parameters = cryptoDateParams(start, end)
+	return collectRows[EthFeeRow](q, ctx)
+}
+
+// EthBurnRow splits a day's fees into base fee burned vs priority tips
+// (EIP-1559). base_fee_per_gas is NULL pre-London, coalesced to 0 so those
+// days report everything as tips — historically accurate.
+type EthBurnRow struct {
+	Date      string  `json:"date" bigquery:"date"`
+	BurnedETH float64 `json:"burned_eth" bigquery:"burned_eth"`
+	TipsETH   float64 `json:"tips_eth" bigquery:"tips_eth"`
+}
+
+func ethBurnSQL() string {
+	return fmt.Sprintf(`
+		SELECT
+			FORMAT_DATE('%%Y-%%m-%%d', DATE(t.block_timestamp)) AS date,
+			ROUND(SUM(t.receipt_gas_used * CAST(COALESCE(b.base_fee_per_gas, 0) AS FLOAT64)) / 1e18, 4) AS burned_eth,
+			ROUND(SUM(t.receipt_gas_used * GREATEST(
+				CAST(COALESCE(t.receipt_effective_gas_price, t.gas_price) AS FLOAT64) - CAST(COALESCE(b.base_fee_per_gas, 0) AS FLOAT64),
+				0)) / 1e18, 4) AS tips_eth
+		FROM %s t
+		JOIN %s b ON b.number = t.block_number
+		WHERE t.block_timestamp >= TIMESTAMP(@start_date) AND t.block_timestamp < TIMESTAMP(@end_date)
+			AND b.timestamp >= TIMESTAMP(@start_date) AND b.timestamp < TIMESTAMP(@end_date)
+		GROUP BY date ORDER BY date`, ethTxTable, ethBlocksTable)
+}
+
+func (b *BQClient) GetEthBurn(ctx context.Context, start, end civil.Date) ([]EthBurnRow, error) {
+	q := b.client.Query(ethBurnSQL())
+	q.Parameters = cryptoDateParams(start, end)
+	return collectRows[EthBurnRow](q, ctx)
+}

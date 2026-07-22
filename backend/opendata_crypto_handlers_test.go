@@ -72,3 +72,38 @@ func TestRollupCryptoKpiEmpty(t *testing.T) {
 		t.Errorf("empty input must yield zero KPI, got %+v", kpi)
 	}
 }
+
+// Subsidy is coinbase revenue minus fees, clamped at zero (a day where fee
+// rows and coinbase rows disagree must never render a negative subsidy).
+func TestMergeBtcFees(t *testing.T) {
+	fees := []BtcFeeRow{
+		{Date: "2026-07-19", MedianFeeVB: 12, TotalFeesBTC: 20},
+		{Date: "2026-07-20", MedianFeeVB: 15, TotalFeesBTC: 30},
+	}
+	coinbase := []BtcCoinbaseRow{
+		{Date: "2026-07-19", CoinbaseBTC: 470},
+		{Date: "2026-07-20", CoinbaseBTC: 10}, // pathological: fees > revenue
+	}
+	got := mergeBtcFees(fees, coinbase)
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2", len(got))
+	}
+	if got[0].SubsidyBTC != 450 {
+		t.Errorf("subsidy = %v, want 450", got[0].SubsidyBTC)
+	}
+	if got[1].SubsidyBTC != 0 {
+		t.Errorf("clamped subsidy = %v, want 0", got[1].SubsidyBTC)
+	}
+	if fees[0].SubsidyBTC != 0 {
+		t.Errorf("input slice was mutated")
+	}
+}
+
+func TestMergeEthFees(t *testing.T) {
+	fees := []EthFeeRow{{Date: "2026-07-20", AvgGasGwei: 8, TotalFeesETH: 900}}
+	burn := []EthBurnRow{{Date: "2026-07-20", BurnedETH: 700, TipsETH: 200}}
+	got := mergeEthFees(fees, burn)
+	if got[0].BurnedETH != 700 || got[0].TipsETH != 200 {
+		t.Errorf("merge = %+v, want burned 700 / tips 200", got[0])
+	}
+}

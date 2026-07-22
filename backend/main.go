@@ -99,6 +99,7 @@ func main() {
 	mux.Handle("/api/opendata/weather/meta", h(api.WeatherMeta))
 	mux.Handle("/api/opendata/weather/dashboard", h(api.WeatherDashboard))
 	mux.Handle("/api/opendata/crypto/pulse", h(api.CryptoPulse))
+	mux.Handle("/api/opendata/crypto/fees", h(api.CryptoFees))
 
 	// Individual endpoints
 	mux.Handle("/api/storage", h(api.StorageStats))

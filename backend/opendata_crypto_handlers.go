@@ -182,3 +182,109 @@ func (h *APIHandler) CryptoPulse(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, v)
 }
+
+// --- /fees ---
+
+type CryptoFeesData struct {
+	Days      int              `json:"days"`
+	BTC       []BtcFeeRow      `json:"btc"`
+	ETH       []EthFeeRow      `json:"eth"`
+	BTCBlocks []CryptoBlockRow `json:"btc_blocks"`
+	ETHBlocks []CryptoBlockRow `json:"eth_blocks"`
+}
+
+// mergeBtcFees returns new rows with SubsidyBTC = coinbase revenue − fees,
+// clamped at 0. Inputs are not mutated.
+func mergeBtcFees(fees []BtcFeeRow, coinbase []BtcCoinbaseRow) []BtcFeeRow {
+	revenue := make(map[string]float64, len(coinbase))
+	for _, c := range coinbase {
+		revenue[c.Date] = c.CoinbaseBTC
+	}
+	out := make([]BtcFeeRow, 0, len(fees))
+	for _, f := range fees {
+		if subsidy := revenue[f.Date] - f.TotalFeesBTC; subsidy > 0 {
+			f.SubsidyBTC = subsidy
+		}
+		out = append(out, f)
+	}
+	return out
+}
+
+// mergeEthFees returns new rows with the burn/tips split joined by date.
+func mergeEthFees(fees []EthFeeRow, burn []EthBurnRow) []EthFeeRow {
+	byDate := make(map[string]EthBurnRow, len(burn))
+	for _, b := range burn {
+		byDate[b.Date] = b
+	}
+	out := make([]EthFeeRow, 0, len(fees))
+	for _, f := range fees {
+		if b, ok := byDate[f.Date]; ok {
+			f.BurnedETH = b.BurnedETH
+			f.TipsETH = b.TipsETH
+		}
+		out = append(out, f)
+	}
+	return out
+}
+
+func (h *APIHandler) CryptoFees(w http.ResponseWriter, r *http.Request) {
+	days, err := parseCryptoDays(r, cryptoDefaultDays, cryptoPulseDaysAllowed)
+	if err != nil {
+		writeError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	key := fmt.Sprintf("opendata:crypto:fees:%d", days)
+	if cached, ok := h.cache.Get(key); ok {
+		writeJSON(w, cached)
+		return
+	}
+
+	v, err, _ := cryptoFlight.Do(key, func() (any, error) {
+		start, end := cryptoWindow(days)
+		data := CryptoFeesData{
+			Days:      days,
+			BTC:       []BtcFeeRow{},
+			ETH:       []EthFeeRow{},
+			BTCBlocks: []CryptoBlockRow{},
+			ETHBlocks: []CryptoBlockRow{},
+		}
+		var btcFees []BtcFeeRow
+		var btcCoinbase []BtcCoinbaseRow
+		var ethFees []EthFeeRow
+		var ethBurn []EthBurnRow
+
+		g, ctx := errgroup.WithContext(r.Context())
+		g.Go(func() (err error) { btcFees, err = h.bq.GetBtcFees(ctx, start, end); return })
+		g.Go(func() (err error) { btcCoinbase, err = h.bq.GetBtcCoinbase(ctx, start, end); return })
+		g.Go(func() (err error) { ethFees, err = h.bq.GetEthFees(ctx, start, end); return })
+		g.Go(func() (err error) { ethBurn, err = h.bq.GetEthBurn(ctx, start, end); return })
+		g.Go(func() error {
+			rows, err := h.bq.GetCryptoBlockStats(ctx, "btc", start, end)
+			if rows != nil {
+				data.BTCBlocks = rows
+			}
+			return err
+		})
+		g.Go(func() error {
+			rows, err := h.bq.GetCryptoBlockStats(ctx, "eth", start, end)
+			if rows != nil {
+				data.ETHBlocks = rows
+			}
+			return err
+		})
+		if err := g.Wait(); err != nil {
+			return nil, err
+		}
+
+		data.BTC = mergeBtcFees(btcFees, btcCoinbase)
+		data.ETH = mergeEthFees(ethFees, ethBurn)
+		h.cache.Set(key, &data)
+		return &data, nil
+	})
+	if err != nil {
+		writeError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, v)
+}
