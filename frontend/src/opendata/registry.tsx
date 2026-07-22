@@ -1,8 +1,9 @@
 import React from 'react';
-import { TrendingUp, Globe2, CloudSun } from 'lucide-react';
+import { TrendingUp, Globe2, CloudSun, Bitcoin } from 'lucide-react';
 import GoogleTrendsDashboard from './GoogleTrendsDashboard';
 import GdeltDashboard from './GdeltDashboard';
 import WeatherDashboard from './WeatherDashboard';
+import CryptoDashboard from './crypto/CryptoDashboard';
 
 // Registry of BigQuery Open Data dashboards. To add a new public dataset:
 // build its component in this directory, add an entry here, and expose its
@@ -44,5 +45,15 @@ export const OPEN_DATASETS: OpenDataset[] = [
       'from ~20,000 stations worldwide, about one day behind real time.',
     sourceTable: 'bigquery-public-data.ghcn_d',
     component: WeatherDashboard,
+  },
+  {
+    id: 'crypto',
+    label: 'Crypto Pulse',
+    icon: <Bitcoin size={16} />,
+    description:
+      'On-chain fundamentals for Bitcoin and Ethereum: network activity, fee markets, ' +
+      'whale flows and the ERC-20 token economy — native units, no fiat prices, updated daily.',
+    sourceTable: 'bigquery-public-data.crypto_bitcoin · crypto_ethereum',
+    component: CryptoDashboard,
   },
 ];
