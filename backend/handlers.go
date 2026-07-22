@@ -280,29 +280,14 @@ func (h *APIHandler) IAMDashboard(w http.ResponseWriter, r *http.Request) {
 	})
 
 	g.Go(func() error {
+		// The >=30 and >=90 day lists are subsets of the >=7 day list, so one
+		// 180-day JOBS_BY_PROJECT scan covers all three buckets.
 		i, err := h.bq.GetInactiveEmails(ctx, filters.Region, 7)
 		if err != nil {
 			return err
 		}
 		data.Inactive7 = i
-		return nil
-	})
-
-	g.Go(func() error {
-		i, err := h.bq.GetInactiveEmails(ctx, filters.Region, 30)
-		if err != nil {
-			return err
-		}
-		data.Inactive30 = i
-		return nil
-	})
-
-	g.Go(func() error {
-		i, err := h.bq.GetInactiveEmails(ctx, filters.Region, 90)
-		if err != nil {
-			return err
-		}
-		data.Inactive90 = i
+		data.Inactive30, data.Inactive90 = bucketInactiveEmails(i)
 		return nil
 	})
 
@@ -313,6 +298,20 @@ func (h *APIHandler) IAMDashboard(w http.ResponseWriter, r *http.Request) {
 
 	h.cache.Set(key, &data)
 	writeJSON(w, &data)
+}
+
+// bucketInactiveEmails splits a >=7-day inactivity list into its >=30 and
+// >=90 day subsets, preserving order.
+func bucketInactiveEmails(inactive []InactiveEmail) (i30, i90 []InactiveEmail) {
+	for _, e := range inactive {
+		if e.DaysIdle >= 30 {
+			i30 = append(i30, e)
+		}
+		if e.DaysIdle >= 90 {
+			i90 = append(i90, e)
+		}
+	}
+	return i30, i90
 }
 
 func (h *APIHandler) SearchEmails(w http.ResponseWriter, r *http.Request) {
