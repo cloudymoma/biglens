@@ -6,23 +6,11 @@ import { fetchCryptoPulse } from '../../api';
 import { MetricCard, EmptyState, ErrorBanner } from '../../dashboards/shared';
 import {
   BTC_COLOR, ETH_COLOR, CHART_TOOLTIP, AXIS_LABEL, SPLIT_LINE,
-  fmtNum, Panel, DaysPicker,
+  fmtNum, Panel, DaysPicker, mergeDates, seriesByDate,
 } from './shared';
 
 const DAY_OPTIONS = [7, 30, 90, 365];
 const ADDRESS_MAX_DAYS = 90; // mirrors backend cryptoAddressMaxDays
-
-// Aligns both chains' series on the union of dates so lines share one x-axis.
-function mergeDates(btc: { date: string }[], eth: { date: string }[]): string[] {
-  return [...new Set([...btc.map(r => r.date), ...eth.map(r => r.date)])].sort();
-}
-
-function seriesByDate<T extends { date: string }>(
-  rows: T[], dates: string[], pick: (r: T) => number,
-): (number | null)[] {
-  const byDate = new Map(rows.map(r => [r.date, pick(r)]));
-  return dates.map(d => byDate.get(d) ?? null);
-}
 
 function dualChainLineOption(
   dates: string[],

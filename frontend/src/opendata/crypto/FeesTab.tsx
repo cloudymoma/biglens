@@ -6,7 +6,7 @@ import { fetchCryptoFees } from '../../api';
 import { MetricCard, EmptyState, ErrorBanner } from '../../dashboards/shared';
 import {
   BTC_COLOR, ETH_COLOR, CHART_TOOLTIP, AXIS_LABEL, SPLIT_LINE,
-  fmtNum, Panel, DaysPicker,
+  fmtNum, Panel, DaysPicker, mergeDates, seriesByDate,
 } from './shared';
 
 const DAY_OPTIONS = [7, 30, 90, 365];
@@ -43,6 +43,7 @@ export default function FeesTab() {
   const latestEth = data.eth[data.eth.length - 1];
   const btcDates = data.btc.map(r => r.date);
   const ethDates = data.eth.map(r => r.date);
+  const feeTrendDates = mergeDates(data.btc, data.eth);
   const btcFeeByDate = new Map(data.btc.map(r => [r.date, r.median_fee_vb]));
   const ethFeeByDate = new Map(data.eth.map(r => [r.date, r.avg_gas_gwei]));
 
@@ -67,14 +68,14 @@ export default function FeesTab() {
             tooltip: { trigger: 'axis', ...CHART_TOOLTIP },
             legend: { textStyle: { color: '#a1a1aa', fontSize: 11 }, top: 0 },
             grid: { left: 60, right: 60, top: 32, bottom: 24 },
-            xAxis: { type: 'category', data: btcDates, axisLabel: AXIS_LABEL },
+            xAxis: { type: 'category', data: feeTrendDates, axisLabel: AXIS_LABEL },
             yAxis: [
               { type: 'value', axisLabel: AXIS_LABEL, splitLine: SPLIT_LINE },
               { type: 'value', axisLabel: AXIS_LABEL, splitLine: { show: false } },
             ],
             series: [
-              { name: 'BTC sat/vB', type: 'line', showSymbol: false, data: data.btc.map(r => r.median_fee_vb), lineStyle: { color: BTC_COLOR, width: 2 }, itemStyle: { color: BTC_COLOR } },
-              { name: 'ETH gwei', type: 'line', showSymbol: false, yAxisIndex: 1, data: data.eth.map(r => r.avg_gas_gwei), lineStyle: { color: ETH_COLOR, width: 2 }, itemStyle: { color: ETH_COLOR } },
+              { name: 'BTC sat/vB', type: 'line', showSymbol: false, data: seriesByDate(data.btc, feeTrendDates, r => r.median_fee_vb), lineStyle: { color: BTC_COLOR, width: 2 }, itemStyle: { color: BTC_COLOR } },
+              { name: 'ETH gwei', type: 'line', showSymbol: false, yAxisIndex: 1, data: seriesByDate(data.eth, feeTrendDates, r => r.avg_gas_gwei), lineStyle: { color: ETH_COLOR, width: 2 }, itemStyle: { color: ETH_COLOR } },
             ],
           }}
         />

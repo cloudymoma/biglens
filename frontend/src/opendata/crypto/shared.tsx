@@ -55,3 +55,15 @@ export function DaysPicker({ options, value, onChange }: {
     </div>
   );
 }
+
+// Aligns both chains' series on the union of dates so lines share one x-axis.
+export function mergeDates(btc: { date: string }[], eth: { date: string }[]): string[] {
+  return [...new Set([...btc.map(r => r.date), ...eth.map(r => r.date)])].sort();
+}
+
+export function seriesByDate<T extends { date: string }>(
+  rows: T[], dates: string[], pick: (r: T) => number,
+): (number | null)[] {
+  const byDate = new Map(rows.map(r => [r.date, pick(r)]));
+  return dates.map(d => byDate.get(d) ?? null);
+}
