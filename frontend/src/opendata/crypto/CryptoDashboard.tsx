@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type React from 'react';
 import PulseTab from './PulseTab';
+import FeesTab from './FeesTab';
 
 const TABS = [
   { id: 'pulse', label: 'Network Pulse' },
@@ -28,7 +29,7 @@ export default function CryptoDashboard() {
 
   const tabBody: Record<TabId, React.ReactNode> = {
     pulse: <PulseTab />,
-    fees: <ComingSoon label="Fee Market" />,
+    fees: <FeesTab />,
     whales: <ComingSoon label="Whales & Flow" />,
     tokens: <ComingSoon label="Token Economy" />,
   };
