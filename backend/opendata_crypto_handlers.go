@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"sort"
 	"strconv"
 	"time"
 
@@ -408,6 +409,101 @@ func (h *APIHandler) CryptoWhales(w http.ResponseWriter, r *http.Request) {
 			return nil, err
 		}
 
+		h.cache.Set(key, &data)
+		return &data, nil
+	})
+	if err != nil {
+		writeError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, v)
+}
+
+// --- /tokens ---
+
+var cryptoTokenDaysAllowed = []int{7, 30}
+
+const cryptoTokenDefaultDays = 30
+
+type CryptoTokensData struct {
+	Days      int             `json:"days"`
+	TopTokens []TokenRow      `json:"top_tokens"`
+	Daily     []TokenDailyRow `json:"daily"`
+	Contracts []ContractRow   `json:"contracts"`
+}
+
+// mergeTokenDaily zips transfer counts with native tx counts over the union
+// of dates (sorted), zero-filling either side. Inputs are not mutated.
+func mergeTokenDaily(transfers []TokenDailyRow, native []CryptoActivityRow) []TokenDailyRow {
+	transferByDate := make(map[string]int64, len(transfers))
+	nativeByDate := make(map[string]int64, len(native))
+	dates := make(map[string]bool)
+	for _, r := range transfers {
+		transferByDate[r.Date] = r.Transfers
+		dates[r.Date] = true
+	}
+	for _, r := range native {
+		nativeByDate[r.Date] = r.TxCount
+		dates[r.Date] = true
+	}
+	sorted := make([]string, 0, len(dates))
+	for d := range dates {
+		sorted = append(sorted, d)
+	}
+	sort.Strings(sorted)
+	out := make([]TokenDailyRow, 0, len(sorted))
+	for _, d := range sorted {
+		out = append(out, TokenDailyRow{Date: d, Transfers: transferByDate[d], NativeTxs: nativeByDate[d]})
+	}
+	return out
+}
+
+func (h *APIHandler) CryptoTokens(w http.ResponseWriter, r *http.Request) {
+	days, err := parseCryptoDays(r, cryptoTokenDefaultDays, cryptoTokenDaysAllowed)
+	if err != nil {
+		writeError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	key := fmt.Sprintf("opendata:crypto:tokens:%d", days)
+	if cached, ok := h.cache.Get(key); ok {
+		writeJSON(w, cached)
+		return
+	}
+
+	v, err, _ := cryptoFlight.Do(key, func() (any, error) {
+		start, end := cryptoWindow(days)
+		data := CryptoTokensData{
+			Days:      days,
+			TopTokens: []TokenRow{},
+			Daily:     []TokenDailyRow{},
+			Contracts: []ContractRow{},
+		}
+		var transfers []TokenDailyRow
+		var native []CryptoActivityRow
+
+		g, ctx := errgroup.WithContext(r.Context())
+		g.Go(func() error {
+			rows, err := h.bq.GetTokenTop(ctx, start, end)
+			if rows != nil {
+				data.TopTokens = rows
+			}
+			return err
+		})
+		g.Go(func() (err error) { transfers, err = h.bq.GetTokenDaily(ctx, start, end); return })
+		g.Go(func() (err error) { native, err = h.bq.GetCryptoActivity(ctx, "eth", start, end); return })
+		g.Go(func() error {
+			rows, err := h.bq.GetContractsDaily(ctx, start, end)
+			if rows != nil {
+				data.Contracts = rows
+			}
+			return err
+		})
+		if err := g.Wait(); err != nil {
+			return nil, err
+		}
+
+		data.Daily = mergeTokenDaily(transfers, native)
 		h.cache.Set(key, &data)
 		return &data, nil
 	})

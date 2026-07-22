@@ -103,3 +103,33 @@ func TestCryptoWhaleSQLPartitionFilters(t *testing.T) {
 		})
 	}
 }
+
+func TestCryptoTokenSQLShape(t *testing.T) {
+	sql := tokenTopSQL()
+	for _, want := range []string{
+		"WITH top AS", "block_timestamp >= TIMESTAMP(@start_date)",
+		"APPROX_COUNT_DISTINCT(from_address)", "APPROX_COUNT_DISTINCT(to_address)",
+		"LIMIT 25", "LEFT JOIN",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("tokenTopSQL missing %q:\n%s", want, sql)
+		}
+	}
+	// Spec: aggregate token_transfers to 25 rows in a CTE BEFORE joining the
+	// tokens table — the LIMIT must appear before the join.
+	if strings.Index(sql, "LIMIT 25") > strings.Index(sql, "LEFT JOIN") {
+		t.Errorf("tokenTopSQL joins tokens before aggregating transfers:\n%s", sql)
+	}
+
+	for name, s := range map[string]string{
+		"tokenDailySQL":     tokenDailySQL(),
+		"contractsDailySQL": contractsDailySQL(),
+	} {
+		if !strings.Contains(s, "block_timestamp >= TIMESTAMP(@start_date)") {
+			t.Errorf("%s missing partition filter:\n%s", name, s)
+		}
+	}
+	if !strings.Contains(contractsDailySQL(), "is_erc20") {
+		t.Errorf("contractsDailySQL missing erc flags")
+	}
+}

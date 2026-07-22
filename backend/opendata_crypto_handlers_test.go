@@ -158,3 +158,30 @@ func TestFilterWhaleTxs(t *testing.T) {
 		})
 	}
 }
+
+// Token transfer counts and native tx counts come from two queries; the
+// merged series must cover the union of dates with zeros, not drop days.
+func TestMergeTokenDaily(t *testing.T) {
+	transfers := []TokenDailyRow{
+		{Date: "2026-07-19", Transfers: 500},
+		{Date: "2026-07-20", Transfers: 700},
+	}
+	native := []CryptoActivityRow{
+		{Date: "2026-07-20", TxCount: 1200},
+		{Date: "2026-07-21", TxCount: 1300},
+	}
+	got := mergeTokenDaily(transfers, native)
+	want := []TokenDailyRow{
+		{Date: "2026-07-19", Transfers: 500, NativeTxs: 0},
+		{Date: "2026-07-20", Transfers: 700, NativeTxs: 1200},
+		{Date: "2026-07-21", Transfers: 0, NativeTxs: 1300},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("len = %d, want %d: %+v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("row %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}

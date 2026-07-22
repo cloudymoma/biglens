@@ -440,3 +440,110 @@ func (b *BQClient) GetCryptoConcentration(ctx context.Context, chain string, sta
 	q.Parameters = cryptoDateParams(start, end)
 	return collectRows[ConcentrationRow](q, ctx)
 }
+
+// --- /tokens: ERC-20 activity (counts only — cross-token value sums are
+// meaningless without prices, and long-tail decimals are unreliable) ---
+
+const (
+	ethTokenTransfersTable = "`bigquery-public-data.crypto_ethereum.token_transfers`"
+	ethTokensTable         = "`bigquery-public-data.crypto_ethereum.tokens`"
+	ethContractsTable      = "`bigquery-public-data.crypto_ethereum.contracts`"
+)
+
+// TokenRow is one of the window's most-moved ERC-20 tokens.
+type TokenRow struct {
+	TokenAddress string `json:"token_address" bigquery:"token_address"`
+	Symbol       string `json:"symbol" bigquery:"symbol"`
+	Name         string `json:"name" bigquery:"name"`
+	Transfers    int64  `json:"transfers" bigquery:"transfers"`
+	Senders      int64  `json:"senders" bigquery:"senders"`
+	Receivers    int64  `json:"receivers" bigquery:"receivers"`
+}
+
+// tokenTopSQL aggregates the multi-billion-row token_transfers table down to
+// 25 rows inside the CTE first, then joins the (deduplicated) tokens table
+// for symbol/name — never the other way around.
+func tokenTopSQL() string {
+	return fmt.Sprintf(`
+		WITH top AS (
+			SELECT
+				token_address,
+				COUNT(*) AS transfers,
+				APPROX_COUNT_DISTINCT(from_address) AS senders,
+				APPROX_COUNT_DISTINCT(to_address) AS receivers
+			FROM %s
+			WHERE block_timestamp >= TIMESTAMP(@start_date) AND block_timestamp < TIMESTAMP(@end_date)
+			GROUP BY token_address
+			ORDER BY transfers DESC
+			LIMIT 25
+		)
+		SELECT
+			top.token_address,
+			COALESCE(tk.symbol, '') AS symbol,
+			COALESCE(tk.name, '') AS name,
+			top.transfers,
+			top.senders,
+			top.receivers
+		FROM top
+		LEFT JOIN (
+			SELECT address, ANY_VALUE(symbol) AS symbol, ANY_VALUE(name) AS name
+			FROM %s GROUP BY address
+		) tk ON tk.address = top.token_address
+		ORDER BY top.transfers DESC`, ethTokenTransfersTable, ethTokensTable)
+}
+
+func (b *BQClient) GetTokenTop(ctx context.Context, start, end civil.Date) ([]TokenRow, error) {
+	q := b.client.Query(tokenTopSQL())
+	q.Parameters = cryptoDateParams(start, end)
+	return collectRows[TokenRow](q, ctx)
+}
+
+// TokenDailyRow compares ERC-20 transfer events with plain ETH transactions.
+// NativeTxs is filled by mergeTokenDaily, not by SQL.
+type TokenDailyRow struct {
+	Date      string `json:"date" bigquery:"date"`
+	Transfers int64  `json:"transfers" bigquery:"transfers"`
+	NativeTxs int64  `json:"native_txs" bigquery:"-"`
+}
+
+func tokenDailySQL() string {
+	return fmt.Sprintf(`
+		SELECT
+			FORMAT_DATE('%%Y-%%m-%%d', DATE(block_timestamp)) AS date,
+			COUNT(*) AS transfers
+		FROM %s
+		WHERE block_timestamp >= TIMESTAMP(@start_date) AND block_timestamp < TIMESTAMP(@end_date)
+		GROUP BY date ORDER BY date`, ethTokenTransfersTable)
+}
+
+func (b *BQClient) GetTokenDaily(ctx context.Context, start, end civil.Date) ([]TokenDailyRow, error) {
+	q := b.client.Query(tokenDailySQL())
+	q.Parameters = cryptoDateParams(start, end)
+	return collectRows[TokenDailyRow](q, ctx)
+}
+
+// ContractRow is one day's contract deployments with ERC flags.
+type ContractRow struct {
+	Date      string `json:"date" bigquery:"date"`
+	Contracts int64  `json:"contracts" bigquery:"contracts"`
+	Erc20     int64  `json:"erc20" bigquery:"erc20"`
+	Erc721    int64  `json:"erc721" bigquery:"erc721"`
+}
+
+func contractsDailySQL() string {
+	return fmt.Sprintf(`
+		SELECT
+			FORMAT_DATE('%%Y-%%m-%%d', DATE(block_timestamp)) AS date,
+			COUNT(*) AS contracts,
+			COUNTIF(is_erc20) AS erc20,
+			COUNTIF(is_erc721) AS erc721
+		FROM %s
+		WHERE block_timestamp >= TIMESTAMP(@start_date) AND block_timestamp < TIMESTAMP(@end_date)
+		GROUP BY date ORDER BY date`, ethContractsTable)
+}
+
+func (b *BQClient) GetContractsDaily(ctx context.Context, start, end civil.Date) ([]ContractRow, error) {
+	q := b.client.Query(contractsDailySQL())
+	q.Parameters = cryptoDateParams(start, end)
+	return collectRows[ContractRow](q, ctx)
+}
