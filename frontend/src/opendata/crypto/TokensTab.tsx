@@ -82,7 +82,7 @@ export default function TokensTab() {
             option={{
               tooltip: {
                 ...CHART_TOOLTIP,
-                formatter: (p: { name: string; value: number }) => `${p.name}<br/>${fmtNum(p.value)} transfers`,
+                formatter: (p: { value: number }) => `${fmtNum(p.value)} transfers`,
               },
               series: [{
                 type: 'treemap',
