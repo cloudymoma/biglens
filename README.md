@@ -196,10 +196,92 @@ relative to the term's own history*, a #14 term can score 100 (it just hit its
 all-time high) while the #1 term scores lower (huge volume, but past its peak
 week). The leaderboard therefore intentionally sorts by rank, not score.
 
+### GDELT News Pulse
+
+A real-time global news sentiment and geopolitical monitoring dashboard,
+powered by the [GDELT Project](https://www.gdeltproject.org/) 2.0 tables
+`gdelt-bq.gdeltv2.events_partitioned` and `gdelt-bq.gdeltv2.gkg_partitioned`.
+GDELT machine-reads news media worldwide in 100+ languages and refreshes
+every 15 minutes; BigLens queries the partitioned tables directly (no
+intermediate tables or views).
+
+| Widget | Description |
+|---|---|
+| **Global Event Hotspots** | World map of the top 500 locations — bubble size = event count, color = average tone |
+| **Sentiment Gauge** | Weighted global average tone for the selected range |
+| **Volume & Tone Trend** | Daily event count (bars) vs. daily average tone (line) |
+| **Cooperation vs Conflict** | Donut of the event mix across the four QuadClasses |
+| **Risk Matrix** | Event types plotted by Goldstein score (x) vs. activity (y, log) — lower-right = high-volume destabilizing |
+| **Conflict Categories** | Event counts per CAMEO conflict root code (Protest, Coerce, Assault, Fight, …) |
+| **Breaking Conflict Reports** | Top 50 most-mentioned conflict articles, one row per source URL |
+| **Trending Themes** | Treemap of the top 50 GKG themes by article count |
+| **Most Covered People / Leading Media Sources** | Top 20 people and top 10 outlets (colored by average tone) |
+
+Filters: quick ranges (3 / 7 / 30 days) plus a custom UTC date range. The
+event panels accept up to 90 days; the theme/entity (GKG) panel up to 30 days
+and loads independently, so the fast event charts never wait for it.
+
+#### Understanding the data
+
+GDELT is an index of *news coverage*, not a registry of verified incidents.
+Each row is one machine-coded "who did what to whom" statement extracted from
+a news report, so the same real-world incident covered by many outlets
+produces many rows — counts measure **media attention**, which is exactly
+what a news-pulse dashboard should show.
+
+- **Date reported** — the UTC date GDELT ingested the report
+  (`_PARTITIONDATE`), not the date the underlying event happened. This is the
+  right axis for "what is the news covering right now", and it is also the
+  table's partition key, so every query prunes to only the selected days.
+- **Tone** — the average emotional tone of the language in the articles
+  describing an event, from GDELT's sentiment engine. The scale is
+  −100…+100 but real-world values almost always fall in −10…+10; below −2
+  reads as clearly negative coverage, above +2 as positive.
+- **Goldstein scale (−10…+10)** — a standard political-science score of an
+  event *type*'s theoretical impact on a country's stability (e.g. "Provide
+  aid" is strongly positive, "Fight" strongly negative). It is fixed per
+  CAMEO event type — it rates the kind of action, not the individual article.
+- **QuadClass (1–4)** — GDELT's coarsest event grouping: Verbal Cooperation,
+  Material Cooperation, Verbal Conflict, Material Conflict. Classes 3–4 drive
+  the "Conflict Share" metric and the breaking-reports list.
+- **CAMEO root codes ('01'–'20')** — the 20 top-level event categories of the
+  [CAMEO taxonomy](http://data.gdeltproject.org/documentation/CAMEO.Manual.1.1b3.pdf)
+  (Appeal, Consult, Threaten, Protest, Fight, …). Codes '10'+ are the
+  conflict side. The API returns raw codes; the UI maps them to labels.
+- **Mentions** — how many times an event was mentioned across all monitored
+  documents (`NumMentions`); the prominence signal that ranks the
+  breaking-reports table.
+- **Themes / People (GKG)** — from the Global Knowledge Graph, which tags
+  every *article* with themes (e.g. `PROTEST`, `WB_2670_JOBS`) and named
+  people. Their weights are **article counts**: an article mentioning a theme
+  ten times still counts once, so long articles don't dominate the treemap.
+- **Media source tone** — the average document tone (first field of the GKG
+  `V2Tone` composite) across everything an outlet published in the range.
+
+#### How the numbers are calculated
+
+- **Weighted averages, never averages of averages.** BigQuery returns one
+  row per (day × QuadClass × event type) group with that group's `AVG` and
+  `COUNT`; the Go backend combines them as `Σ(avg×n)/Σ(n)`, which is
+  mathematically identical to averaging the raw rows. A plain mean of group
+  averages would let a 10-event group distort the global tone as much as a
+  100,000-event group.
+- **Hotspots** are event coordinates rounded to a 0.1° grid (~11 km) and
+  aggregated per cell; the map shows the 500 busiest cells.
+- **Breaking reports** are deduplicated by `SOURCEURL` (keeping each
+  article's highest-mention event row), because GDELT emits several event
+  rows per article and one big story would otherwise flood the top 50.
+- **Cost guardrails**: native `DATE` parameters against the partition key,
+  hard span caps (90 / 30 days), server-side `GROUP BY + LIMIT`, the shared
+  10-minute cache, and request coalescing (`singleflight`) so concurrent
+  identical requests trigger a single BigQuery job. A full cache miss on the
+  default 3-day window scans well under 1 GB — a fraction of a cent at
+  on-demand pricing.
+
 ### Adding another public dataset
 
 1. Backend: create `backend/opendata_<name>.go` (typed rows + `BQClient`
-   methods) and handlers in `backend/opendata_handlers.go`, routed under
+   methods) and `backend/opendata_<name>_handlers.go`, routed under
    `/api/opendata/<name>/*`.
 2. Frontend: build the dashboard component in `frontend/src/opendata/` and
    register it in `frontend/src/opendata/registry.tsx` — the sidebar entry,

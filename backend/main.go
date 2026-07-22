@@ -94,6 +94,8 @@ func main() {
 	mux.Handle("/api/opendata/trends/meta", h(api.TrendsMetaHandler))
 	mux.Handle("/api/opendata/trends/dashboard", h(api.TrendsDashboard))
 	mux.Handle("/api/opendata/trends/term", h(api.TrendsTerm))
+	mux.Handle("/api/opendata/gdelt/events", h(api.GdeltEvents))
+	mux.Handle("/api/opendata/gdelt/gkg", h(api.GdeltGkg))
 
 	// Individual endpoints
 	mux.Handle("/api/storage", h(api.StorageStats))

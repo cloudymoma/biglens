@@ -1,6 +1,7 @@
 import React from 'react';
-import { TrendingUp } from 'lucide-react';
+import { TrendingUp, Globe2 } from 'lucide-react';
 import GoogleTrendsDashboard from './GoogleTrendsDashboard';
+import GdeltDashboard from './GdeltDashboard';
 
 // Registry of BigQuery Open Data dashboards. To add a new public dataset:
 // build its component in this directory, add an entry here, and expose its
@@ -23,5 +24,14 @@ export const OPEN_DATASETS: OpenDataset[] = [
       'Top 25 search terms and top rising queries by country, with 5 years of weekly history per daily snapshot.',
     sourceTable: 'bigquery-public-data.google_trends',
     component: GoogleTrendsDashboard,
+  },
+  {
+    id: 'gdelt',
+    label: 'GDELT News Pulse',
+    icon: <Globe2 size={16} />,
+    description:
+      'Real-time global news sentiment and geopolitical events: tone, conflict hotspots, themes and actors, refreshed every 15 minutes.',
+    sourceTable: 'gdelt-bq.gdeltv2',
+    component: GdeltDashboard,
   },
 ];

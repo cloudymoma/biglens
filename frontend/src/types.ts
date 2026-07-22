@@ -255,3 +255,72 @@ export interface TrendsTermData {
   geo: TrendsGeoPoint[];
   history: TrendsHistoryPoint[];
 }
+
+// --- BigQuery Open Data: GDELT ---
+
+export interface GdeltOverall {
+  event_count: number;
+  avg_tone: number;
+  avg_goldstein: number;
+}
+
+export interface GdeltDaily {
+  ingest_date: string;
+  event_count: number;
+  avg_tone: number;
+}
+
+export interface GdeltQuadClass {
+  quad_class: number;
+  event_count: number;
+}
+
+export interface GdeltEventType {
+  event_root_code: string;
+  event_count: number;
+  avg_goldstein: number;
+  avg_tone: number;
+}
+
+export interface GdeltHotspot {
+  latitude: number;
+  longitude: number;
+  fips_country: string;
+  event_count: number;
+  avg_tone: number;
+}
+
+export interface GdeltNews {
+  ingest_date: string;
+  fips_country: string;
+  event_root_code: string;
+  avg_tone: number;
+  source_url: string;
+  mention_count: number;
+}
+
+export interface GdeltEventsData {
+  overall: GdeltOverall;
+  daily: GdeltDaily[];
+  quad_class: GdeltQuadClass[];
+  event_types: GdeltEventType[];
+  hotspots: GdeltHotspot[];
+  conflict_news: GdeltNews[];
+}
+
+export interface GdeltNamedCount {
+  name: string;
+  article_count: number;
+}
+
+export interface GdeltMediaSource {
+  media_source: string;
+  article_count: number;
+  avg_tone: number;
+}
+
+export interface GdeltGkgData {
+  themes: GdeltNamedCount[];
+  persons: GdeltNamedCount[];
+  sources: GdeltMediaSource[];
+}

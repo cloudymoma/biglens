@@ -16,6 +16,8 @@ import type {
   TrendsMeta,
   TrendsDashboardData,
   TrendsTermData,
+  GdeltEventsData,
+  GdeltGkgData,
 } from './types';
 
 function filterParams(filters: QueryFilters): Record<string, string> {
@@ -179,5 +181,21 @@ export async function fetchTrendsTerm(
     params.country_code = countryCode;
   }
   const { data } = await axios.get('/api/opendata/trends/term', { params });
+  return data;
+}
+
+// --- BigQuery Open Data: GDELT ---
+
+export async function fetchGdeltEvents(startDate: string, endDate: string): Promise<GdeltEventsData> {
+  const { data } = await axios.get('/api/opendata/gdelt/events', {
+    params: { start_date: startDate, end_date: endDate },
+  });
+  return data;
+}
+
+export async function fetchGdeltGkg(startDate: string, endDate: string): Promise<GdeltGkgData> {
+  const { data } = await axios.get('/api/opendata/gdelt/gkg', {
+    params: { start_date: startDate, end_date: endDate },
+  });
   return data;
 }
