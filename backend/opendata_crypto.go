@@ -272,3 +272,171 @@ func (b *BQClient) GetEthBurn(ctx context.Context, start, end civil.Date) ([]Eth
 	q.Parameters = cryptoDateParams(start, end)
 	return collectRows[EthBurnRow](q, ctx)
 }
+
+// --- /whales: largest transfers, top receivers, whale trend, concentration ---
+
+// Whale thresholds in native units (no USD rate exists in these datasets);
+// the satoshi/wei literals appear verbatim in SQL so tests can assert them.
+const (
+	whaleThresholdBTC = 100.0  // BTC;  10000000000 satoshi
+	whaleThresholdETH = 1000.0 // ETH;  1000000000000000000000 wei (NUMERIC literal)
+)
+
+// WhaleTx is one large transaction. From/To are empty on BTC: with multiple
+// inputs and outputs there is no single sender/receiver to name.
+type WhaleTx struct {
+	Hash   string  `json:"hash" bigquery:"hash"`
+	Time   string  `json:"time" bigquery:"time"`
+	From   string  `json:"from" bigquery:"from_address"`
+	To     string  `json:"to" bigquery:"to_address"`
+	Amount float64 `json:"amount" bigquery:"amount"`
+}
+
+func whaleLargestSQL(chain string) string {
+	if chain == "btc" {
+		return fmt.Sprintf(`
+		SELECT
+			`+"`hash`"+`,
+			FORMAT_TIMESTAMP('%%Y-%%m-%%d %%H:%%M', block_timestamp) AS time,
+			'' AS from_address,
+			'' AS to_address,
+			ROUND(CAST(output_value AS FLOAT64) / 1e8, 2) AS amount
+		FROM %s
+		WHERE NOT is_coinbase AND %s
+		ORDER BY output_value DESC
+		LIMIT 50`, btcTxTable, btcTxWindow)
+	}
+	return fmt.Sprintf(`
+		SELECT
+			`+"`hash`"+`,
+			FORMAT_TIMESTAMP('%%Y-%%m-%%d %%H:%%M', block_timestamp) AS time,
+			COALESCE(from_address, '') AS from_address,
+			COALESCE(to_address, '') AS to_address,
+			ROUND(CAST(value AS FLOAT64) / 1e18, 2) AS amount
+		FROM %s
+		WHERE %s
+		ORDER BY value DESC
+		LIMIT 50`, ethTxTable, ethTxWindow)
+}
+
+func (b *BQClient) GetCryptoLargestTxs(ctx context.Context, chain string, start, end civil.Date) ([]WhaleTx, error) {
+	q := b.client.Query(whaleLargestSQL(chain))
+	q.Parameters = cryptoDateParams(start, end)
+	return collectRows[WhaleTx](q, ctx)
+}
+
+// WhaleAddress is one of the window's top value receivers.
+type WhaleAddress struct {
+	Address string  `json:"address" bigquery:"address"`
+	Total   float64 `json:"total" bigquery:"total"`
+	TxCount int64   `json:"tx_count" bigquery:"tx_count"`
+}
+
+func whaleReceiversSQL(chain string) string {
+	if chain == "btc" {
+		return fmt.Sprintf(`
+		SELECT
+			addr AS address,
+			ROUND(CAST(SUM(o.value) AS FLOAT64) / 1e8, 2) AS total,
+			COUNT(*) AS tx_count
+		FROM %s t, UNNEST(t.outputs) AS o, UNNEST(o.addresses) AS addr
+		WHERE t.%s
+		GROUP BY addr
+		ORDER BY total DESC
+		LIMIT 20`, btcTxTable, btcTxWindowAliased)
+	}
+	return fmt.Sprintf(`
+		SELECT
+			to_address AS address,
+			ROUND(CAST(SUM(value) AS FLOAT64) / 1e18, 2) AS total,
+			COUNT(*) AS tx_count
+		FROM %s
+		WHERE to_address IS NOT NULL AND %s
+		GROUP BY to_address
+		ORDER BY total DESC
+		LIMIT 20`, ethTxTable, ethTxWindow)
+}
+
+func (b *BQClient) GetCryptoTopReceivers(ctx context.Context, chain string, start, end civil.Date) ([]WhaleAddress, error) {
+	q := b.client.Query(whaleReceiversSQL(chain))
+	q.Parameters = cryptoDateParams(start, end)
+	return collectRows[WhaleAddress](q, ctx)
+}
+
+// WhaleTrendRow counts whale-sized transactions per day.
+type WhaleTrendRow struct {
+	Date       string `json:"date" bigquery:"date"`
+	WhaleCount int64  `json:"whale_count" bigquery:"whale_count"`
+}
+
+func whaleTrendSQL(chain string) string {
+	if chain == "btc" {
+		return fmt.Sprintf(`
+		SELECT
+			FORMAT_DATE('%%Y-%%m-%%d', DATE(block_timestamp)) AS date,
+			COUNTIF(output_value >= 10000000000) AS whale_count
+		FROM %s
+		WHERE NOT is_coinbase AND %s
+		GROUP BY date ORDER BY date`, btcTxTable, btcTxWindow)
+	}
+	return fmt.Sprintf(`
+		SELECT
+			FORMAT_DATE('%%Y-%%m-%%d', DATE(block_timestamp)) AS date,
+			COUNTIF(value >= NUMERIC '1000000000000000000000') AS whale_count
+		FROM %s
+		WHERE %s
+		GROUP BY date ORDER BY date`, ethTxTable, ethTxWindow)
+}
+
+func (b *BQClient) GetCryptoWhaleTrend(ctx context.Context, chain string, start, end civil.Date) ([]WhaleTrendRow, error) {
+	q := b.client.Query(whaleTrendSQL(chain))
+	q.Parameters = cryptoDateParams(start, end)
+	return collectRows[WhaleTrendRow](q, ctx)
+}
+
+// ConcentrationRow is the share of a day's moved value carried by its top 1%
+// largest transactions.
+type ConcentrationRow struct {
+	Date         string  `json:"date" bigquery:"date"`
+	Top1PctShare float64 `json:"top1pct_share" bigquery:"top1pct_share"`
+}
+
+// whaleConcentrationSQL computes per-day p99 with APPROX_QUANTILES, then the
+// value share at-or-above it. The CTE reads only the value column twice —
+// far cheaper than an exact PERCENTILE_CONT window shuffle.
+func whaleConcentrationSQL(chain string) string {
+	if chain == "btc" {
+		return fmt.Sprintf(`
+		WITH t AS (
+			SELECT DATE(block_timestamp) AS d, CAST(output_value AS FLOAT64) AS v
+			FROM %s
+			WHERE NOT is_coinbase AND %s
+		), q AS (
+			SELECT d, APPROX_QUANTILES(v, 100)[OFFSET(99)] AS p99 FROM t GROUP BY d
+		)
+		SELECT
+			FORMAT_DATE('%%Y-%%m-%%d', t.d) AS date,
+			ROUND(SAFE_DIVIDE(SUM(IF(t.v >= q.p99, t.v, 0)), SUM(t.v)) * 100, 1) AS top1pct_share
+		FROM t JOIN q USING (d)
+		GROUP BY date ORDER BY date`, btcTxTable, btcTxWindow)
+	}
+	return fmt.Sprintf(`
+		WITH t AS (
+			SELECT DATE(block_timestamp) AS d, CAST(value AS FLOAT64) AS v
+			FROM %s
+			WHERE %s
+		), q AS (
+			SELECT d, APPROX_QUANTILES(v, 100)[OFFSET(99)] AS p99 FROM t GROUP BY d
+		)
+		SELECT
+			FORMAT_DATE('%%Y-%%m-%%d', t.d) AS date,
+			ROUND(SAFE_DIVIDE(SUM(IF(t.v >= q.p99, t.v, 0)), SUM(t.v)) * 100, 1) AS top1pct_share
+		FROM t JOIN q USING (d)
+		GROUP BY date ORDER BY date`, ethTxTable, ethTxWindow)
+}
+
+func (b *BQClient) GetCryptoConcentration(ctx context.Context, chain string, start, end civil.Date) ([]ConcentrationRow, error) {
+	q := b.client.Query(whaleConcentrationSQL(chain))
+	q.Parameters = cryptoDateParams(start, end)
+	return collectRows[ConcentrationRow](q, ctx)
+}

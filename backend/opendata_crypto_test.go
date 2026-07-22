@@ -68,3 +68,38 @@ func TestCryptoFeeSQLPartitionFilters(t *testing.T) {
 		})
 	}
 }
+
+func TestCryptoWhaleSQLPartitionFilters(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+		want []string
+	}{
+		{"btc largest", whaleLargestSQL("btc"), []string{
+			"block_timestamp_month", "NOT is_coinbase", "ORDER BY output_value DESC", "LIMIT 50"}},
+		{"eth largest", whaleLargestSQL("eth"), []string{
+			"block_timestamp >= TIMESTAMP(@start_date)", "from_address", "to_address",
+			"ORDER BY value DESC", "LIMIT 50"}},
+		{"btc receivers", whaleReceiversSQL("btc"), []string{
+			"block_timestamp_month", "UNNEST", "LIMIT 20"}},
+		{"eth receivers", whaleReceiversSQL("eth"), []string{
+			"block_timestamp >= TIMESTAMP(@start_date)", "to_address", "LIMIT 20"}},
+		{"btc trend", whaleTrendSQL("btc"), []string{
+			"block_timestamp_month", "COUNTIF", "10000000000"}}, // 100 BTC in satoshi
+		{"eth trend", whaleTrendSQL("eth"), []string{
+			"block_timestamp >= TIMESTAMP(@start_date)", "COUNTIF", "1000000000000000000000"}}, // 1000 ETH in wei
+		{"btc concentration", whaleConcentrationSQL("btc"), []string{
+			"block_timestamp_month", "APPROX_QUANTILES", "OFFSET(99)"}},
+		{"eth concentration", whaleConcentrationSQL("eth"), []string{
+			"block_timestamp >= TIMESTAMP(@start_date)", "APPROX_QUANTILES", "OFFSET(99)"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, want := range tt.want {
+				if !strings.Contains(tt.sql, want) {
+					t.Errorf("%s: missing %q in SQL:\n%s", tt.name, want, tt.sql)
+				}
+			}
+		})
+	}
+}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -105,5 +106,55 @@ func TestMergeEthFees(t *testing.T) {
 	got := mergeEthFees(fees, burn)
 	if got[0].BurnedETH != 700 || got[0].TipsETH != 200 {
 		t.Errorf("merge = %+v, want burned 700 / tips 200", got[0])
+	}
+}
+
+func TestParseCryptoChain(t *testing.T) {
+	tests := []struct {
+		query   string
+		want    string
+		wantErr bool
+	}{
+		{"", "btc", false}, // default
+		{"chain=btc", "btc", false},
+		{"chain=eth", "eth", false},
+		{"chain=doge", "", true},
+	}
+	for _, tt := range tests {
+		r := httptest.NewRequest("GET", "/api/opendata/crypto/whales?"+tt.query, nil)
+		got, err := parseCryptoChain(r)
+		if (err != nil) != tt.wantErr {
+			t.Fatalf("%q: err = %v, wantErr %v", tt.query, err, tt.wantErr)
+		}
+		if !tt.wantErr && got != tt.want {
+			t.Errorf("%q: chain = %q, want %q", tt.query, got, tt.want)
+		}
+	}
+}
+
+// Explorer links are built only from rows whose hash matches the chain's
+// canonical shape; anything else (NULL, truncated, injected) is dropped.
+func TestFilterWhaleTxs(t *testing.T) {
+	btcGood := "4a5e1e4baab89f3a32518a88c31bc87f618f76673e2cc77ab2127b7afdeda33b"
+	ethGood := "0x" + btcGood
+	tests := []struct {
+		name  string
+		chain string
+		in    []WhaleTx
+		want  int
+	}{
+		{"btc keeps valid", "btc", []WhaleTx{{Hash: btcGood}}, 1},
+		{"btc drops 0x-prefixed", "btc", []WhaleTx{{Hash: ethGood}}, 0},
+		{"btc drops empty and short", "btc", []WhaleTx{{Hash: ""}, {Hash: "abc123"}}, 0},
+		{"eth keeps valid", "eth", []WhaleTx{{Hash: ethGood}}, 1},
+		{"eth drops bare hex", "eth", []WhaleTx{{Hash: btcGood}}, 0},
+		{"eth drops non-hex", "eth", []WhaleTx{{Hash: "0x" + strings.Repeat("g", 64)}}, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := filterWhaleTxs(tt.chain, tt.in); len(got) != tt.want {
+				t.Errorf("kept %d rows, want %d", len(got), tt.want)
+			}
+		})
 	}
 }

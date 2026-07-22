@@ -13,7 +13,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"regexp"
 	"strconv"
 	"time"
 
@@ -279,6 +281,133 @@ func (h *APIHandler) CryptoFees(w http.ResponseWriter, r *http.Request) {
 
 		data.BTC = mergeBtcFees(btcFees, btcCoinbase)
 		data.ETH = mergeEthFees(ethFees, ethBurn)
+		h.cache.Set(key, &data)
+		return &data, nil
+	})
+	if err != nil {
+		writeError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, v)
+}
+
+// --- /whales ---
+
+var cryptoWhaleDaysAllowed = []int{7, 30, 90}
+
+// Explorer links are built in the frontend from these hashes; only rows
+// matching the chain's canonical hash shape survive (spec: validated
+// server-side, dropped and logged otherwise).
+var (
+	btcHashRe = regexp.MustCompile(`^[a-fA-F0-9]{64}$`)
+	ethHashRe = regexp.MustCompile(`^0x[a-fA-F0-9]{64}$`)
+)
+
+func parseCryptoChain(r *http.Request) (string, error) {
+	chain := r.URL.Query().Get("chain")
+	switch chain {
+	case "":
+		return "btc", nil
+	case "btc", "eth":
+		return chain, nil
+	}
+	return "", fmt.Errorf("chain must be btc or eth, got %q", chain)
+}
+
+func filterWhaleTxs(chain string, txs []WhaleTx) []WhaleTx {
+	re := btcHashRe
+	if chain == "eth" {
+		re = ethHashRe
+	}
+	out := make([]WhaleTx, 0, len(txs))
+	for _, tx := range txs {
+		if re.MatchString(tx.Hash) {
+			out = append(out, tx)
+		} else {
+			slog.Warn("crypto: dropping whale row with malformed tx hash", "chain", chain)
+		}
+	}
+	return out
+}
+
+type CryptoWhalesData struct {
+	Days          int                `json:"days"`
+	Chain         string             `json:"chain"`
+	Threshold     float64            `json:"threshold"`
+	Largest       []WhaleTx          `json:"largest"`
+	TopReceivers  []WhaleAddress     `json:"top_receivers"`
+	Trend         []WhaleTrendRow    `json:"trend"`
+	Concentration []ConcentrationRow `json:"concentration"`
+}
+
+func (h *APIHandler) CryptoWhales(w http.ResponseWriter, r *http.Request) {
+	days, err := parseCryptoDays(r, cryptoDefaultDays, cryptoWhaleDaysAllowed)
+	if err != nil {
+		writeError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	chain, err := parseCryptoChain(r)
+	if err != nil {
+		writeError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	key := fmt.Sprintf("opendata:crypto:whales:%s:%d", chain, days)
+	if cached, ok := h.cache.Get(key); ok {
+		writeJSON(w, cached)
+		return
+	}
+
+	v, err, _ := cryptoFlight.Do(key, func() (any, error) {
+		start, end := cryptoWindow(days)
+		threshold := whaleThresholdBTC
+		if chain == "eth" {
+			threshold = whaleThresholdETH
+		}
+		data := CryptoWhalesData{
+			Days:          days,
+			Chain:         chain,
+			Threshold:     threshold,
+			Largest:       []WhaleTx{},
+			TopReceivers:  []WhaleAddress{},
+			Trend:         []WhaleTrendRow{},
+			Concentration: []ConcentrationRow{},
+		}
+
+		g, ctx := errgroup.WithContext(r.Context())
+		g.Go(func() error {
+			rows, err := h.bq.GetCryptoLargestTxs(ctx, chain, start, end)
+			if err != nil {
+				return err
+			}
+			data.Largest = filterWhaleTxs(chain, rows)
+			return nil
+		})
+		g.Go(func() error {
+			rows, err := h.bq.GetCryptoTopReceivers(ctx, chain, start, end)
+			if rows != nil {
+				data.TopReceivers = rows
+			}
+			return err
+		})
+		g.Go(func() error {
+			rows, err := h.bq.GetCryptoWhaleTrend(ctx, chain, start, end)
+			if rows != nil {
+				data.Trend = rows
+			}
+			return err
+		})
+		g.Go(func() error {
+			rows, err := h.bq.GetCryptoConcentration(ctx, chain, start, end)
+			if rows != nil {
+				data.Concentration = rows
+			}
+			return err
+		})
+		if err := g.Wait(); err != nil {
+			return nil, err
+		}
+
 		h.cache.Set(key, &data)
 		return &data, nil
 	})
