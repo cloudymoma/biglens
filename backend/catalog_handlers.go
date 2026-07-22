@@ -13,18 +13,26 @@ const catalogGraphCacheKey = "catalog_graph"
 
 // --- Dataplex / Knowledge Catalog (OKF bundle) endpoints ---
 
-// CatalogGraph: GET /api/catalog/graph — full node+edge graph of the bundle.
-func (h *APIHandler) CatalogGraph(w http.ResponseWriter, r *http.Request) {
+// catalogGraph returns the bundle graph, building and caching it on a miss.
+func (h *APIHandler) catalogGraph() (*Graph, error) {
 	if cached, ok := h.cache.Get(catalogGraphCacheKey); ok {
-		writeJSON(w, cached)
-		return
+		return cached.(*Graph), nil
 	}
 	g, err := h.bundle.BuildGraph()
+	if err != nil {
+		return nil, err
+	}
+	h.cache.Set(catalogGraphCacheKey, g)
+	return g, nil
+}
+
+// CatalogGraph: GET /api/catalog/graph — full node+edge graph of the bundle.
+func (h *APIHandler) CatalogGraph(w http.ResponseWriter, r *http.Request) {
+	g, err := h.catalogGraph()
 	if err != nil {
 		writeError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	h.cache.Set(catalogGraphCacheKey, g)
 	writeJSON(w, g)
 }
 
@@ -63,12 +71,19 @@ func (h *APIHandler) getConcept(w http.ResponseWriter, r *http.Request) {
 		writeError(w, "id is required", http.StatusBadRequest)
 		return
 	}
-	detail, err := h.bundle.GetConcept(id)
+	// Resolve neighbors from the cached graph instead of bundle.GetConcept,
+	// which re-reads every file in the bundle per request.
+	c, err := h.bundle.ReadConcept(id)
 	if err != nil {
 		writeError(w, err.Error(), http.StatusNotFound)
 		return
 	}
-	writeJSON(w, detail)
+	g, err := h.catalogGraph()
+	if err != nil {
+		writeError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, &ConceptDetail{Concept: c, Neighbors: neighborsFromGraph(g, c.ID)})
 }
 
 func (h *APIHandler) upsertConcept(w http.ResponseWriter, r *http.Request) {

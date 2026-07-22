@@ -6,6 +6,7 @@ package main
 import (
 	"fmt"
 	"net/http"
+	"strings"
 
 	"cloud.google.com/go/civil"
 	"golang.org/x/sync/errgroup"
@@ -146,7 +147,7 @@ func (h *APIHandler) TrendsTerm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	key := fmt.Sprintf("opendata:trends_term:%s:%s:%s:%s", refreshDate, countryCode, term, joinEmails(terms))
+	key := fmt.Sprintf("opendata:trends_term:%s:%s:%s:%s", refreshDate, countryCode, term, strings.Join(terms, ","))
 	if cached, ok := h.cache.Get(key); ok {
 		writeJSON(w, cached)
 		return

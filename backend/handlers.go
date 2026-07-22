@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -241,7 +242,7 @@ type IAMDashboardData struct {
 func (h *APIHandler) IAMDashboard(w http.ResponseWriter, r *http.Request) {
 	filters := ParseFilters(r)
 	emails := parseEmails(r)
-	key := filters.CacheKey("iam_dashboard") + ":" + joinEmails(emails)
+	key := filters.CacheKey("iam_dashboard") + ":" + strings.Join(emails, ",")
 
 	if cached, ok := h.cache.Get(key); ok {
 		writeJSON(w, cached)
@@ -346,66 +347,16 @@ func parseEmails(r *http.Request) []string {
 	return out
 }
 
-func joinEmails(emails []string) string {
-	if len(emails) == 0 {
-		return ""
-	}
-	result := ""
-	for i, e := range emails {
-		if i > 0 {
-			result += ","
-		}
-		result += e
-	}
-	return result
-}
-
+// splitTrimmed splits s on sep, trims whitespace from each part, and drops
+// empty parts.
 func splitTrimmed(s, sep string) []string {
 	parts := make([]string, 0)
-	for _, p := range splitString(s, sep) {
-		trimmed := trimSpace(p)
-		if trimmed != "" {
+	for _, p := range strings.Split(s, sep) {
+		if trimmed := strings.TrimSpace(p); trimmed != "" {
 			parts = append(parts, trimmed)
 		}
 	}
 	return parts
-}
-
-func splitString(s, sep string) []string {
-	if s == "" {
-		return nil
-	}
-	var result []string
-	for {
-		i := indexOf(s, sep)
-		if i < 0 {
-			result = append(result, s)
-			break
-		}
-		result = append(result, s[:i])
-		s = s[i+len(sep):]
-	}
-	return result
-}
-
-func indexOf(s, sub string) int {
-	for i := 0; i <= len(s)-len(sub); i++ {
-		if s[i:i+len(sub)] == sub {
-			return i
-		}
-	}
-	return -1
-}
-
-func trimSpace(s string) string {
-	start, end := 0, len(s)
-	for start < end && (s[start] == ' ' || s[start] == '\t') {
-		start++
-	}
-	for end > start && (s[end-1] == ' ' || s[end-1] == '\t') {
-		end--
-	}
-	return s[start:end]
 }
 
 // --- Regions ---

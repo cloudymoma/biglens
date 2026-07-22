@@ -329,52 +329,61 @@ func (b *OKFBundle) BuildGraph() (*Graph, error) {
 	return g, nil
 }
 
-// GetConcept loads one concept plus its immediate neighbors (out-links and
-// in-links).
-func (b *OKFBundle) GetConcept(id string) (*ConceptDetail, error) {
+// ReadConcept loads and parses a single concept file without walking the
+// bundle.
+func (b *OKFBundle) ReadConcept(id string) (Concept, error) {
 	path, err := b.safePath(id)
 	if err != nil {
-		return nil, err
+		return Concept{}, err
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return Concept{}, err
 	}
 	cid, err := b.idFromPath(path)
 	if err != nil {
-		return nil, err
+		return Concept{}, err
 	}
-	c := b.parseContent(cid, string(raw))
+	return b.parseContent(cid, string(raw)), nil
+}
 
-	concepts, err := b.ListConcepts()
+// neighborsFromGraph returns id's immediate neighbors (out-links first, then
+// in-links) from an already-built graph.
+func neighborsFromGraph(g *Graph, id string) []GraphNode {
+	byID := make(map[string]GraphNode, len(g.Nodes))
+	for _, n := range g.Nodes {
+		byID[n.ID] = n
+	}
+	seen := map[string]bool{id: true}
+	var neighbors []GraphNode
+	for _, e := range g.Edges { // out-links
+		if e.Source == id && !seen[e.Target] {
+			seen[e.Target] = true
+			neighbors = append(neighbors, byID[e.Target])
+		}
+	}
+	for _, e := range g.Edges { // in-links
+		if e.Target == id && !seen[e.Source] {
+			seen[e.Source] = true
+			neighbors = append(neighbors, byID[e.Source])
+		}
+	}
+	return neighbors
+}
+
+// GetConcept loads one concept plus its immediate neighbors (out-links and
+// in-links). It rebuilds the full graph; callers that already hold a cached
+// graph should use ReadConcept + neighborsFromGraph instead.
+func (b *OKFBundle) GetConcept(id string) (*ConceptDetail, error) {
+	c, err := b.ReadConcept(id)
 	if err != nil {
 		return nil, err
 	}
-	byID := make(map[string]Concept, len(concepts))
-	for _, x := range concepts {
-		byID[x.ID] = x
+	g, err := b.BuildGraph()
+	if err != nil {
+		return nil, err
 	}
-	seen := map[string]bool{c.ID: true}
-	var neighbors []GraphNode
-	for _, t := range c.Links { // out-links
-		if n, ok := byID[t]; ok && !seen[t] {
-			seen[t] = true
-			neighbors = append(neighbors, conceptNode(n))
-		}
-	}
-	for _, x := range concepts { // in-links
-		if seen[x.ID] {
-			continue
-		}
-		for _, t := range x.Links {
-			if t == c.ID {
-				seen[x.ID] = true
-				neighbors = append(neighbors, conceptNode(x))
-				break
-			}
-		}
-	}
-	return &ConceptDetail{Concept: c, Neighbors: neighbors}, nil
+	return &ConceptDetail{Concept: c, Neighbors: neighborsFromGraph(g, c.ID)}, nil
 }
 
 // Search returns nodes matching a case-insensitive query over id/title/
