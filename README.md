@@ -82,7 +82,7 @@ cd frontend && npm run dev
 
 ## Dashboards
 
-BigLens provides four dashboard views, each powered by `INFORMATION_SCHEMA` queries:
+BigLens provides five dashboard views, each powered by `INFORMATION_SCHEMA` queries:
 
 | Dashboard | Widgets |
 |---|---|
@@ -90,6 +90,7 @@ BigLens provides four dashboard views, each powered by `INFORMATION_SCHEMA` quer
 | **Compute** | Concurrent slot usage area chart (JOBS_TIMELINE), top slot-consuming jobs |
 | **Cost** | On-demand cost extrapolation ($6.25/TiB), spend-by-user treemap |
 | **Insights** | Active BigQuery recommendations feed |
+| **IAM** | Per-principal job activity and inactive-principal detection (7/30/90-day windows) |
 
 ### Global Filters
 
@@ -258,6 +259,43 @@ what a news-pulse dashboard should show.
 - **Media source tone** — the average document tone (first field of the GKG
   `V2Tone` composite) across everything an outlet published in the range.
 
+#### How the numbers are calculated
+
+- **Weighted averages, never averages of averages.** BigQuery returns one
+  row per (day × QuadClass × event type) group with that group's `AVG` and
+  `COUNT`; the Go backend combines them as `Σ(avg×n)/Σ(n)`, which is
+  mathematically identical to averaging the raw rows. A plain mean of group
+  averages would let a 10-event group distort the global tone as much as a
+  100,000-event group.
+- **Hotspots** are event coordinates rounded to a 0.1° grid (~11 km) and
+  aggregated per cell; the map shows the 500 busiest cells.
+- **Breaking reports** are deduplicated by `SOURCEURL` (keeping each
+  article's highest-mention event row), because GDELT emits several event
+  rows per article and one big story would otherwise flood the top 50.
+- **Cost guardrails**: native `DATE` parameters against the partition key,
+  hard span caps (90 / 30 days), server-side `GROUP BY + LIMIT`, the shared
+  10-minute cache, and request coalescing (`singleflight`) so concurrent
+  identical requests trigger a single BigQuery job. A full cache miss on the
+  default 3-day window scans well under 1 GB — a fraction of a cent at
+  on-demand pricing.
+
+### Global Weather
+
+Daily land-station observations from NOAA GHCN-Daily
+(`bigquery-public-data.ghcn_d`): ~20,000 stations worldwide, about one day
+behind real time.
+
+| Widget | Description |
+|---|---|
+| **KPI strip** | Stations reporting, hottest / coldest / wettest station, stations with snow |
+| **Station Map** | World map of the snapshot day's observations (max/min temp, precipitation, snow) |
+| **Daily Trend** | Network-wide temperature/precipitation averages and reporting-station counts |
+
+Filters: snapshot date (back to 1900) and a 7–31 day trailing window. Trend
+averages are means across reporting stations — a network mean, not a
+physical global average. The default date skips the newest 1–2 days while
+GHCN backfill settles.
+
 ### Crypto Pulse
 
 On-chain financial fundamentals for Bitcoin and Ethereum, powered by
@@ -294,26 +332,6 @@ reported in native units (BTC, ETH, gwei) or counts:
   metadata needed to scale raw amounts is unreliable for long-tail tokens.
 - **Whale thresholds** (≥100 BTC, ≥1,000 ETH) are named constants in native
   units; there is no USD equivalent in the datasets.
-
-#### How the numbers are calculated
-
-- **Weighted averages, never averages of averages.** BigQuery returns one
-  row per (day × QuadClass × event type) group with that group's `AVG` and
-  `COUNT`; the Go backend combines them as `Σ(avg×n)/Σ(n)`, which is
-  mathematically identical to averaging the raw rows. A plain mean of group
-  averages would let a 10-event group distort the global tone as much as a
-  100,000-event group.
-- **Hotspots** are event coordinates rounded to a 0.1° grid (~11 km) and
-  aggregated per cell; the map shows the 500 busiest cells.
-- **Breaking reports** are deduplicated by `SOURCEURL` (keeping each
-  article's highest-mention event row), because GDELT emits several event
-  rows per article and one big story would otherwise flood the top 50.
-- **Cost guardrails**: native `DATE` parameters against the partition key,
-  hard span caps (90 / 30 days), server-side `GROUP BY + LIMIT`, the shared
-  10-minute cache, and request coalescing (`singleflight`) so concurrent
-  identical requests trigger a single BigQuery job. A full cache miss on the
-  default 3-day window scans well under 1 GB — a fraction of a cent at
-  on-demand pricing.
 
 ### Adding another public dataset
 
