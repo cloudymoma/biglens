@@ -23,20 +23,32 @@ const RIGS = [
 // A sustained 1 TH/s burns e J/TH × 86400 TH/day = 0.024·e kWh/day.
 const KWH_PER_JTH_DAY = 0.024;
 
-// BTC earned per day by 1 TH/s at network-average luck (1 EH/s = 1e6 TH/s).
-function btcPerThDay(r: BtcMiningRow): number {
-  return r.hashrate_ehs > 0 ? r.revenue_btc / (r.hashrate_ehs * 1e6) : 0;
+// Operating assumptions beyond the wall-plug wattage: PUE multiplies energy
+// (cooling, fans, transformer losses; 1.05–1.2 typical), pool fee shaves
+// revenue (1–2.5% typical).
+interface Assumptions {
+  pue: number;
+  poolFeePct: number;
 }
 
-// Electricity price ($/kWh) at which mining revenue exactly covers power.
-function breakEvenKwh(r: BtcMiningRow, jth: number, price: number): number {
-  return (btcPerThDay(r) * price) / (KWH_PER_JTH_DAY * jth);
+// BTC earned per day by 1 TH/s at network-average luck (1 EH/s = 1e6 TH/s),
+// net of the pool fee.
+function btcPerThDay(r: BtcMiningRow, a: Assumptions): number {
+  if (r.hashrate_ehs <= 0) return 0;
+  return (r.revenue_btc / (r.hashrate_ehs * 1e6)) * (1 - a.poolFeePct / 100);
 }
 
-// Electricity cost ($) to mine one whole BTC with a rig of efficiency jth.
-function costPerBtc(r: BtcMiningRow, jth: number, elec: number): number {
-  const perDay = btcPerThDay(r);
-  return perDay > 0 ? ((KWH_PER_JTH_DAY * jth) / perDay) * elec : 0;
+// Shutdown price: the electricity price ($/kWh) at which net revenue exactly
+// covers power. Above it a running rig loses money on every kWh — but capex
+// is sunk, so actual payback takes longer than this suggests.
+function breakEvenKwh(r: BtcMiningRow, jth: number, price: number, a: Assumptions): number {
+  return (btcPerThDay(r, a) * price) / (KWH_PER_JTH_DAY * jth * a.pue);
+}
+
+// Electricity cost ($) to net one whole BTC with a rig of efficiency jth.
+function costPerBtc(r: BtcMiningRow, jth: number, elec: number, a: Assumptions): number {
+  const perDay = btcPerThDay(r, a);
+  return perDay > 0 ? ((KWH_PER_JTH_DAY * jth * a.pue) / perDay) * elec : 0;
 }
 
 function NumberInput({ label, unit, value, onChange, width = 'w-28' }: {
@@ -66,6 +78,8 @@ export default function MiningTab() {
   const [priceStr, setPriceStr] = useState('');
   const [spotNote, setSpotNote] = useState('spot unavailable — enter a price');
   const [elecStr, setElecStr] = useState('0.06');
+  const [pueStr, setPueStr] = useState('1.05');
+  const [poolFeeStr, setPoolFeeStr] = useState('1');
   const [customJthStr, setCustomJthStr] = useState('18');
 
   useEffect(() => {
@@ -94,10 +108,15 @@ export default function MiningTab() {
 
   const price = Math.max(0, parseFloat(priceStr) || 0);
   const elec = Math.max(0, parseFloat(elecStr) || 0);
+  // PUE < 1 is physically impossible; pool fee is clamped to [0, 99]%.
+  const assumptions: Assumptions = {
+    pue: Math.max(1, parseFloat(pueStr) || 1.05),
+    poolFeePct: Math.min(99, Math.max(0, parseFloat(poolFeeStr) || 0)),
+  };
   const customJth = Math.max(0, parseFloat(customJthStr) || 0);
   const dates = data.daily.map(r => r.date);
   const newestRig = RIGS[RIGS.length - 1];
-  const satsPerThDay = btcPerThDay(latest) * 1e8;
+  const satsPerThDay = btcPerThDay(latest, assumptions) * 1e8;
 
   const tableRigs = [
     ...RIGS,
@@ -114,19 +133,21 @@ export default function MiningTab() {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <MetricCard label="Network Hashrate" value={`${fmtNum(latest.hashrate_ehs)} EH/s`} icon={<Cpu size={15} />} detail={`${latest.blocks} blocks · ${latest.date}`} accentColor={BTC_COLOR} />
         <MetricCard label="Miner Revenue" value={`${fmtNum(latest.revenue_btc)} BTC`} icon={<Pickaxe size={15} />} detail={price > 0 ? `≈ $${fmtNum(latest.revenue_btc * price)}/day` : 'subsidy + fees'} accentColor={BTC_COLOR} />
-        <MetricCard label="Yield per TH/s" value={`${satsPerThDay.toFixed(1)} sats/day`} icon={<Coins size={15} />} detail="network-average luck" accentColor={BTC_COLOR} />
-        <MetricCard label={`Break-even (${newestRig.jth} J/TH)`} value={price > 0 ? `$${breakEvenKwh(latest, newestRig.jth, price).toFixed(3)}/kWh` : '—'} icon={<Zap size={15} />} detail={price > 0 ? `at $${fmtNum(price)}/BTC` : 'enter a BTC price'} accentColor="#22c55e" />
+        <MetricCard label="Yield per TH/s" value={`${satsPerThDay.toFixed(1)} sats/day`} icon={<Coins size={15} />} detail="net of pool fee · avg luck" accentColor={BTC_COLOR} />
+        <MetricCard label={`Shutdown price (${newestRig.jth} J/TH)`} value={price > 0 ? `$${breakEvenKwh(latest, newestRig.jth, price, assumptions).toFixed(3)}/kWh` : '—'} icon={<Zap size={15} />} detail={price > 0 ? `at $${fmtNum(price)}/BTC` : 'enter a BTC price'} accentColor="#22c55e" />
       </div>
 
       <Panel title="Assumptions" note={spotNote}>
         <div className="flex flex-wrap items-center gap-6">
           <NumberInput label="BTC price" unit="USD" value={priceStr} onChange={setPriceStr} />
           <NumberInput label="Your electricity" unit="$/kWh" value={elecStr} onChange={setElecStr} width="w-20" />
+          <NumberInput label="PUE" unit="× energy" value={pueStr} onChange={setPueStr} width="w-20" />
+          <NumberInput label="Pool fee" unit="%" value={poolFeeStr} onChange={setPoolFeeStr} width="w-16" />
           <NumberInput label="Custom rig" unit="J/TH" value={customJthStr} onChange={setCustomJthStr} width="w-20" />
         </div>
       </Panel>
 
-      <Panel title="Break-even Electricity Price by Rig" note="max $/kWh at which each rig still profits · dashed line = your electricity price">
+      <Panel title="Shutdown Price by Rig" note="max $/kWh at which each rig still covers power (net of pool fee, incl. PUE) · dashed line = your electricity price">
         <ReactECharts
           style={{ height: 300 }}
           option={{
@@ -139,7 +160,7 @@ export default function MiningTab() {
               name: `${rig.jth} J/TH`,
               type: 'line',
               showSymbol: false,
-              data: data.daily.map(r => Number(breakEvenKwh(r, rig.jth, price).toFixed(4))),
+              data: data.daily.map(r => Number(breakEvenKwh(r, rig.jth, price, assumptions).toFixed(4))),
               lineStyle: { color: rig.color, width: 2 },
               itemStyle: { color: rig.color },
               ...(i === 0 && elec > 0 ? {
@@ -156,7 +177,7 @@ export default function MiningTab() {
         />
       </Panel>
 
-      <Panel title="Rig Economics (latest day)" note={`electricity at $${elec}/kWh · BTC at $${fmtNum(price)}`}>
+      <Panel title="Rig Economics (latest day)" note={`electricity $${elec}/kWh · BTC $${fmtNum(price)} · PUE ${assumptions.pue} · pool fee ${assumptions.poolFeePct}%`}>
         <table className="w-full text-xs">
           <thead>
             <tr className="text-zinc-500 border-b border-zinc-800/60">
@@ -169,8 +190,8 @@ export default function MiningTab() {
           </thead>
           <tbody>
             {tableRigs.map(rig => {
-              const be = breakEvenKwh(latest, rig.jth, price);
-              const cost = costPerBtc(latest, rig.jth, elec);
+              const be = breakEvenKwh(latest, rig.jth, price, assumptions);
+              const cost = costPerBtc(latest, rig.jth, elec, assumptions);
               const margin = price > 0 && cost > 0 ? ((price - cost) / price) * 100 : 0;
               const profitable = price > 0 && be >= elec;
               return (
@@ -195,9 +216,11 @@ export default function MiningTab() {
       </Panel>
 
       <p className="text-[11px] text-zinc-600">
-        Electricity-only model: excludes hardware capex, cooling, pool fees (~1–2%) and assumes
-        network-average luck. Hashrate is implied from difficulty (decoded from block header bits)
-        and actual daily block count; revenue is total coinbase output (subsidy + fees).
+        These are shutdown prices (opex-only): revenue is net of the pool fee and energy includes
+        the PUE overhead, but hardware capex, hosting fees and downtime are excluded — actual
+        payback on a purchased rig takes longer. Assumes network-average luck. Hashrate is implied
+        from difficulty (decoded from block header bits) and actual daily block count; revenue is
+        total coinbase output (subsidy + fees).
       </p>
     </div>
   );
