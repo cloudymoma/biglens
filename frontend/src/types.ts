@@ -376,3 +376,133 @@ export interface WeatherDashboardData {
   stations: WeatherStation[];
   daily: WeatherDaily[];
 }
+
+// --- BigQuery Open Data: Crypto Pulse ---
+
+export interface CryptoActivityRow {
+  date: string;
+  tx_count: number;
+  value_settled: number;
+  fees_total: number;
+}
+
+export interface CryptoAddressRow {
+  date: string;
+  active_addresses: number;
+}
+
+export interface CryptoBlockRow {
+  date: string;
+  blocks: number;
+  fullness_pct: number;
+}
+
+export interface CryptoKpi {
+  date: string;
+  tx_count: number;
+  value_settled: number;
+  fees_total: number;
+  blocks: number;
+  fullness_pct: number;
+}
+
+export interface CryptoChainPulse {
+  daily: CryptoActivityRow[];
+  addresses: CryptoAddressRow[];
+  blocks: CryptoBlockRow[];
+  kpi: CryptoKpi;
+}
+
+export interface CryptoPulseData {
+  days: number;
+  btc: CryptoChainPulse;
+  eth: CryptoChainPulse;
+}
+
+export interface BtcFeeRow {
+  date: string;
+  median_fee_vb: number;
+  total_fees_btc: number;
+  subsidy_btc: number;
+}
+
+export interface EthFeeRow {
+  date: string;
+  avg_gas_gwei: number;
+  total_fees_eth: number;
+  burned_eth: number;
+  tips_eth: number;
+}
+
+export interface CryptoFeesData {
+  days: number;
+  btc: BtcFeeRow[];
+  eth: EthFeeRow[];
+  btc_blocks: CryptoBlockRow[];
+  eth_blocks: CryptoBlockRow[];
+}
+
+export type CryptoChain = 'btc' | 'eth';
+
+export interface WhaleTx {
+  hash: string;
+  time: string;
+  from: string;
+  to: string;
+  amount: number;
+}
+
+export interface WhaleAddress {
+  address: string;
+  total: number;
+  tx_count: number;
+}
+
+export interface WhaleTrendRow {
+  date: string;
+  whale_count: number;
+}
+
+export interface ConcentrationRow {
+  date: string;
+  top1pct_share: number;
+}
+
+export interface CryptoWhalesData {
+  days: number;
+  chain: CryptoChain;
+  threshold: number;
+  largest: WhaleTx[];
+  top_receivers: WhaleAddress[];
+  trend: WhaleTrendRow[];
+  concentration: ConcentrationRow[];
+}
+
+export interface TokenRow {
+  token_address: string;
+  symbol: string;
+  name: string;
+  transfers: number;
+  senders: number;
+  receivers: number;
+}
+
+export interface TokenDailyRow {
+  date: string;
+  transfers: number;
+  native_txs: number;
+}
+
+export interface ContractRow {
+  date: string;
+  contracts: number;
+  erc20: number;
+  erc721: number;
+}
+
+export interface CryptoTokensData {
+  days: number;
+  top_tokens: TokenRow[];
+  daily: TokenDailyRow[];
+  contracts: ContractRow[];
+}

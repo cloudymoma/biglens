@@ -82,7 +82,7 @@ cd frontend && npm run dev
 
 ## Dashboards
 
-BigLens provides four dashboard views, each powered by `INFORMATION_SCHEMA` queries:
+BigLens provides five dashboard views, each powered by `INFORMATION_SCHEMA` queries:
 
 | Dashboard | Widgets |
 |---|---|
@@ -90,6 +90,7 @@ BigLens provides four dashboard views, each powered by `INFORMATION_SCHEMA` quer
 | **Compute** | Concurrent slot usage area chart (JOBS_TIMELINE), top slot-consuming jobs |
 | **Cost** | On-demand cost extrapolation ($6.25/TiB), spend-by-user treemap |
 | **Insights** | Active BigQuery recommendations feed |
+| **IAM** | Per-principal job activity and inactive-principal detection (7/30/90-day windows) |
 
 ### Global Filters
 
@@ -277,6 +278,60 @@ what a news-pulse dashboard should show.
   identical requests trigger a single BigQuery job. A full cache miss on the
   default 3-day window scans well under 1 GB — a fraction of a cent at
   on-demand pricing.
+
+### Global Weather
+
+Daily land-station observations from NOAA GHCN-Daily
+(`bigquery-public-data.ghcn_d`): ~20,000 stations worldwide, about one day
+behind real time.
+
+| Widget | Description |
+|---|---|
+| **KPI strip** | Stations reporting, hottest / coldest / wettest station, stations with snow |
+| **Station Map** | World map of the snapshot day's observations (max/min temp, precipitation, snow) |
+| **Daily Trend** | Network-wide temperature/precipitation averages and reporting-station counts |
+
+Filters: snapshot date (back to 1900) and a 7–31 day trailing window. Trend
+averages are means across reporting stations — a network mean, not a
+physical global average. The default date skips the newest 1–2 days while
+GHCN backfill settles.
+
+### Crypto Pulse
+
+On-chain financial fundamentals for Bitcoin and Ethereum, powered by
+`bigquery-public-data.crypto_bitcoin` and `crypto_ethereum` (refreshed daily).
+Four lazily-loaded tabs, each behind its own endpoint and the shared
+10-minute cache:
+
+| Tab | Widgets |
+|---|---|
+| **Network Pulse** | Per-chain KPI strip (latest complete UTC day), daily transactions, value settled, active addresses (approx. distinct senders, ≤90d), block fullness, block production |
+| **Fee Market** | BTC median sat/vB vs ETH avg gwei trend, BTC miner revenue (subsidy vs fees), ETH EIP-1559 burned vs tips, congestion-vs-fee scatter |
+| **Whales & Flow** | Top 50 largest transfers (explorer links), whale-sized tx trend (≥100 BTC / ≥1,000 ETH), top receiving addresses, top-1% value concentration |
+| **Token Economy** | Top 25 ERC-20 tokens by transfer count, token vs native activity, new contract deployments, token movement treemap |
+
+Ranges: 7/30/90 days everywhere, plus 1 year for the slim aggregate trends
+(pulse, fees); token queries cap at 30 days. Every query filters the
+partition key — `crypto_ethereum` prunes daily on `block_timestamp`, while
+`crypto_bitcoin` is month-partitioned on `block_timestamp_month`, so BTC
+queries carry both the month bound and the exact timestamp window.
+
+#### Understanding the data
+
+These datasets contain **on-chain data only — no fiat prices**. Everything is
+reported in native units (BTC, ETH, gwei) or counts:
+
+- **Value settled (BTC)** sums transaction outputs, which include change
+  returning to the sender — an upper bound on economic volume, not a measure
+  of "money changing hands". The chart tooltip carries the same caveat.
+- **Active addresses** are approximate distinct senders per day
+  (`APPROX_COUNT_DISTINCT`, ~1% error) — a network-activity gauge, not a
+  user count (one user can hold many addresses).
+- **Token activity is measured in transfer counts, never summed values**:
+  cross-token value sums are meaningless without prices, and the `decimals`
+  metadata needed to scale raw amounts is unreliable for long-tail tokens.
+- **Whale thresholds** (≥100 BTC, ≥1,000 ETH) are named constants in native
+  units; there is no USD equivalent in the datasets.
 
 ### Adding another public dataset
 

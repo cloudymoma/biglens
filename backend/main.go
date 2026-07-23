@@ -98,6 +98,10 @@ func main() {
 	mux.Handle("/api/opendata/gdelt/gkg", h(api.GdeltGkg))
 	mux.Handle("/api/opendata/weather/meta", h(api.WeatherMeta))
 	mux.Handle("/api/opendata/weather/dashboard", h(api.WeatherDashboard))
+	mux.Handle("/api/opendata/crypto/pulse", h(api.CryptoPulse))
+	mux.Handle("/api/opendata/crypto/fees", h(api.CryptoFees))
+	mux.Handle("/api/opendata/crypto/whales", h(api.CryptoWhales))
+	mux.Handle("/api/opendata/crypto/tokens", h(api.CryptoTokens))
 
 	// Individual endpoints
 	mux.Handle("/api/storage", h(api.StorageStats))

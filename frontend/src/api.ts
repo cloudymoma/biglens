@@ -20,6 +20,11 @@ import type {
   GdeltGkgData,
   WeatherMeta,
   WeatherDashboardData,
+  CryptoPulseData,
+  CryptoFeesData,
+  CryptoWhalesData,
+  CryptoTokensData,
+  CryptoChain,
 } from './types';
 
 function filterParams(filters: QueryFilters): Record<string, string> {
@@ -213,5 +218,27 @@ export async function fetchWeatherDashboard(date: string, days: number): Promise
   const { data } = await axios.get('/api/opendata/weather/dashboard', {
     params: { date, days: String(days) },
   });
+  return data;
+}
+
+// --- BigQuery Open Data: Crypto Pulse ---
+
+export async function fetchCryptoPulse(days: number): Promise<CryptoPulseData> {
+  const { data } = await axios.get('/api/opendata/crypto/pulse', { params: { days: String(days) } });
+  return data;
+}
+
+export async function fetchCryptoFees(days: number): Promise<CryptoFeesData> {
+  const { data } = await axios.get('/api/opendata/crypto/fees', { params: { days: String(days) } });
+  return data;
+}
+
+export async function fetchCryptoWhales(days: number, chain: CryptoChain): Promise<CryptoWhalesData> {
+  const { data } = await axios.get('/api/opendata/crypto/whales', { params: { days: String(days), chain } });
+  return data;
+}
+
+export async function fetchCryptoTokens(days: number): Promise<CryptoTokensData> {
+  const { data } = await axios.get('/api/opendata/crypto/tokens', { params: { days: String(days) } });
   return data;
 }
