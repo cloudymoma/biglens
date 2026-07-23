@@ -273,6 +273,36 @@ func (b *BQClient) GetEthBurn(ctx context.Context, start, end civil.Date) ([]Eth
 	return collectRows[EthBurnRow](q, ctx)
 }
 
+// --- /mining: daily block production, difficulty, network hashrate ---
+
+// BtcMiningBlockRow is one day's block count and average difficulty. The
+// blocks table has no difficulty column; it is decoded in SQL from the
+// compact `bits` header (8 hex chars, no 0x prefix): exponent = first 2
+// chars, mantissa = last 6, difficulty = 65535/mantissa * 256^(29-exponent).
+type BtcMiningBlockRow struct {
+	Date       string  `json:"date" bigquery:"date"`
+	Blocks     int64   `json:"blocks" bigquery:"blocks"`
+	Difficulty float64 `json:"difficulty" bigquery:"difficulty"`
+}
+
+func btcMiningBlocksSQL() string {
+	return fmt.Sprintf(`
+		SELECT
+			FORMAT_DATE('%%Y-%%m-%%d', DATE(timestamp)) AS date,
+			COUNT(*) AS blocks,
+			AVG(SAFE_DIVIDE(65535, CAST(CONCAT('0x', SUBSTR(bits, 3, 6)) AS INT64))
+				* POW(256, 29 - CAST(CONCAT('0x', SUBSTR(bits, 1, 2)) AS INT64))) AS difficulty
+		FROM %s
+		WHERE %s
+		GROUP BY date ORDER BY date`, btcBlocksTable, btcBlockWindow)
+}
+
+func (b *BQClient) GetBtcMiningBlocks(ctx context.Context, start, end civil.Date) ([]BtcMiningBlockRow, error) {
+	q := b.client.Query(btcMiningBlocksSQL())
+	q.Parameters = cryptoDateParams(start, end)
+	return collectRows[BtcMiningBlockRow](q, ctx)
+}
+
 // --- /whales: largest transfers, top receivers, whale trend, concentration ---
 
 // Whale thresholds in native units (no USD rate exists in these datasets);

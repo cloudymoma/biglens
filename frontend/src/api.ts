@@ -24,6 +24,8 @@ import type {
   CryptoFeesData,
   CryptoWhalesData,
   CryptoTokensData,
+  CryptoMiningData,
+  CryptoSpotData,
   CryptoChain,
 } from './types';
 
@@ -241,4 +243,20 @@ export async function fetchCryptoWhales(days: number, chain: CryptoChain): Promi
 export async function fetchCryptoTokens(days: number): Promise<CryptoTokensData> {
   const { data } = await axios.get('/api/opendata/crypto/tokens', { params: { days: String(days) } });
   return data;
+}
+
+export async function fetchCryptoMining(days: number): Promise<CryptoMiningData> {
+  const { data } = await axios.get('/api/opendata/crypto/mining', { params: { days: String(days) } });
+  return data;
+}
+
+// Spot price is a convenience default for the mining calculator; on failure
+// the tab falls back to manual input, so errors resolve to null here.
+export async function fetchCryptoSpot(): Promise<CryptoSpotData | null> {
+  try {
+    const { data } = await axios.get('/api/opendata/crypto/spot');
+    return data;
+  } catch {
+    return null;
+  }
 }

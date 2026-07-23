@@ -69,6 +69,20 @@ func TestCryptoFeeSQLPartitionFilters(t *testing.T) {
 	}
 }
 
+func TestCryptoMiningSQLPartitionFilters(t *testing.T) {
+	sql := btcMiningBlocksSQL()
+	// Partition guard plus the bits→difficulty decode: exponent from the
+	// first 2 hex chars, mantissa from the last 6, 65535/mantissa * 256^(29-e).
+	for _, want := range []string{
+		"timestamp_month", "timestamp >= TIMESTAMP(@start_date)", "crypto_bitcoin.blocks",
+		"SUBSTR(bits, 1, 2)", "SUBSTR(bits, 3, 6)", "65535", "POW(256, 29",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("btc mining blocks: missing %q in SQL:\n%s", want, sql)
+		}
+	}
+}
+
 func TestCryptoWhaleSQLPartitionFilters(t *testing.T) {
 	tests := []struct {
 		name string

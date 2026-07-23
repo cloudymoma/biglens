@@ -1,6 +1,9 @@
 package main
 
 import (
+	"encoding/json"
+	"math"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -183,5 +186,85 @@ func TestMergeTokenDaily(t *testing.T) {
 		if got[i] != want[i] {
 			t.Errorf("row %d = %+v, want %+v", i, got[i], want[i])
 		}
+	}
+}
+
+// Difficulty chosen so hashrate = difficulty * 2^32 * blocks / 86400 / 1e18
+// is exactly 1 EH/s at 144 blocks/day — a wrong constant or a dropped
+// blocks factor can't produce 1.0 by accident.
+func TestMergeBtcMining(t *testing.T) {
+	oneEhsDifficulty := 600.0 / 4294967296.0 * 1e18
+	blocks := []BtcMiningBlockRow{
+		{Date: "2026-07-19", Blocks: 144, Difficulty: oneEhsDifficulty},
+		{Date: "2026-07-20", Blocks: 72, Difficulty: oneEhsDifficulty}, // half the blocks → half the hashrate
+	}
+	coinbase := []BtcCoinbaseRow{
+		{Date: "2026-07-19", CoinbaseBTC: 460.5},
+		// 2026-07-20 missing: revenue defaults to 0, day is kept
+	}
+	got := mergeBtcMining(blocks, coinbase)
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2", len(got))
+	}
+	if math.Abs(got[0].HashrateEhs-1.0) > 1e-9 {
+		t.Errorf("hashrate = %v EH/s, want 1.0", got[0].HashrateEhs)
+	}
+	if math.Abs(got[1].HashrateEhs-0.5) > 1e-9 {
+		t.Errorf("hashrate = %v EH/s, want 0.5", got[1].HashrateEhs)
+	}
+	if got[0].RevenueBTC != 460.5 {
+		t.Errorf("revenue = %v, want 460.5", got[0].RevenueBTC)
+	}
+	if got[1].RevenueBTC != 0 {
+		t.Errorf("missing coinbase day revenue = %v, want 0", got[1].RevenueBTC)
+	}
+}
+
+func TestCryptoSpot(t *testing.T) {
+	tests := []struct {
+		name       string
+		upstream   http.HandlerFunc
+		wantStatus int
+		wantPrice  float64
+	}{
+		{"success", func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte(`{"data":{"amount":"117234.56","currency":"USD"}}`))
+		}, http.StatusOK, 117234.56},
+		{"upstream error", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		}, http.StatusBadGateway, 0},
+		{"malformed amount", func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte(`{"data":{"amount":"","currency":"USD"}}`))
+		}, http.StatusBadGateway, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			upstream := httptest.NewServer(tt.upstream)
+			defer upstream.Close()
+			orig := btcSpotURL
+			btcSpotURL = upstream.URL
+			defer func() { btcSpotURL = orig }()
+
+			h := &APIHandler{cache: NewCache(time.Minute)}
+			rec := httptest.NewRecorder()
+			h.CryptoSpot(rec, httptest.NewRequest("GET", "/api/opendata/crypto/spot", nil))
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d (body %q)", rec.Code, tt.wantStatus, rec.Body.String())
+			}
+			if tt.wantStatus != http.StatusOK {
+				return
+			}
+			var got CryptoSpotData
+			if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if got.PriceUSD != tt.wantPrice {
+				t.Errorf("price = %v, want %v", got.PriceUSD, tt.wantPrice)
+			}
+			if got.Source != "coinbase" {
+				t.Errorf("source = %q, want coinbase", got.Source)
+			}
+		})
 	}
 }

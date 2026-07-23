@@ -506,3 +506,21 @@ export interface CryptoTokensData {
   daily: TokenDailyRow[];
   contracts: ContractRow[];
 }
+
+export interface BtcMiningRow {
+  date: string;
+  blocks: number;
+  hashrate_ehs: number;
+  revenue_btc: number;
+}
+
+export interface CryptoMiningData {
+  days: number;
+  daily: BtcMiningRow[];
+}
+
+export interface CryptoSpotData {
+  price_usd: number;
+  as_of: string;
+  source: string;
+}

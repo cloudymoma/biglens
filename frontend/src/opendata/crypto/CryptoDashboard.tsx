@@ -4,12 +4,14 @@ import PulseTab from './PulseTab';
 import FeesTab from './FeesTab';
 import WhalesTab from './WhalesTab';
 import TokensTab from './TokensTab';
+import MiningTab from './MiningTab';
 
 const TABS = [
   { id: 'pulse', label: 'Network Pulse' },
   { id: 'fees', label: 'Fee Market' },
   { id: 'whales', label: 'Whales & Flow' },
   { id: 'tokens', label: 'Token Economy' },
+  { id: 'mining', label: 'Mining Economics' },
 ] as const;
 
 type TabId = (typeof TABS)[number]['id'];
@@ -28,6 +30,7 @@ export default function CryptoDashboard() {
     fees: <FeesTab />,
     whales: <WhalesTab />,
     tokens: <TokensTab />,
+    mining: <MiningTab />,
   };
 
   return (
