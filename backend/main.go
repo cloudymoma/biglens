@@ -77,6 +77,7 @@ func main() {
 	mux.Handle("/api/dashboard/compute", h(api.ComputeDashboard))
 	mux.Handle("/api/dashboard/cost", h(api.CostDashboard))
 	mux.Handle("/api/dashboard/insights", h(api.InsightsDashboard))
+	mux.Handle("/api/dashboard/jobs", h(api.JobsDashboard))
 
 	// IAM Security endpoints
 	mux.Handle("/api/dashboard/iam", h(api.IAMDashboard))

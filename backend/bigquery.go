@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 
 	"cloud.google.com/go/bigquery"
@@ -130,6 +131,78 @@ func (b *BQClient) GetTopTables(ctx context.Context, filters QueryFilters) ([]To
 	return collectRows[TopTable](q, ctx)
 }
 
+// --- Widget 1.5: Per-Dataset Storage (billing model recommendation) ---
+
+type DatasetStorage struct {
+	Dataset          string `json:"dataset" bigquery:"dataset"`
+	ActiveLogical    int64  `json:"active_logical" bigquery:"active_logical"`
+	LongTermLogical  int64  `json:"long_term_logical" bigquery:"long_term_logical"`
+	ActivePhysical   int64  `json:"active_physical" bigquery:"active_physical"`
+	LongTermPhysical int64  `json:"long_term_physical" bigquery:"long_term_physical"`
+	TimeTravel       int64  `json:"time_travel" bigquery:"time_travel"`
+	FailSafe         int64  `json:"fail_safe" bigquery:"fail_safe"`
+}
+
+func (b *BQClient) GetDatasetStorage(ctx context.Context, filters QueryFilters) ([]DatasetStorage, error) {
+	where, params := filters.StorageWhere()
+	q := b.client.Query(fmt.Sprintf(
+		`SELECT
+			table_schema AS dataset,
+			SUM(active_logical_bytes) AS active_logical,
+			SUM(long_term_logical_bytes) AS long_term_logical,
+			SUM(active_physical_bytes) AS active_physical,
+			SUM(long_term_physical_bytes) AS long_term_physical,
+			SUM(time_travel_physical_bytes) AS time_travel,
+			SUM(fail_safe_physical_bytes) AS fail_safe
+		FROM %s.INFORMATION_SCHEMA.TABLE_STORAGE_BY_PROJECT%s
+		GROUP BY dataset
+		ORDER BY SUM(active_logical_bytes) + SUM(long_term_logical_bytes) DESC
+		LIMIT 50`,
+		b.regionRef(filters.Region), where))
+	q.Parameters = params
+
+	return collectRows[DatasetStorage](q, ctx)
+}
+
+// --- Widget 1.6: Cold Tables (no references in the time window) ---
+
+type ColdTable struct {
+	Dataset     string `json:"dataset" bigquery:"dataset"`
+	TableName   string `json:"table_name" bigquery:"table_name"`
+	TotalBytes  int64  `json:"total_bytes" bigquery:"total_bytes"`
+	StorageTier string `json:"storage_tier" bigquery:"storage_tier"`
+}
+
+func (b *BQClient) GetColdTables(ctx context.Context, filters QueryFilters) ([]ColdTable, error) {
+	where, params := filters.StorageWhere()
+	extra := strings.TrimPrefix(where, " WHERE ")
+	if extra != "" {
+		extra = " AND " + extra
+	}
+	q := b.client.Query(fmt.Sprintf(
+		`SELECT
+			ts.table_schema AS dataset,
+			ts.table_name,
+			(ts.active_logical_bytes + ts.long_term_logical_bytes) AS total_bytes,
+			CASE WHEN ts.long_term_logical_bytes > ts.active_logical_bytes THEN 'LONG_TERM' ELSE 'ACTIVE' END AS storage_tier
+		FROM %[1]s.INFORMATION_SCHEMA.TABLE_STORAGE_BY_PROJECT ts
+		WHERE ts.deleted = FALSE
+			AND NOT STARTS_WITH(ts.table_schema, '_')
+			AND NOT EXISTS (
+				SELECT 1
+				FROM %[1]s.INFORMATION_SCHEMA.JOBS_BY_PROJECT j, UNNEST(j.referenced_tables) rt
+				WHERE j.creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL %[2]s)
+					AND rt.dataset_id = ts.table_schema
+					AND rt.table_id = ts.table_name
+			)%[3]s
+		ORDER BY total_bytes DESC
+		LIMIT 20`,
+		b.regionRef(filters.Region), filters.TimeInterval(), extra))
+	q.Parameters = params
+
+	return collectRows[ColdTable](q, ctx)
+}
+
 // --- Widget 1.4: Search Indexes Info ---
 
 type SearchIndexInfo struct {
@@ -222,35 +295,108 @@ func (b *BQClient) GetSearchIndexes(ctx context.Context, filters QueryFilters) (
 }
 
 
-// --- Widget 2.1: Concurrent Slot Usage (Time-Series) ---
+// --- Widget 2.1: Concurrent Slot Usage by State (Time-Series) ---
 
-type SlotTimepoint struct {
-	PeriodStart     string  `json:"period_start" bigquery:"period_start"`
-	ConcurrentSlots float64 `json:"concurrent_slots" bigquery:"concurrent_slots"`
+// SlotStatePoint carries one (period, state) slot reading; PENDING vs
+// RUNNING split reveals slot starvation (sustained PENDING).
+type SlotStatePoint struct {
+	PeriodStart string  `json:"period_start" bigquery:"period_start"`
+	State       string  `json:"state" bigquery:"state"`
+	Slots       float64 `json:"slots" bigquery:"slots"`
 }
 
-func (b *BQClient) GetConcurrentSlots(ctx context.Context, filters QueryFilters) ([]SlotTimepoint, error) {
-	where, params := filters.JobsWhere("period_start")
+func (b *BQClient) GetConcurrentSlotsByState(ctx context.Context, filters QueryFilters) ([]SlotStatePoint, error) {
+	where, params := filters.TimelineWhere("period_start")
 	q := b.client.Query(fmt.Sprintf(
 		`SELECT
 			FORMAT_TIMESTAMP("%%Y-%%m-%%dT%%H:%%M:%%SZ", period_start) AS period_start,
-			SUM(period_slot_ms) / 1000 AS concurrent_slots
+			state,
+			SUM(period_slot_ms) / 1000 AS slots
 		FROM %s.INFORMATION_SCHEMA.JOBS_TIMELINE_BY_PROJECT
-		%s
-		GROUP BY period_start
+		%s AND state IN ('PENDING', 'RUNNING')
+		GROUP BY period_start, state
 		ORDER BY period_start ASC`,
 		b.regionRef(filters.Region), where))
 	q.Parameters = params
 
-	return collectRows[SlotTimepoint](q, ctx)
+	return collectRows[SlotStatePoint](q, ctx)
+}
+
+// --- Widget 2.3: Queue Time & Duration KPIs ---
+
+type QueueStats struct {
+	AvgQueueMs float64 `json:"avg_queue_ms" bigquery:"avg_queue_ms"`
+	P95QueueMs float64 `json:"p95_queue_ms" bigquery:"p95_queue_ms"`
+	AvgRunMs   float64 `json:"avg_run_ms" bigquery:"avg_run_ms"`
+	P95RunMs   float64 `json:"p95_run_ms" bigquery:"p95_run_ms"`
+	JobCount   int64   `json:"job_count" bigquery:"job_count"`
+}
+
+func (b *BQClient) GetQueueStats(ctx context.Context, filters QueryFilters) (*QueueStats, error) {
+	where, params := filters.JobsWhere("creation_time")
+	q := b.client.Query(fmt.Sprintf(
+		`SELECT
+			CAST(IFNULL(AVG(TIMESTAMP_DIFF(start_time, creation_time, MILLISECOND)), 0) AS FLOAT64) AS avg_queue_ms,
+			CAST(IFNULL(APPROX_QUANTILES(TIMESTAMP_DIFF(start_time, creation_time, MILLISECOND), 100)[OFFSET(95)], 0) AS FLOAT64) AS p95_queue_ms,
+			CAST(IFNULL(AVG(TIMESTAMP_DIFF(end_time, start_time, MILLISECOND)), 0) AS FLOAT64) AS avg_run_ms,
+			CAST(IFNULL(APPROX_QUANTILES(TIMESTAMP_DIFF(end_time, start_time, MILLISECOND), 100)[OFFSET(95)], 0) AS FLOAT64) AS p95_run_ms,
+			COUNT(*) AS job_count
+		FROM %s.INFORMATION_SCHEMA.JOBS_BY_PROJECT
+		%s AND start_time IS NOT NULL AND end_time IS NOT NULL`,
+		b.regionRef(filters.Region), where))
+	q.Parameters = params
+
+	it, err := q.Read(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("queue stats query failed: %w", err)
+	}
+	var qs QueueStats
+	err = it.Next(&qs)
+	if err == iterator.Done {
+		return &QueueStats{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("queue stats iteration failed: %w", err)
+	}
+	return &qs, nil
+}
+
+// --- Widget 2.4: Reservation Utilization ---
+
+type ReservationPoint struct {
+	PeriodStart string  `json:"period_start" bigquery:"period_start"`
+	Assigned    float64 `json:"assigned" bigquery:"assigned"`
+	Autoscale   float64 `json:"autoscale" bigquery:"autoscale"`
+}
+
+// GetReservationTimeline returns baseline + autoscaled capacity per minute.
+// Projects without reservations (or without permission on the admin
+// project) get an empty result; callers treat errors as "no reservations".
+func (b *BQClient) GetReservationTimeline(ctx context.Context, filters QueryFilters) ([]ReservationPoint, error) {
+	q := b.client.Query(fmt.Sprintf(
+		`SELECT
+			FORMAT_TIMESTAMP("%%Y-%%m-%%dT%%H:%%M:%%SZ", period_start) AS period_start,
+			CAST(SUM(slots_assigned) AS FLOAT64) AS assigned,
+			CAST(SUM(IFNULL(autoscale.current_slots, 0)) AS FLOAT64) AS autoscale
+		FROM %s.INFORMATION_SCHEMA.RESERVATIONS_TIMELINE
+		WHERE period_start >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL %s)
+		GROUP BY period_start
+		ORDER BY period_start ASC`,
+		b.regionRef(filters.Region), filters.TimeInterval()))
+
+	return collectRows[ReservationPoint](q, ctx)
 }
 
 // --- Widget 2.2: Slot Gluttons (Top Jobs) ---
 
 type TopSlotJob struct {
-	JobID      string  `json:"job_id" bigquery:"job_id"`
-	UserEmail  string  `json:"user_email" bigquery:"user_email"`
+	JobID       string `json:"job_id" bigquery:"job_id"`
+	UserEmail   string `json:"user_email" bigquery:"user_email"`
 	TotalSlotMs int64  `json:"total_slot_ms" bigquery:"total_slot_ms"`
+	DurationMs  int64  `json:"duration_ms" bigquery:"duration_ms"`
+	State       string `json:"state" bigquery:"state"`
+	CacheHit    bool   `json:"cache_hit" bigquery:"cache_hit"`
+	Reservation string `json:"reservation" bigquery:"reservation"`
 }
 
 func (b *BQClient) GetTopSlotJobs(ctx context.Context, filters QueryFilters) ([]TopSlotJob, error) {
@@ -259,7 +405,11 @@ func (b *BQClient) GetTopSlotJobs(ctx context.Context, filters QueryFilters) ([]
 		`SELECT
 			job_id,
 			user_email,
-			total_slot_ms
+			total_slot_ms,
+			IFNULL(TIMESTAMP_DIFF(end_time, start_time, MILLISECOND), 0) AS duration_ms,
+			state,
+			IFNULL(cache_hit, FALSE) AS cache_hit,
+			IFNULL(reservation_id, '') AS reservation
 		FROM %s.INFORMATION_SCHEMA.JOBS_BY_PROJECT
 		%s
 		ORDER BY total_slot_ms DESC
@@ -296,14 +446,18 @@ func (b *BQClient) GetSlotUsage(ctx context.Context, filters QueryFilters) ([]Sl
 // --- Widget 3.1: On-Demand Cost Extrapolator ---
 
 type CostSummary struct {
-	BytesBilled int64 `json:"bytes_billed" bigquery:"bytes_billed"`
+	BytesBilled    int64 `json:"bytes_billed" bigquery:"bytes_billed"`
+	BytesProcessed int64 `json:"bytes_processed" bigquery:"bytes_processed"`
+	TotalSlotMs    int64 `json:"total_slot_ms" bigquery:"total_slot_ms"`
 }
 
 func (b *BQClient) GetCostSummary(ctx context.Context, filters QueryFilters) (*CostSummary, error) {
 	where, params := filters.JobsWhere("creation_time")
 	q := b.client.Query(fmt.Sprintf(
 		`SELECT
-			IFNULL(SUM(total_bytes_billed), 0) AS bytes_billed
+			IFNULL(SUM(total_bytes_billed), 0) AS bytes_billed,
+			IFNULL(SUM(total_bytes_processed), 0) AS bytes_processed,
+			IFNULL(SUM(total_slot_ms), 0) AS total_slot_ms
 		FROM %s.INFORMATION_SCHEMA.JOBS_BY_PROJECT
 		%s AND statement_type != 'SCRIPT'`,
 		b.regionRef(filters.Region), where))
@@ -325,27 +479,64 @@ func (b *BQClient) GetCostSummary(ctx context.Context, filters QueryFilters) (*C
 	return &cs, nil
 }
 
-// --- Widget 3.2: Spend by User (Treemap) ---
+// --- Widget 3.2: Spend by <group-by dimension> (Treemap) ---
 
-type UserSpend struct {
-	UserEmail  string `json:"user_email" bigquery:"user_email"`
+type SpendEntry struct {
+	Name       string `json:"name" bigquery:"name"`
 	TotalBytes int64  `json:"total_bytes" bigquery:"total_bytes"`
 }
 
-func (b *BQClient) GetSpendByUser(ctx context.Context, filters QueryFilters) ([]UserSpend, error) {
+// GetSpend aggregates bytes billed by the filters.GroupBy dimension. The
+// dataset/table dimensions unnest referenced_tables, so a job referencing N
+// tables is counted once under each of them.
+func (b *BQClient) GetSpend(ctx context.Context, filters QueryFilters) ([]SpendEntry, error) {
+	nameExpr, from := "user_email", ""
+	switch filters.GroupBy {
+	case "dataset":
+		nameExpr, from = "rt.dataset_id", ", UNNEST(referenced_tables) rt"
+	case "table":
+		nameExpr, from = "CONCAT(rt.dataset_id, '.', rt.table_id)", ", UNNEST(referenced_tables) rt"
+	case "reservation":
+		nameExpr = "IFNULL(reservation_id, 'on-demand')"
+	}
+
 	where, params := filters.JobsWhere("creation_time")
 	q := b.client.Query(fmt.Sprintf(
 		`SELECT
-			user_email,
+			%s AS name,
 			IFNULL(SUM(total_bytes_billed), 0) AS total_bytes
+		FROM %s.INFORMATION_SCHEMA.JOBS_BY_PROJECT%s
+		%s AND statement_type != 'SCRIPT'
+		GROUP BY name
+		ORDER BY total_bytes DESC
+		LIMIT 25`,
+		nameExpr, b.regionRef(filters.Region), from, where))
+	q.Parameters = params
+
+	return collectRows[SpendEntry](q, ctx)
+}
+
+// --- Widget 3.3: Daily Cost Trend ---
+
+type DailyCost struct {
+	Day         string `json:"day" bigquery:"day"`
+	BytesBilled int64  `json:"bytes_billed" bigquery:"bytes_billed"`
+}
+
+func (b *BQClient) GetDailyCost(ctx context.Context, filters QueryFilters) ([]DailyCost, error) {
+	where, params := filters.JobsWhere("creation_time")
+	q := b.client.Query(fmt.Sprintf(
+		`SELECT
+			FORMAT_DATE("%%Y-%%m-%%d", DATE(creation_time)) AS day,
+			IFNULL(SUM(total_bytes_billed), 0) AS bytes_billed
 		FROM %s.INFORMATION_SCHEMA.JOBS_BY_PROJECT
-		%s
-		GROUP BY user_email
-		ORDER BY total_bytes DESC`,
+		%s AND statement_type != 'SCRIPT'
+		GROUP BY day
+		ORDER BY day ASC`,
 		b.regionRef(filters.Region), where))
 	q.Parameters = params
 
-	return collectRows[UserSpend](q, ctx)
+	return collectRows[DailyCost](q, ctx)
 }
 
 // --- Widget 4.1: Active Recommendations ---

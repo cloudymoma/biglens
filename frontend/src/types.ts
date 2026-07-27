@@ -4,6 +4,12 @@ export interface QueryFilters {
   table: string;
   user_email: string;
   time_range: string;
+  job_type: string;   // '' | QUERY | LOAD | EXTRACT | COPY
+  status: string;     // '' | success | failed
+  cache_hit: string;  // '' | hit | miss
+  billing: string;    // '' | ondemand | reservation
+  principal: string;  // '' | human | sa
+  group_by: string;   // user | dataset | table | reservation
 }
 
 export interface StorageStats {
@@ -33,22 +39,46 @@ export interface SearchIndexInfo {
   total_storage_bytes: number;
 }
 
+export interface DatasetStorage {
+  dataset: string;
+  active_logical: number;
+  long_term_logical: number;
+  active_physical: number;   // includes time-travel bytes (BQ semantics)
+  long_term_physical: number;
+  time_travel: number;
+  fail_safe: number;
+}
+
+export interface ColdTable {
+  dataset: string;
+  table_name: string;
+  total_bytes: number;
+  storage_tier: string; // ACTIVE | LONG_TERM
+}
+
 export interface StorageDashboardData {
   billing: StorageStats | null;
   breakdown: StorageBreakdown | null;
   top_tables: TopTable[] | null;
   search_indexes: SearchIndexInfo[] | null;
+  dataset_storage: DatasetStorage[] | null;
+  cold_tables: ColdTable[] | null;
 }
 
-export interface SlotTimepoint {
+export interface SlotStatePoint {
   period_start: string;
-  concurrent_slots: number;
+  state: string; // PENDING | RUNNING
+  slots: number;
 }
 
 export interface TopSlotJob {
   job_id: string;
   user_email: string;
   total_slot_ms: number;
+  duration_ms: number;
+  state: string;
+  cache_hit: boolean;
+  reservation: string;
 }
 
 export interface SlotUsage {
@@ -56,24 +86,48 @@ export interface SlotUsage {
   avg_slots: number;
 }
 
+export interface QueueStats {
+  avg_queue_ms: number;
+  p95_queue_ms: number;
+  avg_run_ms: number;
+  p95_run_ms: number;
+  job_count: number;
+}
+
+export interface ReservationPoint {
+  period_start: string;
+  assigned: number;
+  autoscale: number;
+}
+
 export interface ComputeDashboardData {
-  slot_timeline: SlotTimepoint[] | null;
+  slot_timeline: SlotStatePoint[] | null;
   top_jobs: TopSlotJob[] | null;
   slot_usage: SlotUsage[] | null;
+  queue_stats: QueueStats | null;
+  reservations: ReservationPoint[] | null;
 }
 
 export interface CostSummary {
   bytes_billed: number;
+  bytes_processed: number;
+  total_slot_ms: number;
 }
 
-export interface UserSpend {
-  user_email: string;
+export interface SpendEntry {
+  name: string;
   total_bytes: number;
+}
+
+export interface DailyCost {
+  day: string;
+  bytes_billed: number;
 }
 
 export interface CostDashboardData {
   summary: CostSummary | null;
-  spend_by_user: UserSpend[] | null;
+  spend_by: SpendEntry[] | null;
+  daily_cost: DailyCost[] | null;
 }
 
 export interface Recommendation {
@@ -83,8 +137,68 @@ export interface Recommendation {
   projected_savings_usd: number;
 }
 
+export interface ErrorStat {
+  reason: string;
+  job_count: number;
+  slot_ms: number;
+}
+
+export interface FailingUser {
+  user_email: string;
+  job_count: number;
+  slot_ms: number;
+}
+
+export interface PerfInsightJob {
+  job_id: string;
+  user_email: string;
+  slot_ms: number;
+  slot_contention: boolean;
+  shuffle_quota: boolean;
+  high_card_join: boolean;
+  partition_skew: boolean;
+}
+
+export interface RepeatedQuery {
+  query_hash: string;
+  sample_query: string;
+  runs: number;
+  total_bytes: number;
+  user_count: number;
+}
+
 export interface InsightsDashboardData {
   recommendations: Recommendation[] | null;
+  error_stats: ErrorStat[] | null;
+  failing_users: FailingUser[] | null;
+  perf_insights: PerfInsightJob[] | null;
+  repeated_queries: RepeatedQuery[] | null;
+}
+
+export interface JobRow {
+  job_id: string;
+  user_email: string;
+  job_type: string;
+  statement_type: string;
+  state: string;
+  error_reason: string;
+  creation_time: string;
+  reservation: string;
+  queue_ms: number;
+  duration_ms: number;
+  slot_ms: number;
+  bytes_billed: number;
+  cache_hit: boolean;
+  ref_tables: string[] | null;
+  query: string;
+  slot_contention: boolean;
+  shuffle_quota: boolean;
+  high_card_join: boolean;
+  partition_skew: boolean;
+}
+
+export interface JobsDashboardData {
+  jobs: JobRow[] | null;
 }
 
 // --- IAM Security ---

@@ -37,10 +37,12 @@ func writeError(w http.ResponseWriter, msg string, code int) {
 // --- Dashboard 1: Storage Analysis ---
 
 type StorageDashboardData struct {
-	Billing       *StorageStats     `json:"billing"`
-	Breakdown     *StorageBreakdown `json:"breakdown"`
-	TopTables     []TopTable        `json:"top_tables"`
-	SearchIndexes []SearchIndexInfo `json:"search_indexes"`
+	Billing        *StorageStats     `json:"billing"`
+	Breakdown      *StorageBreakdown `json:"breakdown"`
+	TopTables      []TopTable        `json:"top_tables"`
+	SearchIndexes  []SearchIndexInfo `json:"search_indexes"`
+	DatasetStorage []DatasetStorage  `json:"dataset_storage"`
+	ColdTables     []ColdTable       `json:"cold_tables"`
 }
 
 func (h *APIHandler) StorageDashboard(w http.ResponseWriter, r *http.Request) {
@@ -91,6 +93,27 @@ func (h *APIHandler) StorageDashboard(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 
+	g.Go(func() error {
+		ds, err := h.bq.GetDatasetStorage(ctx, filters)
+		if err != nil {
+			return err
+		}
+		data.DatasetStorage = ds
+		return nil
+	})
+
+	g.Go(func() error {
+		// Cold-table detection needs jobs history; degrade to empty if the
+		// caller lacks bigquery.jobs.listAll rather than failing storage.
+		cold, err := h.bq.GetColdTables(ctx, filters)
+		if err != nil {
+			slog.Warn("cold tables widget degraded", "error", err)
+			return nil
+		}
+		data.ColdTables = cold
+		return nil
+	})
+
 	if err := g.Wait(); err != nil {
 		writeError(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -103,9 +126,11 @@ func (h *APIHandler) StorageDashboard(w http.ResponseWriter, r *http.Request) {
 // --- Dashboard 2: Slots & Compute ---
 
 type ComputeDashboardData struct {
-	SlotTimeline []SlotTimepoint `json:"slot_timeline"`
-	TopJobs      []TopSlotJob    `json:"top_jobs"`
-	SlotUsage    []SlotUsage     `json:"slot_usage"`
+	SlotTimeline []SlotStatePoint   `json:"slot_timeline"`
+	TopJobs      []TopSlotJob       `json:"top_jobs"`
+	SlotUsage    []SlotUsage        `json:"slot_usage"`
+	QueueStats   *QueueStats        `json:"queue_stats"`
+	Reservations []ReservationPoint `json:"reservations"`
 }
 
 func (h *APIHandler) ComputeDashboard(w http.ResponseWriter, r *http.Request) {
@@ -121,7 +146,7 @@ func (h *APIHandler) ComputeDashboard(w http.ResponseWriter, r *http.Request) {
 	g, ctx := errgroup.WithContext(r.Context())
 
 	g.Go(func() error {
-		timeline, err := h.bq.GetConcurrentSlots(ctx, filters)
+		timeline, err := h.bq.GetConcurrentSlotsByState(ctx, filters)
 		if err != nil {
 			return err
 		}
@@ -147,6 +172,27 @@ func (h *APIHandler) ComputeDashboard(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 
+	g.Go(func() error {
+		qs, err := h.bq.GetQueueStats(ctx, filters)
+		if err != nil {
+			return err
+		}
+		data.QueueStats = qs
+		return nil
+	})
+
+	g.Go(func() error {
+		// RESERVATIONS_TIMELINE is empty or unauthorized on pure on-demand
+		// projects; the widget shows an empty state instead of an error.
+		res, err := h.bq.GetReservationTimeline(ctx, filters)
+		if err != nil {
+			slog.Warn("reservation widget degraded", "error", err)
+			return nil
+		}
+		data.Reservations = res
+		return nil
+	})
+
 	if err := g.Wait(); err != nil {
 		writeError(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -159,8 +205,9 @@ func (h *APIHandler) ComputeDashboard(w http.ResponseWriter, r *http.Request) {
 // --- Dashboard 3: Pricing & Cost ---
 
 type CostDashboardData struct {
-	Summary     *CostSummary `json:"summary"`
-	SpendByUser []UserSpend  `json:"spend_by_user"`
+	Summary   *CostSummary `json:"summary"`
+	SpendBy   []SpendEntry `json:"spend_by"`
+	DailyCost []DailyCost  `json:"daily_cost"`
 }
 
 func (h *APIHandler) CostDashboard(w http.ResponseWriter, r *http.Request) {
@@ -185,11 +232,20 @@ func (h *APIHandler) CostDashboard(w http.ResponseWriter, r *http.Request) {
 	})
 
 	g.Go(func() error {
-		spend, err := h.bq.GetSpendByUser(ctx, filters)
+		spend, err := h.bq.GetSpend(ctx, filters)
 		if err != nil {
 			return err
 		}
-		data.SpendByUser = spend
+		data.SpendBy = spend
+		return nil
+	})
+
+	g.Go(func() error {
+		daily, err := h.bq.GetDailyCost(ctx, filters)
+		if err != nil {
+			return err
+		}
+		data.DailyCost = daily
 		return nil
 	})
 
@@ -206,6 +262,10 @@ func (h *APIHandler) CostDashboard(w http.ResponseWriter, r *http.Request) {
 
 type InsightsDashboardData struct {
 	Recommendations []Recommendation `json:"recommendations"`
+	ErrorStats      []ErrorStat      `json:"error_stats"`
+	FailingUsers    []FailingUser    `json:"failing_users"`
+	PerfInsights    []PerfInsightJob `json:"perf_insights"`
+	RepeatedQueries []RepeatedQuery  `json:"repeated_queries"`
 }
 
 func (h *APIHandler) InsightsDashboard(w http.ResponseWriter, r *http.Request) {
@@ -217,13 +277,89 @@ func (h *APIHandler) InsightsDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	recs, err := h.bq.GetRecommendations(r.Context(), filters.Region)
+	var data InsightsDashboardData
+	g, ctx := errgroup.WithContext(r.Context())
+
+	g.Go(func() error {
+		recs, err := h.bq.GetRecommendations(ctx, filters.Region)
+		if err != nil {
+			return err
+		}
+		data.Recommendations = recs
+		return nil
+	})
+
+	g.Go(func() error {
+		es, err := h.bq.GetErrorStats(ctx, filters)
+		if err != nil {
+			return err
+		}
+		data.ErrorStats = es
+		return nil
+	})
+
+	g.Go(func() error {
+		fu, err := h.bq.GetTopFailingUsers(ctx, filters)
+		if err != nil {
+			return err
+		}
+		data.FailingUsers = fu
+		return nil
+	})
+
+	g.Go(func() error {
+		// performance_insights schema availability varies by region/edition;
+		// degrade to empty rather than failing the whole tab.
+		pi, err := h.bq.GetPerfInsightJobs(ctx, filters)
+		if err != nil {
+			slog.Warn("perf insights widget degraded", "error", err)
+			return nil
+		}
+		data.PerfInsights = pi
+		return nil
+	})
+
+	g.Go(func() error {
+		rq, err := h.bq.GetRepeatedQueries(ctx, filters)
+		if err != nil {
+			slog.Warn("repeated queries widget degraded", "error", err)
+			return nil
+		}
+		data.RepeatedQueries = rq
+		return nil
+	})
+
+	if err := g.Wait(); err != nil {
+		writeError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	h.cache.Set(key, &data)
+	writeJSON(w, &data)
+}
+
+// --- Dashboard 6: Jobs Explorer ---
+
+type JobsDashboardData struct {
+	Jobs []JobRow `json:"jobs"`
+}
+
+func (h *APIHandler) JobsDashboard(w http.ResponseWriter, r *http.Request) {
+	filters := ParseFilters(r)
+	key := filters.CacheKey("jobs_dashboard")
+
+	if cached, ok := h.cache.Get(key); ok {
+		writeJSON(w, cached)
+		return
+	}
+
+	jobs, err := h.bq.ListJobs(r.Context(), filters)
 	if err != nil {
 		writeError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	data := &InsightsDashboardData{Recommendations: recs}
+	data := &JobsDashboardData{Jobs: jobs}
 	h.cache.Set(key, data)
 	writeJSON(w, data)
 }

@@ -5,6 +5,7 @@ import type {
   ComputeDashboardData,
   CostDashboardData,
   InsightsDashboardData,
+  JobsDashboardData,
   IAMDashboardData,
   CatalogGraph,
   GraphNode,
@@ -40,6 +41,12 @@ function filterParams(filters: QueryFilters): Record<string, string> {
   if (filters.table) p.table = filters.table;
   if (filters.user_email) p.user_email = filters.user_email;
   if (filters.time_range) p.time_range = filters.time_range;
+  if (filters.job_type) p.job_type = filters.job_type;
+  if (filters.status) p.status = filters.status;
+  if (filters.cache_hit) p.cache_hit = filters.cache_hit;
+  if (filters.billing) p.billing = filters.billing;
+  if (filters.principal) p.principal = filters.principal;
+  if (filters.group_by && filters.group_by !== 'user') p.group_by = filters.group_by;
   return p;
 }
 
@@ -60,6 +67,11 @@ export async function fetchCostDashboard(filters: QueryFilters): Promise<CostDas
 
 export async function fetchInsightsDashboard(filters: QueryFilters): Promise<InsightsDashboardData> {
   const { data } = await axios.get('/api/dashboard/insights', { params: filterParams(filters) });
+  return data;
+}
+
+export async function fetchJobsDashboard(filters: QueryFilters): Promise<JobsDashboardData> {
+  const { data } = await axios.get('/api/dashboard/jobs', { params: filterParams(filters) });
   return data;
 }
 

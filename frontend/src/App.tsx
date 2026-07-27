@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import {
   ChevronDown, ChevronLeft, ChevronRight, Server, Layers, Search, RefreshCw,
   Database, BarChart3, DollarSign, Lightbulb, Clock, Shield, Network, Globe,
+  ListChecks,
 } from 'lucide-react';
 import type { QueryFilters } from './types';
 import { fetchConfig, fetchDatasets, fetchTables, fetchRegions } from './api';
@@ -9,17 +10,19 @@ import StorageDashboard from './dashboards/StorageDashboard';
 import ComputeDashboard from './dashboards/ComputeDashboard';
 import CostDashboard from './dashboards/CostDashboard';
 import InsightsDashboard from './dashboards/InsightsDashboard';
+import JobsDashboard from './dashboards/JobsDashboard';
 import IAMDashboard from './dashboards/IAMDashboard';
 import CatalogView from './catalog/CatalogView';
 import { OPEN_DATASETS } from './opendata/registry';
 
-type Tab = 'storage' | 'compute' | 'cost' | 'insights';
+type Tab = 'storage' | 'compute' | 'cost' | 'insights' | 'jobs';
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'storage',  label: 'Storage',  icon: <Database size={16} /> },
   { id: 'compute',  label: 'Compute',  icon: <BarChart3 size={16} /> },
   { id: 'cost',     label: 'Cost',     icon: <DollarSign size={16} /> },
   { id: 'insights', label: 'Insights', icon: <Lightbulb size={16} /> },
+  { id: 'jobs',     label: 'Jobs',     icon: <ListChecks size={16} /> },
 ];
 
 const PRODUCTS: { id: string; label: string; icon: React.ReactNode }[] = [
@@ -42,6 +45,12 @@ function App() {
   const [selectedTable, setSelectedTable] = useState('');
   const [userEmail, setUserEmail] = useState('');
   const [timeRange, setTimeRange] = useState('7d');
+  const [jobType, setJobType] = useState('');
+  const [status, setStatus] = useState('');
+  const [cacheHit, setCacheHit] = useState('');
+  const [billing, setBilling] = useState('');
+  const [principal, setPrincipal] = useState('');
+  const [groupBy, setGroupBy] = useState('user');
 
   const [refreshKey, setRefreshKey] = useState(0);
 
@@ -70,7 +79,21 @@ function App() {
     table: selectedTable,
     user_email: userEmail,
     time_range: timeRange,
-  }), [selectedRegion, selectedDataset, selectedTable, userEmail, timeRange, refreshKey]);
+    job_type: jobType,
+    status,
+    cache_hit: cacheHit,
+    billing,
+    principal,
+    group_by: groupBy,
+  }), [selectedRegion, selectedDataset, selectedTable, userEmail, timeRange,
+    jobType, status, cacheHit, billing, principal, groupBy, refreshKey]);
+
+  // Cross-link target: e.g. clicking an error slice on Insights lands on the
+  // Jobs tab pre-filtered to failed jobs.
+  const drillToJobs = (jobStatus: string) => {
+    setStatus(jobStatus);
+    setActiveTab('jobs');
+  };
 
   const handleProductClick = (productId: string) => {
     if (activeProduct === productId && sidebarOpen) {
@@ -210,6 +233,29 @@ function App() {
                     options={['1d', '7d', '30d', '90d']}
                     optionLabels={['Last 24h', 'Last 7 days', 'Last 30 days', 'Last 90 days']}
                     onChange={setTimeRange} />
+                  <FilterSelect label="Job Type" value={jobType}
+                    options={['QUERY', 'LOAD', 'EXTRACT', 'COPY']}
+                    onChange={setJobType} />
+                  <FilterSelect label="Status" value={status}
+                    options={['', 'success', 'failed']}
+                    optionLabels={['All', 'Success', 'Failed']}
+                    onChange={setStatus} />
+                  <FilterSelect label="Cache" value={cacheHit}
+                    options={['', 'hit', 'miss']}
+                    optionLabels={['All', 'Cache Hit', 'Cache Miss']}
+                    onChange={setCacheHit} />
+                  <FilterSelect label="Billing" value={billing}
+                    options={['', 'ondemand', 'reservation']}
+                    optionLabels={['All', 'On-demand', 'Reservation']}
+                    onChange={setBilling} />
+                  <FilterSelect label="Principal" value={principal}
+                    options={['', 'human', 'sa']}
+                    optionLabels={['All', 'Humans', 'Service Accounts']}
+                    onChange={setPrincipal} />
+                  <FilterSelect label="Group Top-N By" value={groupBy}
+                    options={['user', 'dataset', 'table', 'reservation']}
+                    optionLabels={['User', 'Dataset', 'Table', 'Reservation']}
+                    onChange={setGroupBy} />
                 </div>
               </div>
             </>
@@ -367,7 +413,8 @@ function App() {
               {activeTab === 'storage' && <StorageDashboard filters={filters} />}
               {activeTab === 'compute' && <ComputeDashboard filters={filters} />}
               {activeTab === 'cost' && <CostDashboard filters={filters} />}
-              {activeTab === 'insights' && <InsightsDashboard filters={filters} />}
+              {activeTab === 'insights' && <InsightsDashboard filters={filters} onDrillToJobs={drillToJobs} />}
+              {activeTab === 'jobs' && <JobsDashboard filters={filters} />}
             </>
           )}
           {activeProduct === 'iam' && (
