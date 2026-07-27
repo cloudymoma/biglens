@@ -7,6 +7,7 @@ import type {
   InsightsDashboardData,
   JobsDashboardData,
   IAMDashboardData,
+  SecurityDashboardData,
   CatalogGraph,
   GraphNode,
   Concept,
@@ -79,6 +80,11 @@ export async function fetchIAMDashboard(region: string, emails: string[], timeRa
   const params: Record<string, string> = { region, time_range: timeRange };
   if (emails.length > 0) params.emails = emails.join(',');
   const { data } = await axios.get('/api/dashboard/iam', { params });
+  return data;
+}
+
+export async function fetchSecurityDashboard(region: string, timeRange: string): Promise<SecurityDashboardData> {
+  const { data } = await axios.get('/api/dashboard/security', { params: { region, time_range: timeRange } });
   return data;
 }
 

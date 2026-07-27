@@ -99,3 +99,29 @@ func TestCacheKeyIncludesNewFilters(t *testing.T) {
 		seen[k] = true
 	}
 }
+
+func TestValidateRegion(t *testing.T) {
+	tests := []struct {
+		name     string
+		region   string
+		expected string
+	}{
+		{"valid us", "us", "us"},
+		{"valid eu", "eu", "eu"},
+		{"valid regional", "asia-east1", "asia-east1"},
+		{"empty defaults to us", "", "us"},
+		{"sql injection attempt", "us`; DROP TABLE x;--", "us"},
+		{"uppercase not in whitelist", "US", "us"},
+		{"invalid region", "invalid-region", "us"},
+		{"backtick escape", "us`", "us"},
+		{"mixed case", "Asia-East1", "us"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := validateRegion(tt.region)
+			if got != tt.expected {
+				t.Errorf("validateRegion(%q) = %q, want %q", tt.region, got, tt.expected)
+			}
+		})
+	}
+}

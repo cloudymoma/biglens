@@ -2,11 +2,12 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import ReactECharts from 'echarts-for-react';
 import {
   Shield, Users, Bot, Activity, Search, X,
-  AlertTriangle,
+  AlertTriangle, Clock, Download,
 } from 'lucide-react';
-import type { IAMDashboardData, InactiveEmail } from '../types';
+import type { IAMDashboardData, InactiveEmail, NewActor, OffHoursCell, OffHoursUser, ExfilSignal } from '../types';
 import { fetchIAMDashboard, fetchEmailSuggestions } from '../api';
 import { formatBytes, MetricCard, EmptyState, ErrorBanner } from './shared';
+import SecurityPosture from './SecurityPosture';
 
 interface Props {
   region: string;
@@ -18,6 +19,7 @@ export default function IAMDashboard({ region, timeRange }: Props) {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [selectedEmails, setSelectedEmails] = useState<string[]>([]);
+  const [view, setView] = useState<'activity' | 'posture'>('activity');
 
   useEffect(() => {
     setLoading(true);
@@ -40,26 +42,57 @@ export default function IAMDashboard({ region, timeRange }: Props) {
 
   return (
     <div className="space-y-6">
-      <EmailSearchBar
-        region={region}
-        selectedEmails={selectedEmails}
-        onAdd={handleAddEmail}
-        onRemove={handleRemoveEmail}
-        onClear={() => setSelectedEmails([])}
-      />
+      {/* Pill toggle */}
+      <div className="flex items-center rounded-lg border border-zinc-800/50 overflow-hidden w-fit" style={{ background: '#09090b' }}>
+        <button
+          onClick={() => setView('activity')}
+          className={`px-4 py-2 text-xs font-medium cursor-pointer transition-all ${
+            view === 'activity' ? 'text-white' : 'text-zinc-600 hover:text-zinc-400'
+          }`}
+          style={view === 'activity' ? { background: '#14532d20' } : undefined}
+        >
+          Activity & Anomalies
+        </button>
+        <button
+          onClick={() => setView('posture')}
+          className={`px-4 py-2 text-xs font-medium cursor-pointer transition-all ${
+            view === 'posture' ? 'text-white' : 'text-zinc-600 hover:text-zinc-400'
+          }`}
+          style={view === 'posture' ? { background: '#14532d20' } : undefined}
+        >
+          Access Posture
+        </button>
+      </div>
 
-      {loading && <LoadingPulse />}
-      {error && <ErrorBanner message={error} />}
-      {!loading && !error && data && (
+      {view === 'posture' ? (
+        <SecurityPosture region={region} timeRange={timeRange} />
+      ) : (
         <>
-          <SummaryCards summary={data.summary} />
-          <UsageTimelineChart timeline={data.timeline || []} />
-          <TopCallersTable callers={data.top_callers || []} />
-          <InactiveSection
-            inactive7={data.inactive_7d || []}
-            inactive30={data.inactive_30d || []}
-            inactive90={data.inactive_90d || []}
+          <EmailSearchBar
+            region={region}
+            selectedEmails={selectedEmails}
+            onAdd={handleAddEmail}
+            onRemove={handleRemoveEmail}
+            onClear={() => setSelectedEmails([])}
           />
+
+          {loading && <LoadingPulse />}
+          {error && <ErrorBanner message={error} />}
+          {!loading && !error && data && (
+            <>
+              <SummaryCards summary={data.summary} />
+              <UsageTimelineChart timeline={data.timeline || []} />
+              <TopCallersTable callers={data.top_callers || []} />
+              <InactiveSection
+                inactive7={data.inactive_7d || []}
+                inactive30={data.inactive_30d || []}
+                inactive90={data.inactive_90d || []}
+              />
+              <NewActorsCard actors={data.new_actors || []} />
+              <OffHoursHeatmap cells={data.off_hours || []} top={data.off_hours_top || []} />
+              <ExfilSignalsTable signals={data.exfil_signals || []} />
+            </>
+          )}
         </>
       )}
     </div>
@@ -592,6 +625,207 @@ function formatRelativeTime(iso: string): string {
   if (days < 30) return `${Math.floor(days / 7)}w ago`;
   return `${Math.floor(days / 30)}mo ago`;
 }
+
+// --- New Actors Card ---
+
+function NewActorsCard({ actors }: { actors: NewActor[] }) {
+  return (
+    <div className="rounded-2xl border border-zinc-800/50 p-6" style={{ background: '#111114' }}>
+      <h3 className="text-sm font-semibold text-white mb-1">New Actors (first seen ≤ 7d)</h3>
+      <p className="text-xs text-zinc-500 mb-4">
+        Principals whose first job in the 90-day baseline is recent — new service accounts are the classic credential-misuse tell (idle &gt;90d re-appears as new)
+      </p>
+
+      {actors.length > 0 ? (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-zinc-500 border-b border-zinc-800/50">
+                <th className="text-left py-2.5 px-3 font-medium">Identity</th>
+                <th className="text-right py-2.5 px-3 font-medium">First Seen</th>
+                <th className="text-right py-2.5 px-3 font-medium">Jobs</th>
+              </tr>
+            </thead>
+            <tbody>
+              {actors.map((actor, i) => (
+                <tr key={i} className="border-b border-zinc-800/30 hover:bg-zinc-800/20 transition-colors">
+                  <td className="py-3 px-3">
+                    <div className="flex items-center gap-2">
+                      {actor.is_sa ? <Bot size={13} className="text-purple-400 shrink-0" /> : <Users size={13} className="text-cyan-400 shrink-0" />}
+                      <span className="font-mono text-white truncate max-w-[260px]" title={actor.email}>{actor.email}</span>
+                      {actor.is_sa && (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full font-medium border bg-amber-500/10 text-amber-400 border-amber-500/20">
+                          SERVICE ACCT
+                        </span>
+                      )}
+                    </div>
+                  </td>
+                  <td className="py-3 px-3 text-right font-mono text-zinc-400">{formatRelativeTime(actor.first_seen)}</td>
+                  <td className="py-3 px-3 text-right font-mono text-zinc-300">{formatNumber(actor.jobs)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <EmptyState text="No new principals in the last 7 days" />
+      )}
+    </div>
+  );
+}
+
+// --- Off-Hours Heatmap ---
+
+function OffHoursHeatmap({ cells, top }: { cells: OffHoursCell[]; top: OffHoursUser[] }) {
+  const DOW_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+  const heatmapData = cells.map(c => [c.hr, c.dow - 1, c.jobs]);
+  const maxJobs = cells.length > 0 ? Math.max(...cells.map(c => c.jobs)) : 1;
+
+  const option = {
+    backgroundColor: 'transparent',
+    tooltip: {
+      trigger: 'item',
+      backgroundColor: 'rgba(17,17,20,0.95)',
+      borderColor: '#27272a',
+      textStyle: { color: '#e4e4e7', fontSize: 11 },
+      formatter: (params: any) => {
+        const [hr, dow, jobs] = params.data;
+        return `${DOW_LABELS[dow]} ${hr.toString().padStart(2, '0')}:00 UTC<br/>${jobs} jobs`;
+      },
+    },
+    grid: { left: 48, right: 24, bottom: 32, top: 12 },
+    xAxis: {
+      type: 'category',
+      data: Array.from({ length: 24 }, (_, i) => i.toString().padStart(2, '0')),
+      axisLabel: { color: '#71717a', fontSize: 10, fontFamily: 'JetBrains Mono, monospace' },
+      axisLine: { show: false },
+      axisTick: { show: false },
+      splitArea: { show: false },
+    },
+    yAxis: {
+      type: 'category',
+      data: DOW_LABELS,
+      axisLabel: { color: '#71717a', fontSize: 10, fontFamily: 'JetBrains Mono, monospace' },
+      axisLine: { show: false },
+      axisTick: { show: false },
+      splitArea: { show: false },
+    },
+    visualMap: {
+      show: false,
+      min: 0,
+      max: maxJobs,
+      inRange: { color: ['#111114', '#0e7490', '#38bdf8'] },
+    },
+    series: [{
+      type: 'heatmap',
+      data: heatmapData,
+      itemStyle: { borderColor: '#09090b', borderWidth: 1 },
+      emphasis: {
+        itemStyle: { shadowBlur: 4, shadowColor: 'rgba(56,189,248,0.5)' },
+      },
+    }],
+  };
+
+  return (
+    <div className="rounded-2xl border border-zinc-800/50 p-6" style={{ background: '#111114' }}>
+      <div className="flex items-center gap-2 mb-1">
+        <Clock size={16} className="text-cyan-400" />
+        <h3 className="text-sm font-semibold text-white">Off-Hours Activity</h3>
+      </div>
+      <p className="text-xs text-zinc-500 mb-4">Human (non-service-account) jobs by weekday × hour, UTC</p>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-2">
+          {cells.length > 0 ? (
+            <div className="h-[280px]">
+              <ReactECharts option={option} style={{ height: '100%' }} />
+            </div>
+          ) : (
+            <EmptyState text="No off-hours activity data" />
+          )}
+        </div>
+
+        <div>
+          <h4 className="text-xs font-semibold text-white mb-3">Top Off-Hours Principals (00:00–06:00 UTC)</h4>
+          {top.length > 0 ? (
+            <div className="space-y-2">
+              {top.slice(0, 10).map((user, i) => (
+                <div key={i} className="flex items-center justify-between text-xs">
+                  <span className="font-mono text-zinc-400 truncate max-w-[180px]" title={user.email}>{user.email}</span>
+                  <span className="font-mono text-zinc-300 shrink-0">{formatNumber(user.jobs)}</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500 italic">No off-hours activity</p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// --- Exfil Signals Table ---
+
+function ExfilSignalsTable({ signals }: { signals: ExfilSignal[] }) {
+  return (
+    <div className="rounded-2xl border border-zinc-800/50 p-6" style={{ background: '#111114' }}>
+      <div className="flex items-center gap-2 mb-1">
+        <Download size={16} className="text-rose-400" />
+        <h3 className="text-sm font-semibold text-white">Exfiltration Signals</h3>
+      </div>
+      <p className="text-xs text-zinc-500 mb-4">
+        Extracts, EXPORT DATA, cross-project writes, and &gt;1 TiB scans — not visible: Storage Read API reads, RLS-blanked bytes
+      </p>
+
+      {signals.length > 0 ? (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-zinc-500 border-b border-zinc-800/50">
+                <th className="text-left py-2.5 px-3 font-medium">User</th>
+                <th className="text-left py-2.5 px-3 font-medium">Signal</th>
+                <th className="text-right py-2.5 px-3 font-medium">Bytes</th>
+                <th className="text-left py-2.5 px-3 font-medium">Dest Project</th>
+                <th className="text-right py-2.5 px-3 font-medium">Created</th>
+                <th className="text-left py-2.5 px-3 font-medium">Job ID</th>
+              </tr>
+            </thead>
+            <tbody>
+              {signals.map((sig, i) => (
+                <tr key={i} className="border-b border-zinc-800/30 hover:bg-zinc-800/20 transition-colors">
+                  <td className="py-3 px-3 text-white font-mono max-w-[200px] truncate" title={sig.email}>{sig.email}</td>
+                  <td className="py-3 px-3">
+                    <span
+                      className={`text-[10px] px-2 py-0.5 rounded-full font-medium border ${
+                        sig.signal === 'EXTRACT_TO_GCS' || sig.signal === 'EXPORT_DATA'
+                          ? 'bg-rose-500/10 text-rose-400 border-rose-500/20'
+                          : sig.signal === 'CROSS_PROJECT_WRITE'
+                          ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                          : 'bg-zinc-500/10 text-zinc-400 border-zinc-500/20'
+                      }`}
+                    >
+                      {sig.signal}
+                    </span>
+                  </td>
+                  <td className="py-3 px-3 text-right font-mono text-zinc-300">{formatBytes(sig.bytes)}</td>
+                  <td className="py-3 px-3 text-zinc-400 font-mono">{sig.dest_project || '—'}</td>
+                  <td className="py-3 px-3 text-right font-mono text-zinc-500">{formatRelativeTime(sig.created)}</td>
+                  <td className="py-3 px-3 text-zinc-400 font-mono max-w-[160px] truncate" title={sig.job_id}>{sig.job_id}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <EmptyState text="No exfiltration signals detected" />
+      )}
+    </div>
+  );
+}
+
+// --- Helpers ---
 
 function LoadingPulse() {
   return (

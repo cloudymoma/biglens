@@ -232,6 +232,85 @@ export interface InactiveEmail {
   total_calls: number;
 }
 
+export type GranteeKind = 'user' | 'serviceAccount' | 'group' | 'domain' | 'special' | 'public';
+
+export interface PublicFlag {
+  dataset: string;
+  object_type: string;
+  role: string;
+  grantee: string;
+  kind: GranteeKind;
+}
+
+export interface PrincipalGrant {
+  principal: string;
+  kind: GranteeKind;
+  datasets: string[];
+  roles: string[];
+  write_capable: boolean;
+}
+
+export interface ProjectBinding {
+  role: string;
+  basic: boolean;
+  members: string[];
+}
+
+export interface DatasetPosture {
+  dataset: string;
+  cmek: boolean;
+  kms_key: string;
+  default_exp_days: number;
+}
+
+export interface RLSPolicy {
+  dataset: string;
+  table: string;
+  policy: string;
+  predicate: string;
+  modified: string;
+}
+
+export interface SensitiveColumn {
+  dataset: string;
+  table: string;
+  column: string;
+  tagged: boolean;
+}
+
+export interface SecurityDashboardData {
+  public_flags: PublicFlag[] | null;
+  principals: PrincipalGrant[] | null;
+  unused_grants: PrincipalGrant[] | null;
+  project_bindings: ProjectBinding[] | null;
+  tag_bypassers: string[] | null;
+  project_iam_error: string;
+  dataset_posture: DatasetPosture[] | null;
+  rls_policies: RLSPolicy[] | null;
+  sensitive_columns: SensitiveColumn[] | null;
+  datasets_scanned: number;
+  datasets_total: number;
+}
+
+export interface NewActor {
+  email: string;
+  first_seen: string;
+  jobs: number;
+  is_sa: boolean;
+}
+
+export interface OffHoursCell { dow: number; hr: number; jobs: number }
+export interface OffHoursUser { email: string; jobs: number }
+
+export interface ExfilSignal {
+  email: string;
+  job_id: string;
+  signal: 'EXTRACT_TO_GCS' | 'EXPORT_DATA' | 'CROSS_PROJECT_WRITE' | 'LARGE_SCAN';
+  bytes: number;
+  dest_project: string;
+  created: string;
+}
+
 export interface IAMDashboardData {
   summary: IAMSummary | null;
   timeline: UsageTimepoint[] | null;
@@ -239,6 +318,10 @@ export interface IAMDashboardData {
   inactive_7d: InactiveEmail[] | null;
   inactive_30d: InactiveEmail[] | null;
   inactive_90d: InactiveEmail[] | null;
+  new_actors: NewActor[] | null;
+  off_hours: OffHoursCell[] | null;
+  off_hours_top: OffHoursUser[] | null;
+  exfil_signals: ExfilSignal[] | null;
 }
 
 // --- Dataplex / Knowledge Catalog (OKF) ---

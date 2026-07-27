@@ -367,12 +367,16 @@ func (h *APIHandler) JobsDashboard(w http.ResponseWriter, r *http.Request) {
 // --- Dashboard 5: IAM Security ---
 
 type IAMDashboardData struct {
-	Summary   *IAMSummary      `json:"summary"`
-	Timeline  []UsageTimepoint `json:"timeline"`
-	TopCallers []TopCaller     `json:"top_callers"`
-	Inactive7  []InactiveEmail `json:"inactive_7d"`
-	Inactive30 []InactiveEmail `json:"inactive_30d"`
-	Inactive90 []InactiveEmail `json:"inactive_90d"`
+	Summary     *IAMSummary      `json:"summary"`
+	Timeline    []UsageTimepoint `json:"timeline"`
+	TopCallers  []TopCaller      `json:"top_callers"`
+	Inactive7   []InactiveEmail  `json:"inactive_7d"`
+	Inactive30  []InactiveEmail  `json:"inactive_30d"`
+	Inactive90  []InactiveEmail  `json:"inactive_90d"`
+	NewActors   []NewActor       `json:"new_actors"`
+	OffHours    []OffHoursCell   `json:"off_hours"`
+	OffHoursTop []OffHoursUser   `json:"off_hours_top"`
+	Exfil       []ExfilSignal    `json:"exfil_signals"`
 }
 
 func (h *APIHandler) IAMDashboard(w http.ResponseWriter, r *http.Request) {
@@ -427,6 +431,37 @@ func (h *APIHandler) IAMDashboard(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 
+	g.Go(func() error {
+		na, err := h.bq.GetNewActors(ctx, filters.Region)
+		if err != nil {
+			slog.Warn("new actors widget degraded", "error", err)
+			return nil
+		}
+		data.NewActors = na
+		return nil
+	})
+
+	g.Go(func() error {
+		cells, top, err := h.bq.GetOffHours(ctx, filters.Region, emails, filters.TimeRange)
+		if err != nil {
+			slog.Warn("off-hours widget degraded", "error", err)
+			return nil
+		}
+		data.OffHours = cells
+		data.OffHoursTop = top
+		return nil
+	})
+
+	g.Go(func() error {
+		ex, err := h.bq.GetExfilSignals(ctx, filters.Region, emails, filters.TimeRange)
+		if err != nil {
+			slog.Warn("exfil signals widget degraded", "error", err)
+			return nil
+		}
+		data.Exfil = ex
+		return nil
+	})
+
 	if err := g.Wait(); err != nil {
 		writeError(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -455,6 +490,7 @@ func (h *APIHandler) SearchEmails(w http.ResponseWriter, r *http.Request) {
 	if region == "" {
 		region = "us"
 	}
+	region = validateRegion(region)
 	prefix := r.URL.Query().Get("q")
 
 	emails, err := h.bq.SearchEmails(r.Context(), region, prefix, 20)
@@ -492,6 +528,98 @@ func splitTrimmed(s, sep string) []string {
 		}
 	}
 	return parts
+}
+
+// --- Dashboard 5b: Access Posture (IAM & Security tab) ---
+
+type SecurityDashboardData struct {
+	PublicFlags      []PublicFlag      `json:"public_flags"`
+	Principals       []PrincipalGrant  `json:"principals"`
+	UnusedGrants     []PrincipalGrant  `json:"unused_grants"`
+	ProjectBindings  []ProjectBinding  `json:"project_bindings"`
+	TagBypassers     []string          `json:"tag_bypassers"`
+	ProjectIAMError  string            `json:"project_iam_error"`
+	DatasetPosture   []DatasetPosture  `json:"dataset_posture"`
+	RLSPolicies      []RLSPolicy       `json:"rls_policies"`
+	SensitiveColumns []SensitiveColumn `json:"sensitive_columns"`
+	DatasetsScanned  int               `json:"datasets_scanned"`
+	DatasetsTotal    int               `json:"datasets_total"`
+}
+
+func (h *APIHandler) SecurityDashboard(w http.ResponseWriter, r *http.Request) {
+	filters := ParseFilters(r)
+	key := filters.CacheKey("security_dashboard")
+
+	if cached, ok := h.cache.Get(key); ok {
+		writeJSON(w, cached)
+		return
+	}
+
+	var data SecurityDashboardData
+	g, ctx := errgroup.WithContext(r.Context())
+
+	g.Go(func() error {
+		// Grants fan-out; unused-grants join needs the activity set too.
+		datasets, total, err := h.bq.GetDatasetNames(ctx, filters.Region)
+		if err != nil {
+			return err
+		}
+		data.DatasetsScanned = len(datasets)
+		data.DatasetsTotal = total
+		grants, rls := h.bq.GetGrantsAndRLS(ctx, filters.Region, datasets)
+		data.PublicFlags = publicFlags(grants)
+		data.Principals = buildPrincipalGrants(grants)
+		data.RLSPolicies = rls
+
+		active, err := h.bq.GetActivePrincipals(ctx, filters.Region, filters.TimeRange)
+		if err != nil {
+			slog.Warn("unused grants widget degraded", "error", err)
+			return nil
+		}
+		data.UnusedGrants = computeUnusedGrants(data.Principals, active)
+		return nil
+	})
+
+	g.Go(func() error {
+		// Needs resourcemanager.projects.getIamPolicy; degrade with a hint.
+		bindings, bypassers, err := h.bq.GetProjectBindings(ctx)
+		if err != nil {
+			slog.Warn("project IAM widget degraded", "error", err)
+			data.ProjectIAMError = "Project-level bindings unavailable — grant the service account roles/browser (or resourcemanager.projects.getIamPolicy)."
+			return nil
+		}
+		data.ProjectBindings = bindings
+		data.TagBypassers = bypassers
+		return nil
+	})
+
+	g.Go(func() error {
+		dp, err := h.bq.GetDatasetPosture(ctx, filters.Region)
+		if err != nil {
+			return err
+		}
+		data.DatasetPosture = dp
+		return nil
+	})
+
+	g.Go(func() error {
+		// COLUMN_FIELD_PATHS region support varies; degrade to empty.
+		sc, err := h.bq.GetSensitiveColumns(ctx, filters.Region)
+		if err != nil {
+			slog.Warn("sensitive columns widget degraded", "error", err)
+			return nil
+		}
+		data.SensitiveColumns = sc
+		return nil
+	})
+
+	if err := g.Wait(); err != nil {
+		writeError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	h.cache.Set(key, &data)
+	writeJSON(w, &data)
 }
 
 // --- Regions ---

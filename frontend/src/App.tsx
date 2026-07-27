@@ -27,7 +27,7 @@ const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
 
 const PRODUCTS: { id: string; label: string; icon: React.ReactNode }[] = [
   { id: 'bigquery', label: 'BigQuery', icon: <Database size={20} /> },
-  { id: 'iam',      label: 'IAM Security', icon: <Shield size={20} /> },
+  { id: 'iam',      label: 'IAM & Security', icon: <Shield size={20} /> },
   { id: 'dataplex', label: 'Dataplex', icon: <Network size={20} /> },
   { id: 'opendata', label: 'BigQuery Open Data', icon: <Globe size={20} /> },
 ];

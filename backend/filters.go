@@ -8,6 +8,23 @@ import (
 	"cloud.google.com/go/bigquery"
 )
 
+// validRegions is populated from bqRegions in init() to prevent injection.
+var validRegions = map[string]bool{}
+
+func init() {
+	for _, r := range bqRegions {
+		validRegions[r] = true
+	}
+}
+
+// validateRegion returns the region if it's in the whitelist, else "us".
+func validateRegion(region string) string {
+	if validRegions[region] {
+		return region
+	}
+	return "us"
+}
+
 type QueryFilters struct {
 	Region    string
 	Dataset   string
@@ -32,6 +49,7 @@ func ParseFilters(r *http.Request) QueryFilters {
 	if region == "" {
 		region = "us"
 	}
+	region = validateRegion(region)
 	groupBy := q.Get("group_by")
 	switch groupBy {
 	case "dataset", "table", "reservation":

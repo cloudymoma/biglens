@@ -82,6 +82,7 @@ func main() {
 	// IAM Security endpoints
 	mux.Handle("/api/dashboard/iam", h(api.IAMDashboard))
 	mux.Handle("/api/iam/emails", h(api.SearchEmails))
+	mux.Handle("/api/dashboard/security", h(api.SecurityDashboard))
 
 	// Dataplex / Knowledge Catalog (OKF bundle) endpoints
 	mux.Handle("/api/catalog/graph", h(api.CatalogGraph))
