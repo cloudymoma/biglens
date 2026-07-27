@@ -27,6 +27,7 @@ func TestGdeltRangeValidation(t *testing.T) {
 		"gkg":     h.GdeltGkg,
 		"dyads":   h.GdeltDyads,
 		"country": h.GdeltCountry, // range is validated before the country param
+		"impact":  h.GdeltImpact,
 	}
 
 	shared := []struct {
@@ -68,6 +69,7 @@ func TestGdeltRangeValidation(t *testing.T) {
 		{"events", h.GdeltEvents, eventsTooWide},
 		{"gkg", h.GdeltGkg, gkgTooWide},
 		{"dyads", h.GdeltDyads, eventsTooWide},
+		{"impact", h.GdeltImpact, gkgTooWide},
 	}
 	for _, tt := range spanCases {
 		t.Run(tt.endpoint+"/span too large", func(t *testing.T) {

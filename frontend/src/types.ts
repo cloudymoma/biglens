@@ -385,6 +385,33 @@ export interface GdeltCountryData {
   top_events: GdeltCountryEvent[];
 }
 
+// Human Impact tab: article counts of media-reported figures, never sums.
+
+export interface GdeltImpactDaily {
+  ingest_date: string;
+  count_type: string;
+  article_count: number;
+}
+
+export interface GdeltImpactCountry {
+  fips_country: string;
+  article_count: number;
+}
+
+export interface GdeltImpactIncident {
+  count_type: string;
+  num: number;
+  location: string;
+  article_count: number;
+  sample_url: string;
+}
+
+export interface GdeltImpactData {
+  daily: GdeltImpactDaily[];
+  countries: GdeltImpactCountry[];
+  incidents: GdeltImpactIncident[];
+}
+
 // --- BigQuery Open Data: NOAA GHCN-Daily weather ---
 
 export interface WeatherMeta {

@@ -4,10 +4,12 @@ import { ErrorBanner } from '../../dashboards/shared';
 import { MAX_EVENTS_DAYS, daysAgoUTC, spanOf, DateInput } from './shared';
 import OverviewTab from './OverviewTab';
 import CountryTab from './CountryTab';
+import ImpactTab from './ImpactTab';
 
 const TABS = [
   { id: 'overview', label: 'Overview' },
   { id: 'country', label: 'Country & Relations' },
+  { id: 'impact', label: 'Human Impact' },
 ] as const;
 
 type TabId = (typeof TABS)[number]['id'];
@@ -47,6 +49,7 @@ export default function GdeltDashboard() {
   const tabBody: Record<TabId, React.ReactNode> = {
     overview: <OverviewTab startDate={startDate} endDate={endDate} />,
     country: <CountryTab startDate={startDate} endDate={endDate} />,
+    impact: <ImpactTab startDate={startDate} endDate={endDate} />,
   };
 
   return (

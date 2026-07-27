@@ -394,6 +394,79 @@ func (h *APIHandler) GdeltCountry(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, v)
 }
 
+// --- /impact ---
+
+type GdeltImpactData struct {
+	Daily     []GdeltImpactDaily    `json:"daily"`
+	Countries []GdeltImpactCountry  `json:"countries"`
+	Incidents []GdeltImpactIncident `json:"incidents"`
+}
+
+func (h *APIHandler) GdeltImpact(w http.ResponseWriter, r *http.Request) {
+	start, end, err := parseGdeltRange(r, maxGdeltGkgDays)
+	if err != nil {
+		writeError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	key := fmt.Sprintf("opendata:gdelt:impact:%s:%s", start, end)
+	if cached, ok := h.cache.Get(key); ok {
+		writeJSON(w, cached)
+		return
+	}
+
+	v, err, _ := gdeltFlight.Do(key, func() (any, error) {
+		data := GdeltImpactData{
+			Daily:     []GdeltImpactDaily{},
+			Countries: []GdeltImpactCountry{},
+			Incidents: []GdeltImpactIncident{},
+		}
+
+		g, ctx := errgroup.WithContext(r.Context())
+		g.Go(func() error {
+			daily, err := h.bq.GetGdeltImpactDaily(ctx, start, end)
+			if err != nil {
+				return err
+			}
+			if daily != nil {
+				data.Daily = daily
+			}
+			return nil
+		})
+		g.Go(func() error {
+			countries, err := h.bq.GetGdeltImpactCountries(ctx, start, end)
+			if err != nil {
+				return err
+			}
+			if countries != nil {
+				data.Countries = countries
+			}
+			return nil
+		})
+		g.Go(func() error {
+			incidents, err := h.bq.GetGdeltImpactIncidents(ctx, start, end)
+			if err != nil {
+				return err
+			}
+			if incidents != nil {
+				data.Incidents = incidents
+			}
+			return nil
+		})
+		if err := g.Wait(); err != nil {
+			return nil, err
+		}
+
+		h.cache.Set(key, &data)
+		return &data, nil
+	})
+	if err != nil {
+		writeError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, v)
+}
+
 // --- /gkg ---
 
 type GdeltGkgData struct {

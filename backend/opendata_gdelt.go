@@ -342,6 +342,119 @@ func (b *BQClient) GetGdeltPersons(ctx context.Context, start, end civil.Date) (
 	return collectRows[GdeltNamedCount](q, ctx)
 }
 
+// --- /impact: numeric impact counts from GKG V2Counts ---
+//
+// V2Counts entries are `Type#Count#ObjectType#LocType#FullName#FIPS#...`,
+// semicolon-separated. Only the core human-impact types are surfaced; the
+// CRISISLEX taxa duplicate them with more noise. All metrics count ARTICLES
+// REPORTING a figure, never sum the figures themselves — the same incident
+// is reported by hundreds of outlets, so sums would be meaningless.
+
+// gdeltImpactTypes is interpolated into IN(...) lists; values are fixed
+// literals, never user input.
+const gdeltImpactTypes = `('KILL', 'WOUND', 'ARREST', 'KIDNAP', 'DISPLACED', 'SEIZE')`
+
+type GdeltImpactDaily struct {
+	IngestDate   string `json:"ingest_date" bigquery:"ingest_date"`
+	CountType    string `json:"count_type" bigquery:"count_type"`
+	ArticleCount int64  `json:"article_count" bigquery:"article_count"`
+}
+
+// GetGdeltImpactDaily counts articles per day per impact type. The in-row
+// DISTINCT dedupes repeat counts within one article (same shape as
+// gdeltEntityQuery).
+func (b *BQClient) GetGdeltImpactDaily(ctx context.Context, start, end civil.Date) ([]GdeltImpactDaily, error) {
+	q := b.client.Query(`
+		WITH docs AS (
+			SELECT _PARTITIONDATE AS d,
+				ARRAY(
+					SELECT DISTINCT SPLIT(entry, '#')[SAFE_OFFSET(0)]
+					FROM UNNEST(SPLIT(V2Counts, ';')) AS entry
+					WHERE entry != ''
+				) AS types
+			FROM ` + gdeltGkgTable + `
+			WHERE _PARTITIONDATE BETWEEN @start_date AND @end_date
+				AND V2Counts IS NOT NULL
+		)
+		SELECT FORMAT_DATE('%Y-%m-%d', d) AS ingest_date, t AS count_type, COUNT(1) AS article_count
+		FROM docs, UNNEST(types) AS t
+		WHERE t IN ` + gdeltImpactTypes + `
+		GROUP BY 1, 2
+		ORDER BY 1, 2`)
+	q.Parameters = gdeltDateParams(start, end)
+	return collectRows[GdeltImpactDaily](q, ctx)
+}
+
+type GdeltImpactCountry struct {
+	FipsCountry  string `json:"fips_country" bigquery:"fips_country"`
+	ArticleCount int64  `json:"article_count" bigquery:"article_count"`
+}
+
+func (b *BQClient) GetGdeltImpactCountries(ctx context.Context, start, end civil.Date) ([]GdeltImpactCountry, error) {
+	q := b.client.Query(`
+		WITH docs AS (
+			SELECT
+				ARRAY(
+					SELECT DISTINCT SPLIT(entry, '#')[SAFE_OFFSET(5)]
+					FROM UNNEST(SPLIT(V2Counts, ';')) AS entry
+					WHERE entry != ''
+						AND SPLIT(entry, '#')[SAFE_OFFSET(0)] IN ` + gdeltImpactTypes + `
+				) AS countries
+			FROM ` + gdeltGkgTable + `
+			WHERE _PARTITIONDATE BETWEEN @start_date AND @end_date
+				AND V2Counts IS NOT NULL
+		)
+		SELECT c AS fips_country, COUNT(1) AS article_count
+		FROM docs, UNNEST(countries) AS c
+		WHERE c IS NOT NULL AND c != ''
+		GROUP BY 1
+		ORDER BY article_count DESC
+		LIMIT 20`)
+	q.Parameters = gdeltDateParams(start, end)
+	return collectRows[GdeltImpactCountry](q, ctx)
+}
+
+type GdeltImpactIncident struct {
+	CountType    string `json:"count_type" bigquery:"count_type"`
+	Num          int64  `json:"num" bigquery:"num"`
+	Location     string `json:"location" bigquery:"location"`
+	ArticleCount int64  `json:"article_count" bigquery:"article_count"`
+	SampleURL    string `json:"sample_url" bigquery:"sample_url"`
+}
+
+// GetGdeltImpactIncidents surfaces the most-reported (type, figure,
+// location) triples. Grouping on the triple naturally dedups one incident
+// reported by many outlets into a single row ranked by coverage. ARREST and
+// SEIZE are excluded here: routine small figures dominate them.
+func (b *BQClient) GetGdeltImpactIncidents(ctx context.Context, start, end civil.Date) ([]GdeltImpactIncident, error) {
+	q := b.client.Query(`
+		WITH entries AS (
+			SELECT
+				SPLIT(entry, '#')[SAFE_OFFSET(0)] AS count_type,
+				SAFE_CAST(SPLIT(entry, '#')[SAFE_OFFSET(1)] AS INT64) AS num,
+				SPLIT(entry, '#')[SAFE_OFFSET(4)] AS location,
+				DocumentIdentifier AS url
+			FROM ` + gdeltGkgTable + `, UNNEST(SPLIT(V2Counts, ';')) AS entry
+			WHERE _PARTITIONDATE BETWEEN @start_date AND @end_date
+				AND V2Counts IS NOT NULL
+				AND entry != ''
+		)
+		SELECT
+			count_type,
+			num,
+			COALESCE(NULLIF(location, ''), 'Unknown location') AS location,
+			COUNT(DISTINCT url) AS article_count,
+			ANY_VALUE(url) AS sample_url
+		FROM entries
+		WHERE count_type IN ('KILL', 'WOUND', 'KIDNAP', 'DISPLACED')
+			AND num >= 1 AND num < 10000000
+		GROUP BY 1, 2, 3
+		ORDER BY article_count DESC
+		LIMIT 30`)
+	q.Parameters = gdeltDateParams(start, end)
+	return collectRows[GdeltImpactIncident](q, ctx)
+}
+
 // --- /gkg 3.2c: top media sources with average tone ---
 
 type GdeltMediaSource struct {
