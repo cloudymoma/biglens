@@ -1,0 +1,183 @@
+import { CAMEO_LABELS } from './shared';
+
+// Full CAMEO event taxonomy (verbs, codebook 1.1b3) for the detail tabs.
+// GDELT EventCode is a 2-4 char string with leading zeros preserved.
+// Lookup falls back 4-digit → 3-digit → 2-digit root, so unknown or new
+// subcodes still render a meaningful label.
+const CAMEO_FULL: Record<string, string> = {
+  // 01 MAKE PUBLIC STATEMENT
+  '010': 'Make statement', '011': 'Decline comment', '012': 'Make pessimistic comment',
+  '013': 'Make optimistic comment', '014': 'Consider policy option',
+  '015': 'Acknowledge or claim responsibility', '016': 'Deny responsibility',
+  '017': 'Engage in symbolic act', '018': 'Make empathetic comment', '019': 'Express accord',
+  // 02 APPEAL
+  '020': 'Make an appeal or request', '021': 'Appeal for material cooperation',
+  '0211': 'Appeal for economic cooperation', '0212': 'Appeal for military cooperation',
+  '0213': 'Appeal for judicial cooperation', '0214': 'Appeal for intelligence cooperation',
+  '022': 'Appeal for diplomatic cooperation', '023': 'Appeal for aid',
+  '0231': 'Appeal for economic aid', '0232': 'Appeal for military aid',
+  '0233': 'Appeal for humanitarian aid', '0234': 'Appeal for military protection or peacekeeping',
+  '024': 'Appeal for political reform', '0241': 'Appeal for change in leadership',
+  '0242': 'Appeal for policy change', '0243': 'Appeal for rights',
+  '0244': 'Appeal for change in institutions or regime',
+  '025': 'Appeal to yield', '0251': 'Appeal for easing of administrative sanctions',
+  '0252': 'Appeal for easing of political dissent', '0253': 'Appeal for release of persons or property',
+  '0254': 'Appeal for easing of economic sanctions', '0255': 'Appeal to allow international involvement',
+  '0256': 'Appeal for de-escalation of military engagement',
+  '026': 'Appeal to others to meet or negotiate', '027': 'Appeal to others to settle dispute',
+  '028': 'Appeal to others to engage in or accept mediation',
+  // 03 EXPRESS INTENT TO COOPERATE
+  '030': 'Express intent to cooperate', '031': 'Express intent to engage in material cooperation',
+  '0311': 'Express intent to cooperate economically', '0312': 'Express intent to cooperate militarily',
+  '0313': 'Express intent to cooperate judicially', '0314': 'Express intent to cooperate on intelligence',
+  '032': 'Express intent to engage in diplomatic cooperation', '033': 'Express intent to provide aid',
+  '0331': 'Express intent to provide economic aid', '0332': 'Express intent to provide military aid',
+  '0333': 'Express intent to provide humanitarian aid',
+  '0334': 'Express intent to provide military protection or peacekeeping',
+  '034': 'Express intent to institute political reform',
+  '0341': 'Express intent to change leadership', '0342': 'Express intent to change policy',
+  '0343': 'Express intent to provide rights', '0344': 'Express intent to change institutions or regime',
+  '035': 'Express intent to yield', '0351': 'Express intent to ease administrative sanctions',
+  '0352': 'Express intent to ease popular dissent', '0353': 'Express intent to release persons or property',
+  '0354': 'Express intent to ease economic sanctions',
+  '0355': 'Express intent to allow international involvement',
+  '0356': 'Express intent to de-escalate military engagement',
+  '036': 'Express intent to meet or negotiate', '037': 'Express intent to settle dispute',
+  '038': 'Express intent to accept mediation', '039': 'Express intent to mediate',
+  // 04 CONSULT
+  '040': 'Consult', '041': 'Discuss by telephone', '042': 'Make a visit', '043': 'Host a visit',
+  '044': 'Meet at a third location', '045': 'Mediate', '046': 'Engage in negotiation',
+  // 05 DIPLOMATIC COOPERATION
+  '050': 'Engage in diplomatic cooperation', '051': 'Praise or endorse', '052': 'Defend verbally',
+  '053': 'Rally support on behalf of', '054': 'Grant diplomatic recognition', '055': 'Apologize',
+  '056': 'Forgive', '057': 'Sign formal agreement',
+  // 06 MATERIAL COOPERATION
+  '060': 'Engage in material cooperation', '061': 'Cooperate economically', '062': 'Cooperate militarily',
+  '063': 'Engage in judicial cooperation', '064': 'Share intelligence or information',
+  // 07 PROVIDE AID
+  '070': 'Provide aid', '071': 'Provide economic aid', '072': 'Provide military aid',
+  '073': 'Provide humanitarian aid', '074': 'Provide military protection or peacekeeping',
+  '075': 'Grant asylum',
+  // 08 YIELD
+  '080': 'Yield', '081': 'Ease administrative sanctions',
+  '0811': 'Ease restrictions on political freedoms', '0812': 'Ease ban on political parties or politicians',
+  '0813': 'Ease curfew', '0814': 'Ease state of emergency or martial law',
+  '082': 'Ease political dissent', '083': 'Accede to demands for political reform',
+  '0831': 'Accede to demands for change in leadership', '0832': 'Accede to demands for policy change',
+  '0833': 'Accede to demands for rights', '0834': 'Accede to demands for change in institutions or regime',
+  '084': 'Return or release', '0841': 'Return or release persons', '0842': 'Return or release property',
+  '085': 'Ease economic sanctions or embargo', '086': 'Allow international involvement',
+  '0861': 'Receive deployment of peacekeepers', '0862': 'Receive inspectors',
+  '0863': 'Allow humanitarian access', '087': 'De-escalate military engagement',
+  '0871': 'Declare truce or ceasefire', '0872': 'Ease military blockade',
+  '0873': 'Demobilize armed forces', '0874': 'Retreat or surrender militarily',
+  // 09 INVESTIGATE
+  '090': 'Investigate', '091': 'Investigate crime or corruption', '092': 'Investigate human rights abuses',
+  '093': 'Investigate military action', '094': 'Investigate war crimes',
+  // 10 DEMAND
+  '100': 'Demand', '101': 'Demand material cooperation',
+  '1011': 'Demand economic cooperation', '1012': 'Demand military cooperation',
+  '1013': 'Demand judicial cooperation', '1014': 'Demand intelligence cooperation',
+  '102': 'Demand diplomatic cooperation', '103': 'Demand material aid',
+  '1031': 'Demand economic aid', '1032': 'Demand military aid', '1033': 'Demand humanitarian aid',
+  '1034': 'Demand military protection or peacekeeping',
+  '104': 'Demand political reform', '1041': 'Demand change in leadership', '1042': 'Demand policy change',
+  '1043': 'Demand rights', '1044': 'Demand change in institutions or regime',
+  '105': 'Demand that target yields', '1051': 'Demand easing of administrative sanctions',
+  '1052': 'Demand easing of political dissent', '1053': 'Demand release of persons or property',
+  '1054': 'Demand easing of economic sanctions', '1055': 'Demand international involvement',
+  '1056': 'Demand de-escalation of military engagement',
+  '106': 'Demand meeting or negotiation', '107': 'Demand settling of dispute', '108': 'Demand mediation',
+  // 11 DISAPPROVE
+  '110': 'Disapprove', '111': 'Criticize or denounce', '112': 'Accuse',
+  '1121': 'Accuse of crime or corruption', '1122': 'Accuse of human rights abuses',
+  '1123': 'Accuse of aggression', '1124': 'Accuse of war crimes', '1125': 'Accuse of espionage or treason',
+  '113': 'Rally opposition against', '114': 'Complain officially', '115': 'Bring lawsuit against',
+  '116': 'Find legally guilty or liable',
+  // 12 REJECT
+  '120': 'Reject', '121': 'Reject material cooperation',
+  '1211': 'Reject economic cooperation', '1212': 'Reject military cooperation',
+  '122': 'Reject request for material aid', '1221': 'Reject request for economic aid',
+  '1222': 'Reject request for military aid', '1223': 'Reject request for humanitarian aid',
+  '1224': 'Reject request for peacekeeping',
+  '123': 'Reject demand for political reform', '1231': 'Reject demand for change in leadership',
+  '1232': 'Reject demand for policy change', '1233': 'Reject demand for rights',
+  '1234': 'Reject demand for change in institutions or regime',
+  '124': 'Refuse to yield', '1241': 'Refuse to ease administrative sanctions',
+  '1242': 'Refuse to ease popular dissent', '1243': 'Refuse to release persons or property',
+  '1244': 'Refuse to ease economic sanctions', '1245': 'Refuse to allow international involvement',
+  '1246': 'Refuse to de-escalate military engagement',
+  '125': 'Reject proposal to meet or negotiate', '126': 'Reject mediation',
+  '127': 'Reject plan to settle dispute', '128': 'Defy norms or law', '129': 'Veto',
+  // 13 THREATEN
+  '130': 'Threaten', '131': 'Threaten non-force', '1311': 'Threaten to reduce or stop aid',
+  '1312': 'Threaten sanctions, boycott or embargo', '1313': 'Threaten to reduce or break relations',
+  '132': 'Threaten with administrative sanctions',
+  '1321': 'Threaten to restrict political freedoms', '1322': 'Threaten to ban parties or politicians',
+  '1323': 'Threaten to impose curfew', '1324': 'Threaten state of emergency or martial law',
+  '133': 'Threaten with political dissent or protest', '134': 'Threaten to halt negotiations',
+  '135': 'Threaten to halt mediation', '136': 'Threaten to halt international involvement',
+  '137': 'Threaten with repression', '138': 'Threaten with military force',
+  '1381': 'Threaten blockade', '1382': 'Threaten occupation',
+  '1383': 'Threaten unconventional violence', '1384': 'Threaten conventional attack',
+  '1385': 'Threaten attack with WMD', '139': 'Give ultimatum',
+  // 14 PROTEST
+  '140': 'Engage in political dissent', '141': 'Demonstrate or rally',
+  '1411': 'Demonstrate for change in leadership', '1412': 'Demonstrate for policy change',
+  '1413': 'Demonstrate for rights', '1414': 'Demonstrate for change in institutions or regime',
+  '142': 'Conduct hunger strike', '1421': 'Hunger strike for change in leadership',
+  '1422': 'Hunger strike for policy change', '1423': 'Hunger strike for rights',
+  '1424': 'Hunger strike for change in institutions or regime',
+  '143': 'Conduct strike or boycott', '1431': 'Strike or boycott for change in leadership',
+  '1432': 'Strike or boycott for policy change', '1433': 'Strike or boycott for rights',
+  '1434': 'Strike or boycott for change in institutions or regime',
+  '144': 'Obstruct passage or block', '1441': 'Obstruct passage for change in leadership',
+  '1442': 'Obstruct passage for policy change', '1443': 'Obstruct passage for rights',
+  '1444': 'Obstruct passage for change in institutions or regime',
+  '145': 'Protest violently, riot', '1451': 'Riot for change in leadership',
+  '1452': 'Riot for policy change', '1453': 'Riot for rights',
+  '1454': 'Riot for change in institutions or regime',
+  // 15 EXHIBIT FORCE POSTURE
+  '150': 'Demonstrate military or police power', '151': 'Increase police alert status',
+  '152': 'Increase military alert status', '153': 'Mobilize or increase police power',
+  '154': 'Mobilize or increase armed forces', '155': 'Mobilize or increase cyber-forces',
+  // 16 REDUCE RELATIONS
+  '160': 'Reduce relations', '161': 'Reduce or break diplomatic relations',
+  '162': 'Reduce or stop aid', '1621': 'Reduce or stop economic aid',
+  '1622': 'Reduce or stop military aid', '1623': 'Reduce or stop humanitarian aid',
+  '163': 'Impose embargo, boycott or sanctions', '164': 'Halt negotiations', '165': 'Halt mediation',
+  '166': 'Expel or withdraw', '1661': 'Expel or withdraw peacekeepers',
+  '1662': 'Expel or withdraw inspectors or observers', '1663': 'Expel or withdraw aid agencies',
+  // 17 COERCE
+  '170': 'Coerce', '171': 'Seize or damage property', '1711': 'Confiscate property',
+  '1712': 'Destroy property', '172': 'Impose administrative sanctions',
+  '1721': 'Restrict political freedoms', '1722': 'Ban political parties or politicians',
+  '1723': 'Impose curfew', '1724': 'Impose state of emergency or martial law',
+  '173': 'Arrest, detain or charge', '174': 'Expel or deport individuals',
+  '175': 'Use tactics of violent repression', '176': 'Attack cybernetically',
+  // 18 ASSAULT
+  '180': 'Use unconventional violence', '181': 'Abduct, hijack or take hostage',
+  '182': 'Physically assault', '1821': 'Sexually assault', '1822': 'Torture',
+  '1823': 'Kill by physical assault', '183': 'Conduct non-military bombing',
+  '1831': 'Carry out suicide bombing', '1832': 'Carry out vehicular bombing',
+  '1833': 'Carry out roadside bombing', '1834': 'Carry out location bombing',
+  '184': 'Use as human shield', '185': 'Attempt to assassinate', '186': 'Assassinate',
+  // 19 FIGHT
+  '190': 'Use conventional military force', '191': 'Impose blockade or restrict movement',
+  '192': 'Occupy territory', '193': 'Fight with small arms and light weapons',
+  '194': 'Fight with artillery and tanks', '195': 'Employ aerial weapons',
+  '1951': 'Employ precision-guided aerial munitions', '1952': 'Employ remotely piloted aerial munitions',
+  '196': 'Violate ceasefire',
+  // 20 USE UNCONVENTIONAL MASS VIOLENCE
+  '200': 'Use unconventional mass violence', '201': 'Engage in mass expulsion',
+  '202': 'Engage in mass killings', '203': 'Engage in ethnic cleansing',
+  '204': 'Use weapons of mass destruction',
+  '2041': 'Use chemical, biological or radiological weapons', '2042': 'Detonate nuclear weapons',
+};
+
+export function cameoFullLabel(code: string): string {
+  if (CAMEO_FULL[code]) return CAMEO_FULL[code];
+  if (code.length === 4 && CAMEO_FULL[code.slice(0, 3)]) return CAMEO_FULL[code.slice(0, 3)];
+  if (code.length >= 2 && CAMEO_LABELS[code.slice(0, 2)]) return CAMEO_LABELS[code.slice(0, 2)];
+  return `Code ${code}`;
+}

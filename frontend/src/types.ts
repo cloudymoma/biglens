@@ -325,6 +325,66 @@ export interface GdeltGkgData {
   sources: GdeltMediaSource[];
 }
 
+// Country & Relations tab. Country codes are CAMEO 3-letter actor codes.
+
+export interface GdeltDyadRow {
+  country_a: string;
+  country_b: string;
+  event_count: number;
+  avg_goldstein: number;
+  avg_tone: number;
+}
+
+export interface GdeltCountryCount {
+  country: string;
+  event_count: number;
+}
+
+export interface GdeltDyadsData {
+  dyads: GdeltDyadRow[];
+  countries: GdeltCountryCount[];
+}
+
+export interface GdeltCountryDaily {
+  ingest_date: string;
+  event_count: number;
+  avg_tone: number;
+  avg_goldstein: number;
+}
+
+export interface GdeltCountryEventType {
+  event_code: string;
+  event_count: number;
+  avg_goldstein: number;
+}
+
+export interface GdeltPartnerRow {
+  partner: string;
+  event_count: number;
+  avg_goldstein: number;
+  avg_tone: number;
+}
+
+export interface GdeltCountryEvent {
+  ingest_date: string;
+  actor1: string;
+  actor2: string;
+  event_code: string;
+  goldstein: number;
+  avg_tone: number;
+  mention_count: number;
+  source_count: number;
+  source_url: string;
+}
+
+export interface GdeltCountryData {
+  country: string;
+  daily: GdeltCountryDaily[];
+  event_types: GdeltCountryEventType[];
+  partners: GdeltPartnerRow[];
+  top_events: GdeltCountryEvent[];
+}
+
 // --- BigQuery Open Data: NOAA GHCN-Daily weather ---
 
 export interface WeatherMeta {

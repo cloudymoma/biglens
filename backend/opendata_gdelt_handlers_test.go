@@ -23,8 +23,10 @@ func TestGdeltRangeValidation(t *testing.T) {
 
 	h := &APIHandler{cache: NewCache(time.Minute)}
 	endpoints := map[string]http.HandlerFunc{
-		"events": h.GdeltEvents,
-		"gkg":    h.GdeltGkg,
+		"events":  h.GdeltEvents,
+		"gkg":     h.GdeltGkg,
+		"dyads":   h.GdeltDyads,
+		"country": h.GdeltCountry, // range is validated before the country param
 	}
 
 	shared := []struct {
@@ -65,6 +67,7 @@ func TestGdeltRangeValidation(t *testing.T) {
 	}{
 		{"events", h.GdeltEvents, eventsTooWide},
 		{"gkg", h.GdeltGkg, gkgTooWide},
+		{"dyads", h.GdeltDyads, eventsTooWide},
 	}
 	for _, tt := range spanCases {
 		t.Run(tt.endpoint+"/span too large", func(t *testing.T) {
@@ -94,6 +97,31 @@ func TestGdeltRangeValidation(t *testing.T) {
 			t.Errorf("span of exactly %d days rejected: %v", maxGdeltGkgDays, err)
 		}
 	})
+}
+
+// The country drill-down interpolates nothing into SQL — the code is bound
+// as a query parameter — but malformed codes must still 400 before any
+// BigQuery call (bq is nil: reaching a query would panic).
+func TestGdeltCountryValidation(t *testing.T) {
+	h := &APIHandler{cache: NewCache(time.Minute)}
+	today := civil.DateOf(time.Now().UTC())
+
+	for _, country := range []string{"", "US", "usa", "USAX", "U.S"} {
+		t.Run(fmt.Sprintf("country=%q", country), func(t *testing.T) {
+			url := fmt.Sprintf("/api/opendata/gdelt/country?start_date=%s&end_date=%s&country=%s", today, today, country)
+			r := httptest.NewRequest(http.MethodGet, url, nil)
+			w := httptest.NewRecorder()
+
+			h.GdeltCountry(w, r)
+
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("got status %d, want %d", w.Code, http.StatusBadRequest)
+			}
+			if !strings.Contains(w.Body.String(), "country") {
+				t.Errorf("error %q does not mention the country param", w.Body.String())
+			}
+		})
+	}
 }
 
 // The dashboard's headline metrics must weight group averages by event

@@ -123,6 +123,181 @@ func (b *BQClient) GetGdeltConflictNews(ctx context.Context, start, end civil.Da
 	return collectRows[GdeltNews](q, ctx)
 }
 
+// --- /dyads: bilateral tension board + actor-country picker list ---
+//
+// The Country & Relations tab is keyed on Actor*CountryCode (CAMEO 3-letter
+// codes, ISO-like), NOT ActionGeo_CountryCode (FIPS): actor codes give
+// uniform "events involving X" semantics and avoid mixing the two systems.
+
+type GdeltDyadRow struct {
+	CountryA     string  `json:"country_a" bigquery:"country_a"`
+	CountryB     string  `json:"country_b" bigquery:"country_b"`
+	EventCount   int64   `json:"event_count" bigquery:"event_count"`
+	AvgGoldstein float64 `json:"avg_goldstein" bigquery:"avg_goldstein"`
+	AvgTone      float64 `json:"avg_tone" bigquery:"avg_tone"`
+}
+
+// GetGdeltDyads returns the busiest country pairs. LEAST/GREATEST merges the
+// two directions (RUS→UKR and UKR→RUS) into one undirected pair.
+func (b *BQClient) GetGdeltDyads(ctx context.Context, start, end civil.Date) ([]GdeltDyadRow, error) {
+	q := b.client.Query(`
+		SELECT
+			LEAST(Actor1CountryCode, Actor2CountryCode) AS country_a,
+			GREATEST(Actor1CountryCode, Actor2CountryCode) AS country_b,
+			COUNT(1) AS event_count,
+			ROUND(COALESCE(AVG(GoldsteinScale), 0), 2) AS avg_goldstein,
+			ROUND(COALESCE(AVG(AvgTone), 0), 2) AS avg_tone
+		FROM ` + gdeltEventsTable + `
+		WHERE _PARTITIONDATE BETWEEN @start_date AND @end_date
+			AND Actor1CountryCode IS NOT NULL
+			AND Actor2CountryCode IS NOT NULL
+			AND Actor1CountryCode != Actor2CountryCode
+		GROUP BY 1, 2
+		ORDER BY event_count DESC
+		LIMIT 30`)
+	q.Parameters = gdeltDateParams(start, end)
+	return collectRows[GdeltDyadRow](q, ctx)
+}
+
+type GdeltCountryCount struct {
+	Country    string `json:"country" bigquery:"country"`
+	EventCount int64  `json:"event_count" bigquery:"event_count"`
+}
+
+func (b *BQClient) GetGdeltActorCountries(ctx context.Context, start, end civil.Date) ([]GdeltCountryCount, error) {
+	q := b.client.Query(`
+		SELECT c AS country, COUNT(1) AS event_count
+		FROM ` + gdeltEventsTable + `, UNNEST([Actor1CountryCode, Actor2CountryCode]) AS c
+		WHERE _PARTITIONDATE BETWEEN @start_date AND @end_date
+			AND c IS NOT NULL
+		GROUP BY 1
+		ORDER BY event_count DESC
+		LIMIT 60`)
+	q.Parameters = gdeltDateParams(start, end)
+	return collectRows[GdeltCountryCount](q, ctx)
+}
+
+// --- /country: drill-down on one actor country ---
+
+func gdeltCountryParams(start, end civil.Date, country string) []bigquery.QueryParameter {
+	return append(gdeltDateParams(start, end), bigquery.QueryParameter{Name: "country", Value: country})
+}
+
+// gdeltInvolvesCountry filters to events where either actor is @country.
+const gdeltInvolvesCountry = `(Actor1CountryCode = @country OR Actor2CountryCode = @country)`
+
+type GdeltCountryDaily struct {
+	IngestDate   string  `json:"ingest_date" bigquery:"ingest_date"`
+	EventCount   int64   `json:"event_count" bigquery:"event_count"`
+	AvgTone      float64 `json:"avg_tone" bigquery:"avg_tone"`
+	AvgGoldstein float64 `json:"avg_goldstein" bigquery:"avg_goldstein"`
+}
+
+func (b *BQClient) GetGdeltCountryDaily(ctx context.Context, start, end civil.Date, country string) ([]GdeltCountryDaily, error) {
+	q := b.client.Query(`
+		SELECT
+			FORMAT_DATE('%Y-%m-%d', _PARTITIONDATE) AS ingest_date,
+			COUNT(1) AS event_count,
+			ROUND(COALESCE(AVG(AvgTone), 0), 2) AS avg_tone,
+			ROUND(COALESCE(AVG(GoldsteinScale), 0), 2) AS avg_goldstein
+		FROM ` + gdeltEventsTable + `
+		WHERE _PARTITIONDATE BETWEEN @start_date AND @end_date
+			AND ` + gdeltInvolvesCountry + `
+		GROUP BY 1
+		ORDER BY 1`)
+	q.Parameters = gdeltCountryParams(start, end, country)
+	return collectRows[GdeltCountryDaily](q, ctx)
+}
+
+// GdeltCountryEventType uses the full 4-digit CAMEO EventCode — the whole
+// point of the drill-down is finer grain than the 20 root codes.
+type GdeltCountryEventType struct {
+	EventCode    string  `json:"event_code" bigquery:"event_code"`
+	EventCount   int64   `json:"event_count" bigquery:"event_count"`
+	AvgGoldstein float64 `json:"avg_goldstein" bigquery:"avg_goldstein"`
+}
+
+func (b *BQClient) GetGdeltCountryEventTypes(ctx context.Context, start, end civil.Date, country string) ([]GdeltCountryEventType, error) {
+	q := b.client.Query(`
+		SELECT
+			COALESCE(EventCode, 'UNK') AS event_code,
+			COUNT(1) AS event_count,
+			ROUND(COALESCE(AVG(GoldsteinScale), 0), 2) AS avg_goldstein
+		FROM ` + gdeltEventsTable + `
+		WHERE _PARTITIONDATE BETWEEN @start_date AND @end_date
+			AND ` + gdeltInvolvesCountry + `
+		GROUP BY 1
+		ORDER BY event_count DESC
+		LIMIT 25`)
+	q.Parameters = gdeltCountryParams(start, end, country)
+	return collectRows[GdeltCountryEventType](q, ctx)
+}
+
+type GdeltPartnerRow struct {
+	Partner      string  `json:"partner" bigquery:"partner"`
+	EventCount   int64   `json:"event_count" bigquery:"event_count"`
+	AvgGoldstein float64 `json:"avg_goldstein" bigquery:"avg_goldstein"`
+	AvgTone      float64 `json:"avg_tone" bigquery:"avg_tone"`
+}
+
+func (b *BQClient) GetGdeltCountryPartners(ctx context.Context, start, end civil.Date, country string) ([]GdeltPartnerRow, error) {
+	q := b.client.Query(`
+		SELECT
+			IF(Actor1CountryCode = @country, Actor2CountryCode, Actor1CountryCode) AS partner,
+			COUNT(1) AS event_count,
+			ROUND(COALESCE(AVG(GoldsteinScale), 0), 2) AS avg_goldstein,
+			ROUND(COALESCE(AVG(AvgTone), 0), 2) AS avg_tone
+		FROM ` + gdeltEventsTable + `
+		WHERE _PARTITIONDATE BETWEEN @start_date AND @end_date
+			AND Actor1CountryCode IS NOT NULL
+			AND Actor2CountryCode IS NOT NULL
+			AND Actor1CountryCode != Actor2CountryCode
+			AND ` + gdeltInvolvesCountry + `
+		GROUP BY 1
+		ORDER BY event_count DESC
+		LIMIT 15`)
+	q.Parameters = gdeltCountryParams(start, end, country)
+	return collectRows[GdeltPartnerRow](q, ctx)
+}
+
+type GdeltCountryEvent struct {
+	IngestDate   string  `json:"ingest_date" bigquery:"ingest_date"`
+	Actor1       string  `json:"actor1" bigquery:"actor1"`
+	Actor2       string  `json:"actor2" bigquery:"actor2"`
+	EventCode    string  `json:"event_code" bigquery:"event_code"`
+	Goldstein    float64 `json:"goldstein" bigquery:"goldstein"`
+	AvgTone      float64 `json:"avg_tone" bigquery:"avg_tone"`
+	MentionCount int64   `json:"mention_count" bigquery:"mention_count"`
+	SourceCount  int64   `json:"source_count" bigquery:"source_count"`
+	SourceURL    string  `json:"source_url" bigquery:"source_url"`
+}
+
+// GetGdeltCountryEvents returns the most-mentioned individual events
+// involving the country, deduped by SOURCEURL (GDELT emits several event
+// rows per article).
+func (b *BQClient) GetGdeltCountryEvents(ctx context.Context, start, end civil.Date, country string) ([]GdeltCountryEvent, error) {
+	q := b.client.Query(`
+		SELECT
+			FORMAT_DATE('%Y-%m-%d', _PARTITIONDATE) AS ingest_date,
+			COALESCE(Actor1Name, '') AS actor1,
+			COALESCE(Actor2Name, '') AS actor2,
+			COALESCE(EventCode, 'UNK') AS event_code,
+			ROUND(COALESCE(GoldsteinScale, 0), 1) AS goldstein,
+			ROUND(COALESCE(AvgTone, 0), 2) AS avg_tone,
+			NumMentions AS mention_count,
+			NumSources AS source_count,
+			SOURCEURL AS source_url
+		FROM ` + gdeltEventsTable + `
+		WHERE _PARTITIONDATE BETWEEN @start_date AND @end_date
+			AND ` + gdeltInvolvesCountry + `
+			AND SOURCEURL IS NOT NULL
+		QUALIFY ROW_NUMBER() OVER (PARTITION BY SOURCEURL ORDER BY NumMentions DESC) = 1
+		ORDER BY mention_count DESC
+		LIMIT 30`)
+	q.Parameters = gdeltCountryParams(start, end, country)
+	return collectRows[GdeltCountryEvent](q, ctx)
+}
+
 // --- /gkg 3.2a + 3.2b: top themes / persons by article count ---
 
 type GdeltNamedCount struct {

@@ -1,7 +1,7 @@
 import React from 'react';
 import { TrendingUp, Globe2, CloudSun, Bitcoin } from 'lucide-react';
 import GoogleTrendsDashboard from './GoogleTrendsDashboard';
-import GdeltDashboard from './GdeltDashboard';
+import GdeltDashboard from './gdelt/GdeltDashboard';
 import WeatherDashboard from './WeatherDashboard';
 import CryptoDashboard from './crypto/CryptoDashboard';
 

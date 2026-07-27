@@ -1,26 +1,17 @@
 import { useState, useEffect, useMemo } from 'react';
 import ReactECharts from 'echarts-for-react';
 import * as echarts from 'echarts';
-import { Activity, Thermometer, Scale, Swords, ExternalLink } from 'lucide-react';
+import { Activity, Thermometer, Scale, Swords } from 'lucide-react';
 import type {
   GdeltEventsData, GdeltGkgData, GdeltHotspot, GdeltDaily, GdeltQuadClass,
   GdeltEventType, GdeltNews, GdeltNamedCount, GdeltMediaSource,
-} from '../types';
-import { fetchGdeltEvents, fetchGdeltGkg } from '../api';
-import { MetricCard, EmptyState, ErrorBanner } from '../dashboards/shared';
-
-// Span caps mirror the backend limits (events <= 90 days, GKG <= 30 days).
-const MAX_EVENTS_DAYS = 90;
-const MAX_GKG_DAYS = 30;
-
-const CHART_TOOLTIP = {
-  backgroundColor: 'rgba(17,17,20,0.95)',
-  borderColor: '#27272a',
-  textStyle: { color: '#e4e4e7', fontSize: 12 },
-};
-
-const AXIS_LABEL = { color: '#71717a', fontSize: 10, fontFamily: 'JetBrains Mono, monospace' };
-const SPLIT_LINE = { lineStyle: { color: '#1f1f23', type: 'dashed' } };
+} from '../../types';
+import { fetchGdeltEvents, fetchGdeltGkg } from '../../api';
+import { MetricCard, EmptyState, ErrorBanner } from '../../dashboards/shared';
+import {
+  MAX_GKG_DAYS, CHART_TOOLTIP, AXIS_LABEL, SPLIT_LINE,
+  cameoLabel, toneColor, spanOf, SourceLink, LoadingPulse,
+} from './shared';
 
 // Labels are a frontend concern: the API returns raw GDELT codes.
 const QUAD_LABELS: Record<number, string> = {
@@ -30,38 +21,7 @@ const QUAD_LABELS: Record<number, string> = {
   4: 'Material Conflict',
 };
 
-// CAMEO event root codes ('01'-'20'); codes >= '10' are the conflict side.
-const CAMEO_LABELS: Record<string, string> = {
-  '01': 'Public Statement', '02': 'Appeal', '03': 'Express Intent to Cooperate',
-  '04': 'Consult', '05': 'Diplomatic Cooperation', '06': 'Material Cooperation',
-  '07': 'Provide Aid', '08': 'Yield', '09': 'Investigate', '10': 'Demand',
-  '11': 'Disapprove', '12': 'Reject', '13': 'Threaten', '14': 'Protest',
-  '15': 'Exhibit Force Posture', '16': 'Reduce Relations', '17': 'Coerce',
-  '18': 'Assault', '19': 'Fight', '20': 'Mass Violence',
-};
-
-const cameoLabel = (code: string) => CAMEO_LABELS[code] || `Code ${code}`;
-
-// Tone scale: <= -2 alarming, -2..2 neutral, >= 2 positive.
-const toneColor = (t: number) => (t <= -2 ? '#ef4444' : t < 2 ? '#fbbf24' : '#22c55e');
-
-// GDELT dates are UTC (_PARTITIONDATE); all range math sticks to UTC.
-const fmtDate = (d: Date) => d.toISOString().slice(0, 10);
-const daysAgoUTC = (n: number) => fmtDate(new Date(Date.now() - n * 86400000));
-
-const spanOf = (start: string, end: string) =>
-  Math.round((Date.parse(end) - Date.parse(start)) / 86400000) + 1;
-
-const PRESETS = [
-  { label: '3 days', days: 3 },
-  { label: '7 days', days: 7 },
-  { label: '30 days', days: 30 },
-];
-
-export default function GdeltDashboard() {
-  const [startDate, setStartDate] = useState(daysAgoUTC(2));
-  const [endDate, setEndDate] = useState(daysAgoUTC(0));
-
+export default function OverviewTab({ startDate, endDate }: { startDate: string; endDate: string }) {
   const [events, setEvents] = useState<GdeltEventsData | null>(null);
   const [eventsLoading, setEventsLoading] = useState(true);
   const [eventsError, setEventsError] = useState('');
@@ -72,14 +32,7 @@ export default function GdeltDashboard() {
 
   const [mapReady, setMapReady] = useState(false);
 
-  const today = daysAgoUTC(0);
-  const span = spanOf(startDate, endDate);
-  const rangeError = span < 1
-    ? 'Start date must be on or before end date.'
-    : span > MAX_EVENTS_DAYS
-      ? `Date range spans ${span} days; at most ${MAX_EVENTS_DAYS} days are supported.`
-      : '';
-  const gkgTooWide = !rangeError && span > MAX_GKG_DAYS;
+  const gkgTooWide = spanOf(startDate, endDate) > MAX_GKG_DAYS;
 
   // ECharts 6 ships no built-in maps; the world outline is a vendored
   // Natural Earth 110m GeoJSON registered once per app lifetime.
@@ -98,26 +51,25 @@ export default function GdeltDashboard() {
   }, []);
 
   useEffect(() => {
-    if (rangeError) return;
     setEventsLoading(true);
     setEventsError('');
     fetchGdeltEvents(startDate, endDate)
       .then(setEvents)
       .catch(e => setEventsError(e.response?.data || e.message))
       .finally(() => setEventsLoading(false));
-  }, [startDate, endDate, rangeError]);
+  }, [startDate, endDate]);
 
   // The GKG panel loads independently so heavy theme parsing never blocks
   // the event panels.
   useEffect(() => {
-    if (rangeError || gkgTooWide) return;
+    if (gkgTooWide) return;
     setGkgLoading(true);
     setGkgError('');
     fetchGdeltGkg(startDate, endDate)
       .then(setGkg)
       .catch(e => setGkgError(e.response?.data || e.message))
       .finally(() => setGkgLoading(false));
-  }, [startDate, endDate, rangeError, gkgTooWide]);
+  }, [startDate, endDate, gkgTooWide]);
 
   const conflictShare = useMemo(() => {
     if (!events || events.overall.event_count === 0) return 0;
@@ -127,50 +79,12 @@ export default function GdeltDashboard() {
     return Math.round((conflict / events.overall.event_count) * 100);
   }, [events]);
 
-  function setPreset(days: number) {
-    setStartDate(daysAgoUTC(days - 1));
-    setEndDate(daysAgoUTC(0));
-  }
-
   return (
     <div className="space-y-6">
-      {/* Filter bar: quick presets + custom UTC date range */}
-      <div className="rounded-2xl border border-zinc-800/50 p-4 flex flex-wrap items-end gap-4" style={{ background: '#111114' }}>
-        <div>
-          <label className="text-[10px] font-mono text-zinc-600 uppercase block mb-1 px-0.5">Quick Range</label>
-          <div className="flex gap-1.5">
-            {PRESETS.map(p => {
-              const active = startDate === daysAgoUTC(p.days - 1) && endDate === today;
-              return (
-                <button
-                  key={p.days}
-                  onClick={() => setPreset(p.days)}
-                  className={`text-xs rounded-lg px-3 py-2 border cursor-pointer transition-colors ${
-                    active
-                      ? 'border-cyan-500/30 bg-cyan-500/5 text-cyan-400'
-                      : 'border-zinc-800/50 text-zinc-400 hover:border-zinc-700/60'
-                  }`}
-                  style={{ background: active ? undefined : '#09090b' }}
-                >
-                  {p.label}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-        <DateInput label="From" value={startDate} max={endDate <= today ? endDate : today} onChange={setStartDate} />
-        <DateInput label="To" value={endDate} min={startDate} max={today} onChange={setEndDate} />
-        <p className="text-[10px] text-zinc-600 ml-auto self-center max-w-[260px] leading-relaxed">
-          Dates reported in UTC. GDELT refreshes every 15 minutes; events support {MAX_EVENTS_DAYS} days,
-          themes &amp; entities {MAX_GKG_DAYS} days.
-        </p>
-      </div>
-
-      {rangeError && <ErrorBanner message={rangeError} />}
       {eventsError && <ErrorBanner message={eventsError} />}
-      {!rangeError && eventsLoading && <LoadingPulse />}
+      {eventsLoading && <LoadingPulse />}
 
-      {!rangeError && !eventsLoading && !eventsError && events && (
+      {!eventsLoading && !eventsError && events && (
         <>
           {/* Summary metrics (weighted server-side) */}
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -266,78 +180,66 @@ export default function GdeltDashboard() {
       )}
 
       {/* Panel 3: themes & entities (GKG) — independent lifecycle */}
-      {!rangeError && (
-        <div className="space-y-6">
-          <div className="flex items-baseline gap-3">
-            <h2 className="text-sm font-semibold text-white">Themes &amp; Entities</h2>
-            <span className="text-[10px] text-zinc-600">GDELT Global Knowledge Graph · loads independently</span>
-          </div>
+      <div className="space-y-6">
+        <div className="flex items-baseline gap-3">
+          <h2 className="text-sm font-semibold text-white">Themes &amp; Entities</h2>
+          <span className="text-[10px] text-zinc-600">GDELT Global Knowledge Graph · loads independently</span>
+        </div>
 
-          {gkgTooWide ? (
+        {gkgTooWide ? (
+          <div className="rounded-2xl border border-zinc-800/50 p-6" style={{ background: '#111114' }}>
+            <EmptyState text={`Theme & entity analysis supports up to ${MAX_GKG_DAYS} days — narrow the range to load this panel`} />
+          </div>
+        ) : gkgError ? (
+          <ErrorBanner message={gkgError} />
+        ) : gkgLoading ? (
+          <LoadingPulse />
+        ) : gkg && (
+          <>
             <div className="rounded-2xl border border-zinc-800/50 p-6" style={{ background: '#111114' }}>
-              <EmptyState text={`Theme & entity analysis supports up to ${MAX_GKG_DAYS} days — narrow the range to load this panel`} />
+              <h3 className="text-sm font-semibold text-white mb-1">Trending Themes</h3>
+              <p className="text-xs text-zinc-500 mb-4">Top 50 GKG themes by article count</p>
+              {gkg.themes.length > 0 ? (
+                <div className="h-[380px]">
+                  <ReactECharts option={treemapOption(gkg.themes)} style={{ height: '100%' }} />
+                </div>
+              ) : (
+                <EmptyState text="No themes in this range" />
+              )}
             </div>
-          ) : gkgError ? (
-            <ErrorBanner message={gkgError} />
-          ) : gkgLoading ? (
-            <LoadingPulse />
-          ) : gkg && (
-            <>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <div className="rounded-2xl border border-zinc-800/50 p-6" style={{ background: '#111114' }}>
-                <h3 className="text-sm font-semibold text-white mb-1">Trending Themes</h3>
-                <p className="text-xs text-zinc-500 mb-4">Top 50 GKG themes by article count</p>
-                {gkg.themes.length > 0 ? (
-                  <div className="h-[380px]">
-                    <ReactECharts option={treemapOption(gkg.themes)} style={{ height: '100%' }} />
+                <h3 className="text-sm font-semibold text-white mb-1">Most Covered People</h3>
+                <p className="text-xs text-zinc-500 mb-4">Top 20 by article count</p>
+                {gkg.persons.length > 0 ? (
+                  <div className="h-[420px]">
+                    <ReactECharts option={personsBarOption(gkg.persons)} style={{ height: '100%' }} />
                   </div>
                 ) : (
-                  <EmptyState text="No themes in this range" />
+                  <EmptyState text="No people in this range" />
                 )}
               </div>
-
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <div className="rounded-2xl border border-zinc-800/50 p-6" style={{ background: '#111114' }}>
-                  <h3 className="text-sm font-semibold text-white mb-1">Most Covered People</h3>
-                  <p className="text-xs text-zinc-500 mb-4">Top 20 by article count</p>
-                  {gkg.persons.length > 0 ? (
-                    <div className="h-[420px]">
-                      <ReactECharts option={personsBarOption(gkg.persons)} style={{ height: '100%' }} />
-                    </div>
-                  ) : (
-                    <EmptyState text="No people in this range" />
-                  )}
-                </div>
-                <div className="rounded-2xl border border-zinc-800/50 p-6" style={{ background: '#111114' }}>
-                  <h3 className="text-sm font-semibold text-white mb-1">Leading Media Sources</h3>
-                  <p className="text-xs text-zinc-500 mb-4">Top 10 by volume, colored by average tone</p>
-                  {gkg.sources.length > 0 ? (
-                    <div className="h-[420px]">
-                      <ReactECharts option={sourcesBarOption(gkg.sources)} style={{ height: '100%' }} />
-                    </div>
-                  ) : (
-                    <EmptyState text="No sources in this range" />
-                  )}
-                </div>
+              <div className="rounded-2xl border border-zinc-800/50 p-6" style={{ background: '#111114' }}>
+                <h3 className="text-sm font-semibold text-white mb-1">Leading Media Sources</h3>
+                <p className="text-xs text-zinc-500 mb-4">Top 10 by volume, colored by average tone</p>
+                {gkg.sources.length > 0 ? (
+                  <div className="h-[420px]">
+                    <ReactECharts option={sourcesBarOption(gkg.sources)} style={{ height: '100%' }} />
+                  </div>
+                ) : (
+                  <EmptyState text="No sources in this range" />
+                )}
               </div>
-            </>
-          )}
-        </div>
-      )}
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }
 
 // --- News table ---
-
-// SOURCEURL is untrusted external data: only http/https URLs become links.
-function safeUrl(raw: string): URL | null {
-  try {
-    const u = new URL(raw);
-    return u.protocol === 'http:' || u.protocol === 'https:' ? u : null;
-  } catch {
-    return null;
-  }
-}
 
 function NewsTable({ news }: { news: GdeltNews[] }) {
   return (
@@ -358,36 +260,18 @@ function NewsTable({ news }: { news: GdeltNews[] }) {
               </tr>
             </thead>
             <tbody>
-              {news.map((n, i) => {
-                const url = safeUrl(n.source_url);
-                return (
-                  <tr key={`${n.source_url}-${i}`} className="border-t border-zinc-800/40 text-zinc-400">
-                    <td className="py-2 pr-3 font-mono text-[11px] whitespace-nowrap">{n.ingest_date}</td>
-                    <td className="py-2 pr-3 font-mono text-[11px]">{n.fips_country}</td>
-                    <td className="py-2 pr-3">{cameoLabel(n.event_root_code)}</td>
-                    <td className="py-2 pr-3 text-right font-mono" style={{ color: toneColor(n.avg_tone) }}>
-                      {n.avg_tone.toFixed(1)}
-                    </td>
-                    <td className="py-2 pr-3 text-right font-mono">{n.mention_count.toLocaleString()}</td>
-                    <td className="py-2 max-w-[280px]">
-                      {url ? (
-                        <a
-                          href={url.href}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="flex items-center gap-1 text-cyan-500 hover:text-cyan-300 truncate transition-colors"
-                          title={url.href}
-                        >
-                          <span className="truncate">{url.hostname}</span>
-                          <ExternalLink size={10} className="shrink-0" />
-                        </a>
-                      ) : (
-                        <span className="text-zinc-600 truncate block" title={n.source_url}>{n.source_url}</span>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
+              {news.map((n, i) => (
+                <tr key={`${n.source_url}-${i}`} className="border-t border-zinc-800/40 text-zinc-400">
+                  <td className="py-2 pr-3 font-mono text-[11px] whitespace-nowrap">{n.ingest_date}</td>
+                  <td className="py-2 pr-3 font-mono text-[11px]">{n.fips_country}</td>
+                  <td className="py-2 pr-3">{cameoLabel(n.event_root_code)}</td>
+                  <td className="py-2 pr-3 text-right font-mono" style={{ color: toneColor(n.avg_tone) }}>
+                    {n.avg_tone.toFixed(1)}
+                  </td>
+                  <td className="py-2 pr-3 text-right font-mono">{n.mention_count.toLocaleString()}</td>
+                  <td className="py-2 max-w-[280px]"><SourceLink raw={n.source_url} /></td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
@@ -776,39 +660,4 @@ function sourcesBarOption(sources: GdeltMediaSource[]) {
       },
     }],
   };
-}
-
-// --- Local controls ---
-
-function DateInput({ label, value, min, max, onChange }: {
-  label: string;
-  value: string;
-  min?: string;
-  max?: string;
-  onChange: (v: string) => void;
-}) {
-  return (
-    <div>
-      <label className="text-[10px] font-mono text-zinc-600 uppercase block mb-1 px-0.5">{label}</label>
-      <input
-        type="date"
-        value={value}
-        min={min}
-        max={max}
-        onChange={e => e.target.value && onChange(e.target.value)}
-        className="text-xs text-zinc-400 rounded-lg px-3 py-2 outline-none border border-zinc-800/50 transition-colors focus:border-cyan-500/30 [color-scheme:dark]"
-        style={{ background: '#09090b' }}
-      />
-    </div>
-  );
-}
-
-function LoadingPulse() {
-  return (
-    <div className="space-y-4">
-      {[1, 2, 3].map(i => (
-        <div key={i} className="h-32 rounded-2xl animate-pulse" style={{ background: '#111114' }} />
-      ))}
-    </div>
-  );
 }

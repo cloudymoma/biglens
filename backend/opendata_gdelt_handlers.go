@@ -3,13 +3,16 @@ package main
 // HTTP handlers for the GDELT Open Data dashboard. Two endpoints so the fast
 // event panels render without waiting for the heavier GKG scans:
 //
-//	GET /api/opendata/gdelt/events?start_date=...&end_date=...  (panels 1+2)
-//	GET /api/opendata/gdelt/gkg?start_date=...&end_date=...     (panel 3)
+//	GET /api/opendata/gdelt/events?start_date=...&end_date=...   (Overview panels 1+2)
+//	GET /api/opendata/gdelt/gkg?start_date=...&end_date=...      (Overview panel 3)
+//	GET /api/opendata/gdelt/dyads?start_date=...&end_date=...    (Country & Relations board)
+//	GET /api/opendata/gdelt/country?...&country=USA              (Country & Relations drill-down)
 
 import (
 	"fmt"
 	"math"
 	"net/http"
+	"regexp"
 	"sort"
 	"time"
 
@@ -231,6 +234,164 @@ func rollupGdeltSummary(rows []GdeltSummaryRow) (GdeltOverall, []GdeltDaily, []G
 	sort.Slice(types, func(i, j int) bool { return types[i].EventCount > types[j].EventCount })
 
 	return overall, daily, quads, types
+}
+
+// --- /dyads ---
+
+type GdeltDyadsData struct {
+	Dyads     []GdeltDyadRow      `json:"dyads"`
+	Countries []GdeltCountryCount `json:"countries"`
+}
+
+func (h *APIHandler) GdeltDyads(w http.ResponseWriter, r *http.Request) {
+	start, end, err := parseGdeltRange(r, maxGdeltEventsDays)
+	if err != nil {
+		writeError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	key := fmt.Sprintf("opendata:gdelt:dyads:%s:%s", start, end)
+	if cached, ok := h.cache.Get(key); ok {
+		writeJSON(w, cached)
+		return
+	}
+
+	v, err, _ := gdeltFlight.Do(key, func() (any, error) {
+		data := GdeltDyadsData{
+			Dyads:     []GdeltDyadRow{},
+			Countries: []GdeltCountryCount{},
+		}
+
+		g, ctx := errgroup.WithContext(r.Context())
+		g.Go(func() error {
+			dyads, err := h.bq.GetGdeltDyads(ctx, start, end)
+			if err != nil {
+				return err
+			}
+			if dyads != nil {
+				data.Dyads = dyads
+			}
+			return nil
+		})
+		g.Go(func() error {
+			countries, err := h.bq.GetGdeltActorCountries(ctx, start, end)
+			if err != nil {
+				return err
+			}
+			if countries != nil {
+				data.Countries = countries
+			}
+			return nil
+		})
+		if err := g.Wait(); err != nil {
+			return nil, err
+		}
+
+		h.cache.Set(key, &data)
+		return &data, nil
+	})
+	if err != nil {
+		writeError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, v)
+}
+
+// --- /country ---
+
+// CAMEO actor country codes are exactly three uppercase letters. The value
+// is also bound as a query parameter, so this is defense in depth plus a
+// fast 400 for typos.
+var gdeltCountryRe = regexp.MustCompile(`^[A-Z]{3}$`)
+
+type GdeltCountryData struct {
+	Country    string                  `json:"country"`
+	Daily      []GdeltCountryDaily     `json:"daily"`
+	EventTypes []GdeltCountryEventType `json:"event_types"`
+	Partners   []GdeltPartnerRow       `json:"partners"`
+	TopEvents  []GdeltCountryEvent     `json:"top_events"`
+}
+
+func (h *APIHandler) GdeltCountry(w http.ResponseWriter, r *http.Request) {
+	start, end, err := parseGdeltRange(r, maxGdeltEventsDays)
+	if err != nil {
+		writeError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	country := r.URL.Query().Get("country")
+	if !gdeltCountryRe.MatchString(country) {
+		writeError(w, fmt.Sprintf("invalid country %q: expected a 3-letter CAMEO code like USA", country), http.StatusBadRequest)
+		return
+	}
+
+	key := fmt.Sprintf("opendata:gdelt:country:%s:%s:%s", country, start, end)
+	if cached, ok := h.cache.Get(key); ok {
+		writeJSON(w, cached)
+		return
+	}
+
+	v, err, _ := gdeltFlight.Do(key, func() (any, error) {
+		data := GdeltCountryData{
+			Country:    country,
+			Daily:      []GdeltCountryDaily{},
+			EventTypes: []GdeltCountryEventType{},
+			Partners:   []GdeltPartnerRow{},
+			TopEvents:  []GdeltCountryEvent{},
+		}
+
+		g, ctx := errgroup.WithContext(r.Context())
+		g.Go(func() error {
+			daily, err := h.bq.GetGdeltCountryDaily(ctx, start, end, country)
+			if err != nil {
+				return err
+			}
+			if daily != nil {
+				data.Daily = daily
+			}
+			return nil
+		})
+		g.Go(func() error {
+			types, err := h.bq.GetGdeltCountryEventTypes(ctx, start, end, country)
+			if err != nil {
+				return err
+			}
+			if types != nil {
+				data.EventTypes = types
+			}
+			return nil
+		})
+		g.Go(func() error {
+			partners, err := h.bq.GetGdeltCountryPartners(ctx, start, end, country)
+			if err != nil {
+				return err
+			}
+			if partners != nil {
+				data.Partners = partners
+			}
+			return nil
+		})
+		g.Go(func() error {
+			events, err := h.bq.GetGdeltCountryEvents(ctx, start, end, country)
+			if err != nil {
+				return err
+			}
+			if events != nil {
+				data.TopEvents = events
+			}
+			return nil
+		})
+		if err := g.Wait(); err != nil {
+			return nil, err
+		}
+
+		h.cache.Set(key, &data)
+		return &data, nil
+	})
+	if err != nil {
+		writeError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, v)
 }
 
 // --- /gkg ---
