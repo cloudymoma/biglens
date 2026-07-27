@@ -24,6 +24,8 @@ import type {
   GdeltCountryData,
   GdeltImpactData,
   GdeltStoriesData,
+  GdeltIndustryData,
+  GdeltIndustryKey,
   WeatherMeta,
   WeatherDashboardData,
   CryptoPulseData,
@@ -259,6 +261,17 @@ export async function fetchGdeltImpact(startDate: string, endDate: string): Prom
 export async function fetchGdeltStories(startDate: string, endDate: string): Promise<GdeltStoriesData> {
   const { data } = await axios.get('/api/opendata/gdelt/stories', {
     params: { start_date: startDate, end_date: endDate },
+  });
+  return data;
+}
+
+export async function fetchGdeltIndustry(
+  startDate: string,
+  endDate: string,
+  industry: GdeltIndustryKey,
+): Promise<GdeltIndustryData> {
+  const { data } = await axios.get('/api/opendata/gdelt/industry', {
+    params: { start_date: startDate, end_date: endDate, industry },
   });
   return data;
 }

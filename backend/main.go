@@ -102,6 +102,7 @@ func main() {
 	mux.Handle("/api/opendata/gdelt/country", h(api.GdeltCountry))
 	mux.Handle("/api/opendata/gdelt/impact", h(api.GdeltImpact))
 	mux.Handle("/api/opendata/gdelt/stories", h(api.GdeltStories))
+	mux.Handle("/api/opendata/gdelt/industry", h(api.GdeltIndustry))
 	mux.Handle("/api/opendata/weather/meta", h(api.WeatherMeta))
 	mux.Handle("/api/opendata/weather/dashboard", h(api.WeatherDashboard))
 	mux.Handle("/api/opendata/crypto/pulse", h(api.CryptoPulse))

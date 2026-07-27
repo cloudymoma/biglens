@@ -23,12 +23,13 @@ func TestGdeltRangeValidation(t *testing.T) {
 
 	h := &APIHandler{cache: NewCache(time.Minute)}
 	endpoints := map[string]http.HandlerFunc{
-		"events":  h.GdeltEvents,
-		"gkg":     h.GdeltGkg,
-		"dyads":   h.GdeltDyads,
-		"country": h.GdeltCountry, // range is validated before the country param
-		"impact":  h.GdeltImpact,
-		"stories": h.GdeltStories,
+		"events":   h.GdeltEvents,
+		"gkg":      h.GdeltGkg,
+		"dyads":    h.GdeltDyads,
+		"country":  h.GdeltCountry, // range is validated before the country param
+		"impact":   h.GdeltImpact,
+		"stories":  h.GdeltStories,
+		"industry": h.GdeltIndustry, // range is validated before the industry param
 	}
 
 	shared := []struct {
@@ -191,5 +192,38 @@ func TestGdeltEventsCacheHit(t *testing.T) {
 	}
 	if !strings.Contains(w.Body.String(), `"event_count":42`) {
 		t.Errorf("body %q does not contain cached payload", w.Body.String())
+	}
+}
+
+// The industry key gates a whitelisted theme map; anything unknown must be
+// rejected before any BigQuery call (bq is nil here — reaching a query
+// would panic).
+func TestGdeltIndustryValidation(t *testing.T) {
+	today := civil.DateOf(time.Now().UTC())
+	h := &APIHandler{cache: NewCache(time.Minute)}
+
+	cases := []struct {
+		name    string
+		query   string
+		wantMsg string
+	}{
+		{"missing industry", fmt.Sprintf("start_date=%s&end_date=%s", today, today), "industry"},
+		{"unknown industry", fmt.Sprintf("start_date=%s&end_date=%s&industry=aviation", today, today), "aviation"},
+		{"range too wide", fmt.Sprintf("start_date=%s&end_date=%s&industry=finance", today.AddDays(-maxGdeltGkgDays), today), "days"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodGet, "/api/opendata/gdelt/industry?"+tt.query, nil)
+			w := httptest.NewRecorder()
+
+			h.GdeltIndustry(w, r)
+
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("got status %d, want %d", w.Code, http.StatusBadRequest)
+			}
+			if !strings.Contains(w.Body.String(), tt.wantMsg) {
+				t.Errorf("error %q does not mention %q", w.Body.String(), tt.wantMsg)
+			}
+		})
 	}
 }

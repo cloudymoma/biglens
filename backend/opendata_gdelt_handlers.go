@@ -7,6 +7,7 @@ package main
 //	GET /api/opendata/gdelt/gkg?start_date=...&end_date=...      (Overview panel 3)
 //	GET /api/opendata/gdelt/dyads?start_date=...&end_date=...    (Country & Relations board)
 //	GET /api/opendata/gdelt/country?...&country=USA              (Country & Relations drill-down)
+//	GET /api/opendata/gdelt/industry?...&industry=finance        (Industry Pulse)
 
 import (
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"net/http"
 	"regexp"
 	"sort"
+	"strings"
 	"time"
 
 	"cloud.google.com/go/civil"
@@ -564,6 +566,111 @@ func (h *APIHandler) GdeltGkg(w http.ResponseWriter, r *http.Request) {
 			}
 			if sources != nil {
 				data.Sources = sources
+			}
+			return nil
+		})
+		if err := g.Wait(); err != nil {
+			return nil, err
+		}
+
+		h.cache.Set(key, &data)
+		return &data, nil
+	})
+	if err != nil {
+		writeError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, v)
+}
+
+// --- /industry ---
+
+type GdeltIndustryData struct {
+	Daily     []GdeltIndustryDaily   `json:"daily"`
+	Orgs      []GdeltIndustryOrg     `json:"orgs"`
+	Subtopics []GdeltNamedCount      `json:"subtopics"`
+	Outlets   []GdeltMediaSource     `json:"outlets"`
+	Articles  []GdeltIndustryArticle `json:"articles"`
+}
+
+func (h *APIHandler) GdeltIndustry(w http.ResponseWriter, r *http.Request) {
+	start, end, err := parseGdeltRange(r, maxGdeltGkgDays)
+	if err != nil {
+		writeError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	industry := r.URL.Query().Get("industry")
+	themes, ok := industryThemes[industry]
+	if !ok {
+		writeError(w, fmt.Sprintf("invalid industry %q: valid values are %s",
+			industry, strings.Join(industryKeys(), ", ")), http.StatusBadRequest)
+		return
+	}
+	themeRe := industryThemeRegex(themes)
+
+	key := fmt.Sprintf("opendata:gdelt:industry:%s:%s:%s", industry, start, end)
+	if cached, ok := h.cache.Get(key); ok {
+		writeJSON(w, cached)
+		return
+	}
+
+	v, err, _ := gdeltFlight.Do(key, func() (any, error) {
+		data := GdeltIndustryData{
+			Daily:     []GdeltIndustryDaily{},
+			Orgs:      []GdeltIndustryOrg{},
+			Subtopics: []GdeltNamedCount{},
+			Outlets:   []GdeltMediaSource{},
+			Articles:  []GdeltIndustryArticle{},
+		}
+
+		g, ctx := errgroup.WithContext(r.Context())
+		g.Go(func() error {
+			daily, err := h.bq.GetGdeltIndustryDaily(ctx, start, end, themeRe)
+			if err != nil {
+				return err
+			}
+			if daily != nil {
+				data.Daily = daily
+			}
+			return nil
+		})
+		g.Go(func() error {
+			orgs, err := h.bq.GetGdeltIndustryOrgs(ctx, start, end, themeRe)
+			if err != nil {
+				return err
+			}
+			if orgs != nil {
+				data.Orgs = orgs
+			}
+			return nil
+		})
+		g.Go(func() error {
+			subtopics, err := h.bq.GetGdeltIndustrySubtopics(ctx, start, end, themeRe)
+			if err != nil {
+				return err
+			}
+			if subtopics != nil {
+				data.Subtopics = subtopics
+			}
+			return nil
+		})
+		g.Go(func() error {
+			outlets, err := h.bq.GetGdeltIndustryOutlets(ctx, start, end, themeRe)
+			if err != nil {
+				return err
+			}
+			if outlets != nil {
+				data.Outlets = outlets
+			}
+			return nil
+		})
+		g.Go(func() error {
+			articles, err := h.bq.GetGdeltIndustryArticles(ctx, start, end, themeRe)
+			if err != nil {
+				return err
+			}
+			if articles != nil {
+				data.Articles = articles
 			}
 			return nil
 		})

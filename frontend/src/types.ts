@@ -629,6 +629,36 @@ export interface GdeltStoriesData {
   stories: GdeltStoryRow[];
 }
 
+// Industry Pulse tab: GKG theme-filtered vertical view.
+export type GdeltIndustryKey = 'finance' | 'retail' | 'biomedical' | 'education';
+
+export interface GdeltIndustryDaily {
+  ingest_date: string;
+  article_count: number;
+  avg_tone: number;
+}
+
+export interface GdeltIndustryOrg {
+  name: string;
+  article_count: number;
+  avg_tone: number;
+}
+
+export interface GdeltIndustryArticle {
+  ingest_date: string;
+  url: string;
+  source: string;
+  tone: number;
+}
+
+export interface GdeltIndustryData {
+  daily: GdeltIndustryDaily[];
+  orgs: GdeltIndustryOrg[];
+  subtopics: GdeltNamedCount[];
+  outlets: GdeltMediaSource[];
+  articles: GdeltIndustryArticle[];
+}
+
 // --- BigQuery Open Data: NOAA GHCN-Daily weather ---
 
 export interface WeatherMeta {

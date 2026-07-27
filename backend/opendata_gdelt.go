@@ -12,6 +12,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 
 	"cloud.google.com/go/bigquery"
 	"cloud.google.com/go/civil"
@@ -542,4 +544,170 @@ func (b *BQClient) GetGdeltMediaSources(ctx context.Context, start, end civil.Da
 		LIMIT 10`)
 	q.Parameters = gdeltDateParams(start, end)
 	return collectRows[GdeltMediaSource](q, ctx)
+}
+
+// --- /industry: theme-driven industry pulse ---
+//
+// Each vertical is a fixed list of GKG theme names validated against live
+// GKG data on 2026-07-28 (plan Task 1). Names are matched at entry starts
+// of V2Themes (`NAME,offset;NAME,offset;...`) with prefix semantics, so a
+// root like TAX_DISEASE covers its whole family. The list is compiled into
+// one RE2 pattern bound as @theme_re — never interpolated, never client
+// input. Both Go's regexp and BigQuery use RE2, so the unit tests validate
+// exactly the semantics BigQuery will apply.
+
+var industryThemes = map[string][]string{
+	// Validated against live GKG data 2026-07-28 (2-day window; keep rule
+	// articles >= 500 and <= 25% of total). "retail" is intentionally thin —
+	// GKG has no e-commerce themes; the user chose this Retail & Consumer
+	// slice over dropping the vertical.
+	"finance":    {"ECON_STOCKMARKET", "ECON_INFLATION", "WB_450_DEBT", "ECON_DEBT", "ECON_INTEREST_RATES", "ECON_CURRENCY_EXCHANGE_RATE", "ECON_CENTRALBANK", "ECON_IPO", "ECON_BANKRUPTCY"},
+	"retail":     {"TAX_FNCACT_RETAILER", "WB_358_RETAIL_PAYMENTS", "WB_364_CONSUMER_PROTECTION", "WB_1017_CONSUMER_PROTECTION_LAW"},
+	"biomedical": {"GENERAL_HEALTH", "MEDICAL", "TAX_DISEASE", "WB_1406_DISEASES", "HEALTH_PANDEMIC", "HEALTH_VACCINATION"},
+	"education":  {"EDUCATION", "WB_470_EDUCATION"},
+}
+
+func industryKeys() []string {
+	keys := make([]string, 0, len(industryThemes))
+	for k := range industryThemes {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// industryThemeRegex anchors every theme to an entry start so FOO never
+// matches XFOO, while keeping prefix semantics (FOO matches FOO_BAR).
+func industryThemeRegex(themes []string) string {
+	return `(?:^|;)(?:` + strings.Join(themes, "|") + `)`
+}
+
+const gdeltIndustryFilter = `
+		WHERE _PARTITIONDATE BETWEEN @start_date AND @end_date
+			AND V2Themes IS NOT NULL
+			AND REGEXP_CONTAINS(V2Themes, @theme_re)`
+
+func gdeltIndustryParams(start, end civil.Date, themeRe string) []bigquery.QueryParameter {
+	return append(gdeltDateParams(start, end), bigquery.QueryParameter{Name: "theme_re", Value: themeRe})
+}
+
+type GdeltIndustryDaily struct {
+	IngestDate   string  `json:"ingest_date" bigquery:"ingest_date"`
+	ArticleCount int64   `json:"article_count" bigquery:"article_count"`
+	AvgTone      float64 `json:"avg_tone" bigquery:"avg_tone"`
+}
+
+func (b *BQClient) GetGdeltIndustryDaily(ctx context.Context, start, end civil.Date, themeRe string) ([]GdeltIndustryDaily, error) {
+	// V2Tone is a composite CSV string; field 0 is the tone score.
+	q := b.client.Query(`
+		SELECT
+			FORMAT_DATE('%Y-%m-%d', _PARTITIONDATE) AS ingest_date,
+			COUNT(1) AS article_count,
+			ROUND(COALESCE(AVG(SAFE_CAST(SPLIT(V2Tone, ',')[SAFE_OFFSET(0)] AS FLOAT64)), 0), 2) AS avg_tone
+		FROM ` + gdeltGkgTable + gdeltIndustryFilter + `
+		GROUP BY 1
+		ORDER BY 1`)
+	q.Parameters = gdeltIndustryParams(start, end, themeRe)
+	return collectRows[GdeltIndustryDaily](q, ctx)
+}
+
+type GdeltIndustryOrg struct {
+	Name         string  `json:"name" bigquery:"name"`
+	ArticleCount int64   `json:"article_count" bigquery:"article_count"`
+	AvgTone      float64 `json:"avg_tone" bigquery:"avg_tone"`
+}
+
+// GetGdeltIndustryOrgs counts articles per organization within the vertical.
+// The in-row SPLIT + DISTINCT dedupes repeat mentions within one article so
+// counts mean "articles" (same shape as gdeltEntityQuery); tone is the
+// article tone averaged over the articles naming the org.
+func (b *BQClient) GetGdeltIndustryOrgs(ctx context.Context, start, end civil.Date, themeRe string) ([]GdeltIndustryOrg, error) {
+	q := b.client.Query(`
+		WITH docs AS (
+			SELECT
+				SAFE_CAST(SPLIT(V2Tone, ',')[SAFE_OFFSET(0)] AS FLOAT64) AS tone,
+				ARRAY(
+					SELECT DISTINCT SPLIT(entry, ',')[SAFE_OFFSET(0)]
+					FROM UNNEST(SPLIT(V2Organizations, ';')) AS entry
+					WHERE entry != ''
+				) AS orgs
+			FROM ` + gdeltGkgTable + gdeltIndustryFilter + `
+				AND V2Organizations IS NOT NULL
+		)
+		SELECT
+			org AS name,
+			COUNT(1) AS article_count,
+			ROUND(COALESCE(AVG(tone), 0), 2) AS avg_tone
+		FROM docs, UNNEST(orgs) AS org
+		WHERE LENGTH(org) > 2
+		GROUP BY 1
+		ORDER BY article_count DESC
+		LIMIT 25`)
+	q.Parameters = gdeltIndustryParams(start, end, themeRe)
+	return collectRows[GdeltIndustryOrg](q, ctx)
+}
+
+// GetGdeltIndustrySubtopics counts articles per vertical theme, showing
+// which slice of the vertical drives the coverage. Reuses GdeltNamedCount.
+func (b *BQClient) GetGdeltIndustrySubtopics(ctx context.Context, start, end civil.Date, themeRe string) ([]GdeltNamedCount, error) {
+	q := b.client.Query(`
+		WITH docs AS (
+			SELECT ARRAY(
+				SELECT DISTINCT SPLIT(entry, ',')[SAFE_OFFSET(0)]
+				FROM UNNEST(SPLIT(V2Themes, ';')) AS entry
+				WHERE entry != '' AND REGEXP_CONTAINS(entry, @theme_re)
+			) AS themes
+			FROM ` + gdeltGkgTable + gdeltIndustryFilter + `
+		)
+		SELECT theme AS name, COUNT(1) AS article_count
+		FROM docs, UNNEST(themes) AS theme
+		GROUP BY 1
+		ORDER BY article_count DESC
+		LIMIT 20`)
+	q.Parameters = gdeltIndustryParams(start, end, themeRe)
+	return collectRows[GdeltNamedCount](q, ctx)
+}
+
+// GetGdeltIndustryOutlets reuses GdeltMediaSource (media_source /
+// article_count / avg_tone) for the vertical's most active outlets.
+func (b *BQClient) GetGdeltIndustryOutlets(ctx context.Context, start, end civil.Date, themeRe string) ([]GdeltMediaSource, error) {
+	q := b.client.Query(`
+		SELECT
+			SourceCommonName AS media_source,
+			COUNT(1) AS article_count,
+			ROUND(COALESCE(AVG(SAFE_CAST(SPLIT(V2Tone, ',')[SAFE_OFFSET(0)] AS FLOAT64)), 0), 2) AS avg_tone
+		FROM ` + gdeltGkgTable + gdeltIndustryFilter + `
+			AND SourceCommonName IS NOT NULL
+		GROUP BY media_source
+		ORDER BY article_count DESC
+		LIMIT 15`)
+	q.Parameters = gdeltIndustryParams(start, end, themeRe)
+	return collectRows[GdeltMediaSource](q, ctx)
+}
+
+type GdeltIndustryArticle struct {
+	IngestDate string  `json:"ingest_date" bigquery:"ingest_date"`
+	URL        string  `json:"url" bigquery:"url"`
+	Source     string  `json:"source" bigquery:"source"`
+	Tone       float64 `json:"tone" bigquery:"tone"`
+}
+
+// GetGdeltIndustryArticles returns the most negative articles in the window
+// — the vertical's risk feed. GKG re-processes updated pages, so QUALIFY
+// keeps one row per URL.
+func (b *BQClient) GetGdeltIndustryArticles(ctx context.Context, start, end civil.Date, themeRe string) ([]GdeltIndustryArticle, error) {
+	q := b.client.Query(`
+		SELECT
+			FORMAT_DATE('%Y-%m-%d', _PARTITIONDATE) AS ingest_date,
+			DocumentIdentifier AS url,
+			COALESCE(SourceCommonName, '') AS source,
+			ROUND(SAFE_CAST(SPLIT(V2Tone, ',')[SAFE_OFFSET(0)] AS FLOAT64), 2) AS tone
+		FROM ` + gdeltGkgTable + gdeltIndustryFilter + `
+			AND DocumentIdentifier IS NOT NULL
+			AND SAFE_CAST(SPLIT(V2Tone, ',')[SAFE_OFFSET(0)] AS FLOAT64) IS NOT NULL
+		QUALIFY ROW_NUMBER() OVER (PARTITION BY DocumentIdentifier ORDER BY _PARTITIONDATE) = 1
+		ORDER BY tone ASC
+		LIMIT 25`)
+	q.Parameters = gdeltIndustryParams(start, end, themeRe)
+	return collectRows[GdeltIndustryArticle](q, ctx)
 }

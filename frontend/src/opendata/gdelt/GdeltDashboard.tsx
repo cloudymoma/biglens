@@ -6,12 +6,14 @@ import OverviewTab from './OverviewTab';
 import CountryTab from './CountryTab';
 import ImpactTab from './ImpactTab';
 import StoriesTab from './StoriesTab';
+import IndustryTab from './IndustryTab';
 
 const TABS = [
   { id: 'overview', label: 'Overview' },
   { id: 'country', label: 'Country & Relations' },
   { id: 'impact', label: 'Human Impact' },
   { id: 'stories', label: 'Story Velocity' },
+  { id: 'industry', label: 'Industry Pulse' },
 ] as const;
 
 type TabId = (typeof TABS)[number]['id'];
@@ -53,6 +55,7 @@ export default function GdeltDashboard() {
     country: <CountryTab startDate={startDate} endDate={endDate} />,
     impact: <ImpactTab startDate={startDate} endDate={endDate} />,
     stories: <StoriesTab startDate={startDate} endDate={endDate} />,
+    industry: <IndustryTab startDate={startDate} endDate={endDate} />,
   };
 
   return (
