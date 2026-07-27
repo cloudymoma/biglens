@@ -412,6 +412,26 @@ export interface GdeltImpactData {
   incidents: GdeltImpactIncident[];
 }
 
+// Story Velocity tab: events ranked by distinct-outlet spread.
+
+export interface GdeltStoryRow {
+  mentions: number;
+  outlets: number;
+  avg_confidence: number;
+  avg_tone: number;
+  first_seen: string;
+  span_minutes: number;
+  actor1: string;
+  actor2: string;
+  event_code: string;
+  location: string;
+  source_url: string;
+}
+
+export interface GdeltStoriesData {
+  stories: GdeltStoryRow[];
+}
+
 // --- BigQuery Open Data: NOAA GHCN-Daily weather ---
 
 export interface WeatherMeta {

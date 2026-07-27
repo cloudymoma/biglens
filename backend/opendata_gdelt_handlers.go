@@ -26,6 +26,9 @@ import (
 const (
 	maxGdeltEventsDays = 90
 	maxGdeltGkgDays    = 30
+	// Story velocity is a short-window concept; the mentions stream is also
+	// ~3x the events table per day.
+	maxGdeltStoriesDays = 14
 )
 
 // gdeltFlight collapses concurrent identical queries the instant a cache
@@ -457,6 +460,44 @@ func (h *APIHandler) GdeltImpact(w http.ResponseWriter, r *http.Request) {
 			return nil, err
 		}
 
+		h.cache.Set(key, &data)
+		return &data, nil
+	})
+	if err != nil {
+		writeError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, v)
+}
+
+// --- /stories ---
+
+type GdeltStoriesData struct {
+	Stories []GdeltStoryRow `json:"stories"`
+}
+
+func (h *APIHandler) GdeltStories(w http.ResponseWriter, r *http.Request) {
+	start, end, err := parseGdeltRange(r, maxGdeltStoriesDays)
+	if err != nil {
+		writeError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	key := fmt.Sprintf("opendata:gdelt:stories:%s:%s", start, end)
+	if cached, ok := h.cache.Get(key); ok {
+		writeJSON(w, cached)
+		return
+	}
+
+	v, err, _ := gdeltFlight.Do(key, func() (any, error) {
+		data := GdeltStoriesData{Stories: []GdeltStoryRow{}}
+		stories, err := h.bq.GetGdeltStories(r.Context(), start, end)
+		if err != nil {
+			return nil, err
+		}
+		if stories != nil {
+			data.Stories = stories
+		}
 		h.cache.Set(key, &data)
 		return &data, nil
 	})

@@ -21,6 +21,7 @@ import type {
   GdeltDyadsData,
   GdeltCountryData,
   GdeltImpactData,
+  GdeltStoriesData,
   WeatherMeta,
   WeatherDashboardData,
   CryptoPulseData,
@@ -232,6 +233,13 @@ export async function fetchGdeltCountry(
 
 export async function fetchGdeltImpact(startDate: string, endDate: string): Promise<GdeltImpactData> {
   const { data } = await axios.get('/api/opendata/gdelt/impact', {
+    params: { start_date: startDate, end_date: endDate },
+  });
+  return data;
+}
+
+export async function fetchGdeltStories(startDate: string, endDate: string): Promise<GdeltStoriesData> {
+  const { data } = await axios.get('/api/opendata/gdelt/stories', {
     params: { start_date: startDate, end_date: endDate },
   });
   return data;

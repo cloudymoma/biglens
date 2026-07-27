@@ -18,8 +18,9 @@ import (
 )
 
 const (
-	gdeltEventsTable = "`gdelt-bq.gdeltv2.events_partitioned`"
-	gdeltGkgTable    = "`gdelt-bq.gdeltv2.gkg_partitioned`"
+	gdeltEventsTable   = "`gdelt-bq.gdeltv2.events_partitioned`"
+	gdeltGkgTable      = "`gdelt-bq.gdeltv2.gkg_partitioned`"
+	gdeltMentionsTable = "`gdelt-bq.gdeltv2.eventmentions_partitioned`"
 )
 
 func gdeltDateParams(start, end civil.Date) []bigquery.QueryParameter {
@@ -296,6 +297,69 @@ func (b *BQClient) GetGdeltCountryEvents(ctx context.Context, start, end civil.D
 		LIMIT 30`)
 	q.Parameters = gdeltCountryParams(start, end, country)
 	return collectRows[GdeltCountryEvent](q, ctx)
+}
+
+// --- /stories: story spread from the mentions stream ---
+
+type GdeltStoryRow struct {
+	Mentions      int64   `json:"mentions" bigquery:"mentions"`
+	Outlets       int64   `json:"outlets" bigquery:"outlets"`
+	AvgConfidence float64 `json:"avg_confidence" bigquery:"avg_confidence"`
+	AvgTone       float64 `json:"avg_tone" bigquery:"avg_tone"`
+	FirstSeen     string  `json:"first_seen" bigquery:"first_seen"`
+	SpanMinutes   int64   `json:"span_minutes" bigquery:"span_minutes"`
+	Actor1        string  `json:"actor1" bigquery:"actor1"`
+	Actor2        string  `json:"actor2" bigquery:"actor2"`
+	EventCode     string  `json:"event_code" bigquery:"event_code"`
+	Location      string  `json:"location" bigquery:"location"`
+	SourceURL     string  `json:"source_url" bigquery:"source_url"`
+}
+
+// GetGdeltStories ranks events by how many DISTINCT outlets picked them up —
+// spread across independent sources beats raw mention count, which one wire
+// service can inflate. Confidence >= 40 drops GDELT's least certain
+// event-mention matches. MentionTimeDate is a yyyymmddhhmmss integer;
+// SAFE.PARSE_TIMESTAMP tolerates malformed stamps.
+func (b *BQClient) GetGdeltStories(ctx context.Context, start, end civil.Date) ([]GdeltStoryRow, error) {
+	q := b.client.Query(`
+		WITH m AS (
+			SELECT
+				GLOBALEVENTID,
+				COUNT(1) AS mentions,
+				COUNT(DISTINCT MentionSourceName) AS outlets,
+				MIN(MentionTimeDate) AS first_raw,
+				MAX(MentionTimeDate) AS last_raw,
+				ROUND(AVG(Confidence), 1) AS avg_confidence,
+				ROUND(AVG(MentionDocTone), 2) AS avg_tone
+			FROM ` + gdeltMentionsTable + `
+			WHERE _PARTITIONDATE BETWEEN @start_date AND @end_date
+				AND Confidence >= 40
+			GROUP BY 1
+			ORDER BY outlets DESC
+			LIMIT 200
+		)
+		SELECT
+			m.mentions,
+			m.outlets,
+			m.avg_confidence,
+			m.avg_tone,
+			COALESCE(FORMAT_TIMESTAMP('%Y-%m-%d %H:%M',
+				SAFE.PARSE_TIMESTAMP('%Y%m%d%H%M%S', CAST(m.first_raw AS STRING))), '') AS first_seen,
+			COALESCE(TIMESTAMP_DIFF(
+				SAFE.PARSE_TIMESTAMP('%Y%m%d%H%M%S', CAST(m.last_raw AS STRING)),
+				SAFE.PARSE_TIMESTAMP('%Y%m%d%H%M%S', CAST(m.first_raw AS STRING)), MINUTE), 0) AS span_minutes,
+			COALESCE(e.Actor1Name, '') AS actor1,
+			COALESCE(e.Actor2Name, '') AS actor2,
+			COALESCE(e.EventCode, 'UNK') AS event_code,
+			COALESCE(e.ActionGeo_FullName, '') AS location,
+			COALESCE(e.SOURCEURL, '') AS source_url
+		FROM m
+		JOIN ` + gdeltEventsTable + ` AS e ON e.GLOBALEVENTID = m.GLOBALEVENTID
+		WHERE e._PARTITIONDATE BETWEEN @start_date AND @end_date
+		ORDER BY m.outlets DESC
+		LIMIT 25`)
+	q.Parameters = gdeltDateParams(start, end)
+	return collectRows[GdeltStoryRow](q, ctx)
 }
 
 // --- /gkg 3.2a + 3.2b: top themes / persons by article count ---
