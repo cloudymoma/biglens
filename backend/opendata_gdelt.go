@@ -565,6 +565,18 @@ var industryThemes = map[string][]string{
 	"retail":     {"TAX_FNCACT_RETAILER", "WB_358_RETAIL_PAYMENTS", "WB_364_CONSUMER_PROTECTION", "WB_1017_CONSUMER_PROTECTION_LAW"},
 	"biomedical": {"GENERAL_HEALTH", "MEDICAL", "TAX_DISEASE", "WB_1406_DISEASES", "HEALTH_PANDEMIC", "HEALTH_VACCINATION"},
 	"education":  {"EDUCATION", "WB_470_EDUCATION"},
+	// technology validated 2026-07-28 same method (ECON_TECHNOLOGY and
+	// INTERNET_BLACKOUT returned 0 / <500 and were dropped).
+	"technology": {"WB_133_INFORMATION_AND_COMMUNICATION_TECHNOLOGIES", "WB_678_DIGITAL_GOVERNMENT", "SCIENCE", "MEDIA_SOCIAL", "CYBER_ATTACK"},
+	// Remaining verticals validated 2026-07-28 same method. "tourism",
+	// "defense" and "realestate" are single-theme by data, not oversight
+	// (nothing else passed the keep rule); realestate runs thin like retail.
+	"transport":   {"WB_135_TRANSPORT", "WB_1803_TRANSPORT_INFRASTRUCTURE", "PUBLIC_TRANSPORT"},
+	"energy":      {"ENV_OIL", "ENV_SOLAR", "WB_525_RENEWABLE_ENERGY", "ENV_COAL", "ENV_WINDPOWER", "ENV_NUCLEARPOWER"},
+	"agriculture": {"AGRICULTURE", "TAX_FNCACT_FARMER"},
+	"tourism":     {"TOURISM"},
+	"defense":     {"MILITARY"},
+	"realestate":  {"ECON_HOUSING_PRICES"},
 }
 
 func industryKeys() []string {

@@ -630,7 +630,9 @@ export interface GdeltStoriesData {
 }
 
 // Industry Pulse tab: GKG theme-filtered vertical view.
-export type GdeltIndustryKey = 'finance' | 'retail' | 'biomedical' | 'education';
+export type GdeltIndustryKey =
+  | 'finance' | 'retail' | 'biomedical' | 'education' | 'technology'
+  | 'transport' | 'energy' | 'agriculture' | 'tourism' | 'defense' | 'realestate';
 
 export interface GdeltIndustryDaily {
   ingest_date: string;

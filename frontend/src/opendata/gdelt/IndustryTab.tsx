@@ -15,6 +15,13 @@ const INDUSTRIES: { key: GdeltIndustryKey; label: string }[] = [
   { key: 'retail', label: 'Retail & Consumer' },
   { key: 'biomedical', label: 'Bio-Medical' },
   { key: 'education', label: 'Education' },
+  { key: 'technology', label: 'Technology' },
+  { key: 'transport', label: 'Transport & Infrastructure' },
+  { key: 'energy', label: 'Energy' },
+  { key: 'agriculture', label: 'Agriculture' },
+  { key: 'tourism', label: 'Tourism' },
+  { key: 'defense', label: 'Defense' },
+  { key: 'realestate', label: 'Real Estate' },
 ];
 
 function ToneChip({ tone }: { tone: number }) {
@@ -82,7 +89,7 @@ export default function IndustryTab({ startDate, endDate }: { startDate: string;
         </div>
         <p className="text-[10px] text-zinc-600 self-end pb-2 max-w-[420px] leading-relaxed">
           A vertical is a curated slice of GDELT GKG themes — coverage varies by
-          industry (Retail & Consumer runs thin).
+          industry (Retail & Consumer and Real Estate run thin).
         </p>
       </div>
 

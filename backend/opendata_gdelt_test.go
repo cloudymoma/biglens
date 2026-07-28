@@ -9,7 +9,10 @@ import (
 // RE2, so validating the pattern with Go's regexp proves it is safe and has
 // the intended semantics before it ever reaches a paid query.
 func TestIndustryThemesWellFormed(t *testing.T) {
-	want := []string{"finance", "retail", "biomedical", "education"}
+	want := []string{
+		"finance", "retail", "biomedical", "education", "technology",
+		"transport", "energy", "agriculture", "tourism", "defense", "realestate",
+	}
 	if len(industryThemes) != len(want) {
 		t.Fatalf("industryThemes has %d keys, want %d", len(industryThemes), len(want))
 	}
@@ -32,7 +35,7 @@ func TestIndustryThemesWellFormed(t *testing.T) {
 
 func TestIndustryKeysSorted(t *testing.T) {
 	keys := industryKeys()
-	if len(keys) != 4 {
+	if len(keys) != 11 {
 		t.Fatalf("got %d keys, want 4", len(keys))
 	}
 	for i := 1; i < len(keys); i++ {
