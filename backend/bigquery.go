@@ -53,7 +53,7 @@ func (b *BQClient) GetStorageStats(ctx context.Context, filters QueryFilters) (*
 		`SELECT
 			SUM(total_logical_bytes) AS logical_bytes,
 			SUM(total_physical_bytes) AS physical_bytes,
-			SUM(total_logical_bytes + total_physical_bytes) AS total_bytes
+			SUM(total_logical_bytes) AS total_bytes
 		FROM %s.INFORMATION_SCHEMA.TABLE_STORAGE_BY_PROJECT%s`,
 		b.regionRef(filters.Region), where))
 	q.Parameters = params
@@ -117,6 +117,12 @@ type TopTable struct {
 
 func (b *BQClient) GetTopTables(ctx context.Context, filters QueryFilters) ([]TopTable, error) {
 	where, params := filters.StorageWhere()
+	// Dropped tables linger in TABLE_STORAGE until their time-travel and
+	// fail-safe windows expire; keep them out of the heaviest-tables list.
+	extra := " WHERE deleted = FALSE"
+	if where != "" {
+		extra = where + " AND deleted = FALSE"
+	}
 	q := b.client.Query(fmt.Sprintf(
 		`SELECT
 			table_schema AS dataset,
@@ -125,7 +131,7 @@ func (b *BQClient) GetTopTables(ctx context.Context, filters QueryFilters) ([]To
 		FROM %s.INFORMATION_SCHEMA.TABLE_STORAGE_BY_PROJECT%s
 		ORDER BY total_bytes DESC
 		LIMIT 10`,
-		b.regionRef(filters.Region), where))
+		b.regionRef(filters.Region), extra))
 	q.Parameters = params
 
 	return collectRows[TopTable](q, ctx)
@@ -411,7 +417,7 @@ func (b *BQClient) GetTopSlotJobs(ctx context.Context, filters QueryFilters) ([]
 			IFNULL(cache_hit, FALSE) AS cache_hit,
 			IFNULL(reservation_id, '') AS reservation
 		FROM %s.INFORMATION_SCHEMA.JOBS_BY_PROJECT
-		%s
+		%s AND (statement_type != 'SCRIPT' OR statement_type IS NULL)
 		ORDER BY total_slot_ms DESC
 		LIMIT 10`,
 		b.regionRef(filters.Region), where))
@@ -434,7 +440,7 @@ func (b *BQClient) GetSlotUsage(ctx context.Context, filters QueryFilters) ([]Sl
 			FORMAT_TIMESTAMP("%%Y-%%m-%%dT%%H:00:00Z", TIMESTAMP_TRUNC(creation_time, HOUR)) AS usage_hour,
 			SUM(total_slot_ms) / (1000 * 60 * 60) AS avg_slots
 		FROM %s.INFORMATION_SCHEMA.JOBS_BY_USER
-		%s
+		%s AND (statement_type != 'SCRIPT' OR statement_type IS NULL)
 		GROUP BY usage_hour
 		ORDER BY usage_hour ASC`,
 		b.regionRef(filters.Region), where))
@@ -487,30 +493,51 @@ type SpendEntry struct {
 }
 
 // GetSpend aggregates bytes billed by the filters.GroupBy dimension. The
-// dataset/table dimensions unnest referenced_tables, so a job referencing N
-// tables is counted once under each of them.
+// dataset/table dimensions unnest referenced_tables, which yields one row per
+// referenced table; deduping on job_id keeps each job's bytes counted once per
+// group instead of once per referenced table. A job touching N groups still
+// contributes its full bytes to each of them.
 func (b *BQClient) GetSpend(ctx context.Context, filters QueryFilters) ([]SpendEntry, error) {
-	nameExpr, from := "user_email", ""
-	switch filters.GroupBy {
-	case "dataset":
-		nameExpr, from = "rt.dataset_id", ", UNNEST(referenced_tables) rt"
-	case "table":
-		nameExpr, from = "CONCAT(rt.dataset_id, '.', rt.table_id)", ", UNNEST(referenced_tables) rt"
-	case "reservation":
-		nameExpr = "IFNULL(reservation_id, 'on-demand')"
+	where, params := filters.JobsWhere("creation_time")
+
+	if filters.GroupBy == "dataset" || filters.GroupBy == "table" {
+		nameExpr, notNull := "rt.dataset_id", "rt.dataset_id IS NOT NULL"
+		if filters.GroupBy == "table" {
+			nameExpr = "CONCAT(rt.dataset_id, '.', rt.table_id)"
+			notNull = "rt.dataset_id IS NOT NULL AND rt.table_id IS NOT NULL"
+		}
+		q := b.client.Query(fmt.Sprintf(
+			`WITH jobs AS (
+				SELECT DISTINCT j.job_id, j.total_bytes_billed, %s AS name
+				FROM %s.INFORMATION_SCHEMA.JOBS_BY_PROJECT j, UNNEST(referenced_tables) rt
+				%s AND statement_type != 'SCRIPT' AND %s
+			)
+			SELECT
+				name,
+				IFNULL(SUM(total_bytes_billed), 0) AS total_bytes
+			FROM jobs
+			GROUP BY name
+			ORDER BY total_bytes DESC
+			LIMIT 25`,
+			nameExpr, b.regionRef(filters.Region), where, notNull))
+		q.Parameters = params
+		return collectRows[SpendEntry](q, ctx)
 	}
 
-	where, params := filters.JobsWhere("creation_time")
+	nameExpr := "user_email"
+	if filters.GroupBy == "reservation" {
+		nameExpr = "IFNULL(reservation_id, 'on-demand')"
+	}
 	q := b.client.Query(fmt.Sprintf(
 		`SELECT
 			%s AS name,
 			IFNULL(SUM(total_bytes_billed), 0) AS total_bytes
-		FROM %s.INFORMATION_SCHEMA.JOBS_BY_PROJECT%s
+		FROM %s.INFORMATION_SCHEMA.JOBS_BY_PROJECT
 		%s AND statement_type != 'SCRIPT'
 		GROUP BY name
 		ORDER BY total_bytes DESC
 		LIMIT 25`,
-		nameExpr, b.regionRef(filters.Region), from, where))
+		nameExpr, b.regionRef(filters.Region), where))
 	q.Parameters = params
 
 	return collectRows[SpendEntry](q, ctx)
