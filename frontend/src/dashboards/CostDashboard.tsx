@@ -17,12 +17,14 @@ export default function CostDashboard({ filters }: { filters: QueryFilters }) {
   const [edition, setEdition] = useState<Edition>('enterprise');
 
   useEffect(() => {
+    let active = true;
     setLoading(true);
     setError('');
     fetchCostDashboard(filters)
-      .then(setData)
-      .catch(e => setError(e.response?.data || e.message))
-      .finally(() => setLoading(false));
+      .then(d => { if (active) setData(d); })
+      .catch(e => { if (active) setError(e.response?.data || e.message); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
   }, [filters]);
 
   if (loading) return <LoadingPulse />;

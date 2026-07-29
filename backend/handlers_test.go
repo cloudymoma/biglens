@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -58,5 +60,18 @@ func TestSplitTrimmed(t *testing.T) {
 				t.Errorf("splitTrimmed(%q) = %v, want %v", tt.in, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestDegradedWidgetsJSONMarshaling(t *testing.T) {
+	data := StorageDashboardData{
+		DegradedWidgets: []string{"cold_tables"},
+	}
+	b, err := json.Marshal(data)
+	if err != nil {
+		t.Fatalf("json.Marshal failed: %v", err)
+	}
+	if !strings.Contains(string(b), `"degraded_widgets":["cold_tables"]`) {
+		t.Errorf("json output = %s, missing degraded_widgets", string(b))
 	}
 }

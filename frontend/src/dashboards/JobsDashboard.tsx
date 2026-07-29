@@ -26,13 +26,15 @@ export default function JobsDashboard({ filters }: { filters: QueryFilters }) {
   const [selected, setSelected] = useState<JobRow | null>(null);
 
   useEffect(() => {
+    let active = true;
     setLoading(true);
     setError('');
     setSelected(null);
     fetchJobsDashboard(filters)
-      .then(setData)
-      .catch(e => setError(e.response?.data || e.message))
-      .finally(() => setLoading(false));
+      .then(d => { if (active) setData(d); })
+      .catch(e => { if (active) setError(e.response?.data || e.message); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
   }, [filters]);
 
   const jobs = useMemo(() => {

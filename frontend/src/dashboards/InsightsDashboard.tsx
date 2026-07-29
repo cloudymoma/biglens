@@ -3,7 +3,7 @@ import ReactECharts from 'echarts-for-react';
 import { Lightbulb, Sparkles, AlertTriangle, DollarSign, XCircle, Gauge, Repeat } from 'lucide-react';
 import type { QueryFilters, InsightsDashboardData, PerfInsightJob } from '../types';
 import { fetchInsightsDashboard } from '../api';
-import { formatBytes, EmptyState, ErrorBanner } from './shared';
+import { formatBytes, EmptyState, ErrorBanner, DegradedNotice } from './shared';
 
 const INSIGHT_FLAGS: { key: keyof PerfInsightJob; label: string }[] = [
   { key: 'slot_contention', label: 'Slot Contention' },
@@ -21,12 +21,14 @@ export default function InsightsDashboard({ filters, onDrillToJobs }: {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let active = true;
     setLoading(true);
     setError('');
     fetchInsightsDashboard(filters)
-      .then(setData)
-      .catch(e => setError(e.response?.data || e.message))
-      .finally(() => setLoading(false));
+      .then(d => { if (active) setData(d); })
+      .catch(e => { if (active) setError(e.response?.data || e.message); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
   }, [filters]);
 
   if (loading) return <LoadingPulse />;
@@ -108,6 +110,7 @@ export default function InsightsDashboard({ filters, onDrillToJobs }: {
 
   return (
     <div className="space-y-6">
+      <DegradedNotice widgets={data.degraded_widgets} />
       {/* Summary bar */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="rounded-2xl border border-zinc-800/50 p-5 flex items-center gap-4" style={{ background: '#111114' }}>

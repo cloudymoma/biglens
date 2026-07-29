@@ -3,7 +3,7 @@ import ReactECharts from 'echarts-for-react';
 import { Activity, TrendingUp, Cpu, Hourglass, Timer, Layers } from 'lucide-react';
 import type { QueryFilters, ComputeDashboardData, SlotStatePoint } from '../types';
 import { fetchComputeDashboard } from '../api';
-import { MetricCard, EmptyState, ErrorBanner } from './shared';
+import { MetricCard, EmptyState, ErrorBanner, DegradedNotice } from './shared';
 
 // Pivots (period, state) rows into aligned PENDING/RUNNING series.
 function pivotTimeline(points: SlotStatePoint[]) {
@@ -28,12 +28,14 @@ export default function ComputeDashboard({ filters }: { filters: QueryFilters })
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let active = true;
     setLoading(true);
     setError('');
     fetchComputeDashboard(filters)
-      .then(setData)
-      .catch(e => setError(e.response?.data || e.message))
-      .finally(() => setLoading(false));
+      .then(d => { if (active) setData(d); })
+      .catch(e => { if (active) setError(e.response?.data || e.message); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
   }, [filters]);
 
   if (loading) return <LoadingPulse />;
@@ -137,6 +139,7 @@ export default function ComputeDashboard({ filters }: { filters: QueryFilters })
 
   return (
     <div className="space-y-6">
+      <DegradedNotice widgets={data.degraded_widgets} />
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <MetricCard label="Peak Concurrent" value={peakConcurrent.toFixed(0)} icon={<TrendingUp size={18} />} detail="Max running + pending slots" accentColor="#38bdf8" />
         <MetricCard label="Peak Pending" value={peakPending.toFixed(0)} icon={<Hourglass size={18} />} detail="Sustained pending = slot starvation" accentColor="#fb7185" />

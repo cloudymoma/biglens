@@ -3,7 +3,7 @@ import ReactECharts from 'echarts-for-react';
 import { Database, HardDrive, Box, Search, History, ShieldAlert, Snowflake } from 'lucide-react';
 import type { QueryFilters, StorageDashboardData } from '../types';
 import { fetchStorageDashboard } from '../api';
-import { formatBytes, MetricCard, EmptyState, ErrorBanner } from './shared';
+import { formatBytes, MetricCard, EmptyState, ErrorBanner, DegradedNotice } from './shared';
 import { logicalCostUSD, physicalCostUSD, STORAGE_RATES } from './pricing';
 
 export default function StorageDashboard({ filters }: { filters: QueryFilters }) {
@@ -12,12 +12,14 @@ export default function StorageDashboard({ filters }: { filters: QueryFilters })
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let active = true;
     setLoading(true);
     setError('');
     fetchStorageDashboard(filters)
-      .then(setData)
-      .catch(e => setError(e.response?.data || e.message))
-      .finally(() => setLoading(false));
+      .then(d => { if (active) setData(d); })
+      .catch(e => { if (active) setError(e.response?.data || e.message); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
   }, [filters]);
 
   if (loading) return <LoadingPulse />;
@@ -85,6 +87,7 @@ export default function StorageDashboard({ filters }: { filters: QueryFilters })
 
   return (
     <div className="space-y-6">
+      <DegradedNotice widgets={data.degraded_widgets} />
       {/* Billing Simulator (Widget 1.1) */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <MetricCard

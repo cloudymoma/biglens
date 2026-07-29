@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import type { IAMDashboardData, InactiveEmail, NewActor, OffHoursCell, OffHoursUser, ExfilSignal } from '../types';
 import { fetchIAMDashboard, fetchEmailSuggestions } from '../api';
-import { formatBytes, MetricCard, EmptyState, ErrorBanner } from './shared';
+import { formatBytes, MetricCard, EmptyState, ErrorBanner, DegradedNotice } from './shared';
 import SecurityPosture from './SecurityPosture';
 
 interface Props {
@@ -22,12 +22,14 @@ export default function IAMDashboard({ region, timeRange }: Props) {
   const [view, setView] = useState<'activity' | 'posture'>('activity');
 
   useEffect(() => {
+    let active = true;
     setLoading(true);
     setError('');
     fetchIAMDashboard(region, selectedEmails, timeRange)
-      .then(setData)
-      .catch(e => setError(e.response?.data || e.message))
-      .finally(() => setLoading(false));
+      .then(d => { if (active) setData(d); })
+      .catch(e => { if (active) setError(e.response?.data || e.message); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
   }, [region, timeRange, selectedEmails]);
 
   const handleAddEmail = (email: string) => {
@@ -80,6 +82,7 @@ export default function IAMDashboard({ region, timeRange }: Props) {
           {error && <ErrorBanner message={error} />}
           {!loading && !error && data && (
             <>
+              <DegradedNotice widgets={data.degraded_widgets} />
               <SummaryCards summary={data.summary} />
               <UsageTimelineChart timeline={data.timeline || []} />
               <TopCallersTable callers={data.top_callers || []} />

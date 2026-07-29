@@ -63,6 +63,7 @@ export interface StorageDashboardData {
   search_indexes: SearchIndexInfo[] | null;
   dataset_storage: DatasetStorage[] | null;
   cold_tables: ColdTable[] | null;
+  degraded_widgets?: string[];
 }
 
 export interface SlotStatePoint {
@@ -106,6 +107,7 @@ export interface ComputeDashboardData {
   slot_usage: SlotUsage[] | null;
   queue_stats: QueueStats | null;
   reservations: ReservationPoint[] | null;
+  degraded_widgets?: string[];
 }
 
 export interface CostSummary {
@@ -173,6 +175,7 @@ export interface InsightsDashboardData {
   failing_users: FailingUser[] | null;
   perf_insights: PerfInsightJob[] | null;
   repeated_queries: RepeatedQuery[] | null;
+  degraded_widgets?: string[];
 }
 
 export interface JobRow {
@@ -290,6 +293,7 @@ export interface SecurityDashboardData {
   sensitive_columns: SensitiveColumn[] | null;
   datasets_scanned: number;
   datasets_total: number;
+  degraded_widgets?: string[];
 }
 
 export interface NewActor {
@@ -322,6 +326,7 @@ export interface IAMDashboardData {
   off_hours: OffHoursCell[] | null;
   off_hours_top: OffHoursUser[] | null;
   exfil_signals: ExfilSignal[] | null;
+  degraded_widgets?: string[];
 }
 
 // --- Dataplex / Knowledge Catalog (OKF) ---

@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -37,12 +38,13 @@ func writeError(w http.ResponseWriter, msg string, code int) {
 // --- Dashboard 1: Storage Analysis ---
 
 type StorageDashboardData struct {
-	Billing        *StorageStats     `json:"billing"`
-	Breakdown      *StorageBreakdown `json:"breakdown"`
-	TopTables      []TopTable        `json:"top_tables"`
-	SearchIndexes  []SearchIndexInfo `json:"search_indexes"`
-	DatasetStorage []DatasetStorage  `json:"dataset_storage"`
-	ColdTables     []ColdTable       `json:"cold_tables"`
+	Billing         *StorageStats     `json:"billing"`
+	Breakdown       *StorageBreakdown `json:"breakdown"`
+	TopTables       []TopTable        `json:"top_tables"`
+	SearchIndexes   []SearchIndexInfo `json:"search_indexes"`
+	DatasetStorage  []DatasetStorage  `json:"dataset_storage"`
+	ColdTables      []ColdTable       `json:"cold_tables"`
+	DegradedWidgets []string          `json:"degraded_widgets,omitempty"`
 }
 
 func (h *APIHandler) StorageDashboard(w http.ResponseWriter, r *http.Request) {
@@ -55,6 +57,12 @@ func (h *APIHandler) StorageDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var data StorageDashboardData
+	var mu sync.Mutex
+	addDegraded := func(name string) {
+		mu.Lock()
+		data.DegradedWidgets = append(data.DegradedWidgets, name)
+		mu.Unlock()
+	}
 	g, ctx := errgroup.WithContext(r.Context())
 
 	g.Go(func() error {
@@ -108,6 +116,7 @@ func (h *APIHandler) StorageDashboard(w http.ResponseWriter, r *http.Request) {
 		cold, err := h.bq.GetColdTables(ctx, filters)
 		if err != nil {
 			slog.Warn("cold tables widget degraded", "error", err)
+			addDegraded("cold_tables")
 			return nil
 		}
 		data.ColdTables = cold
@@ -126,11 +135,12 @@ func (h *APIHandler) StorageDashboard(w http.ResponseWriter, r *http.Request) {
 // --- Dashboard 2: Slots & Compute ---
 
 type ComputeDashboardData struct {
-	SlotTimeline []SlotStatePoint   `json:"slot_timeline"`
-	TopJobs      []TopSlotJob       `json:"top_jobs"`
-	SlotUsage    []SlotUsage        `json:"slot_usage"`
-	QueueStats   *QueueStats        `json:"queue_stats"`
-	Reservations []ReservationPoint `json:"reservations"`
+	SlotTimeline    []SlotStatePoint   `json:"slot_timeline"`
+	TopJobs         []TopSlotJob       `json:"top_jobs"`
+	SlotUsage       []SlotUsage        `json:"slot_usage"`
+	QueueStats      *QueueStats        `json:"queue_stats"`
+	Reservations    []ReservationPoint `json:"reservations"`
+	DegradedWidgets []string           `json:"degraded_widgets,omitempty"`
 }
 
 func (h *APIHandler) ComputeDashboard(w http.ResponseWriter, r *http.Request) {
@@ -143,6 +153,12 @@ func (h *APIHandler) ComputeDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var data ComputeDashboardData
+	var mu sync.Mutex
+	addDegraded := func(name string) {
+		mu.Lock()
+		data.DegradedWidgets = append(data.DegradedWidgets, name)
+		mu.Unlock()
+	}
 	g, ctx := errgroup.WithContext(r.Context())
 
 	g.Go(func() error {
@@ -187,6 +203,7 @@ func (h *APIHandler) ComputeDashboard(w http.ResponseWriter, r *http.Request) {
 		res, err := h.bq.GetReservationTimeline(ctx, filters)
 		if err != nil {
 			slog.Warn("reservation widget degraded", "error", err)
+			addDegraded("reservations")
 			return nil
 		}
 		data.Reservations = res
@@ -266,6 +283,7 @@ type InsightsDashboardData struct {
 	FailingUsers    []FailingUser    `json:"failing_users"`
 	PerfInsights    []PerfInsightJob `json:"perf_insights"`
 	RepeatedQueries []RepeatedQuery  `json:"repeated_queries"`
+	DegradedWidgets []string         `json:"degraded_widgets,omitempty"`
 }
 
 func (h *APIHandler) InsightsDashboard(w http.ResponseWriter, r *http.Request) {
@@ -278,6 +296,12 @@ func (h *APIHandler) InsightsDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var data InsightsDashboardData
+	var mu sync.Mutex
+	addDegraded := func(name string) {
+		mu.Lock()
+		data.DegradedWidgets = append(data.DegradedWidgets, name)
+		mu.Unlock()
+	}
 	g, ctx := errgroup.WithContext(r.Context())
 
 	g.Go(func() error {
@@ -313,6 +337,7 @@ func (h *APIHandler) InsightsDashboard(w http.ResponseWriter, r *http.Request) {
 		pi, err := h.bq.GetPerfInsightJobs(ctx, filters)
 		if err != nil {
 			slog.Warn("perf insights widget degraded", "error", err)
+			addDegraded("perf_insights")
 			return nil
 		}
 		data.PerfInsights = pi
@@ -323,6 +348,7 @@ func (h *APIHandler) InsightsDashboard(w http.ResponseWriter, r *http.Request) {
 		rq, err := h.bq.GetRepeatedQueries(ctx, filters)
 		if err != nil {
 			slog.Warn("repeated queries widget degraded", "error", err)
+			addDegraded("repeated_queries")
 			return nil
 		}
 		data.RepeatedQueries = rq
@@ -367,16 +393,17 @@ func (h *APIHandler) JobsDashboard(w http.ResponseWriter, r *http.Request) {
 // --- Dashboard 5: IAM Security ---
 
 type IAMDashboardData struct {
-	Summary     *IAMSummary      `json:"summary"`
-	Timeline    []UsageTimepoint `json:"timeline"`
-	TopCallers  []TopCaller      `json:"top_callers"`
-	Inactive7   []InactiveEmail  `json:"inactive_7d"`
-	Inactive30  []InactiveEmail  `json:"inactive_30d"`
-	Inactive90  []InactiveEmail  `json:"inactive_90d"`
-	NewActors   []NewActor       `json:"new_actors"`
-	OffHours    []OffHoursCell   `json:"off_hours"`
-	OffHoursTop []OffHoursUser   `json:"off_hours_top"`
-	Exfil       []ExfilSignal    `json:"exfil_signals"`
+	Summary         *IAMSummary      `json:"summary"`
+	Timeline        []UsageTimepoint `json:"timeline"`
+	TopCallers      []TopCaller      `json:"top_callers"`
+	Inactive7       []InactiveEmail  `json:"inactive_7d"`
+	Inactive30      []InactiveEmail  `json:"inactive_30d"`
+	Inactive90      []InactiveEmail  `json:"inactive_90d"`
+	NewActors       []NewActor       `json:"new_actors"`
+	OffHours        []OffHoursCell   `json:"off_hours"`
+	OffHoursTop     []OffHoursUser   `json:"off_hours_top"`
+	Exfil           []ExfilSignal    `json:"exfil_signals"`
+	DegradedWidgets []string         `json:"degraded_widgets,omitempty"`
 }
 
 func (h *APIHandler) IAMDashboard(w http.ResponseWriter, r *http.Request) {
@@ -390,6 +417,12 @@ func (h *APIHandler) IAMDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var data IAMDashboardData
+	var mu sync.Mutex
+	addDegraded := func(name string) {
+		mu.Lock()
+		data.DegradedWidgets = append(data.DegradedWidgets, name)
+		mu.Unlock()
+	}
 	g, ctx := errgroup.WithContext(r.Context())
 
 	g.Go(func() error {
@@ -435,6 +468,7 @@ func (h *APIHandler) IAMDashboard(w http.ResponseWriter, r *http.Request) {
 		na, err := h.bq.GetNewActors(ctx, filters.Region)
 		if err != nil {
 			slog.Warn("new actors widget degraded", "error", err)
+			addDegraded("new_actors")
 			return nil
 		}
 		data.NewActors = na
@@ -445,6 +479,7 @@ func (h *APIHandler) IAMDashboard(w http.ResponseWriter, r *http.Request) {
 		cells, top, err := h.bq.GetOffHours(ctx, filters.Region, emails, filters.TimeRange)
 		if err != nil {
 			slog.Warn("off-hours widget degraded", "error", err)
+			addDegraded("off_hours")
 			return nil
 		}
 		data.OffHours = cells
@@ -456,6 +491,7 @@ func (h *APIHandler) IAMDashboard(w http.ResponseWriter, r *http.Request) {
 		ex, err := h.bq.GetExfilSignals(ctx, filters.Region, emails, filters.TimeRange)
 		if err != nil {
 			slog.Warn("exfil signals widget degraded", "error", err)
+			addDegraded("exfil_signals")
 			return nil
 		}
 		data.Exfil = ex
@@ -544,6 +580,7 @@ type SecurityDashboardData struct {
 	SensitiveColumns []SensitiveColumn `json:"sensitive_columns"`
 	DatasetsScanned  int               `json:"datasets_scanned"`
 	DatasetsTotal    int               `json:"datasets_total"`
+	DegradedWidgets  []string          `json:"degraded_widgets,omitempty"`
 }
 
 func (h *APIHandler) SecurityDashboard(w http.ResponseWriter, r *http.Request) {
@@ -556,6 +593,12 @@ func (h *APIHandler) SecurityDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var data SecurityDashboardData
+	var mu sync.Mutex
+	addDegraded := func(name string) {
+		mu.Lock()
+		data.DegradedWidgets = append(data.DegradedWidgets, name)
+		mu.Unlock()
+	}
 	g, ctx := errgroup.WithContext(r.Context())
 
 	g.Go(func() error {
@@ -574,6 +617,7 @@ func (h *APIHandler) SecurityDashboard(w http.ResponseWriter, r *http.Request) {
 		active, err := h.bq.GetActivePrincipals(ctx, filters.Region, filters.TimeRange)
 		if err != nil {
 			slog.Warn("unused grants widget degraded", "error", err)
+			addDegraded("unused_grants")
 			return nil
 		}
 		data.UnusedGrants = computeUnusedGrants(data.Principals, active)
@@ -585,6 +629,7 @@ func (h *APIHandler) SecurityDashboard(w http.ResponseWriter, r *http.Request) {
 		bindings, bypassers, err := h.bq.GetProjectBindings(ctx)
 		if err != nil {
 			slog.Warn("project IAM widget degraded", "error", err)
+			addDegraded("project_iam")
 			data.ProjectIAMError = "Project-level bindings unavailable — grant the service account roles/browser (or resourcemanager.projects.getIamPolicy)."
 			return nil
 		}
@@ -607,6 +652,7 @@ func (h *APIHandler) SecurityDashboard(w http.ResponseWriter, r *http.Request) {
 		sc, err := h.bq.GetSensitiveColumns(ctx, filters.Region)
 		if err != nil {
 			slog.Warn("sensitive columns widget degraded", "error", err)
+			addDegraded("sensitive_columns")
 			return nil
 		}
 		data.SensitiveColumns = sc

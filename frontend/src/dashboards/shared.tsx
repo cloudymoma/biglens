@@ -1,5 +1,5 @@
 import React from 'react';
-import { AlertCircle, BarChart3 } from 'lucide-react';
+import { AlertCircle, AlertTriangle, BarChart3 } from 'lucide-react';
 
 export function formatBytes(bytes: number): string {
   if (bytes === 0) return '0 B';
@@ -39,6 +39,22 @@ export function EmptyState({ text }: { text: string }) {
     <div className="flex flex-col items-center justify-center py-16 text-zinc-600 gap-3">
       <BarChart3 size={28} strokeWidth={1.5} />
       <p className="text-xs font-medium">{text}</p>
+    </div>
+  );
+}
+
+// Shown when the API reports widgets that fell back to empty results
+// (missing permissions or unsupported region), so an empty chart isn't
+// mistaken for "no data".
+export function DegradedNotice({ widgets }: { widgets?: string[] }) {
+  if (!widgets || widgets.length === 0) return null;
+  return (
+    <div className="flex items-center gap-2 px-4 py-2.5 rounded-xl border border-amber-500/20 bg-amber-500/5 text-amber-400">
+      <AlertTriangle size={14} />
+      <p className="text-xs">
+        Unavailable widgets (insufficient permissions or unsupported region):{' '}
+        {widgets.map(w => w.replace(/_/g, ' ')).join(', ')}
+      </p>
     </div>
   );
 }

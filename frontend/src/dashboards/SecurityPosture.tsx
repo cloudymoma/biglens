@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { AlertTriangle, CheckCircle2, Users, Bot, Building2, Key, Lock, EyeOff, Database, Tag, Info } from 'lucide-react';
 import type { SecurityDashboardData } from '../types';
 import { fetchSecurityDashboard } from '../api';
-import { MetricCard, EmptyState, ErrorBanner } from './shared';
+import { MetricCard, EmptyState, ErrorBanner, DegradedNotice } from './shared';
 
 interface Props {
   region: string;
@@ -15,12 +15,14 @@ export default function SecurityPosture({ region, timeRange }: Props) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let active = true;
     setLoading(true);
     setError('');
     fetchSecurityDashboard(region, timeRange)
-      .then(setData)
-      .catch(e => setError(e.response?.data || e.message))
-      .finally(() => setLoading(false));
+      .then(d => { if (active) setData(d); })
+      .catch(e => { if (active) setError(e.response?.data || e.message); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
   }, [region, timeRange]);
 
   if (loading) return <LoadingPulse />;
@@ -42,6 +44,7 @@ export default function SecurityPosture({ region, timeRange }: Props) {
 
   return (
     <div className="space-y-6">
+      <DegradedNotice widgets={data.degraded_widgets} />
       {/* Section 1: Exposure alerts */}
       {publicFlags.length > 0 ? (
         <div className="space-y-3">
