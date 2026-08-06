@@ -114,6 +114,11 @@ func main() {
 	mux.Handle("/api/opendata/gcp_billing/config", h(api.BillingConfig))
 	mux.Handle("/api/opendata/gcp_billing/meta", h(api.BillingMeta))
 	mux.Handle("/api/opendata/gcp_billing/overview", h(api.BillingOverview))
+	mux.Handle("/api/opendata/gcp_billing/services", h(api.BillingServices))
+	mux.Handle("/api/opendata/gcp_billing/projects", h(api.BillingProjects))
+	mux.Handle("/api/opendata/gcp_billing/credits", h(api.BillingCredits))
+	mux.Handle("/api/opendata/gcp_billing/resources", h(api.BillingResources))
+	mux.Handle("/api/opendata/gcp_billing/pricing", h(api.BillingPricing))
 
 	// Individual endpoints
 	mux.Handle("/api/storage", h(api.StorageStats))

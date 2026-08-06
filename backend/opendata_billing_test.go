@@ -216,6 +216,19 @@ func TestStandardTablesSelection(t *testing.T) {
 	}
 }
 
+func TestBillingLabelGroupSQL(t *testing.T) {
+	sql := billingLabelGroupSQL("(SELECT 1)")
+	if !strings.Contains(sql, "LEFT JOIN UNNEST(t.labels) l ON l.key = @group_label_key") {
+		t.Errorf("label grouping must LEFT JOIN a single key:\n%s", sql)
+	}
+	if !strings.Contains(sql, "IFNULL(l.value, '(unlabeled)')") {
+		t.Errorf("unlabeled rows must surface as (unlabeled):\n%s", sql)
+	}
+	if strings.Contains(sql, "LEFT JOIN UNNEST(credits)") {
+		t.Error("credits must stay a nested subquery even in label grouping")
+	}
+}
+
 func TestRollupBillingProjection(t *testing.T) {
 	today := civil.Date{Year: 2026, Month: 8, Day: 6} // Aug: 31 days, 5 complete
 	daily := []BillingDailyRow{}

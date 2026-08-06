@@ -171,3 +171,182 @@ func (b *BQClient) GetBillingGroups(ctx context.Context, src, groupExpr string, 
 	q.Parameters = params
 	return collectRows[BillingGroupRow](q, ctx)
 }
+
+type BillingSkuRow struct {
+	SkuID          string   `json:"sku_id" bigquery:"sku_id"`
+	Sku            string   `json:"sku" bigquery:"sku"`
+	PricingUnit    string   `json:"pricing_unit" bigquery:"pricing_unit"`
+	Usage          float64  `json:"usage" bigquery:"usage"`
+	Gross          float64  `json:"gross" bigquery:"gross"`
+	Net            float64  `json:"net" bigquery:"net"`
+	EffectivePrice *float64 `json:"effective_price" bigquery:"effective_price"`
+}
+
+// GetBillingSkus breaks one service down by SKU. The service value arrives
+// as a query parameter (@sku_service), never interpolated.
+func (b *BQClient) GetBillingSkus(ctx context.Context, src, service string, params []bigquery.QueryParameter) ([]BillingSkuRow, error) {
+	q := b.client.Query(fmt.Sprintf(`
+		SELECT
+			sku.id AS sku_id,
+			ANY_VALUE(sku.description) AS sku,
+			IFNULL(ANY_VALUE(usage.pricing_unit), '') AS pricing_unit,
+			ROUND(SUM(usage.amount_in_pricing_units), 2) AS usage,
+			%s AS gross, %s AS net,
+			SAFE_DIVIDE(%s, SUM(usage.amount_in_pricing_units)) AS effective_price
+		FROM %s
+		WHERE service.description = @sku_service
+		GROUP BY sku_id ORDER BY net DESC LIMIT 100`,
+		billingGrossExpr, billingNetExpr, billingNetExpr, src))
+	q.Parameters = append(append([]bigquery.QueryParameter{}, params...),
+		bigquery.QueryParameter{Name: "sku_service", Value: service})
+	return collectRows[BillingSkuRow](q, ctx)
+}
+
+type BillingProjectRow struct {
+	ID      string  `json:"id" bigquery:"id"`
+	Name    string  `json:"name" bigquery:"name"`
+	Gross   float64 `json:"gross" bigquery:"gross"`
+	Net     float64 `json:"net" bigquery:"net"`
+	Credits float64 `json:"credits" bigquery:"credits"`
+}
+
+func (b *BQClient) GetBillingProjectRows(ctx context.Context, src string, params []bigquery.QueryParameter) ([]BillingProjectRow, error) {
+	q := b.client.Query(fmt.Sprintf(`
+		SELECT
+			IFNULL(project.id, '(none)') AS id,
+			IFNULL(ANY_VALUE(project.name), '') AS name,
+			%s AS gross, %s AS net, %s AS credits
+		FROM %s GROUP BY id ORDER BY net DESC LIMIT 100`,
+		billingGrossExpr, billingNetExpr, billingCreditsExpr, src))
+	q.Parameters = params
+	return collectRows[BillingProjectRow](q, ctx)
+}
+
+func (b *BQClient) GetBillingLabelGroups(ctx context.Context, src, labelKey string, params []bigquery.QueryParameter) ([]BillingGroupRow, error) {
+	q := b.client.Query(billingLabelGroupSQL(src))
+	q.Parameters = append(append([]bigquery.QueryParameter{}, params...),
+		bigquery.QueryParameter{Name: "group_label_key", Value: labelKey})
+	return collectRows[BillingGroupRow](q, ctx)
+}
+
+type BillingCreditRow struct {
+	Type   string  `json:"type" bigquery:"type"`
+	Name   string  `json:"name" bigquery:"name"`
+	Amount float64 `json:"amount" bigquery:"amount"`
+}
+
+// GetBillingCreditRows slices credits by type/name. This query reads ONLY
+// credit amounts (no cost column), so expanding the credits array with a
+// comma join is correct here — the double-counting hazard only exists when
+// cost and credits are summed in the same row set.
+func (b *BQClient) GetBillingCreditRows(ctx context.Context, src string, params []bigquery.QueryParameter) ([]BillingCreditRow, error) {
+	q := b.client.Query(fmt.Sprintf(`
+		SELECT
+			IFNULL(c.type, '(none)') AS type,
+			IFNULL(c.name, '') AS name,
+			ROUND(CAST(SUM(CAST(c.amount AS NUMERIC)) AS FLOAT64), 2) AS amount
+		FROM %s t, UNNEST(t.credits) c
+		GROUP BY type, name ORDER BY amount ASC LIMIT 100`, src))
+	q.Parameters = params
+	return collectRows[BillingCreditRow](q, ctx)
+}
+
+type BillingResourceRow struct {
+	Name       string  `json:"name" bigquery:"name"`
+	GlobalName string  `json:"global_name" bigquery:"global_name"`
+	Service    string  `json:"service" bigquery:"service"`
+	Project    string  `json:"project" bigquery:"project"`
+	Net        float64 `json:"net" bigquery:"net"`
+}
+
+// GetBillingResources lists top-spending resources from the detailed
+// export. search ("" = none) matches resource name/global name, passed as
+// a parameter.
+func (b *BQClient) GetBillingResources(ctx context.Context, src, search string, params []bigquery.QueryParameter) ([]BillingResourceRow, error) {
+	where := "(resource.name IS NOT NULL OR resource.global_name IS NOT NULL)"
+	if search != "" {
+		where += " AND (STRPOS(LOWER(IFNULL(resource.name,'')), LOWER(@resource_q)) > 0 OR STRPOS(LOWER(IFNULL(resource.global_name,'')), LOWER(@resource_q)) > 0)"
+		params = append(append([]bigquery.QueryParameter{}, params...),
+			bigquery.QueryParameter{Name: "resource_q", Value: search})
+	}
+	q := b.client.Query(fmt.Sprintf(`
+		SELECT
+			IFNULL(resource.name, '') AS name,
+			IFNULL(ANY_VALUE(resource.global_name), '') AS global_name,
+			ANY_VALUE(service.description) AS service,
+			IFNULL(ANY_VALUE(project.id), '') AS project,
+			%s AS net
+		FROM %s
+		WHERE %s
+		GROUP BY name ORDER BY net DESC LIMIT 50`,
+		billingNetExpr, src, where))
+	q.Parameters = params
+	return collectRows[BillingResourceRow](q, ctx)
+}
+
+type BillingPriceRow struct {
+	SkuID         string   `json:"sku_id" bigquery:"sku_id"`
+	Sku           string   `json:"sku" bigquery:"sku"`
+	Service       string   `json:"service" bigquery:"service"`
+	PricingUnit   string   `json:"pricing_unit" bigquery:"pricing_unit"`
+	ListPrice     float64  `json:"list_price" bigquery:"list_price"`
+	ContractPrice *float64 `json:"contract_price" bigquery:"contract_price"`
+	DiscountPct   *float64 `json:"discount_pct" bigquery:"discount_pct"`
+	Tiers         int64    `json:"tiers" bigquery:"tiers"`
+}
+
+type billingPricingAsOfRow struct {
+	AsOf string `bigquery:"as_of"`
+}
+
+// GetBillingPricing reads the latest pricing snapshot: partition-pruned to
+// the last 7 days, then restricted to the newest pricing_as_of_time.
+// First tier (start_usage_amount 0) is shown as the headline price.
+func (b *BQClient) GetBillingPricing(ctx context.Context, project, dataset string, services []string, search string) ([]BillingPriceRow, string, error) {
+	table := fmt.Sprintf("`%s.%s.%s`", project, dataset, billingPricingTable)
+	where := "DATE(_PARTITIONTIME) >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)"
+	var params []bigquery.QueryParameter
+	if len(services) > 0 {
+		where += " AND service.description IN UNNEST(@services)"
+		params = append(params, bigquery.QueryParameter{Name: "services", Value: services})
+	}
+	if search != "" {
+		where += " AND STRPOS(LOWER(sku.description), LOWER(@price_q)) > 0"
+		params = append(params, bigquery.QueryParameter{Name: "price_q", Value: search})
+	}
+
+	asOfQ := b.client.Query(fmt.Sprintf(`
+		SELECT FORMAT_TIMESTAMP('%%Y-%%m-%%d', MAX(pricing_as_of_time)) AS as_of
+		FROM %s WHERE DATE(_PARTITIONTIME) >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)`, table))
+	asOfRows, err := collectRows[billingPricingAsOfRow](asOfQ, ctx)
+	if err != nil {
+		return nil, "", fmt.Errorf("pricing as-of: %w", err)
+	}
+	if len(asOfRows) == 0 || asOfRows[0].AsOf == "" {
+		return []BillingPriceRow{}, "", nil
+	}
+	asOf := asOfRows[0].AsOf
+	// DATE(pricing_as_of_time) compares against a DATE, so the parameter
+	// must be a civil.Date, not a string.
+	asOfDate, err := civil.ParseDate(asOf)
+	if err != nil {
+		return nil, "", fmt.Errorf("unexpected pricing as-of %q: %w", asOf, err)
+	}
+
+	q := b.client.Query(fmt.Sprintf(`
+		SELECT
+			sku.id AS sku_id,
+			ANY_VALUE(sku.description) AS sku,
+			ANY_VALUE(service.description) AS service,
+			ANY_VALUE(pricing_unit_description) AS pricing_unit,
+			ROUND(CAST(ANY_VALUE((SELECT tr.account_currency_amount FROM UNNEST(list_price.tiered_rates) tr WHERE tr.start_usage_amount = 0 LIMIT 1)) AS FLOAT64), 6) AS list_price,
+			ROUND(CAST(ANY_VALUE((SELECT tr.account_currency_amount FROM UNNEST(billing_account_price.tiered_rates) tr WHERE tr.start_usage_amount = 0 LIMIT 1)) AS FLOAT64), 6) AS contract_price,
+			CAST(ANY_VALUE(billing_account_price.price_info.discount_percent) AS FLOAT64) AS discount_pct,
+			ANY_VALUE(ARRAY_LENGTH(list_price.tiered_rates)) AS tiers
+		FROM %s
+		WHERE %s AND DATE(pricing_as_of_time) = @as_of_date
+		GROUP BY sku_id ORDER BY list_price DESC LIMIT 200`, table, where))
+	q.Parameters = append(params, bigquery.QueryParameter{Name: "as_of_date", Value: asOfDate})
+	rows, err := collectRows[BillingPriceRow](q, ctx)
+	return rows, asOf, err
+}

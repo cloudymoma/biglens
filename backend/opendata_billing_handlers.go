@@ -418,3 +418,269 @@ func (h *APIHandler) BillingOverview(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, v)
 }
+
+type BillingServicesData struct {
+	Services []BillingGroupRow `json:"services"`
+	Skus     []BillingSkuRow   `json:"skus"`
+	Service  string            `json:"service"`
+}
+
+func (h *APIHandler) BillingServices(w http.ResponseWriter, r *http.Request) {
+	f, err := parseBillingFilter(r, h.bq.config)
+	if err != nil {
+		writeError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	service := r.URL.Query().Get("service")
+	key := f.cacheKey("services") + ":svc=" + service
+	if cached, ok := h.cache.Get(key); ok {
+		writeJSON(w, cached)
+		return
+	}
+
+	v, err, _ := billingFlight.Do(key, func() (any, error) {
+		src, params, err := h.billingStandardSource(r.Context(), f)
+		if err != nil {
+			return nil, err
+		}
+		data := BillingServicesData{Services: []BillingGroupRow{}, Skus: []BillingSkuRow{}, Service: service}
+		if service == "" {
+			rows, err := h.bq.GetBillingGroups(r.Context(), src, billingGroupService, 50, params)
+			if err != nil {
+				return nil, fmt.Errorf("billing services: %w", err)
+			}
+			if rows != nil {
+				data.Services = rows
+			}
+		} else {
+			rows, err := h.bq.GetBillingSkus(r.Context(), src, service, params)
+			if err != nil {
+				return nil, fmt.Errorf("billing skus: %w", err)
+			}
+			if rows != nil {
+				data.Skus = rows
+			}
+		}
+		h.cache.Set(key, &data)
+		return &data, nil
+	})
+	if err != nil {
+		writeError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, v)
+}
+
+type BillingProjectsData struct {
+	Projects    []BillingProjectRow `json:"projects"`
+	LabelGroups []BillingGroupRow   `json:"label_groups"`
+	GroupKey    string              `json:"group_key"`
+}
+
+func (h *APIHandler) BillingProjects(w http.ResponseWriter, r *http.Request) {
+	f, err := parseBillingFilter(r, h.bq.config)
+	if err != nil {
+		writeError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	groupLabel := r.URL.Query().Get("group_label")
+	key := f.cacheKey("projects") + ":gl=" + groupLabel
+	if cached, ok := h.cache.Get(key); ok {
+		writeJSON(w, cached)
+		return
+	}
+
+	v, err, _ := billingFlight.Do(key, func() (any, error) {
+		src, params, err := h.billingStandardSource(r.Context(), f)
+		if err != nil {
+			return nil, err
+		}
+		data := BillingProjectsData{Projects: []BillingProjectRow{}, LabelGroups: []BillingGroupRow{}, GroupKey: groupLabel}
+		g, ctx := errgroup.WithContext(r.Context())
+		g.Go(func() error {
+			rows, err := h.bq.GetBillingProjectRows(ctx, src, params)
+			if err != nil {
+				return fmt.Errorf("billing projects: %w", err)
+			}
+			if rows != nil {
+				data.Projects = rows
+			}
+			return nil
+		})
+		if groupLabel != "" {
+			g.Go(func() error {
+				rows, err := h.bq.GetBillingLabelGroups(ctx, src, groupLabel, params)
+				if err != nil {
+					return fmt.Errorf("billing label groups: %w", err)
+				}
+				if rows != nil {
+					data.LabelGroups = rows
+				}
+				return nil
+			})
+		}
+		if err := g.Wait(); err != nil {
+			return nil, err
+		}
+		h.cache.Set(key, &data)
+		return &data, nil
+	})
+	if err != nil {
+		writeError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, v)
+}
+
+type BillingCreditsData struct {
+	Credits   []BillingCreditRow `json:"credits"`
+	ByService []BillingGroupRow  `json:"by_service"`
+}
+
+func (h *APIHandler) BillingCredits(w http.ResponseWriter, r *http.Request) {
+	f, err := parseBillingFilter(r, h.bq.config)
+	if err != nil {
+		writeError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	key := f.cacheKey("credits")
+	if cached, ok := h.cache.Get(key); ok {
+		writeJSON(w, cached)
+		return
+	}
+
+	v, err, _ := billingFlight.Do(key, func() (any, error) {
+		src, params, err := h.billingStandardSource(r.Context(), f)
+		if err != nil {
+			return nil, err
+		}
+		data := BillingCreditsData{Credits: []BillingCreditRow{}, ByService: []BillingGroupRow{}}
+		g, ctx := errgroup.WithContext(r.Context())
+		g.Go(func() error {
+			rows, err := h.bq.GetBillingCreditRows(ctx, src, params)
+			if err != nil {
+				return fmt.Errorf("billing credits: %w", err)
+			}
+			if rows != nil {
+				data.Credits = rows
+			}
+			return nil
+		})
+		g.Go(func() error {
+			rows, err := h.bq.GetBillingGroups(ctx, src, billingGroupService, 50, params)
+			if err != nil {
+				return fmt.Errorf("billing credits by service: %w", err)
+			}
+			if rows != nil {
+				data.ByService = rows
+			}
+			return nil
+		})
+		if err := g.Wait(); err != nil {
+			return nil, err
+		}
+		h.cache.Set(key, &data)
+		return &data, nil
+	})
+	if err != nil {
+		writeError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, v)
+}
+
+type BillingResourcesData struct {
+	Available bool                 `json:"available"`
+	Resources []BillingResourceRow `json:"resources"`
+}
+
+func (h *APIHandler) BillingResources(w http.ResponseWriter, r *http.Request) {
+	f, err := parseBillingFilter(r, h.bq.config)
+	if err != nil {
+		writeError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	search := r.URL.Query().Get("q")
+	key := f.cacheKey("resources") + ":q=" + search
+	if cached, ok := h.cache.Get(key); ok {
+		writeJSON(w, cached)
+		return
+	}
+
+	v, err, _ := billingFlight.Do(key, func() (any, error) {
+		info, err := h.billingTables(r.Context(), f.DatasetFQN)
+		if err != nil {
+			return nil, err
+		}
+		data := BillingResourcesData{Resources: []BillingResourceRow{}}
+		tables := f.resourceTables(info)
+		if len(tables) == 0 {
+			// No detailed export in this dataset: 200 + available:false so
+			// the tab can render its enable-the-export banner.
+			return &data, nil
+		}
+		data.Available = true
+		src, params := billingSource(f.Project, f.Dataset, tables, f)
+		rows, err := h.bq.GetBillingResources(r.Context(), src, search, params)
+		if err != nil {
+			return nil, fmt.Errorf("billing resources: %w", err)
+		}
+		if rows != nil {
+			data.Resources = rows
+		}
+		h.cache.Set(key, &data)
+		return &data, nil
+	})
+	if err != nil {
+		writeError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, v)
+}
+
+type BillingPricingData struct {
+	Available bool              `json:"available"`
+	AsOf      string            `json:"as_of"`
+	Prices    []BillingPriceRow `json:"prices"`
+}
+
+func (h *APIHandler) BillingPricing(w http.ResponseWriter, r *http.Request) {
+	f, err := parseBillingFilter(r, h.bq.config)
+	if err != nil {
+		writeError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	search := r.URL.Query().Get("q")
+	key := f.cacheKey("pricing") + ":q=" + search
+	if cached, ok := h.cache.Get(key); ok {
+		writeJSON(w, cached)
+		return
+	}
+
+	v, err, _ := billingFlight.Do(key, func() (any, error) {
+		info, err := h.billingTables(r.Context(), f.DatasetFQN)
+		if err != nil {
+			return nil, err
+		}
+		data := BillingPricingData{Prices: []BillingPriceRow{}}
+		if !info.HasPricing {
+			return &data, nil // 200 + available:false → frontend banner
+		}
+		data.Available = true
+		rows, asOf, err := h.bq.GetBillingPricing(r.Context(), f.Project, f.Dataset, f.Services, search)
+		if err != nil {
+			return nil, fmt.Errorf("billing pricing: %w", err)
+		}
+		data.AsOf = asOf
+		if rows != nil {
+			data.Prices = rows
+		}
+		h.cache.Set(key, &data)
+		return &data, nil
+	})
+	if err != nil {
+		writeError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, v)
+}
