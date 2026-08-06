@@ -1,6 +1,6 @@
 package main
 
-// Pure domain logic for the GCP Billing open-data section: dataset
+// Pure domain logic for the GCP Billing section: dataset
 // validation, export-table classification, filter/SQL builders, rollups.
 // Everything here is unit-testable without BigQuery.
 
@@ -201,7 +201,7 @@ func billingSource(project, dataset string, tables []string, f BillingFilter) (s
 }
 
 func (f BillingFilter) cacheKey(endpoint string) string {
-	return fmt.Sprintf("opendata:billing:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s",
+	return fmt.Sprintf("billing:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s",
 		endpoint, f.DatasetFQN, f.Start, f.End, f.InvoiceMonth,
 		strings.Join(f.Accounts, ","), strings.Join(f.Projects, ","),
 		strings.Join(f.Services, ","), f.LabelKey, f.LabelValue)

@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import type React from 'react';
 import { Settings } from 'lucide-react';
-import { fetchBillingConfig, fetchBillingMeta } from '../../api';
-import type { BillingDatasetInfo, BillingFilterState, BillingMeta } from '../../types';
-import { EmptyState, ErrorBanner } from '../../dashboards/shared';
+import { fetchBillingConfig, fetchBillingMeta } from '../api';
+import type { BillingDatasetInfo, BillingFilterState, BillingMeta } from '../types';
+import { EmptyState, ErrorBanner } from '../dashboards/shared';
 import ConfigPanel from './ConfigPanel';
 import { Panel } from './shared';
 import FilterBar from './FilterBar';

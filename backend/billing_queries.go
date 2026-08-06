@@ -1,6 +1,6 @@
 package main
 
-// BQClient query methods for the GCP Billing open-data section. SQL strings
+// BQClient query methods for the GCP Billing section. SQL strings
 // come from builders in opendata_billing.go; table identifiers are only ever
 // the validated project/dataset plus names read from INFORMATION_SCHEMA.
 

@@ -1,4 +1,4 @@
-import type { BillingFilterState, BillingMeta } from '../../types';
+import type { BillingFilterState, BillingMeta } from '../types';
 
 export interface FilterBarProps {
   filter: BillingFilterState;

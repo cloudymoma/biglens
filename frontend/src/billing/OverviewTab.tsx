@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import ReactECharts from 'echarts-for-react';
 import { DollarSign, PiggyBank, Boxes, TrendingUp } from 'lucide-react';
-import { billingParams, fetchBillingOverview } from '../../api';
-import type { BillingFilterState, BillingMeta, BillingOverviewData } from '../../types';
-import { EmptyState, ErrorBanner, MetricCard } from '../../dashboards/shared';
+import { billingParams, fetchBillingOverview } from '../api';
+import type { BillingFilterState, BillingMeta, BillingOverviewData } from '../types';
+import { EmptyState, ErrorBanner, MetricCard } from '../dashboards/shared';
 import { AXIS_LABEL, CHART_TOOLTIP, GROSS_COLOR, NET_COLOR, Panel, fmtMoney } from './shared';
 
 interface TabProps {

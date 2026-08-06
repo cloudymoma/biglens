@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import { billingParams, fetchBillingCredits } from '../../api';
-import type { BillingFilterState, BillingMeta, BillingCreditsData } from '../../types';
-import { EmptyState, ErrorBanner } from '../../dashboards/shared';
+import { billingParams, fetchBillingCredits } from '../api';
+import type { BillingFilterState, BillingMeta, BillingCreditsData } from '../types';
+import { EmptyState, ErrorBanner } from '../dashboards/shared';
 import { Panel, fmtMoney } from './shared';
 
 interface TabProps {

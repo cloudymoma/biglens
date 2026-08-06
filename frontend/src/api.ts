@@ -357,50 +357,50 @@ export function billingParams(f: BillingFilterState): Record<string, string> {
 }
 
 export async function fetchBillingConfig(): Promise<BillingConfigResponse> {
-  const { data } = await axios.get('/api/opendata/gcp_billing/config');
+  const { data } = await axios.get('/api/gcp_billing/config');
   return data;
 }
 
 export async function postBillingConfig(action: 'add' | 'remove', dataset: string): Promise<BillingConfigResponse> {
-  const { data } = await axios.post('/api/opendata/gcp_billing/config', { action, dataset });
+  const { data } = await axios.post('/api/gcp_billing/config', { action, dataset });
   return data;
 }
 
 export async function fetchBillingMeta(dataset: string): Promise<BillingMeta> {
-  const { data } = await axios.get('/api/opendata/gcp_billing/meta', { params: { dataset } });
+  const { data } = await axios.get('/api/gcp_billing/meta', { params: { dataset } });
   return data;
 }
 
 export async function fetchBillingOverview(f: BillingFilterState): Promise<BillingOverviewData> {
-  const { data } = await axios.get('/api/opendata/gcp_billing/overview', { params: billingParams(f) });
+  const { data } = await axios.get('/api/gcp_billing/overview', { params: billingParams(f) });
   return data;
 }
 
 export async function fetchBillingServices(f: BillingFilterState, service?: string): Promise<BillingServicesData> {
   const params = { ...billingParams(f), ...(service ? { service } : {}) };
-  const { data } = await axios.get('/api/opendata/gcp_billing/services', { params });
+  const { data } = await axios.get('/api/gcp_billing/services', { params });
   return data;
 }
 
 export async function fetchBillingProjects(f: BillingFilterState, groupLabel?: string): Promise<BillingProjectsData> {
   const params = { ...billingParams(f), ...(groupLabel ? { group_label: groupLabel } : {}) };
-  const { data } = await axios.get('/api/opendata/gcp_billing/projects', { params });
+  const { data } = await axios.get('/api/gcp_billing/projects', { params });
   return data;
 }
 
 export async function fetchBillingResources(f: BillingFilterState, q?: string): Promise<BillingResourcesData> {
   const params = { ...billingParams(f), ...(q ? { q } : {}) };
-  const { data } = await axios.get('/api/opendata/gcp_billing/resources', { params });
+  const { data } = await axios.get('/api/gcp_billing/resources', { params });
   return data;
 }
 
 export async function fetchBillingCredits(f: BillingFilterState): Promise<BillingCreditsData> {
-  const { data } = await axios.get('/api/opendata/gcp_billing/credits', { params: billingParams(f) });
+  const { data } = await axios.get('/api/gcp_billing/credits', { params: billingParams(f) });
   return data;
 }
 
 export async function fetchBillingPricing(f: BillingFilterState, q?: string): Promise<BillingPricingData> {
   const params = { ...billingParams(f), ...(q ? { q } : {}) };
-  const { data } = await axios.get('/api/opendata/gcp_billing/pricing', { params });
+  const { data } = await axios.get('/api/gcp_billing/pricing', { params });
   return data;
 }

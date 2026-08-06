@@ -1,10 +1,9 @@
 import React from 'react';
-import { TrendingUp, Globe2, CloudSun, Bitcoin, Wallet } from 'lucide-react';
+import { TrendingUp, Globe2, CloudSun, Bitcoin } from 'lucide-react';
 import GoogleTrendsDashboard from './GoogleTrendsDashboard';
 import GdeltDashboard from './gdelt/GdeltDashboard';
 import WeatherDashboard from './WeatherDashboard';
 import CryptoDashboard from './crypto/CryptoDashboard';
-import BillingDashboard from './billing/BillingDashboard';
 
 // Registry of BigQuery Open Data dashboards. To add a new public dataset:
 // build its component in this directory, add an entry here, and expose its
@@ -56,15 +55,5 @@ export const OPEN_DATASETS: OpenDataset[] = [
       'whale flows and the ERC-20 token economy — native units, no fiat prices, updated daily.',
     sourceTable: 'bigquery-public-data.crypto_bitcoin · crypto_ethereum',
     component: CryptoDashboard,
-  },
-  {
-    id: 'gcp_billing',
-    label: 'GCP Billing',
-    icon: <Wallet size={16} />,
-    description:
-      'Your own Cloud Billing BigQuery export: cost and usage by service, project, ' +
-      'resource and SKU, with credits, discounts and list-price comparisons.',
-    sourceTable: 'your billing export dataset (project.dataset)',
-    component: BillingDashboard,
   },
 ];

@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { postBillingConfig } from '../../api';
-import type { BillingDatasetInfo } from '../../types';
+import { postBillingConfig } from '../api';
+import type { BillingDatasetInfo } from '../types';
 
 interface ConfigPanelProps {
   datasets: BillingDatasetInfo[];

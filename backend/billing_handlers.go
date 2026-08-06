@@ -1,7 +1,7 @@
 package main
 
-// HTTP handlers for the GCP Billing open-data section
-// (/api/opendata/gcp_billing/*). Unlike other open-data sections this one
+// HTTP handlers for the GCP Billing section
+// (/api/gcp_billing/*). Unlike the BigQuery Open Data sections this one
 // queries user-configured datasets; conf.yaml is the source of truth.
 
 import (
@@ -106,7 +106,7 @@ type BillingConfigResponse struct {
 
 // billingTables returns cached table detection for a configured dataset.
 func (h *APIHandler) billingTables(ctx context.Context, datasetFQN string) (BillingTableInfo, error) {
-	key := "opendata:billing:tables:" + datasetFQN
+	key := "billing:tables:" + datasetFQN
 	if cached, ok := h.cache.Get(key); ok {
 		return cached.(BillingTableInfo), nil
 	}
@@ -243,7 +243,7 @@ func (h *APIHandler) BillingMeta(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	key := "opendata:billing:meta:" + f.DatasetFQN
+	key := "billing:meta:" + f.DatasetFQN
 	if cached, ok := h.cache.Get(key); ok {
 		writeJSON(w, cached)
 		return
