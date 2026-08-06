@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"cloud.google.com/go/bigquery"
 	"cloud.google.com/go/civil"
@@ -225,4 +226,55 @@ func selectBillingTables(byAccount map[string]string, accounts []string) []strin
 	}
 	slices.Sort(out)
 	return out
+}
+
+// billingLabelGroupSQL groups cost by the values of ONE label key.
+// A single-key LEFT JOIN keeps unlabeled rows visible and avoids the
+// double-counting that multi-key label joins cause.
+func billingLabelGroupSQL(src string) string {
+	return fmt.Sprintf(`
+		SELECT
+			IFNULL(l.value, '(unlabeled)') AS name,
+			%s AS gross, %s AS net, %s AS credits
+		FROM %s t
+		LEFT JOIN UNNEST(t.labels) l ON l.key = @group_label_key
+		GROUP BY name ORDER BY net DESC LIMIT 50`,
+		billingGrossExpr, billingNetExpr, billingCreditsExpr, src)
+}
+
+// rollupBillingProjection estimates end-of-month net spend: month-to-date
+// net + average net of the last (up to) 7 complete days in the current
+// month × remaining days. Returns nil when the daily series has no rows in
+// the current month (projection would be meaningless).
+func rollupBillingProjection(daily []BillingDailyRow, today civil.Date) *float64 {
+	monthPrefix := fmt.Sprintf("%04d-%02d-", today.Year, int(today.Month))
+	var mtd float64
+	var complete []float64
+	for _, d := range daily {
+		if !strings.HasPrefix(d.Date, monthPrefix) {
+			continue
+		}
+		mtd += d.Net
+		if d.Date < today.String() { // complete days only
+			complete = append(complete, d.Net)
+		}
+	}
+	if len(complete) == 0 {
+		return nil
+	}
+	if len(complete) > 7 {
+		complete = complete[len(complete)-7:]
+	}
+	var sum float64
+	for _, v := range complete {
+		sum += v
+	}
+	rate := sum / float64(len(complete))
+	// civil.Date does not normalize day 0, so lean on time.Date for the
+	// last day of the current month.
+	daysInMonth := time.Date(today.Year, today.Month+1, 0, 0, 0, 0, 0, time.UTC).Day()
+	remaining := daysInMonth - today.Day + 1 // today itself is incomplete
+	p := mtd + rate*float64(remaining)
+	p = float64(int64(p*100)) / 100
+	return &p
 }

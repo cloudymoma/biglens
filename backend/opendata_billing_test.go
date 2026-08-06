@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -212,5 +213,31 @@ func TestStandardTablesSelection(t *testing.T) {
 	got := f.standardTables(info)
 	if len(got) != 1 || got[0] != "gcp_billing_export_v1_B_2_2" {
 		t.Errorf("account filter: got %v", got)
+	}
+}
+
+func TestRollupBillingProjection(t *testing.T) {
+	today := civil.Date{Year: 2026, Month: 8, Day: 6} // Aug: 31 days, 5 complete
+	daily := []BillingDailyRow{}
+	for d := 1; d <= 5; d++ { // Aug 1-5 complete days, $10/day net
+		daily = append(daily, BillingDailyRow{Date: fmt.Sprintf("2026-08-%02d", d), Net: 10})
+	}
+	got := rollupBillingProjection(daily, today)
+	if got == nil {
+		t.Fatal("projection = nil, want value")
+	}
+	// MTD net = 50; run-rate = 10/day over last complete days; 26 days remain
+	// (Aug 6-31 incl. today, which has no complete data yet) → 50 + 260 = 310.
+	if *got != 310 {
+		t.Errorf("projection = %v, want 310", *got)
+	}
+
+	// Window that doesn't reach the current month → no projection.
+	old := []BillingDailyRow{{Date: "2026-06-01", Net: 10}}
+	if p := rollupBillingProjection(old, today); p != nil {
+		t.Errorf("projection for stale window = %v, want nil", *p)
+	}
+	if p := rollupBillingProjection(nil, today); p != nil {
+		t.Error("projection for empty daily must be nil")
 	}
 }

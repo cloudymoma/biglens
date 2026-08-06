@@ -112,6 +112,8 @@ func main() {
 	mux.Handle("/api/opendata/crypto/mining", h(api.CryptoMining))
 	mux.Handle("/api/opendata/crypto/spot", h(api.CryptoSpot))
 	mux.Handle("/api/opendata/gcp_billing/config", h(api.BillingConfig))
+	mux.Handle("/api/opendata/gcp_billing/meta", h(api.BillingMeta))
+	mux.Handle("/api/opendata/gcp_billing/overview", h(api.BillingOverview))
 
 	// Individual endpoints
 	mux.Handle("/api/storage", h(api.StorageStats))

@@ -14,7 +14,9 @@ import (
 	"strings"
 	"time"
 
+	"cloud.google.com/go/bigquery"
 	"cloud.google.com/go/civil"
+	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -225,4 +227,194 @@ func (h *APIHandler) billingConfigPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.billingConfigGet(w, r)
+}
+
+type BillingMeta struct {
+	Dataset       BillingDatasetInfo     `json:"dataset"`
+	Projects      []BillingProjectOption `json:"projects"`
+	Services      []string               `json:"services"`
+	LabelKeys     []string               `json:"label_keys"`
+	InvoiceMonths []string               `json:"invoice_months"`
+}
+
+func (h *APIHandler) BillingMeta(w http.ResponseWriter, r *http.Request) {
+	f, err := parseBillingFilter(r, h.bq.config)
+	if err != nil {
+		writeError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	key := "opendata:billing:meta:" + f.DatasetFQN
+	if cached, ok := h.cache.Get(key); ok {
+		writeJSON(w, cached)
+		return
+	}
+
+	v, err, _ := billingFlight.Do(key, func() (any, error) {
+		info, err := h.billingTables(r.Context(), f.DatasetFQN)
+		if err != nil {
+			return nil, err
+		}
+		mf := billingMetaFilter(f)
+		src, params := billingSource(f.Project, f.Dataset, mf.standardTables(info), mf)
+
+		data := BillingMeta{
+			Dataset:       billingDatasetInfo(info, f.DatasetFQN),
+			Projects:      []BillingProjectOption{},
+			Services:      []string{},
+			LabelKeys:     []string{},
+			InvoiceMonths: []string{},
+		}
+		g, ctx := errgroup.WithContext(r.Context())
+		g.Go(func() error {
+			rows, err := h.bq.GetBillingProjects(ctx, src, params)
+			if err != nil {
+				return fmt.Errorf("billing projects: %w", err)
+			}
+			if rows != nil {
+				data.Projects = rows
+			}
+			return nil
+		})
+		g.Go(func() error {
+			rows, err := h.bq.GetBillingServices(ctx, src, params)
+			if err != nil {
+				return fmt.Errorf("billing services: %w", err)
+			}
+			if rows != nil {
+				data.Services = rows
+			}
+			return nil
+		})
+		g.Go(func() error {
+			rows, err := h.bq.GetBillingLabelKeys(ctx, src, params)
+			if err != nil {
+				return fmt.Errorf("billing label keys: %w", err)
+			}
+			if rows != nil {
+				data.LabelKeys = rows
+			}
+			return nil
+		})
+		g.Go(func() error {
+			rows, err := h.bq.GetBillingInvoiceMonths(ctx, src, params)
+			if err != nil {
+				return fmt.Errorf("billing invoice months: %w", err)
+			}
+			if rows != nil {
+				data.InvoiceMonths = rows
+			}
+			return nil
+		})
+		if err := g.Wait(); err != nil {
+			return nil, err
+		}
+		h.cache.Set(key, &data)
+		return &data, nil
+	})
+	if err != nil {
+		writeError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, v)
+}
+
+type BillingOverviewData struct {
+	Kpis              []BillingKpiRow   `json:"kpis"`
+	Daily             []BillingDailyRow `json:"daily"`
+	TopServices       []BillingGroupRow `json:"top_services"`
+	TopProjects       []BillingGroupRow `json:"top_projects"`
+	ProjectedMonthNet *float64          `json:"projected_month_net"`
+}
+
+// billingStandardSource resolves table detection and builds the standard-
+// export FROM clause for f. Shared by overview/services/projects/credits.
+func (h *APIHandler) billingStandardSource(ctx context.Context, f BillingFilter) (string, []bigquery.QueryParameter, error) {
+	info, err := h.billingTables(ctx, f.DatasetFQN)
+	if err != nil {
+		return "", nil, err
+	}
+	tables := f.standardTables(info)
+	if len(tables) == 0 {
+		return "", nil, fmt.Errorf("no standard billing export table matches the selected accounts in %s", f.DatasetFQN)
+	}
+	src, params := billingSource(f.Project, f.Dataset, tables, f)
+	return src, params, nil
+}
+
+func (h *APIHandler) BillingOverview(w http.ResponseWriter, r *http.Request) {
+	f, err := parseBillingFilter(r, h.bq.config)
+	if err != nil {
+		writeError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	key := f.cacheKey("overview")
+	if cached, ok := h.cache.Get(key); ok {
+		writeJSON(w, cached)
+		return
+	}
+
+	v, err, _ := billingFlight.Do(key, func() (any, error) {
+		src, params, err := h.billingStandardSource(r.Context(), f)
+		if err != nil {
+			return nil, err
+		}
+		data := BillingOverviewData{
+			Kpis:        []BillingKpiRow{},
+			Daily:       []BillingDailyRow{},
+			TopServices: []BillingGroupRow{},
+			TopProjects: []BillingGroupRow{},
+		}
+		g, ctx := errgroup.WithContext(r.Context())
+		g.Go(func() error {
+			rows, err := h.bq.GetBillingKpis(ctx, src, params)
+			if err != nil {
+				return fmt.Errorf("billing kpis: %w", err)
+			}
+			if rows != nil {
+				data.Kpis = rows
+			}
+			return nil
+		})
+		g.Go(func() error {
+			rows, err := h.bq.GetBillingDaily(ctx, src, params)
+			if err != nil {
+				return fmt.Errorf("billing daily: %w", err)
+			}
+			if rows != nil {
+				data.Daily = rows
+			}
+			return nil
+		})
+		g.Go(func() error {
+			rows, err := h.bq.GetBillingGroups(ctx, src, billingGroupService, 5, params)
+			if err != nil {
+				return fmt.Errorf("billing top services: %w", err)
+			}
+			if rows != nil {
+				data.TopServices = rows
+			}
+			return nil
+		})
+		g.Go(func() error {
+			rows, err := h.bq.GetBillingGroups(ctx, src, billingGroupProject, 5, params)
+			if err != nil {
+				return fmt.Errorf("billing top projects: %w", err)
+			}
+			if rows != nil {
+				data.TopProjects = rows
+			}
+			return nil
+		})
+		if err := g.Wait(); err != nil {
+			return nil, err
+		}
+		data.ProjectedMonthNet = rollupBillingProjection(data.Daily, civil.DateOf(time.Now().UTC()))
+		h.cache.Set(key, &data)
+		return &data, nil
+	})
+	if err != nil {
+		writeError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, v)
 }
