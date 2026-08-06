@@ -865,3 +865,142 @@ export interface CryptoSpotData {
   as_of: string;
   source: string;
 }
+
+// --- BigQuery Open Data: GCP Billing ---
+
+export interface BillingDatasetInfo {
+  dataset: string;
+  has_standard: boolean;
+  has_resource: boolean;
+  has_pricing: boolean;
+  billing_accounts: string[];
+  currency: string;
+  error?: string;
+}
+
+export interface BillingConfigResponse {
+  datasets: BillingDatasetInfo[];
+}
+
+export interface BillingMeta {
+  dataset: BillingDatasetInfo;
+  projects: { id: string; name: string }[];
+  services: string[];
+  label_keys: string[];
+  invoice_months: string[];
+}
+
+// Filter state shared by every billing tab. invoiceMonth !== '' switches the
+// backend into invoice-reconciliation mode.
+export interface BillingFilterState {
+  dataset: string;
+  start: string; // YYYY-MM-DD
+  end: string;
+  invoiceMonth: string;
+  accounts: string[];
+  projects: string[];
+  services: string[];
+  labelKey: string;
+  labelValue: string;
+}
+
+export interface BillingKpi {
+  currency: string;
+  gross: number;
+  net: number;
+  credits: number;
+  projects: number;
+  services: number;
+}
+
+export interface BillingDaily {
+  date: string;
+  gross: number;
+  net: number;
+}
+
+export interface BillingGroup {
+  name: string;
+  gross: number;
+  net: number;
+  credits: number;
+}
+
+export interface BillingOverviewData {
+  kpis: BillingKpi[];
+  daily: BillingDaily[];
+  top_services: BillingGroup[];
+  top_projects: BillingGroup[];
+  projected_month_net: number | null;
+}
+
+export interface BillingSku {
+  sku_id: string;
+  sku: string;
+  pricing_unit: string;
+  usage: number;
+  gross: number;
+  net: number;
+  effective_price: number | null;
+}
+
+export interface BillingServicesData {
+  services: BillingGroup[];
+  skus: BillingSku[];
+  service: string;
+}
+
+export interface BillingProjectRow {
+  id: string;
+  name: string;
+  gross: number;
+  net: number;
+  credits: number;
+}
+
+export interface BillingProjectsData {
+  projects: BillingProjectRow[];
+  label_groups: BillingGroup[];
+  group_key: string;
+}
+
+export interface BillingCreditRow {
+  type: string;
+  name: string;
+  amount: number;
+}
+
+export interface BillingCreditsData {
+  credits: BillingCreditRow[];
+  by_service: BillingGroup[];
+}
+
+export interface BillingResourceRow {
+  name: string;
+  global_name: string;
+  service: string;
+  project: string;
+  net: number;
+}
+
+export interface BillingResourcesData {
+  available: boolean;
+  resources: BillingResourceRow[];
+}
+
+export interface BillingPriceRow {
+  sku_id: string;
+  sku: string;
+  service: string;
+  pricing_unit: string;
+  list_price: number;
+  contract_price: number | null;
+  discount_pct: number | null;
+  tiers: number;
+}
+
+export interface BillingPricingData {
+  available: boolean;
+  as_of: string;
+  prices: BillingPriceRow[];
+}
