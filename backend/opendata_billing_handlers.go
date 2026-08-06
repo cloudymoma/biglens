@@ -9,10 +9,82 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"slices"
+	"strings"
+	"time"
 
+	"cloud.google.com/go/civil"
 	"golang.org/x/sync/singleflight"
 )
+
+var billingInvoiceMonthRe = regexp.MustCompile(`^\d{6}$`)
+
+func billingCSV(r *http.Request, name string) []string {
+	raw := r.URL.Query().Get(name)
+	if raw == "" {
+		return nil
+	}
+	var out []string
+	for _, v := range strings.Split(raw, ",") {
+		if v = strings.TrimSpace(v); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+func parseBillingFilter(r *http.Request, cfg *Config) (BillingFilter, error) {
+	q := r.URL.Query()
+	var f BillingFilter
+
+	f.DatasetFQN = q.Get("dataset")
+	if f.DatasetFQN == "" {
+		return f, fmt.Errorf("dataset is required")
+	}
+	if !slices.Contains(cfg.OpenData.GCPBilling.Datasets, f.DatasetFQN) {
+		return f, fmt.Errorf("dataset %q is not configured", f.DatasetFQN)
+	}
+	var err error
+	if f.Project, f.Dataset, err = parseBillingDataset(f.DatasetFQN); err != nil {
+		return f, err
+	}
+
+	f.End = civil.DateOf(time.Now().UTC())
+	f.Start = f.End.AddDays(-30)
+	if s := q.Get("start"); s != "" {
+		if f.Start, err = civil.ParseDate(s); err != nil {
+			return f, fmt.Errorf("invalid start date %q: %w", s, err)
+		}
+	}
+	if s := q.Get("end"); s != "" {
+		if f.End, err = civil.ParseDate(s); err != nil {
+			return f, fmt.Errorf("invalid end date %q: %w", s, err)
+		}
+	}
+	if !f.Start.Before(f.End) {
+		return f, fmt.Errorf("start must be before end")
+	}
+
+	if m := q.Get("invoice_month"); m != "" {
+		if !billingInvoiceMonthRe.MatchString(m) {
+			return f, fmt.Errorf("invoice_month must be YYYYMM, got %q", m)
+		}
+		f.InvoiceMonth = m
+	}
+
+	f.Accounts = billingCSV(r, "accounts")
+	f.Projects = billingCSV(r, "projects")
+	f.Services = billingCSV(r, "services")
+	if l := q.Get("label"); l != "" {
+		k, v, ok := strings.Cut(l, ":")
+		if !ok || k == "" || v == "" {
+			return f, fmt.Errorf("label must be key:value, got %q", l)
+		}
+		f.LabelKey, f.LabelValue = k, v
+	}
+	return f, nil
+}
 
 var billingFlight singleflight.Group
 

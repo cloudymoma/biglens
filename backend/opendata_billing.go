@@ -7,7 +7,11 @@ package main
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
+
+	"cloud.google.com/go/bigquery"
+	"cloud.google.com/go/civil"
 )
 
 // billingProjectRe: GCP project ID, optionally domain-scoped
@@ -96,4 +100,129 @@ func classifyBillingTables(names []string) BillingTableInfo {
 		}
 	}
 	return info
+}
+
+// BillingFilter carries the validated query filters shared by every billing
+// endpoint. Start/End form a half-open [Start, End) day window.
+type BillingFilter struct {
+	DatasetFQN string
+	Project    string
+	Dataset    string
+	Start      civil.Date
+	End        civil.Date
+	// InvoiceMonth (YYYYMM) switches queries from usage-date mode
+	// (regular costs by usage_start_time) to invoice-reconciliation mode
+	// (all cost types by invoice.month).
+	InvoiceMonth string
+	Accounts     []string
+	Projects     []string
+	Services     []string
+	LabelKey     string
+	LabelValue   string
+}
+
+// Money expressions. NUMERIC aggregation avoids FLOAT64 drift; credits use a
+// nested UNNEST subquery — a LEFT JOIN would duplicate cost rows.
+const (
+	billingGrossExpr   = "ROUND(CAST(SUM(CAST(cost AS NUMERIC)) AS FLOAT64), 2)"
+	billingCreditsExpr = "ROUND(CAST(SUM(IFNULL((SELECT SUM(CAST(c.amount AS NUMERIC)) FROM UNNEST(credits) c), 0)) AS FLOAT64), 2)"
+	billingNetExpr     = "ROUND(CAST(SUM(CAST(cost AS NUMERIC)) + SUM(IFNULL((SELECT SUM(CAST(c.amount AS NUMERIC)) FROM UNNEST(credits) c), 0)) AS FLOAT64), 2)"
+)
+
+// Group-by expressions for GetBillingGroups. Only these constants are ever
+// passed; nothing caller-supplied reaches the SQL string.
+const (
+	billingGroupService = "service.description"
+	billingGroupProject = "IFNULL(project.id, '(none)')"
+)
+
+// billingWhere builds the WHERE clause + parameters for one export table.
+// Export tables are ingestion-time partitioned; _PARTITIONTIME is padded
+// ±2 days (35 days after month end in invoice mode) for late-arriving rows.
+func billingWhere(f BillingFilter) (string, []bigquery.QueryParameter) {
+	var conds []string
+	var params []bigquery.QueryParameter
+
+	if f.InvoiceMonth != "" {
+		conds = append(conds,
+			"invoice.month = @invoice_month",
+			"_PARTITIONTIME >= TIMESTAMP(DATE_SUB(PARSE_DATE('%Y%m', @invoice_month), INTERVAL 2 DAY))",
+			"_PARTITIONTIME < TIMESTAMP(DATE_ADD(LAST_DAY(PARSE_DATE('%Y%m', @invoice_month)), INTERVAL 35 DAY))",
+		)
+		params = append(params, bigquery.QueryParameter{Name: "invoice_month", Value: f.InvoiceMonth})
+	} else {
+		conds = append(conds,
+			"_PARTITIONTIME >= TIMESTAMP(DATE_SUB(@start, INTERVAL 2 DAY))",
+			"_PARTITIONTIME < TIMESTAMP(DATE_ADD(@end, INTERVAL 2 DAY))",
+			"usage_start_time >= TIMESTAMP(@start)",
+			"usage_start_time < TIMESTAMP(@end)",
+			"cost_type = 'regular'",
+		)
+		params = append(params,
+			bigquery.QueryParameter{Name: "start", Value: f.Start},
+			bigquery.QueryParameter{Name: "end", Value: f.End},
+		)
+	}
+
+	if len(f.Accounts) > 0 {
+		conds = append(conds, "billing_account_id IN UNNEST(@accounts)")
+		params = append(params, bigquery.QueryParameter{Name: "accounts", Value: f.Accounts})
+	}
+	if len(f.Projects) > 0 {
+		conds = append(conds, "project.id IN UNNEST(@projects)")
+		params = append(params, bigquery.QueryParameter{Name: "projects", Value: f.Projects})
+	}
+	if len(f.Services) > 0 {
+		conds = append(conds, "service.description IN UNNEST(@services)")
+		params = append(params, bigquery.QueryParameter{Name: "services", Value: f.Services})
+	}
+	if f.LabelKey != "" {
+		conds = append(conds, "EXISTS (SELECT 1 FROM UNNEST(labels) fl WHERE fl.key = @label_key AND fl.value = @label_value)")
+		params = append(params,
+			bigquery.QueryParameter{Name: "label_key", Value: f.LabelKey},
+			bigquery.QueryParameter{Name: "label_value", Value: f.LabelValue},
+		)
+	}
+	return strings.Join(conds, "\n\t\t  AND "), params
+}
+
+// billingSource returns a parenthesized FROM-clause subquery unioning the
+// given export tables with all filters applied inside each branch (so
+// partition pruning still works), plus the query parameters. Table names
+// must come from INFORMATION_SCHEMA detection.
+func billingSource(project, dataset string, tables []string, f BillingFilter) (string, []bigquery.QueryParameter) {
+	where, params := billingWhere(f)
+	parts := make([]string, len(tables))
+	for i, tbl := range tables {
+		parts[i] = fmt.Sprintf("SELECT * FROM `%s.%s.%s` WHERE %s", project, dataset, tbl, where)
+	}
+	return "(" + strings.Join(parts, "\n\t\tUNION ALL\n\t\t") + ")", params
+}
+
+func (f BillingFilter) cacheKey(endpoint string) string {
+	return fmt.Sprintf("opendata:billing:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s",
+		endpoint, f.DatasetFQN, f.Start, f.End, f.InvoiceMonth,
+		strings.Join(f.Accounts, ","), strings.Join(f.Projects, ","),
+		strings.Join(f.Services, ","), f.LabelKey, f.LabelValue)
+}
+
+// standardTables returns the standard export tables for the selected
+// accounts (all accounts when the filter is empty), sorted for stable SQL.
+func (f BillingFilter) standardTables(info BillingTableInfo) []string {
+	return selectBillingTables(info.Standard, f.Accounts)
+}
+
+func (f BillingFilter) resourceTables(info BillingTableInfo) []string {
+	return selectBillingTables(info.Resource, f.Accounts)
+}
+
+func selectBillingTables(byAccount map[string]string, accounts []string) []string {
+	var out []string
+	for acct, tbl := range byAccount {
+		if len(accounts) == 0 || slices.Contains(accounts, acct) {
+			out = append(out, tbl)
+		}
+	}
+	slices.Sort(out)
+	return out
 }

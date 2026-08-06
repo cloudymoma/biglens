@@ -1,6 +1,11 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"cloud.google.com/go/civil"
+)
 
 func TestParseBillingDataset(t *testing.T) {
 	tests := []struct {
@@ -83,5 +88,129 @@ func TestClassifyBillingTables(t *testing.T) {
 	}
 	if _, ok := got.Resource["FFFFFF-111111-222222"]; ok {
 		t.Error("account without resource table must not appear in Resource map")
+	}
+}
+
+func testFilter() BillingFilter {
+	return BillingFilter{
+		DatasetFQN: "my-project.billing_ds",
+		Project:    "my-project",
+		Dataset:    "billing_ds",
+		Start:      civil.Date{Year: 2026, Month: 7, Day: 1},
+		End:        civil.Date{Year: 2026, Month: 8, Day: 1},
+	}
+}
+
+func TestBillingWhereUsageMode(t *testing.T) {
+	where, params := billingWhere(testFilter())
+	for _, want := range []string{
+		"_PARTITIONTIME >=", "_PARTITIONTIME <",
+		"usage_start_time >= TIMESTAMP(@start)", "usage_start_time < TIMESTAMP(@end)",
+		"cost_type = 'regular'",
+	} {
+		if !strings.Contains(where, want) {
+			t.Errorf("usage-mode WHERE missing %q:\n%s", want, where)
+		}
+	}
+	if strings.Contains(where, "invoice.month") {
+		t.Error("usage-mode WHERE must not reference invoice.month")
+	}
+	if len(params) != 2 {
+		t.Errorf("params = %v, want start+end only", params)
+	}
+}
+
+func TestBillingWhereInvoiceMode(t *testing.T) {
+	f := testFilter()
+	f.InvoiceMonth = "202607"
+	where, _ := billingWhere(f)
+	if !strings.Contains(where, "invoice.month = @invoice_month") {
+		t.Errorf("invoice-mode WHERE missing invoice.month filter:\n%s", where)
+	}
+	if strings.Contains(where, "cost_type") {
+		t.Error("invoice mode must include ALL cost types (tax/adjustment/rounding_error)")
+	}
+	if !strings.Contains(where, "_PARTITIONTIME") {
+		t.Error("invoice mode still needs partition pruning")
+	}
+}
+
+func TestBillingWhereOptionalFilters(t *testing.T) {
+	f := testFilter()
+	f.Accounts = []string{"010B7A-A27129-D37860"}
+	f.Projects = []string{"p1", "p2"}
+	f.Services = []string{"BigQuery"}
+	f.LabelKey, f.LabelValue = "env", "prod"
+	where, params := billingWhere(f)
+	for _, want := range []string{
+		"billing_account_id IN UNNEST(@accounts)",
+		"project.id IN UNNEST(@projects)",
+		"service.description IN UNNEST(@services)",
+		"EXISTS (SELECT 1 FROM UNNEST(labels) fl WHERE fl.key = @label_key AND fl.value = @label_value)",
+	} {
+		if !strings.Contains(where, want) {
+			t.Errorf("WHERE missing %q:\n%s", want, where)
+		}
+	}
+	if len(params) != 7 {
+		t.Errorf("got %d params, want 7 (start, end, accounts, projects, services, label_key, label_value)", len(params))
+	}
+}
+
+func TestBillingSourceUnionsTables(t *testing.T) {
+	src, _ := billingSource("my-project", "billing_ds",
+		[]string{"gcp_billing_export_v1_A", "gcp_billing_export_v1_B"}, testFilter())
+	if !strings.Contains(src, "`my-project.billing_ds.gcp_billing_export_v1_A`") ||
+		!strings.Contains(src, "`my-project.billing_ds.gcp_billing_export_v1_B`") {
+		t.Errorf("source missing table refs:\n%s", src)
+	}
+	if strings.Count(src, "UNION ALL") != 1 {
+		t.Errorf("want exactly 1 UNION ALL for 2 tables:\n%s", src)
+	}
+	if !strings.HasPrefix(src, "(") || !strings.HasSuffix(src, ")") {
+		t.Errorf("source must be a parenthesized subquery:\n%s", src)
+	}
+}
+
+// Credits must be summed via nested subquery; LEFT JOIN UNNEST(credits)
+// double-counts cost rows (official docs gotcha).
+func TestBillingCostExprs(t *testing.T) {
+	if !strings.Contains(billingNetExpr, "(SELECT SUM(CAST(c.amount AS NUMERIC)) FROM UNNEST(credits) c)") {
+		t.Errorf("net expr must use nested credits subquery: %s", billingNetExpr)
+	}
+	for _, expr := range []string{billingGrossExpr, billingNetExpr, billingCreditsExpr} {
+		if strings.Contains(expr, "LEFT JOIN") {
+			t.Errorf("cost exprs must never LEFT JOIN credits: %s", expr)
+		}
+		if !strings.Contains(expr, "NUMERIC") {
+			t.Errorf("cost exprs must aggregate as NUMERIC: %s", expr)
+		}
+	}
+}
+
+func TestBillingFilterCacheKey(t *testing.T) {
+	a, b := testFilter(), testFilter()
+	b.Services = []string{"BigQuery"}
+	if a.cacheKey("overview") == b.cacheKey("overview") {
+		t.Error("different filters must produce different cache keys")
+	}
+	if a.cacheKey("overview") == a.cacheKey("services") {
+		t.Error("different endpoints must produce different cache keys")
+	}
+}
+
+func TestStandardTablesSelection(t *testing.T) {
+	info := BillingTableInfo{Standard: map[string]string{
+		"A-1-1": "gcp_billing_export_v1_A_1_1",
+		"B-2-2": "gcp_billing_export_v1_B_2_2",
+	}}
+	f := testFilter()
+	if got := f.standardTables(info); len(got) != 2 {
+		t.Errorf("no account filter: want all tables, got %v", got)
+	}
+	f.Accounts = []string{"B-2-2"}
+	got := f.standardTables(info)
+	if len(got) != 1 || got[0] != "gcp_billing_export_v1_B_2_2" {
+		t.Errorf("account filter: got %v", got)
 	}
 }
