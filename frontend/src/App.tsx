@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import {
   ChevronDown, ChevronLeft, ChevronRight, Server, Layers, Search, RefreshCw,
   Database, BarChart3, DollarSign, Lightbulb, Clock, Shield, Network, Globe,
-  ListChecks, Wallet,
+  ListChecks, Wallet, Boxes,
 } from 'lucide-react';
 import type { QueryFilters } from './types';
 import { fetchConfig, fetchDatasets, fetchTables, fetchRegions } from './api';
@@ -15,6 +15,7 @@ import IAMDashboard from './dashboards/IAMDashboard';
 import CatalogView from './catalog/CatalogView';
 import { OPEN_DATASETS } from './opendata/registry';
 import BillingDashboard from './billing/BillingDashboard';
+import ResourcesDashboard from './resources/ResourcesDashboard';
 
 type Tab = 'storage' | 'compute' | 'cost' | 'insights' | 'jobs';
 
@@ -32,6 +33,7 @@ const PRODUCTS: { id: string; label: string; icon: React.ReactNode }[] = [
   { id: 'dataplex', label: 'Dataplex', icon: <Network size={20} /> },
   { id: 'opendata', label: 'BigQuery Open Data', icon: <Globe size={20} /> },
   { id: 'gcp_billing', label: 'GCP Billing', icon: <Wallet size={20} /> },
+  { id: 'gcp_resources', label: 'GCP Resources', icon: <Boxes size={20} /> },
 ];
 
 function App() {
@@ -189,7 +191,9 @@ function App() {
                     ? <Globe size={15} className="text-emerald-400" />
                     : activeProduct === 'gcp_billing'
                       ? <Wallet size={15} className="text-amber-400" />
-                      : <Network size={15} className="text-cyan-400" />
+                      : activeProduct === 'gcp_resources'
+                        ? <Boxes size={15} className="text-sky-400" />
+                        : <Network size={15} className="text-cyan-400" />
               }
               <h2 className="text-sm font-semibold text-white tracking-tight">
                 {PRODUCTS.find(p => p.id === activeProduct)?.label}
@@ -353,6 +357,17 @@ function App() {
             </div>
           )}
 
+          {activeProduct === 'gcp_resources' && (
+            <div className="px-3 mt-4">
+              <div className="p-3 rounded-xl border border-sky-500/10" style={{ background: '#111114' }}>
+                <p className="text-[10px] font-semibold text-sky-400/70 uppercase tracking-wider mb-2">Resource Inventory</p>
+                <p className="text-[11px] text-zinc-500 leading-relaxed">
+                  Live inventory of GCP resources via Cloud Asset API: compute, storage, network assets with workload context.
+                </p>
+              </div>
+            </div>
+          )}
+
           <div className="mt-auto px-3 pb-4">
             <div className="p-3 rounded-xl border border-zinc-800/40 flex items-center gap-3" style={{ background: '#111114' }}>
               <div className="p-2 rounded-lg border border-emerald-500/15" style={{ background: '#052e1610' }}>
@@ -387,7 +402,9 @@ function App() {
                       ? OPEN_DATASETS.find(ds => ds.id === activeDataset)?.label
                       : activeProduct === 'gcp_billing'
                         ? 'GCP Billing'
-                        : 'Dataplex Knowledge Catalog'
+                        : activeProduct === 'gcp_resources'
+                          ? 'GCP Resources'
+                          : 'Dataplex Knowledge Catalog'
                 }
               </h2>
               {activeProduct === 'dataplex' ? (
@@ -406,6 +423,11 @@ function App() {
                 <p className="text-xs text-zinc-500 mt-1 flex items-center gap-1.5">
                   <Wallet size={11} />
                   <span className="text-zinc-600">Cloud Billing BigQuery export</span>
+                </p>
+              ) : activeProduct === 'gcp_resources' ? (
+                <p className="text-xs text-zinc-500 mt-1 flex items-center gap-1.5">
+                  <Boxes size={11} />
+                  <span className="text-zinc-600">Cloud Asset Inventory</span>
                 </p>
               ) : (
                 <p className="text-xs text-zinc-500 mt-1 flex items-center gap-1.5">
@@ -451,6 +473,7 @@ function App() {
             return <DatasetDashboard key={`${ds.id}-${refreshKey}`} />;
           })()}
           {activeProduct === 'gcp_billing' && <BillingDashboard key={`gcp_billing-${refreshKey}`} />}
+          {activeProduct === 'gcp_resources' && <ResourcesDashboard key={`gcp_resources-${refreshKey}`} />}
         </div>
       </main>
     </div>
