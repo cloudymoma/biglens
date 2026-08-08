@@ -15,6 +15,7 @@ type APIHandler struct {
 	bq     *BQClient
 	cache  *Cache
 	bundle *OKFBundle
+	res    ResourceAPI
 }
 
 func NewAPIHandler(bq *BQClient) *APIHandler {

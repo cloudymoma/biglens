@@ -52,6 +52,13 @@ func main() {
 
 	api := NewAPIHandler(bq)
 
+	res, err := NewResClients(ctx, cfg)
+	if err != nil {
+		slog.Error("failed to initialize GCP resource clients", "error", err)
+		os.Exit(1)
+	}
+	api.res = res
+
 	mux := http.NewServeMux()
 
 	logMW := func(next http.Handler) http.Handler {

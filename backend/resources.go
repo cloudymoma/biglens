@@ -5,6 +5,7 @@ package main
 // insight rules. Everything here is unit-testable without GCP.
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"slices"
@@ -302,3 +303,21 @@ func recentAssets(items []AssetItem, n int) []AssetItem {
 	}
 	return out
 }
+
+// ResourceAPI is the network boundary for GCP resource APIs.
+type ResourceAPI interface {
+	// SearchAssets returns up to resExplorerMax items; bool reports truncation.
+	SearchAssets(ctx context.Context, project, query, assetType string) ([]AssetItem, bool, error)
+	ListInstances(ctx context.Context, project string) ([]VMInstance, error)
+	ListDisks(ctx context.Context, project string) ([]DiskInfo, error)
+	ListBuckets(ctx context.Context, project string) ([]BucketInfo, error)
+	// BucketBytes: bucket name -> storage class -> bytes (latest daily point).
+	BucketBytes(ctx context.Context, project string) (map[string]map[string]float64, error)
+	ListNetworks(ctx context.Context, project string) ([]VPCInfo, error)
+	ListSubnets(ctx context.Context, project string) ([]SubnetInfo, error)
+	ListAddresses(ctx context.Context, project string) ([]AddressInfo, error)
+	ListFirewalls(ctx context.Context, project string) ([]FirewallInfo, error)
+	ListForwardingRules(ctx context.Context, project string) ([]ForwardingRuleInfo, error)
+}
+
+const resExplorerMax = 1000
