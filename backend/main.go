@@ -127,6 +127,9 @@ func main() {
 	mux.Handle("/api/gcp_billing/resources", h(api.BillingResources))
 	mux.Handle("/api/gcp_billing/pricing", h(api.BillingPricing))
 
+	// GCP Resources endpoints (live inventory; conf.yaml lists the projects)
+	mux.Handle("/api/gcp_resources/config", h(api.ResourcesConfig))
+
 	// Individual endpoints
 	mux.Handle("/api/storage", h(api.StorageStats))
 	mux.Handle("/api/slots", h(api.SlotUsage))
