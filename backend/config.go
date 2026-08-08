@@ -31,6 +31,9 @@ type Config struct {
 			Datasets []string `yaml:"datasets"`
 		} `yaml:"gcp_billing"`
 	} `yaml:"opendata"`
+	GCPResources struct {
+		Projects []string `yaml:"projects"`
+	} `yaml:"gcp_resources"`
 
 	// path is where this config was loaded from, so SaveConfig can write back.
 	path string
