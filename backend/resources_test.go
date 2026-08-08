@@ -73,3 +73,74 @@ func TestClassifyWorkload(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildFindings(t *testing.T) {
+	vms := []VMInstance{
+		{Name: "vm-run", Zone: "us-central1-a", Status: "RUNNING"},
+		{Name: "vm-stop", Zone: "us-central1-a", Status: "TERMINATED"},
+	}
+	disks := []DiskInfo{
+		{Name: "d-used", Zone: "us-central1-a", Users: []string{"vm-run"}},
+		{Name: "d-orphan", Zone: "us-central1-a", SizeGB: 500},
+	}
+	buckets := []BucketInfo{
+		{Name: "b-uniform", Location: "US", UniformAccess: true},
+		{Name: "b-acl", Location: "US", UniformAccess: false},
+	}
+	vpcs := []VPCInfo{{Name: "default", AutoCreate: true}, {Name: "prod-vpc"}}
+	addrs := []AddressInfo{
+		{Name: "ip-used", Region: "us-central1", Status: "IN_USE"},
+		{Name: "ip-idle", Region: "us-central1", Status: "RESERVED"},
+	}
+	fws := []FirewallInfo{
+		{Name: "allow-ssh-world", Direction: "INGRESS", SourceRanges: []string{"0.0.0.0/0"}, Allowed: []string{"tcp:22"}},
+		{Name: "allow-http-world", Direction: "INGRESS", SourceRanges: []string{"0.0.0.0/0"}, Allowed: []string{"tcp:80"}},
+		{Name: "allow-all-disabled", Direction: "INGRESS", SourceRanges: []string{"0.0.0.0/0"}, Allowed: []string{"all"}, Disabled: true},
+		{Name: "internal-only", Direction: "INGRESS", SourceRanges: []string{"10.0.0.0/8"}, Allowed: []string{"tcp:22"}},
+		{Name: "egress-open", Direction: "EGRESS", SourceRanges: []string{"0.0.0.0/0"}, Allowed: []string{"all"}},
+	}
+
+	got := buildFindings(vms, disks, buckets, vpcs, addrs, fws)
+
+	byResource := map[string]Finding{}
+	for _, f := range got {
+		byResource[f.Resource] = f
+	}
+	want := []struct {
+		resource, severity, category string
+	}{
+		{"allow-ssh-world", "high", "open_firewall"},
+		{"allow-http-world", "medium", "open_firewall"},
+		{"d-orphan", "medium", "unattached_disk"},
+		{"ip-idle", "medium", "unused_address"},
+		{"vm-stop", "low", "stopped_vm"},
+		{"b-acl", "low", "non_uniform_bucket"},
+		{"default", "low", "default_network"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d findings, want %d: %+v", len(got), len(want), got)
+	}
+	for _, w := range want {
+		f, ok := byResource[w.resource]
+		if !ok {
+			t.Errorf("missing finding for %s", w.resource)
+			continue
+		}
+		if f.Severity != w.severity || f.Category != w.category {
+			t.Errorf("%s: got (%s,%s), want (%s,%s)", w.resource, f.Severity, f.Category, w.severity, w.category)
+		}
+		if f.Summary == "" {
+			t.Errorf("%s: empty summary", w.resource)
+		}
+	}
+	// Ordered high first, low last.
+	if got[0].Severity != "high" || got[len(got)-1].Severity != "low" {
+		t.Errorf("findings not ordered by severity: %+v", got)
+	}
+	// Disabled and egress and internal firewall rules must NOT be flagged.
+	for _, bad := range []string{"allow-all-disabled", "egress-open", "internal-only", "d-used", "ip-used", "vm-run", "b-uniform", "prod-vpc"} {
+		if _, ok := byResource[bad]; ok {
+			t.Errorf("%s should not be flagged", bad)
+		}
+	}
+}

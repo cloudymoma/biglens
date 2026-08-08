@@ -5,7 +5,9 @@ package main
 // insight rules. Everything here is unit-testable without GCP.
 
 import (
+	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -163,4 +165,91 @@ func classifyWorkload(name string, labels map[string]string) string {
 		return "GKE"
 	}
 	return "GCE"
+}
+
+type Finding struct {
+	Severity string `json:"severity"`
+	Category string `json:"category"`
+	Resource string `json:"resource"`
+	Location string `json:"location"`
+	Summary  string `json:"summary"`
+}
+
+// sensitiveFirewallPorts: ports whose exposure to 0.0.0.0/0 is high severity.
+var sensitiveFirewallPorts = []string{"22", "3389"}
+
+// firewallOpenSeverity returns "" when the rule is not internet-open ingress,
+// otherwise the severity. "all" protocols or a sensitive port → high.
+func firewallOpenSeverity(f FirewallInfo) string {
+	if f.Disabled || f.Direction != "INGRESS" || !slices.Contains(f.SourceRanges, "0.0.0.0/0") {
+		return ""
+	}
+	for _, a := range f.Allowed {
+		proto, ports, hasPorts := strings.Cut(a, ":")
+		if proto == "all" {
+			return "high"
+		}
+		if !hasPorts { // protocol with no port list = all ports
+			return "high"
+		}
+		for _, p := range strings.Split(ports, ",") {
+			if slices.Contains(sensitiveFirewallPorts, strings.TrimSpace(p)) {
+				return "high"
+			}
+		}
+	}
+	return "medium"
+}
+
+// buildFindings applies every v1 insight rule; output ordered high→medium→low.
+func buildFindings(vms []VMInstance, disks []DiskInfo, buckets []BucketInfo,
+	vpcs []VPCInfo, addrs []AddressInfo, fws []FirewallInfo) []Finding {
+
+	bySev := map[string][]Finding{}
+	add := func(sev, cat, res, loc, summary string) {
+		bySev[sev] = append(bySev[sev], Finding{sev, cat, res, loc, summary})
+	}
+
+	for _, f := range fws {
+		if sev := firewallOpenSeverity(f); sev != "" {
+			add(sev, "open_firewall", f.Name, "global",
+				fmt.Sprintf("ingress from 0.0.0.0/0 allows %s — internet-exposed", strings.Join(f.Allowed, " ")))
+		}
+	}
+	for _, d := range disks {
+		if len(d.Users) == 0 {
+			add("medium", "unattached_disk", d.Name, d.Zone,
+				fmt.Sprintf("unattached %dGB disk still incurs storage cost", d.SizeGB))
+		}
+	}
+	for _, a := range addrs {
+		if a.Status == "RESERVED" {
+			add("medium", "unused_address", a.Name, a.Region,
+				"reserved static IP not in use is billed hourly")
+		}
+	}
+	for _, v := range vms {
+		if v.Status == "TERMINATED" {
+			add("low", "stopped_vm", v.Name, v.Zone,
+				"stopped VM still incurs cost for attached disks and reserved IPs")
+		}
+	}
+	for _, b := range buckets {
+		if !b.UniformAccess {
+			add("low", "non_uniform_bucket", b.Name, b.Location,
+				"bucket uses legacy per-object ACLs; enable uniform bucket-level access")
+		}
+	}
+	for _, v := range vpcs {
+		if v.Name == "default" {
+			add("low", "default_network", v.Name, "global",
+				"auto-created default network present; prefer purpose-built VPCs with least-privilege firewalls")
+		}
+	}
+
+	out := append(append(bySev["high"], bySev["medium"]...), bySev["low"]...)
+	if out == nil {
+		out = []Finding{}
+	}
+	return out
 }
