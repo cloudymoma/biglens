@@ -144,3 +144,32 @@ func TestBuildFindings(t *testing.T) {
 		}
 	}
 }
+
+func TestAssetSummaries(t *testing.T) {
+	items := []AssetItem{
+		{AssetType: "compute.googleapis.com/Instance", Location: "us-central1-a", Created: "2026-08-01T00:00:00Z"},
+		{AssetType: "compute.googleapis.com/Disk", Location: "us-central1-a", Created: "2026-08-03T00:00:00Z"},
+		{AssetType: "storage.googleapis.com/Bucket", Location: "us", Created: "2026-07-01T00:00:00Z"},
+	}
+	if got := serviceOfAssetType("compute.googleapis.com/Instance"); got != "compute" {
+		t.Errorf("serviceOfAssetType = %q, want compute", got)
+	}
+	if got := serviceOfAssetType("weird"); got != "weird" {
+		t.Errorf("serviceOfAssetType fallback = %q, want weird", got)
+	}
+	svc := countAssetsByService(items)
+	if len(svc) != 2 || svc[0].Name != "compute" || svc[0].Count != 2 || svc[1].Name != "storage" {
+		t.Errorf("countAssetsByService = %+v", svc)
+	}
+	loc := countAssetsByLocation(items)
+	if len(loc) != 2 || loc[0].Name != "us-central1-a" || loc[0].Count != 2 {
+		t.Errorf("countAssetsByLocation = %+v", loc)
+	}
+	rec := recentAssets(items, 2)
+	if len(rec) != 2 || rec[0].Created != "2026-08-03T00:00:00Z" {
+		t.Errorf("recentAssets = %+v", rec)
+	}
+	if got := recentAssets(items, 10); len(got) != 3 {
+		t.Errorf("recentAssets cap = %d items, want 3", len(got))
+	}
+}

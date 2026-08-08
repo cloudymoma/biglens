@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -250,6 +251,54 @@ func buildFindings(vms []VMInstance, disks []DiskInfo, buckets []BucketInfo,
 	out := append(append(bySev["high"], bySev["medium"]...), bySev["low"]...)
 	if out == nil {
 		out = []Finding{}
+	}
+	return out
+}
+
+type ResNamedCount struct {
+	Name  string `json:"name"`
+	Count int    `json:"count"`
+}
+
+func serviceOfAssetType(t string) string {
+	if s, _, ok := strings.Cut(t, ".googleapis.com/"); ok {
+		return s
+	}
+	return t
+}
+
+func countBy(items []AssetItem, key func(AssetItem) string) []ResNamedCount {
+	counts := map[string]int{}
+	for _, it := range items {
+		counts[key(it)]++
+	}
+	out := make([]ResNamedCount, 0, len(counts))
+	for k, v := range counts {
+		out = append(out, ResNamedCount{Name: k, Count: v})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Count != out[j].Count {
+			return out[i].Count > out[j].Count
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out
+}
+
+func countAssetsByService(items []AssetItem) []ResNamedCount {
+	return countBy(items, func(a AssetItem) string { return serviceOfAssetType(a.AssetType) })
+}
+
+func countAssetsByLocation(items []AssetItem) []ResNamedCount {
+	return countBy(items, func(a AssetItem) string { return a.Location })
+}
+
+// recentAssets returns the n newest items by Created (RFC3339 sorts lexically).
+func recentAssets(items []AssetItem, n int) []AssetItem {
+	out := slices.Clone(items)
+	sort.Slice(out, func(i, j int) bool { return out[i].Created > out[j].Created })
+	if len(out) > n {
+		out = out[:n]
 	}
 	return out
 }
