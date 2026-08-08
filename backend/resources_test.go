@@ -10,9 +10,9 @@ func TestValidResourceProject(t *testing.T) {
 		{"my-project-123", true},
 		{"abcdef", true},
 		{"a12345", true},
-		{"Bad-Caps", false},        // uppercase not allowed
+		{"Bad-Caps", false}, // uppercase not allowed
 		{"1starts-with-digit", false},
-		{"ab", false},              // too short (min 6 chars total)
+		{"ab", false}, // too short (min 6 chars total)
 		{"has_underscore", false},
 		{"ends-with-hyphen-", false},
 		{"", false},
