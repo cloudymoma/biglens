@@ -1004,3 +1004,156 @@ export interface BillingPricingData {
   as_of: string;
   prices: BillingPriceRow[];
 }
+
+// ---- GCP Resources section ----
+
+export interface ResProjectInfo {
+  project: string;
+  error?: string;
+}
+
+export interface ResConfigResponse {
+  projects: ResProjectInfo[];
+}
+
+export interface ResNamedCount {
+  name: string;
+  count: number;
+}
+
+export interface ResAssetItem {
+  name: string;
+  asset_type: string;
+  display_name: string;
+  location: string;
+  state: string;
+  labels?: Record<string, string>;
+  created: string;
+  updated: string;
+}
+
+export interface ResOverviewData {
+  fetched_at: string;
+  total_resources: number;
+  vms_running: number;
+  vms_stopped: number;
+  buckets: number;
+  vpcs: number;
+  firewall_rules: number;
+  by_service: ResNamedCount[];
+  by_location: ResNamedCount[];
+  recent: ResAssetItem[];
+  truncated: boolean;
+}
+
+export interface ResVMInstance {
+  name: string;
+  zone: string;
+  machine_type: string;
+  status: string;
+  workload: string;
+  vcpus: number;
+  memory_gb: number;
+  labels?: Record<string, string>;
+  created: string;
+}
+
+export interface ResDiskInfo {
+  name: string;
+  zone: string;
+  type: string;
+  size_gb: number;
+  users?: string[];
+  created: string;
+}
+
+export interface ResComputeData {
+  fetched_at: string;
+  instances: ResVMInstance[];
+  disks: ResDiskInfo[];
+}
+
+export interface ResBucketInfo {
+  name: string;
+  location: string;
+  storage_class: string;
+  uniform_access: boolean;
+  public_access_prevention: string;
+  created: string;
+  bytes_by_class?: Record<string, number>;
+}
+
+export interface ResStorageData {
+  fetched_at: string;
+  buckets: ResBucketInfo[];
+}
+
+export interface ResVPCInfo {
+  name: string;
+  auto_create: boolean;
+}
+
+export interface ResSubnetInfo {
+  name: string;
+  region: string;
+  network: string;
+  cidr: string;
+  private_google_access: boolean;
+}
+
+export interface ResAddressInfo {
+  name: string;
+  region: string;
+  address: string;
+  type: string;
+  status: string;
+  users?: string[];
+}
+
+export interface ResFirewallInfo {
+  name: string;
+  network: string;
+  direction: string;
+  priority: number;
+  source_ranges?: string[];
+  allowed?: string[];
+  target_tags?: string[];
+  disabled: boolean;
+}
+
+export interface ResForwardingRuleInfo {
+  name: string;
+  region: string;
+  ip_address: string;
+  scheme: string;
+  target: string;
+  ports: string;
+}
+
+export interface ResNetworkData {
+  fetched_at: string;
+  networks: ResVPCInfo[];
+  subnets: ResSubnetInfo[];
+  addresses: ResAddressInfo[];
+  firewalls: ResFirewallInfo[];
+  forwarding_rules: ResForwardingRuleInfo[];
+}
+
+export interface ResExplorerData {
+  fetched_at: string;
+  items: ResAssetItem[];
+  truncated: boolean;
+}
+
+export interface ResFinding {
+  severity: 'high' | 'medium' | 'low';
+  category: string;
+  resource: string;
+  location: string;
+  summary: string;
+}
+
+export interface ResInsightsData {
+  fetched_at: string;
+  findings: ResFinding[];
+}

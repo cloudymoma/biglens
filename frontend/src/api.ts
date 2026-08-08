@@ -9,6 +9,13 @@ import type {
   BillingResourcesData,
   BillingCreditsData,
   BillingPricingData,
+  ResConfigResponse,
+  ResOverviewData,
+  ResComputeData,
+  ResStorageData,
+  ResNetworkData,
+  ResExplorerData,
+  ResInsightsData,
 } from './types';
 import type {
   QueryFilters,
@@ -402,5 +409,55 @@ export async function fetchBillingCredits(f: BillingFilterState): Promise<Billin
 export async function fetchBillingPricing(f: BillingFilterState, q?: string): Promise<BillingPricingData> {
   const params = { ...billingParams(f), ...(q ? { q } : {}) };
   const { data } = await axios.get('/api/gcp_billing/pricing', { params });
+  return data;
+}
+
+// ---- GCP Resources section ----
+
+function resParams(project: string, refresh?: boolean) {
+  return { project, ...(refresh ? { refresh: '1' } : {}) };
+}
+
+export async function fetchResourcesConfig(): Promise<ResConfigResponse> {
+  const { data } = await axios.get('/api/gcp_resources/config');
+  return data;
+}
+
+export async function postResourcesConfig(action: 'add' | 'remove', project: string): Promise<ResConfigResponse> {
+  const { data } = await axios.post('/api/gcp_resources/config', { action, project });
+  return data;
+}
+
+export async function fetchResourcesOverview(project: string, refresh?: boolean): Promise<ResOverviewData> {
+  const { data } = await axios.get('/api/gcp_resources/overview', { params: resParams(project, refresh) });
+  return data;
+}
+
+export async function fetchResourcesCompute(project: string, refresh?: boolean): Promise<ResComputeData> {
+  const { data } = await axios.get('/api/gcp_resources/compute', { params: resParams(project, refresh) });
+  return data;
+}
+
+export async function fetchResourcesStorage(project: string, refresh?: boolean): Promise<ResStorageData> {
+  const { data } = await axios.get('/api/gcp_resources/storage', { params: resParams(project, refresh) });
+  return data;
+}
+
+export async function fetchResourcesNetwork(project: string, refresh?: boolean): Promise<ResNetworkData> {
+  const { data } = await axios.get('/api/gcp_resources/network', { params: resParams(project, refresh) });
+  return data;
+}
+
+export async function fetchResourcesExplorer(
+  project: string, query: string, assetType: string, refresh?: boolean,
+): Promise<ResExplorerData> {
+  const { data } = await axios.get('/api/gcp_resources/explorer', {
+    params: { ...resParams(project, refresh), query, asset_type: assetType },
+  });
+  return data;
+}
+
+export async function fetchResourcesInsights(project: string, refresh?: boolean): Promise<ResInsightsData> {
+  const { data } = await axios.get('/api/gcp_resources/insights', { params: resParams(project, refresh) });
   return data;
 }
