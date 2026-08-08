@@ -129,6 +129,12 @@ func main() {
 
 	// GCP Resources endpoints (live inventory; conf.yaml lists the projects)
 	mux.Handle("/api/gcp_resources/config", h(api.ResourcesConfig))
+	mux.Handle("/api/gcp_resources/overview", h(api.ResourcesOverview))
+	mux.Handle("/api/gcp_resources/compute", h(api.ResourcesCompute))
+	mux.Handle("/api/gcp_resources/storage", h(api.ResourcesStorage))
+	mux.Handle("/api/gcp_resources/network", h(api.ResourcesNetwork))
+	mux.Handle("/api/gcp_resources/explorer", h(api.ResourcesExplorer))
+	mux.Handle("/api/gcp_resources/insights", h(api.ResourcesInsights))
 
 	// Individual endpoints
 	mux.Handle("/api/storage", h(api.StorageStats))

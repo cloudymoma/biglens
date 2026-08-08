@@ -172,3 +172,122 @@ func TestResourcesConfigPost(t *testing.T) {
 		t.Errorf("after remove: %v", h.bq.config.GCPResources.Projects)
 	}
 }
+
+func TestResourcesEndpointsRejectUnconfiguredProject(t *testing.T) {
+	h := resourcesTestHandler(t, []string{"proj-alpha"}, &fakeResourceAPI{})
+	endpoints := map[string]http.HandlerFunc{
+		"overview": h.ResourcesOverview, "compute": h.ResourcesCompute,
+		"storage": h.ResourcesStorage, "network": h.ResourcesNetwork,
+		"explorer": h.ResourcesExplorer, "insights": h.ResourcesInsights,
+	}
+	for name, fn := range endpoints {
+		w := httptest.NewRecorder()
+		fn(w, httptest.NewRequest("GET", "/api/gcp_resources/"+name+"?project=evil-project", nil))
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("%s: status %d, want 400", name, w.Code)
+		}
+	}
+}
+
+func TestResourcesCompute(t *testing.T) {
+	fake := &fakeResourceAPI{
+		instances: []VMInstance{{Name: "vm-1", Status: "RUNNING", Workload: "GCE"}},
+		disks:     []DiskInfo{{Name: "d-1", SizeGB: 100}},
+	}
+	h := resourcesTestHandler(t, []string{"proj-alpha"}, fake)
+	w := httptest.NewRecorder()
+	h.ResourcesCompute(w, httptest.NewRequest("GET", "/api/gcp_resources/compute?project=proj-alpha", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	for _, want := range []string{`"vm-1"`, `"d-1"`, `"fetched_at"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body missing %s: %s", want, body)
+		}
+	}
+}
+
+func TestResourcesStorageMergesBucketBytes(t *testing.T) {
+	fake := &fakeResourceAPI{
+		buckets: []BucketInfo{{Name: "b-1", StorageClass: "STANDARD"}},
+		bytes:   map[string]map[string]float64{"b-1": {"STANDARD": 1024}},
+	}
+	h := resourcesTestHandler(t, []string{"proj-alpha"}, fake)
+	w := httptest.NewRecorder()
+	h.ResourcesStorage(w, httptest.NewRequest("GET", "/api/gcp_resources/storage?project=proj-alpha", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"bytes_by_class":{"STANDARD":1024}`) {
+		t.Errorf("bucket bytes not merged: %s", w.Body.String())
+	}
+}
+
+func TestResourcesOverviewCountsAndCache(t *testing.T) {
+	fake := &fakeResourceAPI{
+		assets: []AssetItem{
+			{AssetType: "compute.googleapis.com/Instance", Location: "us-central1-a", Created: "2026-08-01T00:00:00Z"},
+			{AssetType: "storage.googleapis.com/Bucket", Location: "us", Created: "2026-08-02T00:00:00Z"},
+		},
+		instances: []VMInstance{{Name: "vm-1", Status: "RUNNING"}, {Name: "vm-2", Status: "TERMINATED"}},
+		buckets:   []BucketInfo{{Name: "b-1"}},
+		networks:  []VPCInfo{{Name: "default"}},
+		firewalls: []FirewallInfo{{Name: "fw-1"}},
+	}
+	h := resourcesTestHandler(t, []string{"proj-alpha"}, fake)
+	w := httptest.NewRecorder()
+	h.ResourcesOverview(w, httptest.NewRequest("GET", "/api/gcp_resources/overview?project=proj-alpha", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	for _, want := range []string{`"total_resources":2`, `"vms_running":1`, `"vms_stopped":1`, `"buckets":1`, `"vpcs":1`, `"firewall_rules":1`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body missing %s: %s", want, body)
+		}
+	}
+
+	// Second call must be served from cache: break the fake and re-request.
+	fake.listErr = fmt.Errorf("should not be called")
+	w = httptest.NewRecorder()
+	h.ResourcesOverview(w, httptest.NewRequest("GET", "/api/gcp_resources/overview?project=proj-alpha", nil))
+	if w.Code != http.StatusOK {
+		t.Errorf("cached call failed: %d %s", w.Code, w.Body.String())
+	}
+
+	// refresh=1 bypasses the cache and now hits the broken fake.
+	w = httptest.NewRecorder()
+	h.ResourcesOverview(w, httptest.NewRequest("GET", "/api/gcp_resources/overview?project=proj-alpha&refresh=1", nil))
+	if w.Code != http.StatusBadGateway {
+		t.Errorf("refresh should bypass cache: status %d, want 502", w.Code)
+	}
+}
+
+func TestResourcesInsights(t *testing.T) {
+	fake := &fakeResourceAPI{
+		disks: []DiskInfo{{Name: "d-orphan", Zone: "z", SizeGB: 10}},
+	}
+	h := resourcesTestHandler(t, []string{"proj-alpha"}, fake)
+	w := httptest.NewRecorder()
+	h.ResourcesInsights(w, httptest.NewRequest("GET", "/api/gcp_resources/insights?project=proj-alpha", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"unattached_disk"`) {
+		t.Errorf("missing finding: %s", w.Body.String())
+	}
+}
+
+func TestResourcesExplorer(t *testing.T) {
+	fake := &fakeResourceAPI{assets: []AssetItem{{AssetType: "compute.googleapis.com/Instance", DisplayName: "vm-1"}}}
+	h := resourcesTestHandler(t, []string{"proj-alpha"}, fake)
+	w := httptest.NewRecorder()
+	h.ResourcesExplorer(w, httptest.NewRequest("GET", "/api/gcp_resources/explorer?project=proj-alpha&query=vm", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `"vm-1"`) {
+		t.Errorf("missing item: %s", w.Body.String())
+	}
+}
