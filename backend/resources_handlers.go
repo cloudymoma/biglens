@@ -196,8 +196,10 @@ func (h *APIHandler) resServe(w http.ResponseWriter, r *http.Request, endpoint s
 		writeJSON(w, cached)
 		return
 	}
+	// Detach from initiating request's context so cancellation doesn't kill shared waiters.
+	fetchCtx := context.WithoutCancel(r.Context())
 	data, err, _ := resourcesFlight.Do(key, func() (any, error) {
-		return fetch(r.Context(), project)
+		return fetch(fetchCtx, project)
 	})
 	if err != nil {
 		writeError(w, err.Error(), http.StatusBadGateway)

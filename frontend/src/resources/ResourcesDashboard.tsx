@@ -49,6 +49,14 @@ export default function ResourcesDashboard() {
   if (usable.length === 0 || showConfig) {
     return (
       <Panel title="GCP Resources projects" note="stored in conf.yaml">
+        {showConfig && usable.length > 0 && (
+          <button
+            onClick={() => setShowConfig(false)}
+            className="mb-2 text-xs text-zinc-400 hover:text-zinc-200"
+          >
+            ← Back to dashboard
+          </button>
+        )}
         <ConfigPanel
           projects={projects}
           onChanged={resp => {
