@@ -7,7 +7,7 @@ import (
 
 func billingTestConfig() *Config {
 	cfg := &Config{}
-	cfg.OpenData.GCPBilling.Datasets = []string{"my-project.billing_ds"}
+	cfg.GCPBilling.Datasets = []string{"my-project.billing_ds"}
 	return cfg
 }
 

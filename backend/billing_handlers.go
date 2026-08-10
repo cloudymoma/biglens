@@ -44,7 +44,7 @@ func parseBillingFilter(r *http.Request, cfg *Config) (BillingFilter, error) {
 	if f.DatasetFQN == "" {
 		return f, fmt.Errorf("dataset is required")
 	}
-	if !slices.Contains(cfg.OpenData.GCPBilling.Datasets, f.DatasetFQN) {
+	if !slices.Contains(cfg.GCPBilling.Datasets, f.DatasetFQN) {
 		return f, fmt.Errorf("dataset %q is not configured", f.DatasetFQN)
 	}
 	var err error
@@ -159,7 +159,7 @@ func (h *APIHandler) BillingConfig(w http.ResponseWriter, r *http.Request) {
 
 func (h *APIHandler) billingConfigGet(w http.ResponseWriter, r *http.Request) {
 	resp := BillingConfigResponse{Datasets: []BillingDatasetInfo{}}
-	for _, fqn := range h.bq.config.OpenData.GCPBilling.Datasets {
+	for _, fqn := range h.bq.config.GCPBilling.Datasets {
 		info, err := h.billingTables(r.Context(), fqn)
 		if err != nil {
 			resp.Datasets = append(resp.Datasets, BillingDatasetInfo{Dataset: fqn, Error: err.Error()})
@@ -187,7 +187,7 @@ func (h *APIHandler) billingConfigPost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	cfg := h.bq.config
-	datasets := cfg.OpenData.GCPBilling.Datasets
+	datasets := cfg.GCPBilling.Datasets
 
 	switch req.Action {
 	case "add":
@@ -209,14 +209,14 @@ func (h *APIHandler) billingConfigPost(w http.ResponseWriter, r *http.Request) {
 				req.Dataset), http.StatusBadRequest)
 			return
 		}
-		cfg.OpenData.GCPBilling.Datasets = append(datasets, req.Dataset)
+		cfg.GCPBilling.Datasets = append(datasets, req.Dataset)
 	case "remove":
 		i := slices.Index(datasets, req.Dataset)
 		if i < 0 {
 			writeError(w, fmt.Sprintf("dataset %s is not configured", req.Dataset), http.StatusBadRequest)
 			return
 		}
-		cfg.OpenData.GCPBilling.Datasets = slices.Delete(slices.Clone(datasets), i, i+1)
+		cfg.GCPBilling.Datasets = slices.Delete(slices.Clone(datasets), i, i+1)
 	default:
 		writeError(w, `action must be "add" or "remove"`, http.StatusBadRequest)
 		return

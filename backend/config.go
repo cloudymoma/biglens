@@ -26,11 +26,9 @@ type Config struct {
 		} `yaml:"dataplex"`
 		LineageLocation string `yaml:"lineage_location"`
 	} `yaml:"catalog"`
-	OpenData struct {
-		GCPBilling struct {
-			Datasets []string `yaml:"datasets"`
-		} `yaml:"gcp_billing"`
-	} `yaml:"opendata"`
+	GCPBilling struct {
+		Datasets []string `yaml:"datasets"`
+	} `yaml:"gcp_billing"`
 	GCPResources struct {
 		Projects []string `yaml:"projects"`
 	} `yaml:"gcp_resources"`

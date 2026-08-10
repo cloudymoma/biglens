@@ -26,7 +26,7 @@ bigquery:
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg.OpenData.GCPBilling.Datasets = []string{"my-project.billing_ds"}
+	cfg.GCPBilling.Datasets = []string{"my-project.billing_ds"}
 	if err := SaveConfig(cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +41,7 @@ bigquery:
 	if reloaded.BigQuery.ProjectID != "du-hast-mich" {
 		t.Errorf("bigquery section lost: %+v", reloaded.BigQuery)
 	}
-	got := reloaded.OpenData.GCPBilling.Datasets
+	got := reloaded.GCPBilling.Datasets
 	if len(got) != 1 || got[0] != "my-project.billing_ds" {
 		t.Errorf("datasets = %v, want [my-project.billing_ds]", got)
 	}
