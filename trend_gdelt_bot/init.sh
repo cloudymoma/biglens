@@ -117,6 +117,9 @@ run_sql bigquery/04_views_trends_gdelt_unified.sql
 echo -e "  → Deploying 05_property_graph.sql (BigQuery Property Graph)..."
 run_sql bigquery/05_property_graph.sql
 
+echo -e "  → Deploying 08_views_tier2_raw.sql (Tier 2 raw drill-down proxy views)..."
+run_sql bigquery/08_views_tier2_raw.sql
+
 echo -e "${GREEN}✓ BigQuery semantic layer deployed successfully.${NC}\n"
 
 # -----------------------------------------------------------------------------

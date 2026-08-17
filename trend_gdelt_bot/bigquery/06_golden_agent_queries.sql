@@ -119,5 +119,189 @@ ORDER BY
   media_mentions_count DESC
 LIMIT 15;
 
--- Query 6 (graph traversal via GRAPH_TABLE) lives in 07_graph_golden_query.sql:
+-- -----------------------------------------------------------------------------
+-- Query 6 (TIER 2): Multi-Year Weekly Trend Trajectory for a Term
+-- Intent: "Show the 5-year search interest curve for the UK's current #1 term."
+-- Note: Each snapshot_date carries the FULL ~5-year weekly history, so pin
+-- snapshot_date = MAX(snapshot_date) and scan week. NEVER range over
+-- snapshot_date for history — that averages overlapping histories.
+-- -----------------------------------------------------------------------------
+SELECT
+  search_term,
+  week,
+  CAST(AVG(search_score) AS INT64) AS avg_weekly_score
+FROM
+  `trends_gdelt_analytics.vw_raw_trends_international_history`
+WHERE
+  snapshot_date = (SELECT MAX(snapshot_date) FROM `trends_gdelt_analytics.vw_raw_trends_international_history`)
+  AND country_code = 'GB'
+  AND rank = 1
+GROUP BY
+  search_term, week
+ORDER BY
+  week ASC;
+
+-- -----------------------------------------------------------------------------
+-- Query 7 (TIER 2): US Metro-Level (DMA) Breakdown of Today's Top Terms
+-- Intent: "Which search terms chart in the top 3 across the most US metro areas?"
+-- Note: COUNT(DISTINCT dma_name) also collapses the repeated weekly-history
+-- rows within the pinned snapshot.
+-- -----------------------------------------------------------------------------
+SELECT
+  search_term,
+  COUNT(DISTINCT dma_name) AS dma_count,
+  MIN(rank) AS best_rank
+FROM
+  `trends_gdelt_analytics.vw_raw_trends_us_dma`
+WHERE
+  snapshot_date = (SELECT MAX(snapshot_date) FROM `trends_gdelt_analytics.vw_raw_trends_us_dma`)
+  AND rank <= 3
+GROUP BY
+  search_term
+ORDER BY
+  dma_count DESC
+LIMIT 15;
+
+-- -----------------------------------------------------------------------------
+-- Query 8 (TIER 2): Historical News Event Archive Lookup (beyond 90 days)
+-- Intent: "What were the most covered protest events in France in Q1 2023?"
+-- Note: partition_date filter is MANDATORY on the archive view — it prunes
+-- a decade of partitions. is_root_event + QUALIFY deduplicate one-story-
+-- many-events noise.
+-- -----------------------------------------------------------------------------
+SELECT
+  event_date,
+  location_name,
+  primary_actor,
+  secondary_actor,
+  cameo_event_code,
+  event_category,
+  media_mentions_count,
+  source_article_url
+FROM
+  `trends_gdelt_analytics.vw_raw_gdelt_events_archive`
+WHERE
+  partition_date BETWEEN '2023-01-01' AND '2023-03-31'
+  AND country_code = 'FR'
+  AND cameo_root_code = '14' -- Protest
+  AND is_root_event
+QUALIFY
+  ROW_NUMBER() OVER (PARTITION BY source_article_url ORDER BY media_mentions_count DESC) = 1
+ORDER BY
+  media_mentions_count DESC
+LIMIT 15;
+
+-- -----------------------------------------------------------------------------
+-- Query 9 (TIER 2): Entity-Level News Coverage from the GKG Archive
+-- Intent: "Show the most negative coverage mentioning Emmanuel Macron in the last 90 days."
+-- Note: persons/organizations/themes are clean arrays — filter with
+-- IN UNNEST(...). The view is hard-bounded to a rolling 2-year window.
+-- -----------------------------------------------------------------------------
+SELECT
+  partition_date,
+  media_source,
+  document_url,
+  sentiment_tone,
+  organizations
+FROM
+  `trends_gdelt_analytics.vw_raw_gdelt_gkg_entities_archive`
+WHERE
+  partition_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 90 DAY)
+  AND 'Emmanuel Macron' IN UNNEST(persons)
+ORDER BY
+  sentiment_tone ASC
+LIMIT 15;
+
+-- -----------------------------------------------------------------------------
+-- Query 10 (TIER 2 / REAL-TIME): What Is Trending in the US RIGHT NOW
+-- Intent: "What are Americans searching for right now / today?"
+-- Note: The hourly views are the FRESHEST source (several intraday snapshots
+-- per day; the daily views lag 1-2 days). Pin BOTH snapshot_time and week,
+-- then aggregate across DMAs for the national picture.
+-- -----------------------------------------------------------------------------
+WITH latest_snapshot AS (
+  SELECT *
+  FROM `trends_gdelt_analytics.vw_raw_trends_us_hourly`
+  WHERE snapshot_time = (SELECT MAX(snapshot_time) FROM `trends_gdelt_analytics.vw_raw_trends_us_hourly`)
+  QUALIFY week = MAX(week) OVER ()
+)
+SELECT
+  search_term,
+  MIN(rank) AS best_rank,
+  CAST(AVG(search_score) AS INT64) AS avg_dma_score,
+  COUNT(DISTINCT dma_name) AS active_dma_count
+FROM
+  latest_snapshot
+GROUP BY
+  search_term
+ORDER BY
+  best_rank ASC
+LIMIT 25;
+
+-- -----------------------------------------------------------------------------
+-- Query 11 (TIER 2 / REAL-TIME): US Terms Breaking Out RIGHT NOW
+-- Intent: "Which searches are spiking/breaking out in the US at this moment, and where?"
+-- -----------------------------------------------------------------------------
+WITH latest_snapshot AS (
+  SELECT *
+  FROM `trends_gdelt_analytics.vw_raw_trends_us_hourly_rising`
+  WHERE snapshot_time = (SELECT MAX(snapshot_time) FROM `trends_gdelt_analytics.vw_raw_trends_us_hourly_rising`)
+  QUALIFY week = MAX(week) OVER ()
+)
+SELECT
+  search_term,
+  MAX(percent_gain) AS max_percent_gain,
+  COUNT(DISTINCT dma_name) AS rising_dma_count,
+  STRING_AGG(DISTINCT dma_name ORDER BY dma_name LIMIT 5) AS sample_dmas
+FROM
+  latest_snapshot
+GROUP BY
+  search_term
+ORDER BY
+  max_percent_gain DESC
+LIMIT 15;
+
+-- -----------------------------------------------------------------------------
+-- Query 12 (TIER 2): Where a Term Is Rising — US Metro (DMA) Breakout Map
+-- Intent: "In which US metro areas is the top rising term breaking out the hardest?"
+-- -----------------------------------------------------------------------------
+SELECT
+  search_term,
+  dma_name,
+  percent_gain,
+  rank
+FROM
+  `trends_gdelt_analytics.vw_raw_trends_us_dma_rising`
+WHERE
+  snapshot_date = (SELECT MAX(snapshot_date) FROM `trends_gdelt_analytics.vw_raw_trends_us_dma_rising`)
+  AND rank = 1
+QUALIFY
+  week = MAX(week) OVER ()
+ORDER BY
+  percent_gain DESC
+LIMIT 20;
+
+-- -----------------------------------------------------------------------------
+-- Query 13 (TIER 2): Region-Level Rising Terms Inside a Country
+-- Intent: "Which regions of Japan are driving today's biggest breakout query?"
+-- Note: Tier 1 vw_search_trends_rising aggregates regions away — this view
+-- keeps the per-region percent_gain.
+-- -----------------------------------------------------------------------------
+SELECT
+  search_term,
+  region_name,
+  percent_gain,
+  search_score
+FROM
+  `trends_gdelt_analytics.vw_raw_trends_international_rising_history`
+WHERE
+  snapshot_date = (SELECT MAX(snapshot_date) FROM `trends_gdelt_analytics.vw_raw_trends_international_rising_history`)
+  AND country_code = 'JP'
+QUALIFY
+  week = MAX(week) OVER ()
+ORDER BY
+  percent_gain DESC
+LIMIT 20;
+
+-- Query 14 (graph traversal via GRAPH_TABLE) lives in 07_graph_golden_query.sql:
 -- it requires an Enterprise edition reservation, so it is preflighted separately.

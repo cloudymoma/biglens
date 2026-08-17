@@ -20,8 +20,9 @@ trend_gdelt_bot/
 │   ├── 03_views_gdelt_events.sql                # GDELT 每日事件与 GKG 主题精选视图（CAMEO 解码）
 │   ├── 04_views_trends_gdelt_unified.sql        # 搜索热词 × 新闻态势统一分析宽表
 │   ├── 05_property_graph.sql                    # BigQuery 属性图 DDL（NODE TABLES / ISO GQL）
-│   ├── 06_golden_agent_queries.sql              # 供 AI 智能体使用的 few-shot 验证查询
-│   └── 07_graph_golden_query.sql                # 图查询 GQL 示例（需 Enterprise 版本预留）
+│   ├── 06_golden_agent_queries.sql              # 供 AI 智能体使用的 few-shot 验证查询（Tier 1 + Tier 2）
+│   ├── 07_graph_golden_query.sql                # 图查询 GQL 示例（需 Enterprise 版本预留）
+│   └── 08_views_tier2_raw.sql                   # Tier 2 原始下钻代理视图（完整历史、美国 DMA、小时级实时、飙升明细、GKG 实体）
 │
 └── knowledge_catalog/                           # 开放知识格式（OKF）知识包
     ├── index.md                                 # 目录根索引（okf_version: "0.1"）
@@ -77,7 +78,10 @@ cd trend_gdelt_bot
 ---
 
 ### 步骤 2：配置数据源（双层架构）
-在 BigQuery 智能体配置中，同时加入 **Tier 1（精选数据集）**，并可选加入 **Tier 2（底层公共表）**。双层设计让智能体对常规问题给出快速、安全的回答，同时保留深度下钻能力：
+在 BigQuery 智能体配置中，加入 **`trends_gdelt_analytics` 数据集**（或逐个选择下方的视图和表）。双层设计让智能体对常规问题给出快速、安全的回答，同时保留深度下钻能力。
+
+> [!IMPORTANT]
+> **切勿将外部公共数据集（`gdelt-bq.*` 或 `bigquery-public-data.*`）直接添加为智能体数据源。** BigQuery Conversational Analytics 强制执行跨组织资源边界，所有挂载的数据源必须位于你自己的 Google Cloud 项目中。这正是下方 Tier 2 **代理视图（proxy view）** 存在的意义：视图对象位于 `trends_gdelt_analytics`（智能体可无跨组织错误地挂载），而其 SQL 在查询时仍会解析到底层公共表。
 
 #### 🔹 Tier 1：精选语义层（首选，默认）
 加入整个 `<YOUR_PROJECT_ID>.trends_gdelt_analytics` 数据集（或逐个添加视图）：
@@ -92,15 +96,22 @@ cd trend_gdelt_bot
 | **`dim_fips_iso_country`** | **国家维度：** FIPS 10-4 ↔ ISO 3166-1 国家代码对照表。 |
 | **`trend_gdelt_graph`**（属性图 - 预览） | **图模式匹配：** 原生属性图，用于跨国热词重叠、双边对比及扩散网络分析（ISO GQL / `GRAPH_TABLE`）。⚠️ **需要 BigQuery Enterprise（或 Enterprise Plus）版本预留** —— 按需计费下 `GRAPH_TABLE` 查询会被拒绝。 |
 
-#### 🔹 Tier 2：底层公共表（深度历史与细粒度下钻）
-若希望智能体回答 90 天精选窗口之外的深度下钻问题，可加入以下公共数据集表：
+#### 🔹 Tier 2：原始下钻代理视图（按明确请求使用 —— 深度历史与细粒度下钻）
+以下代理视图同样位于 `trends_gdelt_analytics` 中（由 `08_views_tier2_raw.sql` 部署），解锁 90 天精选窗口之外的深度下钻能力：
 
-| 底层公共表 | 解锁哪些下钻能力？ |
-| :--- | :--- |
-| **`bigquery-public-data.google_trends.international_top_terms`** | 每个词完整 5 年的周度历史趋势曲线。 |
-| **`bigquery-public-data.google_trends.top_terms`** | 美国指定市场区域（DMA）都会区级别的细粒度排名。 |
-| **`gdelt-bq.gdeltv2.events_partitioned`** | 多年历史新闻事件档案（2015 年至今）及 300+ 细分 CAMEO 子编码（`010`–`204`）。 |
-| **`gdelt-bq.gdeltv2.gkg_partitioned`** | 全文实体网络：所有被提及人物（`V2Persons`）、组织（`V2Organizations`）及 6 维情绪画像。 |
+| Tier 2 代理视图 | 底层公共表 | 解锁哪些下钻能力？ |
+| :--- | :--- | :--- |
+| **`vw_raw_trends_international_history`** | `bigquery-public-data.google_trends.international_top_terms` | 每个词完整约 5 年的周度历史趋势曲线（按国家/地区）。 |
+| **`vw_raw_trends_international_rising_history`** | `bigquery-public-data.google_trends.international_top_rising_terms` | 地区（省/州）级飙升词及各地区 `percent_gain` 与周度历史。 |
+| **`vw_raw_trends_us_dma`** | `bigquery-public-data.google_trends.top_terms` | 美国指定市场区域（Nielsen DMA）都会区级别的细粒度排名。 |
+| **`vw_raw_trends_us_dma_rising`** | `bigquery-public-data.google_trends.top_rising_terms` | 美国 DMA 级飙升词及各都会区 `percent_gain`。 |
+| **`vw_raw_trends_us_hourly`** | `bigquery-public-data.google_trends_hourly.top_terms_hourly` | **实时：** 美国 DMA 级日内 Top 25，每天多个快照（快照保留约 30 天，每快照约 1 年周度历史）。最新鲜数据源 —— 每日表滞后 1–2 天。 |
+| **`vw_raw_trends_us_hourly_rising`** | `bigquery-public-data.google_trends_hourly.top_rising_terms_hourly` | **实时：** 美国 DMA 级日内飙升词及 `percent_gain`。 |
+| **`vw_raw_gdelt_events_archive`** | `gdelt-bq.gdeltv2.events_partitioned` | 多年历史新闻事件档案（2015 年 2 月至今）、300+ 细分 CAMEO 子编码、行为体类型编码与精确坐标。 |
+| **`vw_raw_gdelt_gkg_entities_archive`** | `gdelt-bq.gdeltv2.gkg_partitioned` | 文章级实体清单：被提及人物（`persons`）、组织（`organizations`）、主题（`themes`）均为已清洗数组，附完整情绪向量；滚动 2 年窗口（视图内置硬性成本上限）。 |
+
+> [!NOTE]
+> 若智能体的数据源数量受限，优先保留 Tier 1 加两个 GDELT 档案视图与 `vw_raw_trends_us_hourly` —— 它们解锁 Tier 1 完全无法回答的能力（深度历史、实体、实时性；每日 Trends 表滞后 1–2 天）。另建议为原始视图查询设置 `maximum_bytes_billed`（项目级查询上限）或自定义配额作为成本兜底。
 
 ---
 
@@ -111,41 +122,53 @@ cd trend_gdelt_bot
 You are a specialized analytical assistant for Google Trends and GDELT 2.0 geopolitical news data.
 Always follow this Two-Tier routing hierarchy and domain rules:
 
-1. ROUTING HIERARCHY:
-   - DEFAULT (TIER 1): Always prefer the curated views in `trends_gdelt_analytics.vw_*` for standard analytics, recent trends (last 90 days; GKG themes last 30 days), and cross-dataset correlations:
-     * Macro correlations (search trends + country news context): Query `trends_gdelt_analytics.vw_topic_news_trends_unified`.
-     * Breakout/surging terms & % growth: Query `trends_gdelt_analytics.vw_search_trends_rising`.
-     * Daily search rankings & regional spread: Query `trends_gdelt_analytics.vw_search_trends_daily`.
-     * Specific news events, actor dyads, or article URLs: Query `trends_gdelt_analytics.vw_gdelt_news_events_daily`.
-     * News themes & media outlets (last 30 days ONLY): Query `trends_gdelt_analytics.vw_gdelt_gkg_themes_daily`.
-     * Country code conversions: Use `trends_gdelt_analytics.dim_fips_iso_country`.
-     * Cross-country term overlap, bilateral comparisons, or graph diffusion networks: Query `trends_gdelt_analytics.trend_gdelt_graph` using GRAPH_TABLE and GQL pattern matching — ONLY if the project has an Enterprise/Enterprise Plus reservation. On on-demand billing GRAPH_TABLE fails; answer the same questions with self-joins or GROUP BY on `trends_gdelt_analytics.vw_search_trends_daily` instead.
-   - DRILL-DOWN (TIER 2): Query raw public tables ONLY when explicitly asked for:
-     * Historical lookbacks older than 90 days (e.g. "over the last 3 years").
-     * News themes or media outlets older than 30 days (from `gdelt-bq.gdeltv2.gkg_partitioned`).
-     * US Designated Market Areas / Metro DMAs (from `bigquery-public-data.google_trends.top_terms`).
-     * Specific organizations or persons from GKG (`gdelt-bq.gdeltv2.gkg_partitioned`).
-     * 5-year historical trend trajectories for a specific term.
+1. ROUTING HIERARCHY — TIER 1 (CURATED, DEFAULT):
+   Always prefer the Tier 1 curated views for standard analytics, recent trends (last 90 days; GKG themes last 30 days), and cross-dataset correlations:
+   - For macro correlations (search trends + country news context): Query `trends_gdelt_analytics.vw_topic_news_trends_unified`.
+   - For breakout/surging terms & % growth (e.g. rising queries in Japan/US): Query `trends_gdelt_analytics.vw_search_trends_rising`.
+   - For daily search rankings & regional spread: Query `trends_gdelt_analytics.vw_search_trends_daily`.
+   - For specific news events, actor dyads, or article URLs: Query `trends_gdelt_analytics.vw_gdelt_news_events_daily`.
+   - For news themes & media outlets (last 30 days ONLY): Query `trends_gdelt_analytics.vw_gdelt_gkg_themes_daily`.
+   - For country code conversions: Use `trends_gdelt_analytics.dim_fips_iso_country`.
+   - Cross-country term overlap, bilateral comparisons, or graph diffusion networks: Query `trends_gdelt_analytics.trend_gdelt_graph` using GRAPH_TABLE and GQL pattern matching — ONLY if the project has an Enterprise/Enterprise Plus reservation. On on-demand billing GRAPH_TABLE fails; answer the same questions with self-joins or GROUP BY on `trends_gdelt_analytics.vw_search_trends_daily` instead.
 
-2. SAFETY GUARDRAILS FOR RAW TABLES:
-   - When querying `google_trends.*`, ALWAYS include `week = (SELECT MAX(week) FROM ... WHERE refresh_date = ...)` unless the user specifically requests historical time-series curves.
-   - When querying `gdelt-bq.gdeltv2.*`, ALWAYS filter `_PARTITIONDATE >= DATE_SUB(CURRENT_DATE(), INTERVAL N DAY)` to avoid multi-terabyte full-table scans.
-   - NEVER join raw GDELT `ActionGeo_CountryCode` (FIPS) to Trends `country_code` (ISO) directly; ALWAYS join via `trends_gdelt_analytics.dim_fips_iso_country`.
-   - GKG V2 fields (`V2Themes`, `V2Persons`, `V2Organizations`) store entries as "Name,charOffset;Name,charOffset;...". ALWAYS strip the offsets, e.g. first entry: SPLIT(SPLIT(V2Persons, ';')[SAFE_OFFSET(0)], ',')[SAFE_OFFSET(0)].
+2. ROUTING HIERARCHY — TIER 2 (RAW DRILL-DOWN, ON EXPLICIT REQUEST ONLY):
+   Use the Tier 2 raw proxy views ONLY when the user explicitly asks for data outside the Tier 1 windows or granularity:
+   - Multi-year historical trend trajectories per term: Query `trends_gdelt_analytics.vw_raw_trends_international_history`.
+   - Region-level rising terms & per-region percent gains: Query `trends_gdelt_analytics.vw_raw_trends_international_rising_history`.
+   - US metro / Designated Market Area (DMA) breakdowns: Query `trends_gdelt_analytics.vw_raw_trends_us_dma` (top terms) or `trends_gdelt_analytics.vw_raw_trends_us_dma_rising` (breakouts with percent_gain).
+   - News events older than 90 days, full CAMEO subcodes, or actor type codes: Query `trends_gdelt_analytics.vw_raw_gdelt_events_archive`.
+   - Person/organization entity mentions, or themes older than 30 days: Query `trends_gdelt_analytics.vw_raw_gdelt_gkg_entities_archive` (rolling 2-year window).
 
-3. SEARCH SCORE VS. RANK:
+3. REAL-TIME EXCEPTION — "RIGHT NOW / TODAY" QUESTIONS (US ONLY):
+   The daily views lag 1-2 days. For US questions about the current moment or today ("what is trending right now", "what is spiking today"), route PROACTIVELY to the intraday hourly views (several snapshots per day, ~30-day snapshot retention):
+   - Current US top terms: `trends_gdelt_analytics.vw_raw_trends_us_hourly`.
+   - Current US breakouts: `trends_gdelt_analytics.vw_raw_trends_us_hourly_rising`.
+   For non-US "right now" questions, use the latest Tier 1 snapshot and state the 1-2 day lag.
+
+4. GUARDRAILS FOR TIER 2 RAW VIEWS:
+   - ALWAYS filter `partition_date >= DATE_SUB(CURRENT_DATE(), INTERVAL N DAY)` (or an explicit BETWEEN range) on the GDELT archive views — they span many years and terabytes.
+   - On `vw_raw_trends_*`, each snapshot (snapshot_date, or snapshot_time on hourly views) carries the FULL weekly history (~5 years daily, ~1 year hourly):
+     * For historical curves: pin `snapshot_date = (SELECT MAX(snapshot_date) FROM <view>)` and scan `week`. NEVER range over snapshots for history — that averages overlapping histories into garbage.
+     * For current single-snapshot values: pin the snapshot as above AND `week = MAX(week)`.
+     * On hourly views pin `snapshot_time = (SELECT MAX(snapshot_time) FROM <view>)` (DATETIME, not DATE).
+   - Rank vs breadth on DMA/region views: aggregate with MIN(rank), MAX(percent_gain), COUNT(DISTINCT dma_name / region_name) for national/country rollups.
+   - In `vw_raw_gdelt_gkg_entities_archive`, `persons`/`organizations`/`themes` are ARRAY<STRING>; filter with `'Name' IN UNNEST(persons)`.
+   - NEVER join `fips_country_code` to ISO country codes directly; the archive views already expose mapped ISO `country_code`.
+
+5. SEARCH SCORE VS. RANK:
    - `search_rank` (1–25) is the cross-sectional popularity hierarchy on that day. Sort top-term leaderboards by `search_rank ASC`.
    - `search_score` (0–100) measures interest relative to the term's OWN historical peak share (100 = all-time peak for that specific term).
    - High rank (e.g. #1 "weather") does NOT imply score 100. A lower-ranking term (e.g. #15 "eclipse") CAN have score 100 if it is at its all-time spike.
    - `is_historical_peak = TRUE` indicates `search_score = 100`.
 
-4. GDELT NEWS METRICS & SENTIMENT:
+6. GDELT NEWS METRICS & SENTIMENT:
    - `country_avg_tone` / `sentiment_tone`: Sentiment tone from -100 to +100. Real-world values fall between -10 and +10 (< -2.0 is clearly negative, > +2.0 is positive).
    - `country_avg_goldstein` / `goldstein_scale`: Theoretical stability impact (-10.0 extreme conflict/destabilizing to +10.0 high cooperation).
    - `conflict_event_share_pct`: Share of daily events classified as Verbal Conflict (QuadClass 3) or Material Conflict (QuadClass 4).
    - `country_daily_media_mentions`: Volume of media attention pulse across news articles.
 
-5. PARTITION & DATE PRUNING:
+7. PARTITION & DATE PRUNING:
    - Always filter `date >= DATE_SUB(CURRENT_DATE(), INTERVAL N DAY)` or `report_date >= ...`.
    - Google Trends snapshots lag 1–2 days; pin the latest snapshot via:
      QUALIFY date = MAX(date) OVER ()
@@ -153,7 +176,8 @@ Always follow this Two-Tier routing hierarchy and domain rules:
 
 其中的核心业务规则包括：
 
-* **双层路由：** 常规分析（近 90 天；GKG 主题近 30 天）一律走 Tier 1 精选视图；只有当用户明确要求更长历史、美国 DMA 都会区或 GKG 人物/组织实体时，才下钻到 Tier 2 底层公共表。
+* **双层路由：** 常规分析（近 90 天；GKG 主题近 30 天）一律走 Tier 1 精选视图；只有当用户明确要求更长历史、美国 DMA 都会区、地区级飙升明细或 GKG 人物/组织实体时，才下钻到 Tier 2 本地代理视图（`vw_raw_*`）。查询 GDELT 档案视图必须过滤 `partition_date`；查询 Trends 历史视图必须锁定最新 `snapshot_date` 再沿 `week` 展开曲线。
+* **实时例外：** 每日表滞后 1–2 天。美国"此刻/今天在搜什么"类问题应主动路由到小时级视图（`vw_raw_trends_us_hourly` / `vw_raw_trends_us_hourly_rising`，锁定 `snapshot_time = MAX(snapshot_time)`）；非美国的实时问题使用 Tier 1 最新快照并向用户说明滞后。
 * **国家代码防护：** GDELT 使用 FIPS 10-4，Trends 使用 ISO 3166-1（FIPS 的 `GB` 是加蓬、ISO 的 `GB` 是英国！），二者绝不能直接 JOIN，必须经 `dim_fips_iso_country` 转换。
 * **Rank 与 Score 的区别：** `search_rank`（1–25）是当日绝对搜索量的横向排名；`search_score`（0–100）是相对该词自身历史峰值的热度（100 = 创历史新高）。排名第 1 不代表分数 100。
 * **分区裁剪：** 所有查询必须带日期过滤，避免对 TB 级底表全表扫描；Trends 快照滞后 1–2 天，用 `QUALIFY date = MAX(date) OVER ()` 锁定最新快照。
@@ -185,6 +209,28 @@ Always follow this Two-Tier routing hierarchy and domain rules:
   FROM `trends_gdelt_analytics.vw_topic_news_trends_unified`
   WHERE country_code = 'US' AND is_historical_peak = TRUE AND date >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)
   ORDER BY date DESC, search_rank ASC;
+  ```
+* **Tier 2 下钻 —— 5 年趋势曲线（锁定快照、沿周展开）：**
+  ```sql
+  SELECT search_term, week, CAST(AVG(search_score) AS INT64) AS avg_weekly_score
+  FROM `trends_gdelt_analytics.vw_raw_trends_international_history`
+  WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM `trends_gdelt_analytics.vw_raw_trends_international_history`)
+    AND country_code = 'GB' AND rank = 1
+  GROUP BY search_term, week
+  ORDER BY week ASC;
+  ```
+* **Tier 2 实时 —— 美国此刻热搜（同时锁定 snapshot_time 与 week）：**
+  ```sql
+  WITH latest_snapshot AS (
+    SELECT * FROM `trends_gdelt_analytics.vw_raw_trends_us_hourly`
+    WHERE snapshot_time = (SELECT MAX(snapshot_time) FROM `trends_gdelt_analytics.vw_raw_trends_us_hourly`)
+    QUALIFY week = MAX(week) OVER ()
+  )
+  SELECT search_term, MIN(rank) AS best_rank, CAST(AVG(search_score) AS INT64) AS avg_dma_score,
+         COUNT(DISTINCT dma_name) AS active_dma_count
+  FROM latest_snapshot
+  GROUP BY search_term
+  ORDER BY best_rank ASC LIMIT 25;
   ```
 * **图遍历 / 双边重叠（GQL via GRAPH_TABLE —— 需 Enterprise 版本预留）：**
   ```sql
@@ -220,6 +266,10 @@ Always follow this Two-Tier routing hierarchy and domain rules:
 4. *"过去 7 天有哪些搜索词同时在 3 个及以上国家上榜？"*
 5. *"为什么排名第 12 的词分数是 100，而排名第 1 的词分数只有 70？"*
 6. *"哪些搜索词在同一天同时进入英国和法国的前 10？对比它们的排名。"*
+7. *"展示英国当前排名第 1 的搜索词过去 5 年的热度曲线。"*（Tier 2 下钻）
+8. *"2023 年初法国报道量最高的抗议事件有哪些？附文章链接。"*（Tier 2 下钻）
+9. *"美国人此刻在搜什么？哪些搜索正在飙升？"*（Tier 2 实时小时级）
+10. *"今天排名第一的飙升词在哪些美国都会区爆发最猛？"*（Tier 2 DMA 飙升）
 
 ---
 
@@ -232,3 +282,11 @@ Always follow this Two-Tier routing hierarchy and domain rules:
 | **`vw_gdelt_news_events_daily`** | 视图 | `gdelt-bq.gdeltv2.events_partitioned` | `report_date`、`country_code`（映射为 ISO）、`event_category`（CAMEO 解码）、`quad_class_name`、`goldstein_scale`、`sentiment_tone`、`source_article_url`。 |
 | **`vw_topic_news_trends_unified`** | 视图 | *统一分析宽表* | **智能体主宽表：** 关联每日搜索词、排名、分数与国家新闻情绪、Goldstein 冲突分及主导新闻类别。 |
 | **`trend_gdelt_graph`** | 属性图 | `node_countries`、`node_search_terms`、`edge_trended_in` | **图模型（预览）：** `Country` 与 `SearchTerm` 节点、`TRENDED_IN` 边，通过 ISO GQL / `GRAPH_TABLE` 查询。需 Enterprise/Enterprise Plus 预留。 |
+| **`vw_raw_trends_international_history`** | 视图（Tier 2） | `google_trends.international_top_terms` | **下钻：** 未聚合的约 5 年周度热度历史（`snapshot_date`、`week`、`region_name`、`search_score`）。 |
+| **`vw_raw_trends_international_rising_history`** | 视图（Tier 2） | `google_trends.international_top_rising_terms` | **下钻：** 地区级飙升词及各地区 `percent_gain` 与周度历史。 |
+| **`vw_raw_trends_us_dma`** | 视图（Tier 2） | `google_trends.top_terms` | **下钻：** 美国 Nielsen DMA 都会区级 Top 25（`dma_name`、`dma_id`）及周度历史。 |
+| **`vw_raw_trends_us_dma_rising`** | 视图（Tier 2） | `google_trends.top_rising_terms` | **下钻：** 美国 DMA 级飙升词及 `percent_gain`。 |
+| **`vw_raw_trends_us_hourly`** | 视图（Tier 2） | `google_trends_hourly.top_terms_hourly` | **实时：** 美国 DMA 级日内 Top 25（`snapshot_time` DATETIME）；每天多快照、保留约 30 天、每快照约 1 年周度历史。 |
+| **`vw_raw_trends_us_hourly_rising`** | 视图（Tier 2） | `google_trends_hourly.top_rising_terms_hourly` | **实时：** 美国 DMA 级日内飙升词及 `percent_gain`。 |
+| **`vw_raw_gdelt_events_archive`** | 视图（Tier 2） | `gdelt-bq.gdeltv2.events_partitioned` | **下钻：** 2015 年 2 月至今的完整事件档案（`partition_date`、`global_event_id`、完整 CAMEO 编码、行为体类型编码、映射 ISO `country_code`）。 |
+| **`vw_raw_gdelt_gkg_entities_archive`** | 视图（Tier 2） | `gdelt-bq.gdeltv2.gkg_partitioned` | **下钻：** 文章级实体数组（`persons`、`organizations`、`themes`）及完整情绪向量；滚动 2 年硬性窗口。 |

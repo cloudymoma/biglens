@@ -79,6 +79,30 @@ ON
 WHERE
   e._PARTITIONDATE >= DATE_SUB(CURRENT_DATE(), INTERVAL 90 DAY);
 
+-- Column Descriptions
+ALTER VIEW `trends_gdelt_analytics.vw_gdelt_news_events_daily`
+ALTER COLUMN report_date SET OPTIONS (description = "Ingestion partition date of the event (last 90 days). Always filter this column."),
+ALTER COLUMN country_code SET OPTIONS (description = "ISO 3166-1 alpha-2 country code of the action location, mapped from FIPS via dim_fips_iso_country; NULL for countries not covered by Google Trends."),
+ALTER COLUMN fips_country_code SET OPTIONS (description = "Raw FIPS 10-4 country code (GDELT native). NEVER join directly to Trends ISO codes (FIPS 'GB' = Gabon, ISO 'GB' = United Kingdom)."),
+ALTER COLUMN location_name SET OPTIONS (description = "Full human-readable action location (city, region, country)."),
+ALTER COLUMN latitude SET OPTIONS (description = "Latitude of the action location centroid."),
+ALTER COLUMN longitude SET OPTIONS (description = "Longitude of the action location centroid."),
+ALTER COLUMN primary_actor SET OPTIONS (description = "Name of Actor1 (initiator) as reported, e.g. 'UNITED STATES', 'PROTESTERS'."),
+ALTER COLUMN actor1_country_code SET OPTIONS (description = "CAMEO 3-letter country affiliation code of Actor1 (e.g. 'USA', 'CHN')."),
+ALTER COLUMN secondary_actor SET OPTIONS (description = "Name of Actor2 (recipient/target) as reported."),
+ALTER COLUMN actor2_country_code SET OPTIONS (description = "CAMEO 3-letter country affiliation code of Actor2."),
+ALTER COLUMN cameo_event_code SET OPTIONS (description = "Full 3-4 digit CAMEO action code, e.g. '1411' = demonstrate for leadership change."),
+ALTER COLUMN cameo_root_code SET OPTIONS (description = "2-digit CAMEO root category code ('01'-'20')."),
+ALTER COLUMN event_category SET OPTIONS (description = "Decoded English name of the CAMEO root category (e.g. 'Protest', 'Fight')."),
+ALTER COLUMN quad_class_id SET OPTIONS (description = "Primary event classification: 1=Verbal Cooperation, 2=Material Cooperation, 3=Verbal Conflict, 4=Material Conflict."),
+ALTER COLUMN quad_class_name SET OPTIONS (description = "Decoded QuadClass name."),
+ALTER COLUMN goldstein_scale SET OPTIONS (description = "Goldstein stability impact score (-10.0 extreme conflict/destabilizing to +10.0 high cooperation)."),
+ALTER COLUMN sentiment_tone SET OPTIONS (description = "Average tone of coverage (-100 to +100; real-world values typically -10 to +10; < -2 clearly negative, > +2 positive)."),
+ALTER COLUMN media_mentions_count SET OPTIONS (description = "Number of mentions of this event across all source documents (media-attention pulse)."),
+ALTER COLUMN distinct_sources_count SET OPTIONS (description = "Number of distinct information sources reporting the event."),
+ALTER COLUMN article_count SET OPTIONS (description = "Number of source articles containing the event."),
+ALTER COLUMN source_article_url SET OPTIONS (description = "URL of a representative news article reporting the event.");
+
 -- View 2: Curated Daily GKG Themes and Sentiment
 CREATE OR REPLACE VIEW `trends_gdelt_analytics.vw_gdelt_gkg_themes_daily`
 OPTIONS (
@@ -100,3 +124,14 @@ FROM
 WHERE
   _PARTITIONDATE >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
   AND V2Themes IS NOT NULL;
+
+-- Column Descriptions
+ALTER VIEW `trends_gdelt_analytics.vw_gdelt_gkg_themes_daily`
+ALTER COLUMN report_date SET OPTIONS (description = "Ingestion partition date of the article (last 30 days only — GKG is the largest source table). Always filter this column."),
+ALTER COLUMN primary_theme SET OPTIONS (description = "First-listed GKG theme code of the article with character offset stripped (e.g. 'TAX_DISEASE', 'PROTEST')."),
+ALTER COLUMN media_source SET OPTIONS (description = "News outlet domain (e.g. 'bbc.co.uk')."),
+ALTER COLUMN document_url SET OPTIONS (description = "URL of the source article."),
+ALTER COLUMN sentiment_tone SET OPTIONS (description = "Overall document tone (-100 to +100; real-world values typically -10 to +10; < -2 clearly negative, > +2 positive)."),
+ALTER COLUMN positive_score SET OPTIONS (description = "Percentage of words with positive emotional connotation."),
+ALTER COLUMN negative_score SET OPTIONS (description = "Percentage of words with negative emotional connotation."),
+ALTER COLUMN polarity_score SET OPTIONS (description = "Percentage of emotionally charged words (how polarized the coverage is).");

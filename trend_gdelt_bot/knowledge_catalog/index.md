@@ -18,12 +18,22 @@ An Open Knowledge Format (OKF) knowledge catalog defining the semantic layer, me
 - [GDELT GKG Partitioned Table](/tables/gkg_partitioned)
 - [FIPS to ISO Country Code Mapping](/tables/dim_fips_iso_country)
 
-## Curated Semantic Views
+## Curated Semantic Views (Tier 1 — Default)
 - [Daily Search Trends View](/views/vw_search_trends_daily)
 - [Rising Search Trends View](/views/vw_search_trends_rising)
 - [Daily GDELT News Events View](/views/vw_gdelt_news_events_daily)
 - [Daily GDELT Themes View](/views/vw_gdelt_gkg_themes_daily)
 - [Unified Topic & News Analytics Mart](/views/vw_topic_news_trends_unified)
+
+## Raw Drill-Down Proxy Views (Tier 2 — On Explicit Request)
+- [Raw International Trends History View](/views/vw_raw_trends_international_history)
+- [Raw International Rising Terms History View](/views/vw_raw_trends_international_rising_history)
+- [Raw US DMA Trends View](/views/vw_raw_trends_us_dma)
+- [Raw US DMA Rising Terms View](/views/vw_raw_trends_us_dma_rising)
+- [Raw US Hourly Trends View — Real-Time](/views/vw_raw_trends_us_hourly)
+- [Raw US Hourly Rising Terms View — Real-Time](/views/vw_raw_trends_us_hourly_rising)
+- [Raw GDELT Events Archive View](/views/vw_raw_gdelt_events_archive)
+- [Raw GDELT GKG Entities Archive View](/views/vw_raw_gdelt_gkg_entities_archive)
 
 ## Core Metrics
 - [Search Interest Score Metric](/metrics/search_score)

@@ -88,3 +88,14 @@ GROUP BY
   country_name,
   country_code,
   search_term;
+
+-- Column Descriptions
+ALTER VIEW `trends_gdelt_analytics.vw_search_trends_rising`
+ALTER COLUMN snapshot_date SET OPTIONS (description = "Date when the Trends snapshot was refreshed (partition key)."),
+ALTER COLUMN country_name SET OPTIONS (description = "Full English name of the country."),
+ALTER COLUMN country_code SET OPTIONS (description = "ISO 2-letter country code (e.g., 'US', 'GB', 'FR')."),
+ALTER COLUMN search_term SET OPTIONS (description = "The rising/breakout search query string."),
+ALTER COLUMN rank SET OPTIONS (description = "Rank of the term among the day's rising queries (1 = fastest riser)."),
+ALTER COLUMN search_score SET OPTIONS (description = "Relative search interest (0-100) for the latest trend week, normalized against the term's OWN historical peak share; 0 when volume is below reporting threshold."),
+ALTER COLUMN max_percent_gain SET OPTIONS (description = "Largest week-over-week percentage gain in search interest across the country's regions. Values in the thousands indicate breakout queries."),
+ALTER COLUMN avg_percent_gain SET OPTIONS (description = "Average week-over-week percentage gain in search interest across the country's regions.");
