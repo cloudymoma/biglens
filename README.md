@@ -342,6 +342,20 @@ reported in native units (BTC, ETH, gwei) or counts:
    register it in `frontend/src/opendata/registry.tsx` — the sidebar entry,
    header, and routing come for free.
 
+## Trends & GDELT Conversational Agent (Standalone)
+
+Beyond the dashboards, this repo ships [`trend_gdelt_bot/`](trend_gdelt_bot/README.md) —
+an independent, self-contained package for building a **Conversational Analytics
+agent in BigQuery** over the same Google Trends and GDELT 2.0 public datasets.
+It includes a curated SQL semantic layer (FIPS→ISO country mapping, latest-week
+pinned views, a unified trends × news mart), a BigQuery property graph, an OKF
+knowledge bundle for agent grounding, an idempotent one-shot `init.sh` deployment
+script, and a step-by-step BigQuery Console tutorial. It only needs `gcloud`/`bq` —
+it does not depend on the BigLens server.
+
+See the [trend_gdelt_bot guide](trend_gdelt_bot/README.md)
+([简体中文](trend_gdelt_bot/README_cn.md)).
+
 ## Architecture
 
 ```

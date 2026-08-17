@@ -1,5 +1,7 @@
 # Google Trends & GDELT BigQuery Conversational Analytical Agent
 
+English | [简体中文](README_cn.md)
+
 A standalone, production-ready package to build a **Conversational AI Data Agent in BigQuery** that queries, correlates, and explains **Google Trends** search trends and **GDELT 2.0** global news sentiment & geopolitical events.
 
 ---
@@ -10,6 +12,7 @@ A standalone, production-ready package to build a **Conversational AI Data Agent
 trend_gdelt_bot/
 ├── init.sh                                      # Automated setup script (gcloud + bq + kcmd)
 ├── README.md                                    # This guide & BigQuery UI tutorial
+├── README_cn.md                                 # Simplified Chinese version of this guide
 │
 ├── bigquery/                                    # Semantic Data Layer & SQL Assets
 │   ├── 01_dataset_setup.sql                     # Dataset DDL + FIPS 10-4 → ISO 3166-1 country mapping table

@@ -309,6 +309,19 @@ GDELT 是*新闻报道*的索引，而非经核实事件的登记册。每行是
 2. 前端：在 `frontend/src/opendata/` 中实现仪表盘组件，并在
    `frontend/src/opendata/registry.tsx` 注册 —— 侧边栏入口、标题与路由自动生效。
 
+## Trends & GDELT 对话式分析智能体（独立组件）
+
+除仪表盘外，本仓库还提供 [`trend_gdelt_bot/`](trend_gdelt_bot/README_cn.md) ——
+一个独立、自包含的软件包，用于基于同样的 Google Trends 与 GDELT 2.0 公共数据集，
+在 BigQuery 中构建**对话式分析智能体（Conversational Analytics Agent）**。
+它包含精选 SQL 语义层（FIPS→ISO 国家代码映射、固定最新周的视图、搜索热词 × 新闻
+态势统一宽表）、BigQuery 属性图、用于智能体知识接地的 OKF 知识包、可幂等重复执行的
+一键部署脚本 `init.sh`，以及分步的 BigQuery 控制台教程。仅需 `gcloud`/`bq` 即可
+部署，不依赖 BigLens 服务本身。
+
+详见 [trend_gdelt_bot 中文指南](trend_gdelt_bot/README_cn.md)
+（[English](trend_gdelt_bot/README.md)）。
+
 ## 架构
 
 ```
