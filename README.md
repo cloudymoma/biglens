@@ -333,6 +333,83 @@ reported in native units (BTC, ETH, gwei) or counts:
 - **Whale thresholds** (≥100 BTC, ≥1,000 ETH) are named constants in native
   units; there is no USD equivalent in the datasets.
 
+### SEM Insights
+
+A keyword-arbitrage dashboard for search-engine marketers, combining the
+Google Trends daily tables (`bigquery-public-data.google_trends`), the hourly
+US table (`google_trends_hourly.top_terms_hourly`) and GDELT news tone
+(`gdelt-bq.gdeltv2`). It is organized around four SEM decisions: **what to
+bid on, where to bid, when to bid, and when *not* to bid.**
+
+The core idea: the day's *rising* queries are joined against the *top-25*
+chart of the same snapshot. A term that is surging but not yet charting has
+momentum before mainstream volume — which usually means Keyword Planner
+hasn't repriced it and CPCs are still low. That window is the arbitrage.
+
+| Widget | Description |
+|---|---|
+| **Breakout Keyword Matrix** | Bubble chart of rising terms: velocity (week-over-week gain, log scale) vs mainstream volume rank. The far-left **Unranked** band + amber bubbles are the arbitrage zone. Click a bubble to drill down |
+| **Geo Demand & Bid Modifiers** | The selected term's demand across all 210 US DMAs (or a country's regions), with a suggested Google Ads location bid adjustment per geo |
+| **Brand Safety & Tone Radar** | 14 days of GDELT news tone + conflict-event share for the market, rolled into a 🟢/🟡/🔴 banner with a plain-language SEM action |
+| **Keyword Opportunities** | The actionable table — respects all filters, exports one-click Google Ads Editor CSVs (keywords + checked-row negatives) |
+| **US Real-Time Pulse** | US mode only: the latest intraday snapshot from the hourly table (~4×/day, hours ahead of the 1–2-day-lagged daily tables) |
+| **Term Drill-Down** | Opens on any term click: ~5-year weekly seasonality with a same-week-last-year marker, last-8-week momentum bars, and on-demand news-cycle context |
+
+Controls: market toggle (**Global** — 42 countries at region grain / **US
+Metro** — 210 Nielsen DMAs), a searchable geo selector, snapshot date picker,
+a velocity slider (client-side filter, +50%…+5000%, log scale), and a
+brand-safety overlay toggle.
+
+#### Reading the numbers
+
+Each column measures a different thing; the interesting keywords are the ones
+where the columns *disagree* (high gain, no rank):
+
+- **Gain (%)** — week-over-week growth in search volume (`percent_gain`,
+  rising tables only). Brand-new breakouts routinely show +1,000% or more.
+  This is the momentum axis of the matrix and the default sort of the table.
+- **Volume rank** — the term's position in the same snapshot's top-25 chart.
+  **UNRANKED** means it is not charting anywhere in the selected geo's top 25
+  — that is the buy signal, not missing data: demand is accelerating but has
+  not reached the mainstream volume that drives auction competition.
+- **Score (0–100)** — Google's relative interest index, normalized against
+  the term's own all-time peak (bubble size in the matrix). A **new** badge
+  means the rising table has no normalized score yet — the term is too new,
+  which is often the strongest play of all.
+- **Geo spread** — in how many DMAs/regions the term is rising: distinguishes
+  a national breakout (bid broadly) from a local phenomenon (bid with geo
+  targeting).
+- **Suggested modifier** — `clamp((geo score / average − 1) × 100, −90…+900)`,
+  the exact bounds of a Google Ads location bid adjustment. It maps *relative
+  demand*, not conversion data — treat it as a starting point for geo
+  targeting, never as a finished bid.
+- **Safety banner** — event-weighted 3-day average of GDELT news tone and
+  conflict share for the market: 🟢 tone ≥ −1 · 🟡 −2…−1 · 🔴 tone < −2 or
+  conflict share > 30%. The signal is country-grained (US-national in DMA
+  mode), so with the overlay on, *every* matrix bubble is tinted and the
+  table header carries one chip — it is market context, not per-keyword
+  sentiment. On red: review broad match, consider pausing brand-adjacent
+  trend bids, and use the checkboxes to build the negatives export.
+- **Pulse Δ badge (wow)** — the current *partial* week's score vs last week,
+  computed from the hourly snapshot's own weekly history (▲ accelerating,
+  ▼ fading, **new** = no prior week). Consecutive hourly snapshots carry
+  fully disjoint top-25 sets, so there is deliberately no
+  "rank vs 6 hours ago" — that comparison does not exist in the data.
+- **CSV exports** — Google Ads Editor import format. Keywords CSV ships every
+  visible row with Campaign `SEM-Trends-{date}`, Ad group = the selected geo,
+  match type Phrase, and Max CPC left blank (that decision stays yours);
+  Negatives CSV ships only the rows you checked.
+
+A practical pass: pick market + geo → scan the matrix top-left (unranked,
+high-gain, sizable bubbles) → click one to check its geo concentration and
+seasonality → glance at the safety banner → export the keywords CSV and the
+checked negatives.
+
+Known limits (also stated in the UI): scores are relative, not absolute
+volume; there is no CPC or competition data — this complements Keyword
+Planner rather than replacing it; hourly + DMA granularity is US-only; the
+daily snapshots lag 1–2 days (the pulse widget exists to close that gap).
+
 ### Adding another public dataset
 
 1. Backend: create `backend/opendata_<name>.go` (typed rows + `BQClient`
