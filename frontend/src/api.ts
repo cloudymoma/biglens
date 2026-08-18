@@ -36,6 +36,13 @@ import type {
   TrendsMeta,
   TrendsDashboardData,
   TrendsTermData,
+  SemMarket,
+  SemMeta,
+  SemDashboardData,
+  SemGeoData,
+  SemPulseData,
+  SemTermData,
+  SemSafetyData,
   GdeltEventsData,
   GdeltGkgData,
   GdeltDyadsData,
@@ -232,6 +239,60 @@ export async function fetchTrendsTerm(
     params.country_code = countryCode;
   }
   const { data } = await axios.get('/api/opendata/trends/term', { params });
+  return data;
+}
+
+// --- BigQuery Open Data: SEM Insights ---
+
+export async function fetchSemMeta(market: SemMarket): Promise<SemMeta> {
+  const { data } = await axios.get('/api/opendata/sem/meta', { params: { market } });
+  return data;
+}
+
+export async function fetchSemDashboard(
+  market: SemMarket,
+  refreshDate: string,
+  geo: string,
+): Promise<SemDashboardData> {
+  const params: Record<string, string> = { market, refresh_date: refreshDate };
+  if (geo) params.geo = geo;
+  const { data } = await axios.get('/api/opendata/sem/dashboard', { params });
+  return data;
+}
+
+export async function fetchSemGeo(
+  market: SemMarket,
+  refreshDate: string,
+  geo: string,
+  term: string,
+): Promise<SemGeoData> {
+  const params: Record<string, string> = { market, refresh_date: refreshDate, term };
+  if (geo) params.geo = geo;
+  const { data } = await axios.get('/api/opendata/sem/geo', { params });
+  return data;
+}
+
+export async function fetchSemPulse(): Promise<SemPulseData> {
+  const { data } = await axios.get('/api/opendata/sem/pulse');
+  return data;
+}
+
+export async function fetchSemTerm(
+  market: SemMarket,
+  refreshDate: string,
+  geo: string,
+  term: string,
+): Promise<SemTermData> {
+  const params: Record<string, string> = { market, refresh_date: refreshDate, term };
+  if (geo) params.geo = geo;
+  const { data } = await axios.get('/api/opendata/sem/term', { params });
+  return data;
+}
+
+export async function fetchSemSafety(market: SemMarket, geo: string): Promise<SemSafetyData> {
+  const params: Record<string, string> = { market };
+  if (geo) params.geo = geo;
+  const { data } = await axios.get('/api/opendata/sem/safety', { params });
   return data;
 }
 

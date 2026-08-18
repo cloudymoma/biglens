@@ -458,6 +458,78 @@ export interface TrendsTermData {
   history: TrendsHistoryPoint[];
 }
 
+// --- BigQuery Open Data: SEM Insights ---
+
+export type SemMarket = 'global' | 'us';
+
+export interface SemDMA {
+  name: string;
+  id: number;
+}
+
+export interface SemMeta {
+  latest_refresh_date: string;
+  refresh_dates: string[];
+  countries: TrendsCountry[];
+  dmas: SemDMA[];
+}
+
+export interface SemMatrixRow {
+  term: string;
+  volume_rank: number; // 0 = not charting in the top 25 ("Unranked")
+  percent_gain: number;
+  score: number; // 0 = too new to score
+  geo_spread: number;
+  rising_rank: number;
+}
+
+export interface SemDashboardData {
+  matrix: SemMatrixRow[];
+}
+
+export interface SemGeoRow {
+  geo: string; // DMA name (us) or region name (global)
+  score: number;
+  rising_rank: number; // 0 = not rising in this geo
+  percent_gain: number;
+}
+
+export interface SemGeoData {
+  rows: SemGeoRow[];
+}
+
+export interface SemPulseRow {
+  term: string;
+  rank: number;
+  score: number; // current (partial) week
+  prev_week_score: number; // 0 = no prior week in the snapshot's history
+}
+
+export interface SemPulseData {
+  snapshot_time: string;
+  rows: SemPulseRow[];
+}
+
+export interface SemHistoryPoint {
+  week: string;
+  score: number;
+}
+
+export interface SemTermData {
+  history: SemHistoryPoint[];
+}
+
+export interface SemSafetyRow {
+  ingest_date: string;
+  event_count: number;
+  avg_tone: number;
+  conflict_share: number; // fraction of CAMEO QuadClass 3/4 events
+}
+
+export interface SemSafetyData {
+  rows: SemSafetyRow[];
+}
+
 // --- BigQuery Open Data: GDELT ---
 
 export interface GdeltOverall {

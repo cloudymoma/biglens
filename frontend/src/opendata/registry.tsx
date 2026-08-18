@@ -1,6 +1,7 @@
 import React from 'react';
-import { TrendingUp, Globe2, CloudSun, Bitcoin } from 'lucide-react';
+import { TrendingUp, Globe2, CloudSun, Bitcoin, Megaphone } from 'lucide-react';
 import GoogleTrendsDashboard from './GoogleTrendsDashboard';
+import SemDashboard from './sem/SemDashboard';
 import GdeltDashboard from './gdelt/GdeltDashboard';
 import WeatherDashboard from './WeatherDashboard';
 import CryptoDashboard from './crypto/CryptoDashboard';
@@ -55,5 +56,16 @@ export const OPEN_DATASETS: OpenDataset[] = [
       'whale flows and the ERC-20 token economy — native units, no fiat prices, updated daily.',
     sourceTable: 'bigquery-public-data.crypto_bitcoin · crypto_ethereum',
     component: CryptoDashboard,
+  },
+  {
+    id: 'sem',
+    label: 'SEM Insights',
+    icon: <Megaphone size={16} />,
+    description:
+      'Keyword arbitrage for search marketers: rising queries joined against the top-25 chart ' +
+      'to spot momentum before mainstream volume, across 210 US metros or country level worldwide, ' +
+      'with geo bid modifiers, hourly US pulse, GDELT brand-safety radar and Google Ads Editor CSV export.',
+    sourceTable: 'bigquery-public-data.google_trends · google_trends_hourly · gdelt-bq.gdeltv2',
+    component: SemDashboard,
   },
 ];
