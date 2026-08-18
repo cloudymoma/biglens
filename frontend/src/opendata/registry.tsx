@@ -24,8 +24,9 @@ export const OPEN_DATASETS: OpenDataset[] = [
     label: 'Google Trends',
     icon: <TrendingUp size={16} />,
     description:
-      'Top 25 search terms and top rising queries by country, with 5 years of weekly history per daily snapshot.',
-    sourceTable: 'bigquery-public-data.google_trends',
+      'Top 25 search terms and top rising queries for the US and countries worldwide, with 5 years ' +
+      'of weekly history per daily snapshot, US metro breakdowns and an hourly US real-time pulse.',
+    sourceTable: 'bigquery-public-data.google_trends · google_trends_hourly',
     component: GoogleTrendsDashboard,
   },
   {

@@ -219,9 +219,10 @@ export async function fetchTrendsMeta(): Promise<TrendsMeta> {
   return data;
 }
 
-export async function fetchTrendsDashboard(refreshDate: string, countryCode: string): Promise<TrendsDashboardData> {
+// dma narrows the US market ('' = national); ignored unless countryCode is US.
+export async function fetchTrendsDashboard(refreshDate: string, countryCode: string, dma: string): Promise<TrendsDashboardData> {
   const { data } = await axios.get('/api/opendata/trends/dashboard', {
-    params: { refresh_date: refreshDate, country_code: countryCode },
+    params: { refresh_date: refreshDate, country_code: countryCode, dma },
   });
   return data;
 }
@@ -231,13 +232,11 @@ export async function fetchTrendsTerm(
   countryCode: string,
   term: string,
   terms: string[],
+  dma: string,
 ): Promise<TrendsTermData> {
-  const params: Record<string, string> = { refresh_date: refreshDate };
+  const params: Record<string, string> = { refresh_date: refreshDate, country_code: countryCode, dma };
   if (term) params.term = term;
-  if (terms.length > 0) {
-    params.terms = terms.join(',');
-    params.country_code = countryCode;
-  }
+  if (terms.length > 0) params.terms = terms.join(',');
   const { data } = await axios.get('/api/opendata/trends/term', { params });
   return data;
 }

@@ -420,6 +420,7 @@ export interface TrendsMeta {
   latest_refresh_date: string;
   refresh_dates: string[];
   countries: TrendsCountry[];
+  dmas: SemDMA[];
 }
 
 export interface TrendsTopTerm {

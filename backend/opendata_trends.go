@@ -161,11 +161,6 @@ type TrendsHistoryPoint struct {
 }
 
 func (b *BQClient) GetTrendsHistory(ctx context.Context, refreshDate civil.Date, countryCode string, terms []string) ([]TrendsHistoryPoint, error) {
-	lowered := make([]string, 0, len(terms))
-	for _, t := range terms {
-		lowered = append(lowered, strings.ToLower(t))
-	}
-
 	q := b.client.Query(`
 		SELECT
 			term,
@@ -180,7 +175,83 @@ func (b *BQClient) GetTrendsHistory(ctx context.Context, refreshDate civil.Date,
 	q.Parameters = []bigquery.QueryParameter{
 		{Name: "refresh_date", Value: refreshDate},
 		{Name: "country_code", Value: countryCode},
-		{Name: "terms", Value: lowered},
+		{Name: "terms", Value: lowerAll(terms)},
 	}
 	return collectRows[TrendsHistoryPoint](q, ctx)
+}
+
+// --- US market variants ---
+//
+// The US is absent from the international tables; it lives in the DMA-grained
+// `top_terms` / `top_rising_terms` tables (constants in opendata_sem.go).
+// Both carry one national rank per term replicated across all 210 DMAs
+// (verified live 2026-08-18: 25 terms, 1 distinct rank each), so the query
+// shapes mirror the international ones with scores averaged across DMAs.
+// Empty dma aggregates nationally; a DMA name narrows to that metro (term
+// presence and scores vary per DMA even though ranks are national).
+
+func (b *BQClient) GetTrendsTopTermsUS(ctx context.Context, refreshDate civil.Date, dma string) ([]TrendsTopTerm, error) {
+	q := b.client.Query(`
+		SELECT term, rank, CAST(COALESCE(AVG(score), 0) AS INT64) AS score
+		FROM ` + semUSTopTable + `
+		WHERE refresh_date = @refresh_date
+		  AND week = (SELECT MAX(week) FROM ` + semUSTopTable + ` WHERE refresh_date = @refresh_date)
+		  AND (@dma = '' OR dma_name = @dma)
+		GROUP BY term, rank
+		ORDER BY rank ASC
+		LIMIT 25`)
+	q.Parameters = []bigquery.QueryParameter{
+		{Name: "refresh_date", Value: refreshDate},
+		{Name: "dma", Value: dma},
+	}
+	return collectRows[TrendsTopTerm](q, ctx)
+}
+
+func (b *BQClient) GetTrendsRisingTermsUS(ctx context.Context, refreshDate civil.Date, dma string) ([]TrendsRisingTerm, error) {
+	q := b.client.Query(`
+		SELECT
+			term,
+			rank,
+			CAST(COALESCE(AVG(percent_gain), 0) AS INT64) AS percent_gain,
+			CAST(COALESCE(AVG(score), 0) AS INT64) AS score
+		FROM ` + semUSRisingTable + `
+		WHERE refresh_date = @refresh_date
+		  AND week = (SELECT MAX(week) FROM ` + semUSRisingTable + ` WHERE refresh_date = @refresh_date)
+		  AND (@dma = '' OR dma_name = @dma)
+		GROUP BY term, rank
+		ORDER BY percent_gain DESC
+		LIMIT 25`)
+	q.Parameters = []bigquery.QueryParameter{
+		{Name: "refresh_date", Value: refreshDate},
+		{Name: "dma", Value: dma},
+	}
+	return collectRows[TrendsRisingTerm](q, ctx)
+}
+
+func (b *BQClient) GetTrendsHistoryUS(ctx context.Context, refreshDate civil.Date, dma string, terms []string) ([]TrendsHistoryPoint, error) {
+	q := b.client.Query(`
+		SELECT
+			term,
+			FORMAT_DATE('%Y-%m-%d', week) AS week,
+			CAST(COALESCE(AVG(score), 0) AS INT64) AS score
+		FROM ` + semUSTopTable + `
+		WHERE refresh_date = @refresh_date
+		  AND (@dma = '' OR dma_name = @dma)
+		  AND LOWER(term) IN UNNEST(@terms)
+		GROUP BY term, week
+		ORDER BY week ASC`)
+	q.Parameters = []bigquery.QueryParameter{
+		{Name: "refresh_date", Value: refreshDate},
+		{Name: "dma", Value: dma},
+		{Name: "terms", Value: lowerAll(terms)},
+	}
+	return collectRows[TrendsHistoryPoint](q, ctx)
+}
+
+func lowerAll(terms []string) []string {
+	lowered := make([]string, 0, len(terms))
+	for _, t := range terms {
+		lowered = append(lowered, strings.ToLower(t))
+	}
+	return lowered
 }

@@ -20,6 +20,7 @@ type TrendsMeta struct {
 	LatestRefreshDate string          `json:"latest_refresh_date"`
 	RefreshDates      []string        `json:"refresh_dates"`
 	Countries         []TrendsCountry `json:"countries"`
+	Dmas              []SemDMA        `json:"dmas"`
 }
 
 // TrendsMetaHandler serves available partition dates and countries so the
@@ -48,8 +49,23 @@ func (h *APIHandler) TrendsMetaHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	countries, err := h.bq.GetTrendsCountries(r.Context(), latest)
-	if err != nil {
+	// The US market lives in the DMA-grained US tables (partition dates
+	// verified aligned with the international ones), so one meta payload
+	// carries both filter lists: countries for Global, DMAs for US.
+	var countries []TrendsCountry
+	var dmas []SemDMA
+	g, gctx := errgroup.WithContext(r.Context())
+	g.Go(func() error {
+		var err error
+		countries, err = h.bq.GetTrendsCountries(gctx, latest)
+		return err
+	})
+	g.Go(func() error {
+		var err error
+		dmas, err = h.bq.GetSemDMAs(gctx, latest)
+		return err
+	})
+	if err := g.Wait(); err != nil {
 		writeError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -58,6 +74,7 @@ func (h *APIHandler) TrendsMetaHandler(w http.ResponseWriter, r *http.Request) {
 		LatestRefreshDate: dates[0],
 		RefreshDates:      dates,
 		Countries:         countries,
+		Dmas:              dmas,
 	}
 	h.cache.Set(key, data)
 	writeJSON(w, data)
@@ -79,8 +96,11 @@ func (h *APIHandler) TrendsDashboard(w http.ResponseWriter, r *http.Request) {
 		writeError(w, "country_code is required", http.StatusBadRequest)
 		return
 	}
+	// dma narrows the US market to one metro ('' = national); it is only
+	// meaningful with country_code=US.
+	dma := r.URL.Query().Get("dma")
 
-	key := fmt.Sprintf("opendata:trends_dashboard:%s:%s", refreshDate, countryCode)
+	key := fmt.Sprintf("opendata:trends_dashboard:%s:%s:%s", refreshDate, countryCode, dma)
 	if cached, ok := h.cache.Get(key); ok {
 		writeJSON(w, cached)
 		return
@@ -90,7 +110,13 @@ func (h *APIHandler) TrendsDashboard(w http.ResponseWriter, r *http.Request) {
 	g, ctx := errgroup.WithContext(r.Context())
 
 	g.Go(func() error {
-		top, err := h.bq.GetTrendsTopTerms(ctx, refreshDate, countryCode)
+		var top []TrendsTopTerm
+		var err error
+		if countryCode == "US" {
+			top, err = h.bq.GetTrendsTopTermsUS(ctx, refreshDate, dma)
+		} else {
+			top, err = h.bq.GetTrendsTopTerms(ctx, refreshDate, countryCode)
+		}
 		if err != nil {
 			return err
 		}
@@ -99,7 +125,13 @@ func (h *APIHandler) TrendsDashboard(w http.ResponseWriter, r *http.Request) {
 	})
 
 	g.Go(func() error {
-		rising, err := h.bq.GetTrendsRisingTerms(ctx, refreshDate, countryCode)
+		var rising []TrendsRisingTerm
+		var err error
+		if countryCode == "US" {
+			rising, err = h.bq.GetTrendsRisingTermsUS(ctx, refreshDate, dma)
+		} else {
+			rising, err = h.bq.GetTrendsRisingTerms(ctx, refreshDate, countryCode)
+		}
 		if err != nil {
 			return err
 		}
@@ -147,7 +179,8 @@ func (h *APIHandler) TrendsTerm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	key := fmt.Sprintf("opendata:trends_term:%s:%s:%s:%s", refreshDate, countryCode, term, strings.Join(terms, ","))
+	dma := q.Get("dma")
+	key := fmt.Sprintf("opendata:trends_term:%s:%s:%s:%s:%s", refreshDate, countryCode, dma, term, strings.Join(terms, ","))
 	if cached, ok := h.cache.Get(key); ok {
 		writeJSON(w, cached)
 		return
@@ -158,6 +191,20 @@ func (h *APIHandler) TrendsTerm(w http.ResponseWriter, r *http.Request) {
 
 	if term != "" {
 		g.Go(func() error {
+			// In the US view the cross-country chart becomes a DMA breakdown:
+			// the US never appears in the international tables, and metro
+			// grain is the useful spread there. Reuses the SEM geo query
+			// (top-25 ∪ rising across all 210 DMAs).
+			if countryCode == "US" {
+				rows, err := h.bq.GetSemGeoUS(ctx, refreshDate, term)
+				if err != nil {
+					return err
+				}
+				for _, row := range rows {
+					data.Geo = append(data.Geo, TrendsGeoPoint{CountryName: row.Geo, Score: row.Score})
+				}
+				return nil
+			}
 			geo, err := h.bq.GetTrendsGeo(ctx, refreshDate, term)
 			if err != nil {
 				return err
@@ -171,7 +218,13 @@ func (h *APIHandler) TrendsTerm(w http.ResponseWriter, r *http.Request) {
 
 	if len(terms) > 0 {
 		g.Go(func() error {
-			history, err := h.bq.GetTrendsHistory(ctx, refreshDate, countryCode, terms)
+			var history []TrendsHistoryPoint
+			var err error
+			if countryCode == "US" {
+				history, err = h.bq.GetTrendsHistoryUS(ctx, refreshDate, dma, terms)
+			} else {
+				history, err = h.bq.GetTrendsHistory(ctx, refreshDate, countryCode, terms)
+			}
 			if err != nil {
 				return err
 			}

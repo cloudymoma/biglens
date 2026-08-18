@@ -3,9 +3,10 @@ import ReactECharts from 'echarts-for-react';
 import {
   ChevronDown, Globe2, Flame, TrendingUp, CalendarDays, Search, X, Trophy,
 } from 'lucide-react';
-import type { TrendsMeta, TrendsDashboardData, TrendsTermData } from '../types';
+import type { TrendsMeta, TrendsDashboardData, TrendsTermData, SemMarket } from '../types';
 import { fetchTrendsMeta, fetchTrendsDashboard, fetchTrendsTerm } from '../api';
 import { MetricCard, EmptyState, ErrorBanner } from '../dashboards/shared';
+import PulsePanel from './sem/PulsePanel';
 
 // Categorical palette for the compare chart, validated for the dark surface
 // (lightness band, chroma, CVD separation, contrast). Colors follow the term:
@@ -30,8 +31,13 @@ export default function GoogleTrendsDashboard() {
   const [meta, setMeta] = useState<TrendsMeta | null>(null);
   const [metaError, setMetaError] = useState('');
 
+  // Same filter model as the SEM dashboard: US market at Nielsen DMA grain
+  // ('' = national), Global market at country grain. US/international
+  // partition dates are aligned, so one meta payload serves both.
+  const [market, setMarket] = useState<SemMarket>('us');
   const [refreshDate, setRefreshDate] = useState('');
-  const [countryCode, setCountryCode] = useState('');
+  const [countryCode, setCountryCode] = useState(''); // global market
+  const [dma, setDma] = useState(''); // us market; '' = national
 
   const [data, setData] = useState<TrendsDashboardData | null>(null);
   const [error, setError] = useState('');
@@ -46,27 +52,32 @@ export default function GoogleTrendsDashboard() {
 
   const selectedTerms = useMemo(() => Object.keys(termColors), [termColors]);
 
+  // The country_code/dma pair actually sent to the API for the active market.
+  const geoCode = market === 'us' ? 'US' : countryCode;
+  const geoDma = market === 'us' ? dma : '';
+
   useEffect(() => {
     fetchTrendsMeta()
       .then(m => {
         setMeta(m);
         setRefreshDate(m.latest_refresh_date);
         const codes = m.countries.map(c => c.code);
-        const preferred = ['US', 'GB', 'JP'].find(c => codes.includes(c));
+        const preferred = ['GB', 'JP'].find(c => codes.includes(c));
         setCountryCode(preferred || codes[0] || '');
       })
       .catch(e => setMetaError(e.response?.data || e.message));
   }, []);
 
   useEffect(() => {
-    if (!refreshDate || !countryCode) return;
+    if (!refreshDate || (market === 'global' && !countryCode)) return;
     setLoading(true);
     setError('');
-    fetchTrendsDashboard(refreshDate, countryCode)
+    fetchTrendsDashboard(refreshDate, geoCode, geoDma)
       .then(setData)
       .catch(e => setError(e.response?.data || e.message))
       .finally(() => setLoading(false));
-  }, [refreshDate, countryCode]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [market, refreshDate, countryCode, dma]);
 
   // Seed the compare set with the #1 top term on first load.
   useEffect(() => {
@@ -78,13 +89,15 @@ export default function GoogleTrendsDashboard() {
 
   useEffect(() => {
     if (!refreshDate || (!focusTerm && selectedTerms.length === 0)) return;
+    if (market === 'global' && !countryCode) return;
     setTermLoading(true);
     setTermError('');
-    fetchTrendsTerm(refreshDate, countryCode, focusTerm, selectedTerms)
+    fetchTrendsTerm(refreshDate, geoCode, focusTerm, selectedTerms, geoDma)
       .then(setTermData)
       .catch(e => setTermError(e.response?.data || e.message))
       .finally(() => setTermLoading(false));
-  }, [refreshDate, countryCode, focusTerm, selectedTerms]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [market, refreshDate, countryCode, dma, focusTerm, selectedTerms]);
 
   function selectTerm(term: string) {
     setTermColors(prev => {
@@ -112,18 +125,38 @@ export default function GoogleTrendsDashboard() {
   if (!meta) return <LoadingPulse />;
 
   const countryName = meta.countries.find(c => c.code === countryCode)?.name || countryCode;
+  const geoLabel = market === 'us' ? (dma || 'the United States') : countryName;
   const topTerms = data?.top_terms || [];
   const risingTerms = data?.rising_terms || [];
   const hottest = risingTerms[0];
 
   return (
     <div className="space-y-6">
-      {/* Filter bar: refresh date + country + term search */}
+      {/* Filter bar: market toggle + geo + refresh date + term search */}
       <div className="rounded-2xl border border-zinc-800/50 p-4 flex flex-wrap items-end gap-4" style={{ background: '#111114' }}>
+        <div>
+          <label className="text-[10px] font-mono text-zinc-600 uppercase block mb-1 px-0.5">Market</label>
+          <div className="flex rounded-lg border border-zinc-800/50 overflow-hidden" style={{ background: '#09090b' }}>
+            {(['us', 'global'] as SemMarket[]).map(m => (
+              <button
+                key={m}
+                onClick={() => setMarket(m)}
+                className={`px-3 py-2 text-xs cursor-pointer transition-colors ${
+                  market === m ? 'text-cyan-400 bg-cyan-500/10' : 'text-zinc-500 hover:text-zinc-300'
+                }`}
+              >
+                {m === 'us' ? 'US Metro (DMA)' : 'Global'}
+              </button>
+            ))}
+          </div>
+        </div>
         <CountryCombobox
-          countries={meta.countries}
-          value={countryCode}
-          onChange={setCountryCode}
+          label={market === 'us' ? 'Metro Area (DMA)' : 'Country'}
+          countries={market === 'us'
+            ? [{ name: 'All US (national)', code: '' }, ...meta.dmas.map(d => ({ name: d.name, code: d.name }))]
+            : meta.countries}
+          value={market === 'us' ? dma : countryCode}
+          onChange={code => (market === 'us' ? setDma(code) : setCountryCode(code))}
         />
         <div>
           <label className="text-[10px] font-mono text-zinc-600 uppercase block mb-1 px-0.5">Refresh Date</label>
@@ -157,10 +190,11 @@ export default function GoogleTrendsDashboard() {
           {/* Summary metrics */}
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <MetricCard label="Top Term" value={topTerms[0]?.term || '—'} icon={<Trophy size={18} />}
-              detail={`Rank #1 in ${countryName}`} accentColor="#38bdf8" />
+              detail={`Rank #1 in ${geoLabel}`} accentColor="#38bdf8" />
             <MetricCard label="Hottest Riser" value={hottest ? `+${hottest.percent_gain.toLocaleString()}%` : '—'}
               icon={<Flame size={18} />} detail={hottest?.term || 'No rising terms'} accentColor="#fbbf24" />
-            <MetricCard label="Countries Tracked" value={String(meta.countries.length)} icon={<Globe2 size={18} />}
+            <MetricCard label={market === 'us' ? 'Metros Tracked' : 'Countries Tracked'}
+              value={String(market === 'us' ? meta.dmas.length : meta.countries.length)} icon={<Globe2 size={18} />}
               detail="In this snapshot" accentColor="#34d399" />
             <MetricCard label="Snapshot" value={refreshDate} icon={<CalendarDays size={18} />}
               detail="Daily refresh, 5y weekly history" accentColor="#a78bfa" />
@@ -170,7 +204,7 @@ export default function GoogleTrendsDashboard() {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <div className="rounded-2xl border border-zinc-800/50 p-6 flex flex-col" style={{ background: '#111114' }}>
               <h3 className="text-sm font-semibold text-white mb-1">Top Terms Leaderboard</h3>
-              <p className="text-xs text-zinc-500 mb-4">Top 25 search terms in {countryName}</p>
+              <p className="text-xs text-zinc-500 mb-4">Top 25 search terms in {geoLabel}</p>
               {topTerms.length > 0 ? (
                 // The absolutely-positioned scroller contributes no intrinsic
                 // height, so the card tracks its grid sibling (the term cloud)
@@ -249,7 +283,7 @@ export default function GoogleTrendsDashboard() {
 
             <div className="rounded-2xl border border-zinc-800/50 p-6 flex flex-col" style={{ background: '#111114' }}>
               <h3 className="text-sm font-semibold text-white mb-1">Rising Terms Breakdown</h3>
-              <p className="text-xs text-zinc-500 mb-4">Growth and current score in {countryName}</p>
+              <p className="text-xs text-zinc-500 mb-4">Growth and current score in {geoLabel}</p>
               {risingTerms.length > 0 ? (
                 <div className="relative flex-1 min-h-[300px]">
                   <div className="absolute inset-0 overflow-y-auto pr-2 space-y-1">
@@ -281,12 +315,19 @@ export default function GoogleTrendsDashboard() {
         </>
       )}
 
-      {/* Module 3: Cross-country comparison for the focused term */}
+      {/* Module 3: geo spread for the focused term — cross-country for the
+          international tables, Nielsen DMA breakdown in the US view (the US
+          never appears in the international tables). */}
       <div className="rounded-2xl border border-zinc-800/50 p-6" style={{ background: '#111114' }}>
         <h3 className="text-sm font-semibold text-white mb-1">
-          Cross-Country Interest{focusTerm ? <span className="text-cyan-400"> · {focusTerm}</span> : ''}
+          {market === 'us' ? 'US Metro Interest' : 'Cross-Country Interest'}
+          {focusTerm ? <span className="text-cyan-400"> · {focusTerm}</span> : ''}
         </h3>
-        <p className="text-xs text-zinc-500 mb-4">Latest score wherever the term charts in the top 25</p>
+        <p className="text-xs text-zinc-500 mb-4">
+          {market === 'us'
+            ? 'Score across the Nielsen DMAs where the term charts or rises'
+            : 'Latest score wherever the term charts in the top 25'}
+        </p>
         {termError && <ErrorBanner message={termError} />}
         {!termError && (termLoading ? (
           <div className="h-[300px] rounded-xl animate-pulse" style={{ background: '#09090b' }} />
@@ -295,7 +336,9 @@ export default function GoogleTrendsDashboard() {
             <ReactECharts option={geoBarOption(termData!.geo.slice(0, 20), countryCode)} style={{ height: '100%' }} />
           </div>
         ) : (
-          <EmptyState text={focusTerm ? `"${focusTerm}" is not in any country's top 25 this week` : 'Select a term above'} />
+          <EmptyState text={focusTerm
+            ? `"${focusTerm}" is not ${market === 'us' ? 'charting in any US metro' : "in any country's top 25"} this week`
+            : 'Select a term above'} />
         ))}
       </div>
 
@@ -307,7 +350,7 @@ export default function GoogleTrendsDashboard() {
             <span className="text-[10px] text-zinc-600">Compare list full — remove a term to add another</span>
           )}
         </div>
-        <p className="text-xs text-zinc-500 mb-3">Weekly score over 5 years in {countryName} · drag to zoom</p>
+        <p className="text-xs text-zinc-500 mb-3">Weekly score over 5 years in {geoLabel} · drag to zoom</p>
 
         {selectedTerms.length > 0 && (
           <div className="flex flex-wrap gap-2 mb-4">
@@ -344,6 +387,10 @@ export default function GoogleTrendsDashboard() {
           <EmptyState text="Click terms in the tables above to chart their 5-year history" />
         )}
       </div>
+
+      {/* Module 5: hourly national pulse (US only — the hourly public table
+          has no international counterpart). Reuses the SEM pulse endpoint. */}
+      {market === 'us' && <PulsePanel onSelectTerm={selectTerm} />}
     </div>
   );
 }
@@ -415,7 +462,8 @@ function geoBarOption(geo: { country_code: string; country_name: string; score: 
     xAxis: {
       type: 'category',
       data: geo.map(g => g.country_name),
-      axisLabel: { ...AXIS_LABEL, fontSize: 9, rotate: 35 },
+      // width+truncate keeps long Nielsen DMA names (US view) readable.
+      axisLabel: { ...AXIS_LABEL, fontSize: 9, rotate: 35, width: 100, overflow: 'truncate' },
       axisLine: { show: false },
       axisTick: { show: false },
     },
@@ -515,7 +563,8 @@ function historyOption(history: { term: string; week: string; score: number }[],
 
 // --- Local filter controls ---
 
-function CountryCombobox({ countries, value, onChange }: {
+function CountryCombobox({ label, countries, value, onChange }: {
+  label: string;
   countries: { name: string; code: string }[];
   value: string;
   onChange: (code: string) => void;
@@ -539,13 +588,13 @@ function CountryCombobox({ countries, value, onChange }: {
 
   return (
     <div ref={ref} className="relative">
-      <label className="text-[10px] font-mono text-zinc-600 uppercase block mb-1 px-0.5">Country</label>
+      <label className="text-[10px] font-mono text-zinc-600 uppercase block mb-1 px-0.5">{label}</label>
       <button
         onClick={() => { setOpen(!open); setQuery(''); }}
         className="text-xs text-zinc-400 rounded-lg pl-3 pr-8 py-2 text-left border border-zinc-800/50 transition-colors hover:border-zinc-700/60 cursor-pointer relative"
         style={{ background: '#09090b', minWidth: 180 }}
       >
-        {selected ? selected.name : 'Select country'}
+        {selected ? selected.name : `Select ${label.toLowerCase()}`}
         <ChevronDown size={12} className={`absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-600 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
 
@@ -571,7 +620,10 @@ function CountryCombobox({ countries, value, onChange }: {
                 }`}
               >
                 <span>{c.name}</span>
-                <span className="font-mono text-[10px] text-zinc-600">{c.code}</span>
+                {/* DMA entries use the name as their code — no point showing it twice. */}
+                {c.code !== '' && c.code !== c.name && (
+                  <span className="font-mono text-[10px] text-zinc-600">{c.code}</span>
+                )}
               </button>
             )) : (
               <p className="px-3 py-2 text-[11px] text-zinc-600">No matches</p>
