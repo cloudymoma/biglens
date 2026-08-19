@@ -1,0 +1,125 @@
+#!/bin/bash
+set -euo pipefail
+
+echo "=== [BigLens] Starting automated provisioning ==="
+
+# Set environment variables for GCE startup script execution
+export HOME="/root"
+export GOPATH="/root/go"
+export GOCACHE="/root/.cache/go-build"
+export PATH="/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+export DEBIAN_FRONTEND=noninteractive
+
+apt-get update -y
+apt-get install -y git curl build-essential ca-certificates
+
+# 1. Ensure git safe.directory covers /opt/biglens for both root and biglens user
+git config --system --add safe.directory /opt/biglens || true
+
+# 2. Create dedicated system user
+if ! id "biglens" &>/dev/null; then
+  useradd -r -s /bin/false -d /opt/biglens biglens
+fi
+
+# 3. Install Node.js (v20 LTS)
+if ! command -v node &> /dev/null; then
+  echo "Installing Node.js 20.x..."
+  curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+  apt-get install -y nodejs
+fi
+
+# 4. Install Go (1.26.1 matching go.mod)
+GO_VERSION="1.26.1"
+if ! command -v go &> /dev/null || [ "$(go version 2>/dev/null | awk '{print $3}')" != "go$${GO_VERSION}" ]; then
+  echo "Installing Go $${GO_VERSION}..."
+  curl -fsSL "https://go.dev/dl/go$${GO_VERSION}.linux-amd64.tar.gz" -o /tmp/go.tar.gz
+  rm -rf /usr/local/go && tar -C /usr/local -xzf /tmp/go.tar.gz
+  rm -f /tmp/go.tar.gz
+  echo 'export PATH=/usr/local/go/bin:$PATH' >> /etc/profile
+fi
+
+# 5. Clone or sync BigLens repository
+APP_DIR="/opt/biglens"
+NEEDS_BUILD=false
+
+if [ ! -d "$${APP_DIR}/.git" ]; then
+  echo "Cloning BigLens from ${git_repo_url} (branch: ${git_branch})..."
+  mkdir -p "$${APP_DIR}"
+  git clone --branch "${git_branch}" "${git_repo_url}" "$${APP_DIR}"
+  NEEDS_BUILD=true
+else
+  cd "$${APP_DIR}"
+  git fetch origin "${git_branch}"
+  git checkout "${git_branch}"
+  git reset --hard "origin/${git_branch}"
+fi
+
+cd "$${APP_DIR}"
+CURRENT_REV=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+BUILD_MARKER="$${APP_DIR}/.build_commit"
+
+if [ ! -f "$${APP_DIR}/backend/biglens-server" ] || [ ! -f "$${BUILD_MARKER}" ] || [ "$(cat "$${BUILD_MARKER}" 2>/dev/null)" != "$${CURRENT_REV}" ]; then
+  NEEDS_BUILD=true
+fi
+
+# 6. Generate initial conf.yaml if not already present (preserves runtime user edits)
+CONF_FILE="$${APP_DIR}/backend/conf.yaml"
+if [ ! -f "$${CONF_FILE}" ]; then
+  echo "Creating initial conf.yaml configuration..."
+  cat <<'EOF' > "$${CONF_FILE}"
+server:
+  port: ${server_port}
+bigquery:
+  project_id: "${bigquery_project_id}"
+catalog:
+  bundle_path: "/opt/biglens/okf-bundle.sample"
+  dataplex:
+    project_id: "${bigquery_project_id}"
+    location: "${dataplex_location}"
+EOF
+fi
+
+# 7. Build frontend and backend if needed
+if [ "$${NEEDS_BUILD}" = true ]; then
+  echo "Building frontend..."
+  cd "$${APP_DIR}/frontend"
+  npm install
+  npm run build
+
+  mkdir -p "$${APP_DIR}/backend/static"
+  cp -r "$${APP_DIR}/frontend/dist/"* "$${APP_DIR}/backend/static/"
+
+  echo "Building Go backend..."
+  cd "$${APP_DIR}/backend"
+  go build -o "$${APP_DIR}/backend/biglens-server" .
+
+  echo "$${CURRENT_REV}" > "$${BUILD_MARKER}"
+fi
+
+chown -R biglens:biglens "$${APP_DIR}"
+
+# 8. Create systemd service
+echo "Configuring systemd service for BigLens..."
+cat <<'EOF' > /etc/systemd/system/biglens.service
+[Unit]
+Description=BigLens Analytics Server
+After=network.target
+
+[Service]
+Type=simple
+User=biglens
+Group=biglens
+WorkingDirectory=/opt/biglens/backend
+ExecStart=/opt/biglens/backend/biglens-server
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable biglens.service
+systemctl restart biglens.service
+
+echo "=== [BigLens] Provisioning Complete & Service Running on Port ${server_port} ==="

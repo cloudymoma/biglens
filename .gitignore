@@ -54,3 +54,13 @@ tmp
 
 # https://github.com/Graphify-Labs/graphify
 graphify-out/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+*.tfvars
+!*.tfvars.example
+terraform/.bin/

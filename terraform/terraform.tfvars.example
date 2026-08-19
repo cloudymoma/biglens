@@ -1,0 +1,33 @@
+# Example Terraform Configuration for BigLens IAP Deployment
+# Copy this file to terraform.tfvars and fill in your values.
+
+project_id          = "your-gcp-project-id"
+bigquery_project_id = "" # Optional: specify if different from project_id
+dataplex_location   = "us"
+region              = "us-central1"
+zone                = "us-central1-a"
+deployment_name     = "biglens"
+
+# Domain for Google-Managed SSL Certificate
+domain              = "biglens.yourcompany.com"
+
+# OAuth 2.0 Credentials (Optional: leave empty to use Google-managed IAP)
+iap_client_id       = ""
+iap_client_secret   = ""
+
+# Access Control: Who can access the dashboard through IAP?
+allowed_users_and_groups = [
+  "group:data-team@yourcompany.com",
+  "user:admin@yourcompany.com"
+]
+
+# VM Configuration (Private IP only)
+machine_type        = "e2-standard-2"
+boot_disk_size_gb   = 50
+network             = "default"
+subnetwork          = ""
+create_cloud_nat    = true
+
+# Repository to build on the VM
+git_repo_url        = "https://github.com/cloudymoma/biglens.git"
+git_branch          = "main"
