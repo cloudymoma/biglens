@@ -16,6 +16,11 @@ import type {
   ResNetworkData,
   ResExplorerData,
   ResInsightsData,
+  CalculatorPresets,
+  StorageCalcRequest,
+  StorageEstimate,
+  SlotsCalcRequest,
+  SlotsEstimate,
 } from './types';
 import type {
   QueryFilters,
@@ -519,5 +524,22 @@ export async function fetchResourcesExplorer(
 
 export async function fetchResourcesInsights(project: string, refresh?: boolean): Promise<ResInsightsData> {
   const { data } = await axios.get('/api/gcp_resources/insights', { params: resParams(project, refresh) });
+  return data;
+}
+
+// ---- Pricing calculator ----
+
+export async function fetchCalculatorPresets(): Promise<CalculatorPresets> {
+  const { data } = await axios.get('/api/calculator/presets');
+  return data;
+}
+
+export async function postStorageCalculation(req: StorageCalcRequest, signal?: AbortSignal): Promise<StorageEstimate> {
+  const { data } = await axios.post('/api/calculator/storage', req, { signal });
+  return data;
+}
+
+export async function postSlotsCalculation(req: SlotsCalcRequest, signal?: AbortSignal): Promise<SlotsEstimate> {
+  const { data } = await axios.post('/api/calculator/slots', req, { signal });
   return data;
 }

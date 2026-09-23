@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import {
   ChevronDown, ChevronLeft, ChevronRight, Server, Layers, Search, RefreshCw,
   Database, BarChart3, DollarSign, Lightbulb, Clock, Shield, Network, Globe,
-  ListChecks, Wallet, Boxes,
+  ListChecks, Wallet, Boxes, Calculator,
 } from 'lucide-react';
 import type { QueryFilters } from './types';
 import { fetchConfig, fetchDatasets, fetchTables, fetchRegions } from './api';
@@ -16,8 +16,9 @@ import CatalogView from './catalog/CatalogView';
 import { OPEN_DATASETS } from './opendata/registry';
 import BillingDashboard from './billing/BillingDashboard';
 import ResourcesDashboard from './resources/ResourcesDashboard';
+import CalculatorDashboard from './calculator/CalculatorDashboard';
 
-type Tab = 'storage' | 'compute' | 'cost' | 'insights' | 'jobs';
+type Tab = 'storage' | 'compute' | 'cost' | 'insights' | 'jobs' | 'calculator';
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'storage',  label: 'Storage',  icon: <Database size={16} /> },
@@ -25,6 +26,7 @@ const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: 'cost',     label: 'Cost',     icon: <DollarSign size={16} /> },
   { id: 'insights', label: 'Insights', icon: <Lightbulb size={16} /> },
   { id: 'jobs',     label: 'Jobs',     icon: <ListChecks size={16} /> },
+  { id: 'calculator', label: 'Calculator', icon: <Calculator size={16} /> },
 ];
 
 const PRODUCTS: { id: string; label: string; icon: React.ReactNode }[] = [
@@ -223,6 +225,16 @@ function App() {
                 ))}
               </nav>
 
+              {activeTab === 'calculator' ? (
+                <div className="px-3 mt-4">
+                  <div className="p-3 rounded-xl border border-cyan-500/10" style={{ background: '#111114' }}>
+                    <p className="text-[10px] font-semibold text-cyan-400/70 uppercase tracking-wider mb-2">Pricing Calculator</p>
+                    <p className="text-[11px] text-zinc-500 leading-relaxed">
+                      What-if estimates for storage and slot spend at BigQuery list prices. Edit any rate or apply a discount; the backend recalculates as you type.
+                    </p>
+                  </div>
+                </div>
+              ) : (
               <div className="px-3 mt-6">
                 <div className="flex items-center gap-2 px-3 mb-3">
                   <Search size={12} className="text-zinc-600" />
@@ -266,6 +278,7 @@ function App() {
                     onChange={setGroupBy} />
                 </div>
               </div>
+              )}
             </>
           )}
 
@@ -395,7 +408,7 @@ function App() {
             <div>
               <h2 className="text-2xl font-bold tracking-tight text-white">
                 {activeProduct === 'bigquery'
-                  ? `${TABS.find(t => t.id === activeTab)?.label} Analysis`
+                  ? activeTab === 'calculator' ? 'Pricing Calculator' : `${TABS.find(t => t.id === activeTab)?.label} Analysis`
                   : activeProduct === 'iam'
                     ? 'IAM Security'
                     : activeProduct === 'opendata'
@@ -407,7 +420,12 @@ function App() {
                           : 'Dataplex Knowledge Catalog'
                 }
               </h2>
-              {activeProduct === 'dataplex' ? (
+              {activeProduct === 'bigquery' && activeTab === 'calculator' ? (
+                <p className="text-xs text-zinc-500 mt-1 flex items-center gap-1.5">
+                  <Calculator size={11} />
+                  <span className="text-zinc-600">list prices | what-if estimate</span>
+                </p>
+              ) : activeProduct === 'dataplex' ? (
                 <p className="text-xs text-zinc-500 mt-1 flex items-center gap-1.5">
                   <Network size={11} />
                   <span className="text-zinc-600">Open Knowledge Format graph</span>
@@ -440,7 +458,7 @@ function App() {
               )}
             </div>
 
-            {activeProduct !== 'dataplex' && (
+            {activeProduct !== 'dataplex' && !(activeProduct === 'bigquery' && activeTab === 'calculator') && (
               <button
                 onClick={() => setRefreshKey(k => k + 1)}
                 className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all border cursor-pointer"
@@ -460,6 +478,7 @@ function App() {
               {activeTab === 'cost' && <CostDashboard filters={filters} />}
               {activeTab === 'insights' && <InsightsDashboard filters={filters} onDrillToJobs={drillToJobs} />}
               {activeTab === 'jobs' && <JobsDashboard filters={filters} />}
+              {activeTab === 'calculator' && <CalculatorDashboard />}
             </>
           )}
           {activeProduct === 'iam' && (

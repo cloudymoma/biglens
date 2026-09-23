@@ -143,6 +143,11 @@ func main() {
 	mux.Handle("/api/gcp_resources/insights", h(api.ResourcesInsights))
 
 	// Individual endpoints
+	// Pricing calculator: pure math over the list-price catalog, no BigQuery.
+	mux.Handle("/api/calculator/presets", h(api.CalculatorPresets))
+	mux.Handle("/api/calculator/storage", h(api.CalculateStorage))
+	mux.Handle("/api/calculator/slots", h(api.CalculateSlots))
+
 	mux.Handle("/api/storage", h(api.StorageStats))
 	mux.Handle("/api/slots", h(api.SlotUsage))
 	mux.Handle("/api/config", h(api.Config))

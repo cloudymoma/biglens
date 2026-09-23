@@ -1230,3 +1230,126 @@ export interface ResInsightsData {
   fetched_at: string;
   findings: ResFinding[];
 }
+
+// ---- Pricing calculator (/api/calculator/*) ----
+
+export interface StorageRates {
+  active_logical: number;
+  long_term_logical: number;
+  active_physical: number;
+  long_term_physical: number;
+}
+
+export interface StorageRegionPreset {
+  region: string;
+  label: string;
+  rates: StorageRates; // $/GiB/month
+}
+
+export interface EditionPreset {
+  edition: string;
+  label: string;
+  payg: number; // $/slot-hour
+  commit: Record<string, number>; // term -> $/slot-hour; empty when unavailable
+  max_slots?: number;
+  baseline: boolean;
+}
+
+export interface CalculatorPresets {
+  storage_regions: StorageRegionPreset[];
+  editions: EditionPreset[];
+  free_tier_gib: number;
+  hours_per_month: number;
+  slot_increment: number;
+}
+
+export type StorageUnit = 'GiB' | 'TiB' | 'PiB';
+
+export interface StorageVolumes {
+  active_logical: number;
+  long_term_logical: number;
+  active_physical: number;
+  long_term_physical: number;
+  fail_safe: number;
+}
+
+export interface StorageCalcRequest {
+  unit: StorageUnit;
+  volumes: StorageVolumes;
+  rates: StorageRates;
+  discount_pct: number;
+  free_tier: boolean;
+}
+
+export interface StorageModelCost {
+  active: number;
+  long_term: number;
+  fail_safe: number;
+  total: number;
+}
+
+export interface StorageEstimate {
+  logical: StorageModelCost;
+  physical: StorageModelCost;
+  cheaper: 'logical' | 'physical';
+  savings: number;
+  annual_recommended: number;
+  data_compression_ratio: number;
+  effective_compression_ratio: number;
+  break_even_ratio: number;
+}
+
+export interface PeakWindow {
+  id: string;
+  start: string; // "HH:MM"
+  end: string;   // "HH:MM"; end <= start wraps past midnight
+  slots: number;
+}
+
+export interface SlotsCalcRequest {
+  edition: string;
+  baseline_slots: number;
+  committed_slots: number;
+  windows: PeakWindow[];
+  payg_rate: number;
+  commit_rate: number;
+  discount_pct: number;
+}
+
+export interface SlotCost {
+  committed: number;
+  uncommitted_baseline: number;
+  autoscaled: number;
+  payg: number;
+  total: number;
+}
+
+export interface SlotProfile {
+  baseline: number[];
+  windows: number[][];
+  demand: number[];
+  billed: number[];
+}
+
+export interface SweepPoint {
+  committed: number;
+  monthly: number;
+}
+
+export interface SlotsEstimate {
+  profile: SlotProfile;
+  hourly_cost: SlotCost[];
+  daily: SlotCost;
+  monthly: SlotCost;
+  effective_baseline: number;
+  effective_committed: number;
+  peak_slots: number;
+  avg_slots: number;
+  committed_slot_hours: number;
+  used_committed_slot_hours: number;
+  payg_slot_hours: number;
+  commit_utilization: number;
+  sweep: SweepPoint[];
+  best_commit?: SweepPoint;
+  warnings: string[];
+}
