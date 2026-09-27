@@ -101,8 +101,8 @@ export default function AddressRiskOverview({ sources, onInspect }: {
                 <tr><th className="py-1 pr-3 font-normal">Time (UTC)</th><th className="pr-3 font-normal">Token</th><th className="pr-3 font-normal">Action</th><th className="pr-3 font-normal">Address</th><th className="pr-3 font-normal">Amount</th><th className="font-normal">Tx</th></tr>
               </thead>
               <tbody className="text-zinc-300">
-                {data.recent_events.map(e => (
-                  <tr key={e.tx_hash + e.address + e.action} className="border-t border-zinc-800/60">
+                {data.recent_events.map((e, i) => (
+                  <tr key={`${e.tx_hash}-${e.token}-${e.action}-${e.address}-${i}`} className="border-t border-zinc-800/60">
                     <td className="py-1 pr-3 font-mono text-zinc-400">{e.block_time.slice(0, 16).replace('T', ' ')}</td>
                     <td className="pr-3">{e.token}</td>
                     <td className="pr-3">{ACTION_LABELS[e.action] ?? e.action}</td>

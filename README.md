@@ -300,7 +300,7 @@ GHCN backfill settles.
 
 On-chain financial fundamentals for Bitcoin and Ethereum, powered by
 `bigquery-public-data.crypto_bitcoin` and `crypto_ethereum` (refreshed daily).
-Four lazily-loaded tabs, each behind its own endpoint and the shared
+Six lazily-loaded tabs, each behind its own endpoint and the shared
 10-minute cache:
 
 | Tab | Widgets |
@@ -309,6 +309,8 @@ Four lazily-loaded tabs, each behind its own endpoint and the shared
 | **Fee Market** | BTC median sat/vB vs ETH avg gwei trend, BTC miner revenue (subsidy vs fees), ETH EIP-1559 burned vs tips, congestion-vs-fee scatter |
 | **Whales & Flow** | Top 50 largest transfers (explorer links), whale-sized tx trend (≥100 BTC / ≥1,000 ETH), top receiving addresses, top-1% value concentration |
 | **Token Economy** | Top 25 ERC-20 tokens by transfer count, token vs native activity, new contract deployments, token movement treemap |
+| **Mining Economics** | Network hashrate, miner revenue, yield per TH/s, rig economics for the latest day, shutdown price by rig (editable electricity, PUE, pool fee, BTC price, custom rig) |
+| **Address Risk** | Ethereum address risk-clue lookup, freeze-history overview and sources table — see [Address Risk](#address-risk-ethereum-address-risk-clues) below |
 
 Ranges: 7/30/90 days everywhere, plus 1 year for the slim aggregate trends
 (pulse, fees); token queries cap at 30 days. Every query filters the
