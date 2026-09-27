@@ -17,10 +17,10 @@ const ACTION_LABELS: Record<string, string> = { freeze: 'Freeze', unfreeze: 'Unf
 function fmtCompactUSD(raw: string): string {
   const n = Number(raw);
   if (!Number.isFinite(n)) return `$${raw}`;
-  if (n >= 999_500_000) return `$${Math.round(n / 1e9)}b`;
-  if (n >= 999_500) return `$${Math.round(n / 1e6)}m`;
-  if (n >= 1e3) return `$${Math.round(n / 1e3)}k`;
-  return `$${Math.round(n)}`;
+  if (n >= 999_995_000) return `$${(n / 1e9).toFixed(2)}b`;
+  if (n >= 999_995) return `$${(n / 1e6).toFixed(2)}m`;
+  if (n >= 1e3) return `$${(n / 1e3).toFixed(2)}k`;
+  return `$${n.toFixed(2)}`;
 }
 
 function fmtExactUSD(raw: string): string {
