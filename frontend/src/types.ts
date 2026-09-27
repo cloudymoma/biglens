@@ -864,12 +864,15 @@ export interface WhaleTx {
   from: string;
   to: string;
   amount: number;
+  from_risk?: string[]; // local Address Risk lists (ETH only)
+  to_risk?: string[];
 }
 
 export interface WhaleAddress {
   address: string;
   total: number;
   tx_count: number;
+  risk?: string[];
 }
 
 export interface WhaleTrendRow {
@@ -937,6 +940,128 @@ export interface CryptoSpotData {
   price_usd: number;
   as_of: string;
   source: string;
+}
+
+// --- Crypto Pulse: Address Risk (field names mirror backend/address_risk_lookup.go) ---
+
+export type AddressRiskStatus = 'ok' | 'partial' | 'stale' | 'empty' | 'error' | 'not_configured';
+export type AddressRiskSeverity = 'critical' | 'warning' | 'association' | 'info';
+
+export interface AddressRiskClue {
+  severity: AddressRiskSeverity;
+  source: string;
+  token: string;
+  flag: string;
+  code: string;
+  title: string;
+  detail: string;
+  observed_at: string | null;
+  as_of: string;
+  ref_url: string;
+  association?: AddressRiskAssociation;
+}
+
+export interface AddressRiskAssociation {
+  counterparty: string;
+  counterparty_sources: string[];
+  tx_count: number;
+  channels: string[];
+  direction: 'in' | 'out' | 'both';
+  tx_hash: string;
+  amount: string;
+}
+
+export interface AddressRiskListScope {
+  n: number;
+  oldest_at: string;
+}
+
+export interface AddressRiskScope {
+  txlist: AddressRiskListScope;
+  tokentx: AddressRiskListScope;
+  txlistinternal: AddressRiskListScope;
+  hops: number;
+  token_allowlist: string[];
+  truncated: boolean;
+}
+
+export interface AddressRiskSource {
+  id: string;
+  status: AddressRiskStatus;
+  error?: string;
+  last_ok_at?: string;
+  upstream_changed_at?: string;
+  coverage_from?: string;
+  cursor?: string;
+  last_error?: string;
+  hosts?: string[];
+  sends_address: boolean;
+  signup_url?: string;
+  help_url?: string;
+}
+
+export interface AddressRiskSummary {
+  counts: { critical: number; warning: number; association: number; info: number };
+  checked: string[];
+  failed: string[];
+  incomplete: string[];
+  skipped: string[];
+  text: string;
+}
+
+export interface AddressRiskLookup {
+  address: string;
+  checksum_warning: boolean;
+  queried_at: string;
+  summary: AddressRiskSummary;
+  disclaimer: string;
+  clues: AddressRiskClue[];
+  sources: AddressRiskSource[];
+  association_scope: AddressRiskScope | null;
+}
+
+export interface AddressRiskKeyInfo {
+  configured: boolean;
+  hint: string;
+  credits_available?: number;
+}
+
+export interface AddressRiskSources {
+  lists: AddressRiskSource[];
+  rpc_hosts: string[];
+  goplus_host: string;
+  etherscan: AddressRiskKeyInfo;
+}
+
+export interface AddressRiskTrendPoint {
+  bucket: string;
+  usdt_freeze: number;
+  usdc_freeze: number;
+  unfreeze: number;
+}
+
+export interface AddressRiskEvent {
+  tx_hash: string;
+  token: 'USDT' | 'USDC';
+  action: 'freeze' | 'unfreeze' | 'destroy';
+  address: string;
+  amount: string;
+  block_number: number;
+  block_time: string;
+}
+
+export interface AddressRiskOverview {
+  empty: boolean;
+  coverage: { coverage_from: string; cursor: string; partial: boolean };
+  kpis: {
+    ofac_count: number;
+    usdt_frozen_count: number;
+    usdc_frozen_count: number;
+    usdt_destroyed_total: string;
+    mew_darklist_count: number;
+  };
+  trend: { granularity: 'day' | 'month'; points: AddressRiskTrendPoint[] };
+  recent_events: AddressRiskEvent[];
 }
 
 // --- BigQuery Open Data: GCP Billing ---

@@ -54,8 +54,9 @@ export const OPEN_DATASETS: OpenDataset[] = [
     icon: <Bitcoin size={16} />,
     description:
       'On-chain fundamentals for Bitcoin and Ethereum: network activity, fee markets, ' +
-      'whale flows and the ERC-20 token economy — native units, no fiat prices, updated daily.',
-    sourceTable: 'bigquery-public-data.crypto_bitcoin · crypto_ethereum',
+      'whale flows and the ERC-20 token economy — native units, no fiat prices, updated daily — ' +
+      'plus an Ethereum address risk-clue lookup built on public blacklists and third-party APIs.',
+    sourceTable: 'bigquery-public-data.crypto_bitcoin · crypto_ethereum · 0xB10C OFAC list · MEW darklist · GoPlus · Chainalysis oracle',
     component: CryptoDashboard,
   },
   {

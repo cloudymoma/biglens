@@ -3,6 +3,7 @@ import ReactECharts from 'echarts-for-react';
 import { ExternalLink } from 'lucide-react';
 import type { CryptoWhalesData, CryptoChain } from '../../types';
 import { fetchCryptoWhales } from '../../api';
+import { RISK_BADGES } from './addressRiskTools';
 import { EmptyState, ErrorBanner } from '../../dashboards/shared';
 import {
   BTC_COLOR, ETH_COLOR, CHART_TOOLTIP, AXIS_LABEL, SPLIT_LINE,
@@ -18,7 +19,32 @@ const explorerUrl = (chain: CryptoChain, hash: string) =>
 
 const unit = (chain: CryptoChain) => (chain === 'btc' ? 'BTC' : 'ETH');
 
-export default function WhalesTab() {
+// An ETH address as a button that opens it in Address Risk, with badges for
+// the local lists it is on (spec D17). Empty addresses (contract creations)
+// render as a dash.
+function EthAddress({ address, risk, onInspect }: {
+  address: string;
+  risk?: string[];
+  onInspect?: (address: string) => void;
+}) {
+  if (!address) return <span>—</span>;
+  return (
+    <span className="inline-flex items-center gap-1">
+      <button type="button" title={`${address} — check in Address Risk`} onClick={() => onInspect?.(address)}
+              className="hover:text-white underline decoration-zinc-700">
+        {shortHash(address)}
+      </button>
+      {(risk ?? []).map(r => (
+        <span key={r} className="rounded px-1 text-[10px] font-sans font-semibold border"
+              style={{ color: RISK_BADGES[r]?.color, borderColor: RISK_BADGES[r]?.color }}>
+          {RISK_BADGES[r]?.label ?? r}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+export default function WhalesTab({ onInspect }: { onInspect?: (address: string) => void }) {
   const [days, setDays] = useState(90);
   const [chain, setChain] = useState<CryptoChain>('btc');
   const [data, setData] = useState<CryptoWhalesData | null>(null);
@@ -124,7 +150,10 @@ export default function WhalesTab() {
                         </a>
                       </td>
                       {chain === 'eth' && (
-                        <td className="py-1.5 text-zinc-500">{shortHash(tx.from)} → {shortHash(tx.to)}</td>
+                        <td className="py-1.5 text-zinc-500">
+                          <EthAddress address={tx.from} risk={tx.from_risk} onInspect={onInspect} /> →{' '}
+                          <EthAddress address={tx.to} risk={tx.to_risk} onInspect={onInspect} />
+                        </td>
                       )}
                       <td className="py-1.5 text-right font-semibold text-white">{fmtNum(tx.amount)}</td>
                     </tr>
@@ -148,7 +177,9 @@ export default function WhalesTab() {
                 <tbody className="font-mono">
                   {data.top_receivers.map(a => (
                     <tr key={a.address} className="border-t border-zinc-800/40 text-zinc-300">
-                      <td className="py-1.5">{shortHash(a.address)}</td>
+                      <td className="py-1.5">
+                        {chain === 'eth' ? <EthAddress address={a.address} risk={a.risk} onInspect={onInspect} /> : shortHash(a.address)}
+                      </td>
                       <td className="py-1.5 text-right text-zinc-500">{fmtNum(a.tx_count)}</td>
                       <td className="py-1.5 text-right font-semibold text-white">{fmtNum(a.total)}</td>
                     </tr>

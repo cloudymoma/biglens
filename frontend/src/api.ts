@@ -1,5 +1,9 @@
 import axios from 'axios';
 import type {
+  AddressRiskKeyInfo,
+  AddressRiskLookup,
+  AddressRiskOverview,
+  AddressRiskSources,
   BillingFilterState,
   BillingConfigResponse,
   BillingMeta,
@@ -409,6 +413,31 @@ export async function fetchCryptoSpot(): Promise<CryptoSpotData | null> {
   } catch {
     return null;
   }
+}
+
+export async function fetchAddressRiskLookup(address: string, signal?: AbortSignal): Promise<AddressRiskLookup> {
+  const { data } = await axios.get('/api/opendata/crypto/address-risk/lookup', { params: { address }, signal });
+  return data;
+}
+
+export async function fetchAddressRiskSources(): Promise<AddressRiskSources> {
+  const { data } = await axios.get('/api/opendata/crypto/address-risk/sources');
+  return data;
+}
+
+export async function fetchAddressRiskOverview(): Promise<AddressRiskOverview> {
+  const { data } = await axios.get('/api/opendata/crypto/address-risk/overview');
+  return data;
+}
+
+export async function saveAddressRiskKey(key: string): Promise<AddressRiskKeyInfo> {
+  const { data } = await axios.post('/api/opendata/crypto/address-risk/keys', { provider: 'etherscan', key });
+  return data;
+}
+
+export async function deleteAddressRiskKey(): Promise<AddressRiskKeyInfo> {
+  const { data } = await axios.delete('/api/opendata/crypto/address-risk/keys', { params: { provider: 'etherscan' } });
+  return data;
 }
 
 // --- BigQuery Open Data: GCP Billing ---

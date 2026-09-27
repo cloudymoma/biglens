@@ -5,6 +5,7 @@ import FeesTab from './FeesTab';
 import WhalesTab from './WhalesTab';
 import TokensTab from './TokensTab';
 import MiningTab from './MiningTab';
+import AddressRiskTab from './AddressRiskTab';
 
 const TABS = [
   { id: 'pulse', label: 'Network Pulse' },
@@ -12,6 +13,7 @@ const TABS = [
   { id: 'whales', label: 'Whales & Flow' },
   { id: 'tokens', label: 'Token Economy' },
   { id: 'mining', label: 'Mining Economics' },
+  { id: 'risk', label: 'Address Risk' },
 ] as const;
 
 type TabId = (typeof TABS)[number]['id'];
@@ -20,17 +22,27 @@ export default function CryptoDashboard() {
   const [active, setActive] = useState<TabId>('pulse');
   const [visited, setVisited] = useState<ReadonlySet<TabId>>(new Set<TabId>(['pulse']));
 
+  // Whales → Address Risk hand-off. seq changes on every click, so clicking
+  // the same address again re-runs the lookup in the already-mounted tab.
+  const [inspect, setInspect] = useState({ address: '', seq: 0 });
+
   const select = (id: TabId) => {
     setActive(id);
     setVisited(prev => new Set(prev).add(id));
   };
 
+  const inspectAddress = (address: string) => {
+    select('risk');
+    setInspect(prev => ({ address, seq: prev.seq + 1 }));
+  };
+
   const tabBody: Record<TabId, React.ReactNode> = {
     pulse: <PulseTab />,
     fees: <FeesTab />,
-    whales: <WhalesTab />,
+    whales: <WhalesTab onInspect={inspectAddress} />,
     tokens: <TokensTab />,
     mining: <MiningTab />,
+    risk: <AddressRiskTab inspect={inspect} />,
   };
 
   return (
