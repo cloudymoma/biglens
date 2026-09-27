@@ -300,7 +300,6 @@ func (b *BQClient) GetSearchIndexes(ctx context.Context, filters QueryFilters) (
 	return results, nil
 }
 
-
 // --- Widget 2.1: Concurrent Slot Usage by State (Time-Series) ---
 
 // SlotStatePoint carries one (period, state) slot reading; PENDING vs
@@ -569,9 +568,9 @@ func (b *BQClient) GetDailyCost(ctx context.Context, filters QueryFilters) ([]Da
 // --- Widget 4.1: Active Recommendations ---
 
 type Recommendation struct {
-	Recommender        string  `json:"recommender" bigquery:"recommender"`
-	Description        string  `json:"description" bigquery:"description"`
-	Category           string  `json:"category" bigquery:"category"`
+	Recommender         string  `json:"recommender" bigquery:"recommender"`
+	Description         string  `json:"description" bigquery:"description"`
+	Category            string  `json:"category" bigquery:"category"`
 	ProjectedSavingsUSD float64 `json:"projected_savings_usd" bigquery:"projected_savings_usd"`
 }
 

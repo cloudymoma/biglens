@@ -8,10 +8,10 @@ import (
 
 func TestSplitFrontmatter(t *testing.T) {
 	tests := []struct {
-		name      string
-		content   string
-		wantYAML  string
-		wantBody  string
+		name     string
+		content  string
+		wantYAML string
+		wantBody string
 	}{
 		{
 			name:     "standard frontmatter",
@@ -229,7 +229,7 @@ func TestDeleteConcept(t *testing.T) {
 
 func TestSearch(t *testing.T) {
 	b := writeBundle(t, map[string]string{
-		"tables/users": "---\ntype: BigQuery Table\ntitle: Users\ntags: [pii]\n---\nx",
+		"tables/users":  "---\ntype: BigQuery Table\ntitle: Users\ntags: [pii]\n---\nx",
 		"tables/orders": "---\ntype: BigQuery Table\ntitle: Orders\n---\nx",
 		"glossary/pii":  "---\ntype: Glossary Term\ntitle: PII\n---\nx",
 	})

@@ -19,25 +19,25 @@ import (
 // Reserved filenames (index.md, log.md) are not concepts.
 
 const (
-	okfExt      = ".md"
-	indexFile   = "index.md"
-	logFile     = "log.md"
-	frontDelim  = "---"
+	okfExt     = ".md"
+	indexFile  = "index.md"
+	logFile    = "log.md"
+	frontDelim = "---"
 )
 
 // Concept is one OKF knowledge document.
 type Concept struct {
-	ID          string   `json:"id"`          // path minus .md, forward-slashed
-	Type        string   `json:"type"`        // free-text kind -> drives node color
+	ID          string   `json:"id"`   // path minus .md, forward-slashed
+	Type        string   `json:"type"` // free-text kind -> drives node color
 	Title       string   `json:"title"`
 	Description string   `json:"description"`
-	Resource    string   `json:"resource"`    // canonical URI of the underlying asset
+	Resource    string   `json:"resource"`      // canonical URI of the underlying asset
 	FQN         string   `json:"fqn,omitempty"` // fully qualified name of the asset
 	UserManaged bool     `json:"user_managed,omitempty"`
 	Tags        []string `json:"tags"`
 	Timestamp   string   `json:"timestamp"`
-	Body        string   `json:"body"`        // markdown after frontmatter
-	Links       []string `json:"links"`       // resolved target concept IDs
+	Body        string   `json:"body"`  // markdown after frontmatter
+	Links       []string `json:"links"` // resolved target concept IDs
 }
 
 type frontmatter struct {

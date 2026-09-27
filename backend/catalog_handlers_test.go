@@ -14,7 +14,7 @@ import (
 func newTestHandler(t *testing.T) *APIHandler {
 	t.Helper()
 	return &APIHandler{
-		cache:  NewCache(time.Minute),
+		cache: NewCache(time.Minute),
 		bundle: writeBundle(t, map[string]string{
 			"tables/users":  "---\ntype: BigQuery Table\ntitle: Users\ntags: [pii]\n---\nLinks [orders](/tables/orders).",
 			"tables/orders": "---\ntype: BigQuery Table\ntitle: Orders\n---\nNo links.",
