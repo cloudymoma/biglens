@@ -50,6 +50,20 @@ CREATE TABLE IF NOT EXISTS sync_state (
   pending_count       INTEGER NOT NULL DEFAULT 0,
   last_error          TEXT NOT NULL DEFAULT '',
   row_count           INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS backfill_meta (
+  id             INTEGER PRIMARY KEY CHECK (id = 1),
+  status         TEXT NOT NULL DEFAULT 'idle',
+  since_date     TEXT NOT NULL DEFAULT '',
+  through_date   TEXT NOT NULL DEFAULT '',
+  events_stored  INTEGER NOT NULL DEFAULT 0,
+  usdt_events    INTEGER NOT NULL DEFAULT 0,
+  usdc_events    INTEGER NOT NULL DEFAULT 0,
+  bytes_billed   INTEGER NOT NULL DEFAULT 0,
+  started_at     TEXT NOT NULL DEFAULT '',
+  completed_at   TEXT NOT NULL DEFAULT '',
+  progress_label TEXT NOT NULL DEFAULT '',
+  last_error     TEXT NOT NULL DEFAULT ''
 );`
 
 type riskStore struct{ db *sql.DB }
@@ -367,4 +381,71 @@ func (s *riskStore) riskPoolEntries(ctx context.Context) (riskPool, error) {
 		pool[st.Address] = append(pool[st.Address], "stablecoin")
 	}
 	return pool, nil
+}
+
+type backfillMeta struct {
+	Status, SinceDate, ThroughDate             string
+	EventsStored, USDTEvents, USDCEvents       int
+	BytesBilled                                int64
+	StartedAt, CompletedAt, ProgressLabel, Err string
+}
+
+func (s *riskStore) getBackfillMeta(ctx context.Context) (backfillMeta, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT status, since_date, through_date, events_stored,
+	  usdt_events, usdc_events, bytes_billed, started_at, completed_at, progress_label, last_error
+	  FROM backfill_meta WHERE id = 1`)
+	var m backfillMeta
+	err := row.Scan(&m.Status, &m.SinceDate, &m.ThroughDate, &m.EventsStored,
+		&m.USDTEvents, &m.USDCEvents, &m.BytesBilled, &m.StartedAt, &m.CompletedAt, &m.ProgressLabel, &m.Err)
+	if err == sql.ErrNoRows {
+		return backfillMeta{Status: "idle"}, nil
+	}
+	if err != nil {
+		return backfillMeta{}, fmt.Errorf("read backfill_meta: %w", err)
+	}
+	return m, nil
+}
+
+func (s *riskStore) saveBackfillMeta(ctx context.Context, m backfillMeta) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO backfill_meta
+	  (id, status, since_date, through_date, events_stored, usdt_events, usdc_events, bytes_billed, started_at, completed_at, progress_label, last_error)
+	  VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	  ON CONFLICT(id) DO UPDATE SET
+	    status = excluded.status,
+	    since_date = excluded.since_date,
+	    through_date = excluded.through_date,
+	    events_stored = excluded.events_stored,
+	    usdt_events = excluded.usdt_events,
+	    usdc_events = excluded.usdc_events,
+	    bytes_billed = excluded.bytes_billed,
+	    started_at = excluded.started_at,
+	    completed_at = excluded.completed_at,
+	    progress_label = excluded.progress_label,
+	    last_error = excluded.last_error`,
+		m.Status, m.SinceDate, m.ThroughDate, m.EventsStored, m.USDTEvents, m.USDCEvents,
+		m.BytesBilled, m.StartedAt, m.CompletedAt, m.ProgressLabel, m.Err)
+	return err
+}
+
+func (s *riskStore) stablecoinEventCounts(ctx context.Context) (total, usdt, usdc int, err error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT token, COUNT(*) FROM stablecoin_events GROUP BY token`)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("count stablecoin_events: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var tok string
+		var n int
+		if err := rows.Scan(&tok, &n); err != nil {
+			return 0, 0, 0, err
+		}
+		total += n
+		switch tok {
+		case "USDT":
+			usdt += n
+		case "USDC":
+			usdc += n
+		}
+	}
+	return total, usdt, usdc, rows.Err()
 }

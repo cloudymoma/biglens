@@ -3,7 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -180,5 +183,334 @@ func TestBackfillShowsBlockCheckError(t *testing.T) {
 	err := runAddressRiskBackfill(context.Background(), src, newTestRiskStore(t), backfillOpts{Since: stablecoinFirstDate}, at(6, 0), &out)
 	if err == nil || !strings.Contains(err.Error(), "Access Denied") {
 		t.Errorf("err = %v, want the BigQuery error shown to the operator", err)
+	}
+}
+
+func TestBackfillMetaPersistenceAndCorruptionDetection(t *testing.T) {
+	ctx := context.Background()
+	src := &fakeStableSource{
+		exportedUntil: at(5, 0),
+		dryBytes:      1e9,
+		events: []stablecoinEvent{
+			{TxHash: "0x1", LogIndex: 1, Token: "USDT", Action: "freeze", Address: "0x098b716b8aaf21512996dc57eb0615e2383e2f96", BlockNumber: 1, BlockTime: "2020-01-01T00:00:00Z"},
+			{TxHash: "0x2", LogIndex: 2, Token: "USDC", Action: "freeze", Address: "0x2222222222222222222222222222222222222222", BlockNumber: 2, BlockTime: "2021-01-01T00:00:00Z"},
+		},
+	}
+	store := newTestRiskStore(t)
+	setCursor(t, store, civil.Date{Year: 2026, Month: 1, Day: 1}, syncToday.AddDays(-1))
+
+	var out bytes.Buffer
+	if err := runAddressRiskBackfill(ctx, src, store, backfillOpts{Since: stablecoinFirstDate, Yes: true}, at(6, 0), &out); err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := store.backfillStatus(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st.Completed || st.Corrupted || st.CanRun || st.EventsStored != 2 || st.USDTEvents != 1 || st.USDCEvents != 1 || st.SinceDate != "2017-11-28" {
+		t.Fatalf("healthy status = %+v", st)
+	}
+
+	// Simulate data corruption by deleting one row from stablecoin_events.
+	if _, err := store.db.ExecContext(ctx, `DELETE FROM stablecoin_events WHERE tx_hash = '0x1'`); err != nil {
+		t.Fatal(err)
+	}
+	stCorrupt, err := store.backfillStatus(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stCorrupt.Status != "corrupted" || !stCorrupt.Corrupted || !stCorrupt.CanRun || stCorrupt.LiveEvents != 1 {
+		t.Fatalf("corrupted status = %+v", stCorrupt)
+	}
+
+	// A failed forced re-sync (e.g. before 00:30 UTC when blocks aren't exported yet) must NOT
+	// regress sync_state.coverage_from in SQLite.
+	_ = runAddressRiskBackfill(ctx, src, store, backfillOpts{Since: stablecoinFirstDate, Yes: true, Force: true}, at(0, 10), &out)
+	syncSt, err := store.getSyncState(ctx, stablecoinSourceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if syncSt.CoverageFrom != "2017-11-28" {
+		t.Fatalf("failed Force run regressed coverage_from to %q, want 2017-11-28 preserved", syncSt.CoverageFrom)
+	}
+
+	// Repair with Force: true re-scans back to 2017-11-28 in memory and restores the missing event.
+	if err := runAddressRiskBackfill(ctx, src, store, backfillOpts{Since: stablecoinFirstDate, Yes: true, Force: true}, at(6, 0), &out); err != nil {
+		t.Fatal(err)
+	}
+	stRepaired, err := store.backfillStatus(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !stRepaired.Completed || stRepaired.Corrupted || stRepaired.LiveEvents != 2 {
+		t.Fatalf("repaired status = %+v", stRepaired)
+	}
+}
+
+func TestBackfillPartialVsFullStatus(t *testing.T) {
+	ctx := context.Background()
+	src := &fakeStableSource{
+		exportedUntil: at(5, 0),
+		dryBytes:      1e9,
+		events: []stablecoinEvent{
+			{TxHash: "0x1", LogIndex: 1, Token: "USDT", Action: "freeze", Address: "0x098b716b8aaf21512996dc57eb0615e2383e2f96", BlockNumber: 1, BlockTime: "2020-01-01T00:00:00Z"},
+		},
+	}
+	store := newTestRiskStore(t)
+
+	// Partial backfill (--since 2026-01-01 --yes) must be marked as "partial", Completed=false, CanRun=true.
+	var out bytes.Buffer
+	if err := runAddressRiskBackfill(ctx, src, store, backfillOpts{Since: civil.Date{Year: 2026, Month: 1, Day: 1}, Yes: true}, at(6, 0), &out); err != nil {
+		t.Fatal(err)
+	}
+	stPartial, err := store.backfillStatus(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stPartial.Status != "partial" || stPartial.Completed || !stPartial.CanRun || stPartial.SinceDate != "2026-01-01" {
+		t.Fatalf("partial status = %+v, want status=partial completed=false can_run=true since_date=2026-01-01", stPartial)
+	}
+
+	// Completing the remaining history down to 2017-11-28 upgrades status to "completed", Completed=true, CanRun=false.
+	if err := runAddressRiskBackfill(ctx, src, store, backfillOpts{Since: stablecoinFirstDate, Yes: true}, at(6, 0), &out); err != nil {
+		t.Fatal(err)
+	}
+	stFull, err := store.backfillStatus(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stFull.Status != "completed" || !stFull.Completed || stFull.CanRun || stFull.SinceDate != "2017-11-28" {
+		t.Fatalf("full status = %+v, want status=completed completed=true can_run=false since_date=2017-11-28", stFull)
+	}
+}
+
+func TestBackfillGetIsReadOnly(t *testing.T) {
+	ctx := context.Background()
+	store := newTestRiskStore(t)
+	if err := store.insertStablecoinEvents(ctx, []stablecoinEvent{
+		{TxHash: "0x1", LogIndex: 1, Token: "USDT", Action: "freeze", Address: "0x098b716b8aaf21512996dc57eb0615e2383e2f96", BlockNumber: 1, BlockTime: "2020-01-01T00:00:00Z"},
+	}, stablecoinFirstDay, syncToday.AddDays(-1).String(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := store.backfillStatus(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Status != "completed" || !st.Completed || st.CanRun {
+		t.Fatalf("adopted status = %+v, want status=completed completed=true can_run=false", st)
+	}
+	// Verify that backfillStatus did NOT write a backfill_meta row to the database.
+	metaSt, err := store.getBackfillMeta(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metaSt.Status != "idle" {
+		t.Fatalf("backfillStatus wrote to backfill_meta: %+v", metaSt)
+	}
+}
+
+// The server, not the UI, enforces estimate → confirm: confirm needs the
+// single-use token of the latest estimate, unexpired and for the same mode,
+// and the run stops unbilled if its re-plan grew more than 10%.
+func TestAddressRiskBackfillHTTPRequiresDryRunThenConfirm(t *testing.T) {
+	src := &fakeStableSource{
+		exportedUntil: at(5, 0),
+		dryBytes:      2e9, // × 10 yearly batches (2026…2017) = 20 GB
+		events: []stablecoinEvent{
+			{TxHash: "0x1", LogIndex: 1, Token: "USDT", Action: "freeze", Address: "0x098b716b8aaf21512996dc57eb0615e2383e2f96", BlockNumber: 1, BlockTime: "2020-01-01T00:00:00Z"},
+		},
+	}
+	store := newTestRiskStore(t)
+	svc := newAddressRiskService(store, nil)
+	svc.bqSrc = src
+	clock := at(6, 0)
+	svc.now = func() time.Time { return clock }
+	h := &APIHandler{risk: svc}
+
+	const path = "/api/opendata/crypto/address-risk/backfill"
+	post := func(body string) *httptest.ResponseRecorder {
+		t.Helper()
+		w := httptest.NewRecorder()
+		h.AddressRiskBackfill(w, httptest.NewRequest(http.MethodPost, path, strings.NewReader(body)))
+		return w
+	}
+	expect := func(body string, code int, msg string) {
+		t.Helper()
+		if w := post(body); w.Code != code || !strings.Contains(w.Body.String(), msg) {
+			t.Fatalf("POST %s = %d %q, want %d containing %q", body, w.Code, w.Body.String(), code, msg)
+		}
+	}
+	dryRun := func() string {
+		t.Helper()
+		w := post(`{"dry_run":true}`)
+		var st riskBackfillStatus
+		if w.Code != http.StatusOK {
+			t.Fatalf("dry run = %d %q", w.Code, w.Body.String())
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &st); err != nil {
+			t.Fatal(err)
+		}
+		if !st.DryRunReady || st.DryRunToken == "" || st.DryRunBytes != 20e9 || st.DryRunBatches != 10 {
+			t.Fatalf("dry run status = %+v", st)
+		}
+		return st.DryRunToken
+	}
+	waitIdle := func() {
+		t.Helper()
+		for deadline := time.Now().Add(5 * time.Second); svc.isBackfillRunning(); time.Sleep(5 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatal("backfill still running")
+			}
+		}
+	}
+	confirm := func(tok string) string { return `{"confirm":true,"dry_run_token":"` + tok + `"}` }
+	const noPlan = "no matching estimate"
+
+	expect(`{}`, http.StatusBadRequest, "dry_run=true")
+	expect(`{"dry_run":true,"confirm":true}`, http.StatusBadRequest, "dry_run=true")
+	expect(`{"confirm":true}`, http.StatusConflict, noPlan) // the old one-click path
+
+	tok1 := dryRun()
+	gw := httptest.NewRecorder()
+	h.AddressRiskBackfill(gw, httptest.NewRequest(http.MethodGet, path, nil))
+	if strings.Contains(gw.Body.String(), "dry_run_token") {
+		t.Fatalf("GET leaked the token: %s", gw.Body.String())
+	}
+	expect(`{"confirm":true}`, http.StatusConflict, noPlan)
+	expect(confirm("wrong"), http.StatusConflict, noPlan)
+	expect(`{"confirm":true,"force":true,"dry_run_token":"`+tok1+`"}`, http.StatusConflict, "different mode")
+	clock = at(6, 16) // past backfillPlanTTL
+	expect(confirm(tok1), http.StatusConflict, noPlan)
+	clock = at(6, 0)
+	if src.fetchCount() != 0 {
+		t.Fatalf("fetches = %d before any valid confirm", src.fetchCount())
+	}
+
+	// The failed attempts above did not use tok1 up. The re-plan now costs
+	// 30 GB against 20 GB confirmed, so the run stops before billing.
+	src.mu.Lock()
+	src.dryBytes = 3e9
+	src.mu.Unlock()
+	expect(confirm(tok1), http.StatusAccepted, `"running":true`)
+	waitIdle()
+	st, err := store.backfillStatus(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Status != "failed" || !strings.Contains(st.Error, "estimate grew to 30.0 GB") || src.fetchCount() != 0 {
+		t.Fatalf("grown estimate: status = %+v, fetches = %d", st, src.fetchCount())
+	}
+
+	src.mu.Lock()
+	src.dryBytes = 2e9
+	src.mu.Unlock()
+	stale := dryRun()
+	tok2 := dryRun() // replaces the previous estimate
+	if stale == tok2 || tok1 == tok2 {
+		t.Fatal("tokens must be unique")
+	}
+	expect(confirm(stale), http.StatusConflict, noPlan)
+	expect(confirm(tok2), http.StatusAccepted, `"running":true`)
+	waitIdle()
+	st, err = store.backfillStatus(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st.Completed || st.CanRun || src.fetchCount() != 10 {
+		t.Fatalf("final status = %+v, fetches = %d", st, src.fetchCount())
+	}
+	// Single use: a forced re-sync cannot reuse tok2.
+	expect(`{"confirm":true,"force":true,"dry_run_token":"`+tok2+`"}`, http.StatusConflict, noPlan)
+	svc.backfillMu.Lock()
+	defer svc.backfillMu.Unlock()
+	if svc.pendingPlan != nil {
+		t.Errorf("pendingPlan = %+v after a started run, want nil", svc.pendingPlan)
+	}
+}
+
+func TestBackfillStopsWhenEstimateGrowsPastConfirmed(t *testing.T) {
+	ctx := context.Background()
+	src := &fakeStableSource{exportedUntil: at(5, 0), dryBytes: 3e9}
+	store := newTestRiskStore(t)
+	var out bytes.Buffer
+	err := runAddressRiskBackfill(ctx, src, store, backfillOpts{Since: stablecoinFirstDate, Yes: true, MaxTotalBytes: 22e9}, at(6, 0), &out)
+	var pe publicError
+	if !errors.As(err, &pe) || !strings.Contains(pe.msg, "30.0 GB") || !strings.Contains(pe.msg, "limit 22.0 GB") {
+		t.Fatalf("err = %v, want the estimate-grew error", err)
+	}
+	if src.fetchCount() != 0 {
+		t.Fatalf("fetches = %d, want 0: nothing may be billed", src.fetchCount())
+	}
+	st, err := store.backfillStatus(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Status != "failed" || st.Error != pe.msg {
+		t.Fatalf("status = %+v, want failed with %q", st, pe.msg)
+	}
+
+	// Exactly at the cap still runs.
+	src.mu.Lock()
+	src.dryBytes = 2.2e9
+	src.mu.Unlock()
+	if err := runAddressRiskBackfill(ctx, src, store, backfillOpts{Since: stablecoinFirstDate, Yes: true, MaxTotalBytes: 22e9}, at(6, 0), &out); err != nil {
+		t.Fatal(err)
+	}
+	if src.fetchCount() != 10 {
+		t.Fatalf("fetches = %d, want 10", src.fetchCount())
+	}
+}
+
+// Dry-run failures return a fixed message; BigQuery's text (project and job
+// IDs) goes only to the server log, and no token is issued.
+func TestAddressRiskBackfillDryRunErrorsArePublic(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		src      *fakeStableSource
+		wantCode int
+		wantBody string
+	}{
+		{"BigQuery error", &fakeStableSource{checkErr: errors.New("googleapi: Error 403: Access Denied: Project secret-proj-123: job secret-proj-123:US.bqjob_r1")},
+			http.StatusBadGateway, "BigQuery or database error"},
+		{"blocks not exported yet", &fakeStableSource{exportedUntil: time.Date(2026, 9, 24, 0, 0, 0, 0, time.UTC)},
+			http.StatusServiceUnavailable, errBlocksNotExported.msg},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := newAddressRiskService(newTestRiskStore(t), nil)
+			svc.bqSrc = tt.src
+			svc.now = func() time.Time { return at(6, 0) }
+			h := &APIHandler{risk: svc}
+			w := httptest.NewRecorder()
+			h.AddressRiskBackfill(w, httptest.NewRequest(http.MethodPost, "/api/opendata/crypto/address-risk/backfill", strings.NewReader(`{"dry_run":true}`)))
+			if w.Code != tt.wantCode || !strings.Contains(w.Body.String(), tt.wantBody) || strings.Contains(w.Body.String(), "secret-proj") {
+				t.Errorf("POST dry_run = %d %q, want %d containing %q", w.Code, w.Body.String(), tt.wantCode, tt.wantBody)
+			}
+			svc.backfillMu.Lock()
+			defer svc.backfillMu.Unlock()
+			if svc.pendingPlan != nil {
+				t.Error("a failed estimate must not issue a token")
+			}
+		})
+	}
+}
+
+// GET /backfill serves the stored error, so a failed run stores the fixed
+// message; the CLI still returns (and prints) the raw error.
+func TestBackfillFailureStoredWithoutRawBigQueryText(t *testing.T) {
+	src := &fakeStableSource{exportedUntil: at(5, 0), dryBytes: 1e9, fetchErr: errors.New("googleapi: Error 403: Access Denied: Project secret-proj-123")}
+	store := newTestRiskStore(t)
+	var out bytes.Buffer
+	err := runAddressRiskBackfill(context.Background(), src, store, backfillOpts{Since: stablecoinFirstDate, Yes: true}, at(6, 0), &out)
+	if err == nil || !strings.Contains(err.Error(), "secret-proj-123") {
+		t.Fatalf("err = %v, want the raw error for the CLI", err)
+	}
+	st, err := store.backfillStatus(context.Background(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Status != "failed" || strings.Contains(st.Error, "secret-proj") || !strings.Contains(st.Error, "server log") {
+		t.Fatalf("stored status = %+v, want the fixed message", st)
 	}
 }

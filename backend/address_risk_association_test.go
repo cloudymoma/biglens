@@ -59,7 +59,7 @@ func TestAssociationPoisoningFilters(t *testing.T) {
 		t.Errorf("clues = %+v, want none", clues)
 	}
 	if scope.TxList.N != 4 || scope.TokenTx.N != 2 || scope.TxListInternal.N != 0 || scope.Hops != 1 ||
-		strings.Join(scope.TokenAllowlist, ",") != "USDT,USDC,DAI,WETH,WBTC" {
+		strings.Join(scope.TokenAllowlist, ",") != "USDT,USDC,DAI,WETH,WBTC,stETH,wstETH,USDS,USDe,PYUSD,FDUSD,cbBTC" {
 		t.Errorf("scope = %+v", scope)
 	}
 }

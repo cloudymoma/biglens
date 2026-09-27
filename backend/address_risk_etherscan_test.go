@@ -18,9 +18,12 @@ import (
 func withEtherscan(t *testing.T, h http.HandlerFunc) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(h)
-	origURL, origLim, origT := etherscanBaseURL, etherscanLimiter, riskSourceTimeout
-	etherscanBaseURL, etherscanLimiter, riskSourceTimeout = srv.URL+"/v2/api", rate.NewLimiter(rate.Inf, 1), 300*time.Millisecond
-	t.Cleanup(func() { srv.Close(); etherscanBaseURL, etherscanLimiter, riskSourceTimeout = origURL, origLim, origT })
+	origURL, origBS, origLim, origT := etherscanBaseURL, blockscoutBaseURL, etherscanLimiter, riskSourceTimeout
+	etherscanBaseURL, blockscoutBaseURL, etherscanLimiter, riskSourceTimeout = srv.URL+"/v2/api", "", rate.NewLimiter(rate.Inf, 1), 300*time.Millisecond
+	t.Cleanup(func() {
+		srv.Close()
+		etherscanBaseURL, blockscoutBaseURL, etherscanLimiter, riskSourceTimeout = origURL, origBS, origLim, origT
+	})
 	return srv
 }
 
@@ -124,5 +127,20 @@ func TestEtherscanLimiterWaitRespectsBudget(t *testing.T) {
 	defer cancel()
 	if _, _, code := etherscanCall(ctx, "K", url.Values{}); code != "rate_limited_local" {
 		t.Errorf("code = %q, want rate_limited_local", code)
+	}
+}
+
+func TestBlockscoutListNormalizesTransactionHashAndStatus2(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"status":"2","message":"Some internal transactions not yet processed","result":[{"transactionHash":"0xabc","from":"0x1","to":"0x2","value":"100","isError":"0","timeStamp":"1700000000"}]}`))
+	}))
+	defer srv.Close()
+	origBS := blockscoutBaseURL
+	blockscoutBaseURL = srv.URL
+	defer func() { blockscoutBaseURL = origBS }()
+
+	rows, code := blockscoutList(context.Background(), "txlistinternal", "0x1111111111111111111111111111111111111111")
+	if code != "" || len(rows) != 1 || rows[0].Hash != "0xabc" {
+		t.Fatalf("rows = %+v, code = %q", rows, code)
 	}
 }

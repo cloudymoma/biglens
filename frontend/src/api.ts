@@ -1,5 +1,6 @@
 import axios from 'axios';
 import type {
+  AddressRiskBackfillStatus,
   AddressRiskKeyInfo,
   AddressRiskLookup,
   AddressRiskOverview,
@@ -437,6 +438,21 @@ export async function saveAddressRiskKey(key: string): Promise<AddressRiskKeyInf
 
 export async function deleteAddressRiskKey(): Promise<AddressRiskKeyInfo> {
   const { data } = await axios.delete('/api/opendata/crypto/address-risk/keys', { params: { provider: 'etherscan' } });
+  return data;
+}
+
+export async function fetchAddressRiskBackfill(): Promise<AddressRiskBackfillStatus> {
+  const { data } = await axios.get('/api/opendata/crypto/address-risk/backfill');
+  return data;
+}
+
+export async function postAddressRiskBackfill(opts: {
+  dry_run?: boolean;
+  confirm?: boolean;
+  force?: boolean;
+  dry_run_token?: string;
+}): Promise<AddressRiskBackfillStatus> {
+  const { data } = await axios.post('/api/opendata/crypto/address-risk/backfill', opts);
   return data;
 }
 

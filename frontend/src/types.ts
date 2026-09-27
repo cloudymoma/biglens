@@ -982,6 +982,8 @@ export interface AddressRiskScope {
   txlistinternal: AddressRiskListScope;
   hops: number;
   token_allowlist: string[];
+  counterparties_screened: number;
+  counterparty_errors?: number;
   truncated: boolean;
 }
 
@@ -1062,6 +1064,34 @@ export interface AddressRiskOverview {
   };
   trend: { granularity: 'day' | 'month'; points: AddressRiskTrendPoint[] };
   recent_events: AddressRiskEvent[];
+}
+
+export interface AddressRiskBackfillStatus {
+  status: 'idle' | 'running' | 'partial' | 'completed' | 'failed' | 'corrupted';
+  completed: boolean;
+  running: boolean;
+  corrupted: boolean;
+  corrupt_reason?: string;
+  can_run: boolean;
+  since_date?: string;
+  through_date?: string;
+  coverage_from?: string;
+  coverage_to?: string;
+  events_stored: number;
+  live_events: number;
+  usdt_events: number;
+  usdc_events: number;
+  bytes_billed: number;
+  estimated_usd: number;
+  dry_run_ready?: boolean;
+  dry_run_bytes?: number;
+  dry_run_usd?: number;
+  dry_run_batches?: number;
+  dry_run_token?: string; // only in the POST dry_run response; confirm must send it back
+  started_at?: string;
+  completed_at?: string;
+  progress_label?: string;
+  error?: string;
 }
 
 // --- BigQuery Open Data: GCP Billing ---

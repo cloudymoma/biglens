@@ -37,7 +37,7 @@ const (
 )
 
 // riskSourceOrder fixes source and clue order in every response.
-var riskSourceOrder = map[string]int{"ofac": 0, "mew_darklist": 1, "stablecoin": 2, "chainalysis_oracle": 3, "goplus": 4, "etherscan": 5}
+var riskSourceOrder = map[string]int{"ofac": 0, "mew_darklist": 1, "stablecoin": 2, "chainalysis_oracle": 3, "goplus": 4, "blockscout": 5, "etherscan": 6}
 
 // riskSkippedNotes explains not_configured sources.
 var riskSkippedNotes = map[string]string{"etherscan": "Etherscan association analysis (no API key)"}
@@ -96,8 +96,12 @@ func (r *riskLookupResult) hasError() bool {
 }
 
 // cacheable reports whether the result may be cached for 10 minutes: not when
-// a source errored or a list has not synced yet, so a retry gets fresh data.
+// a source errored, a list has not synced yet, or a live counterparty check
+// failed, so a retry gets fresh data.
 func (r *riskLookupResult) cacheable() bool {
+	if r.AssociationScope != nil && r.AssociationScope.CounterpartyErrors > 0 {
+		return false
+	}
 	for _, s := range r.Sources {
 		if s.Status == "error" || s.Status == "empty" {
 			return false
@@ -293,11 +297,16 @@ type addressRiskService struct {
 	flight  singleflight.Group
 	// etherscanKey is the only place lookups read the key from: config
 	// writes happen under configMu, and reading cfg here would race.
-	etherscanKey atomic.Pointer[string]
-	cfg          *Config               // for saving the key; nil in tests that do not save
-	credits      atomic.Pointer[int64] // creditsAvailable from the last key validation
-	validateMu   sync.Mutex
-	lastValidate time.Time
+	etherscanKey    atomic.Pointer[string]
+	cfg             *Config               // for saving the key; nil in tests that do not save
+	credits         atomic.Pointer[int64] // creditsAvailable from the last key validation
+	validateMu      sync.Mutex
+	lastValidate    time.Time
+	bqSrc           stablecoinSource
+	invalidateCache func()
+	backfillMu      sync.Mutex
+	backfillRunning bool
+	pendingPlan     *backfillPlan // last unconfirmed dry-run estimate; guarded by backfillMu
 }
 
 func (s *addressRiskService) setEtherscanKey(k string) { s.etherscanKey.Store(&k) }
@@ -311,9 +320,83 @@ func (s *addressRiskService) etherscanKeySnapshot() string {
 	return ""
 }
 
-// checkEtherscan runs the one-hop association analysis (spec §8.4). No key
-// → not_configured. No local pool → no request at all: the match against an
-// empty pool would read as "no association".
+// screenCounterparties checks up to riskMaxLiveCounterparties non-pool
+// counterparties (starting with the earliest inbound ETH funder) against the
+// Chainalysis oracle, GoPlus, and Blockscout, adding any hits into pool.
+func (s *addressRiskService) screenCounterparties(ctx context.Context, candidates []string, firstFunder string, pool riskPool, now time.Time) (screened, errCount int) {
+	if len(candidates) > 0 {
+		scCtx, scCancel := context.WithTimeout(ctx, riskSourceTimeout)
+		defer scCancel()
+		type cpHit struct {
+			cp      string
+			sources []string
+			errs    int
+		}
+		hits := make([]cpHit, len(candidates))
+		var wg sync.WaitGroup
+		for i, cp := range candidates {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				var srcs []string
+				var cwg sync.WaitGroup
+				var oracleHit bool
+				var oracleCode, gpCode, bsCode string
+				var gpClues, bsClues []riskClue
+				cwg.Add(3)
+				go func() { defer cwg.Done(); oracleHit, oracleCode = checkOracle(scCtx, s.rpcURLs, cp) }()
+				go func() { defer cwg.Done(); gpClues, gpCode = checkGoPlus(scCtx, cp, now) }()
+				go func() { defer cwg.Done(); bsClues, bsCode = checkBlockscoutAddress(scCtx, cp, now) }()
+				cwg.Wait()
+				errs := 0
+				if oracleCode != "" {
+					errs++
+				}
+				if gpCode != "" {
+					errs++
+				}
+				if bsCode != "" {
+					errs++
+				}
+				if oracleHit {
+					srcs = append(srcs, "chainalysis_oracle")
+				}
+				for _, c := range gpClues {
+					if c.Severity == sevCritical || c.Severity == sevWarning {
+						if c.Flag != "" && !goplusRules[c.Flag].Count {
+							srcs = append(srcs, "goplus:"+c.Flag)
+						} else {
+							srcs = append(srcs, c.Title)
+						}
+					}
+				}
+				for _, c := range bsClues {
+					if c.Code == "blockscout_scam" {
+						srcs = append(srcs, "blockscout_scam")
+					} else if c.Severity == sevWarning {
+						srcs = append(srcs, c.Title)
+					}
+				}
+				hits[i] = cpHit{cp: cp, sources: srcs, errs: errs}
+			}()
+		}
+		wg.Wait()
+		for _, h := range hits {
+			errCount += h.errs
+			if len(h.sources) > 0 {
+				pool[h.cp] = append(pool[h.cp], h.sources...)
+			}
+		}
+	}
+	if firstFunder != "" && len(pool[firstFunder]) > 0 {
+		pool[firstFunder] = append([]string{"first_funder"}, pool[firstFunder]...)
+	}
+	return len(candidates), errCount
+}
+
+// checkEtherscan runs the one-hop association analysis (spec §8.4). When no
+// Etherscan key is configured (or Etherscan fails transiently) and Blockscout
+// is enabled, it falls back to Blockscout's Etherscan-compatible API.
 func (s *addressRiskService) checkEtherscan(ctx context.Context, addr, key string, now time.Time) (riskSource, []riskClue, *riskAssociationScope) {
 	src := riskSource{ID: "etherscan", Status: "ok", Hosts: hostsOf(etherscanBaseURL), SendsAddress: true,
 		SignupURL: etherscanSignupURL, HelpURL: etherscanHelpURL}
@@ -321,7 +404,7 @@ func (s *addressRiskService) checkEtherscan(ctx context.Context, addr, key strin
 		src.Status, src.Error = "error", code
 		return src, nil, nil
 	}
-	if key == "" {
+	if key == "" && blockscoutBaseURL == "" {
 		src.Status = "not_configured"
 		return src, nil, nil
 	}
@@ -332,33 +415,79 @@ func (s *addressRiskService) checkEtherscan(ctx context.Context, addr, key strin
 	if err != nil || len(pool) == 0 { // an empty pool (first sync) would read as "no association"
 		return fail("local_pool_unavailable")
 	}
-	ctx, cancel := context.WithTimeout(ctx, riskSourceTimeout)
-	defer cancel()
-	// The three calls overlap (the shared limiter still spaces the requests):
-	// run one after another, slow 1000-row answers would exhaust the budget.
+
 	type listResult struct {
 		rows      []etherscanRow
 		msg, code string
 	}
 	var results [3]listResult
-	var wg sync.WaitGroup
-	for i, action := range []string{"txlist", "tokentx", "txlistinternal"} {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			rows, msg, code := etherscanList(ctx, key, action, addr)
-			results[i] = listResult{rows, msg, code}
-		}()
-	}
-	wg.Wait()
-	for _, r := range results {
-		if r.code != "" {
-			// Etherscan's own reason (e.g. a tightened free tier), key stripped.
-			src.LastError = strings.ReplaceAll(r.msg, key, "…")
-			return fail(r.code)
+	actions := []string{"txlist", "tokentx", "txlistinternal"}
+
+	needFallback := key == ""
+	var etherscanErrCode string
+	if key != "" {
+		esCtx, esCancel := context.WithTimeout(ctx, riskSourceTimeout)
+		var wg sync.WaitGroup
+		for i, action := range actions {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				rows, msg, code := etherscanList(esCtx, key, action, addr)
+				results[i] = listResult{rows, msg, code}
+			}()
+		}
+		wg.Wait()
+		esCancel()
+		for _, r := range results {
+			if r.code != "" {
+				src.LastError = strings.ReplaceAll(r.msg, key, "…")
+				etherscanErrCode = r.code
+				// Explicit key/plan errors from Etherscan are surfaced directly
+				// unless Blockscout fallback can answer for transient failures.
+				if r.code == "key_invalid" || r.code == "key_throttled" || r.code == "bad_response" || blockscoutBaseURL == "" {
+					return fail(r.code)
+				}
+				needFallback = true
+				break
+			}
 		}
 	}
+
+	if needFallback {
+		bsCtx, bsCancel := context.WithTimeout(ctx, riskSourceTimeout)
+		var bResults [3]listResult
+		var wg sync.WaitGroup
+		for i, action := range actions {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				rows, code := blockscoutList(bsCtx, action, addr)
+				bResults[i] = listResult{rows: rows, code: code}
+			}()
+		}
+		wg.Wait()
+		bsCancel()
+		for _, r := range bResults {
+			if r.code != "" {
+				if etherscanErrCode != "" {
+					return fail(etherscanErrCode)
+				}
+				return fail(r.code)
+			}
+		}
+		results = bResults
+		src.LastError = ""
+		src.Hosts = hostsOf(blockscoutBaseURL)
+	}
+
+	candidates, firstFunder := topCounterpartiesToScreen(addr, results[0].rows, results[1].rows, results[2].rows, pool)
+	screened, screenErrs := s.screenCounterparties(ctx, candidates, firstFunder, pool, now)
+
 	clues, scope := associationClues(addr, results[0].rows, results[1].rows, results[2].rows, pool, fmtTime(now))
+	if scope != nil {
+		scope.CounterpartiesScreened = screened
+		scope.CounterpartyErrors = screenErrs
+	}
 	return src, clues, scope
 }
 
@@ -437,19 +566,20 @@ func (s *addressRiskService) lookup(ctx context.Context, addr string) *riskLooku
 func (s *addressRiskService) lookupKey(ctx context.Context, addr, etherscanKey string) *riskLookupResult {
 	now := s.now()
 	var (
-		wg                      sync.WaitGroup
-		localSrc                []riskSource
-		localClues, goplusFound []riskClue
-		oracleHit               bool
-		oracleCode, goplusCode  string
-		etherSrc                riskSource
-		etherClues              []riskClue
-		scope                   *riskAssociationScope
+		wg                                   sync.WaitGroup
+		localSrc                             []riskSource
+		localClues, goplusFound, bsAddrClues []riskClue
+		oracleHit                            bool
+		oracleCode, goplusCode, bsCode       string
+		etherSrc                             riskSource
+		etherClues                           []riskClue
+		scope                                *riskAssociationScope
 	)
-	wg.Add(4)
+	wg.Add(5)
 	go func() { defer wg.Done(); localSrc, localClues = s.localCheck(ctx, addr) }()
 	go func() { defer wg.Done(); oracleHit, oracleCode = checkOracle(ctx, s.rpcURLs, addr) }()
 	go func() { defer wg.Done(); goplusFound, goplusCode = checkGoPlus(ctx, addr, now) }()
+	go func() { defer wg.Done(); bsAddrClues, bsCode = checkBlockscoutAddress(ctx, addr, now) }()
 	go func() { defer wg.Done(); etherSrc, etherClues, scope = s.checkEtherscan(ctx, addr, etherscanKey, now) }()
 	wg.Wait()
 
@@ -460,6 +590,7 @@ func (s *addressRiskService) lookupKey(ctx context.Context, addr, etherscanKey s
 			RefURL: "https://etherscan.io/address/" + riskOracleContract + "#readContract"})
 	}
 	clues = append(clues, goplusFound...)
+	clues = append(clues, bsAddrClues...)
 	clues = append(clues, etherClues...)
 	sortClues(clues)
 
@@ -472,8 +603,11 @@ func (s *addressRiskService) lookupKey(ctx context.Context, addr, etherscanKey s
 	}
 	sources := append(localSrc,
 		live("chainalysis_oracle", oracleCode, hostsOf(s.rpcURLs...)),
-		live("goplus", goplusCode, hostsOf(goplusBaseURL)),
-		etherSrc)
+		live("goplus", goplusCode, hostsOf(goplusBaseURL)))
+	if blockscoutBaseURL != "" {
+		sources = append(sources, live("blockscout", bsCode, hostsOf(blockscoutBaseURL)))
+	}
+	sources = append(sources, etherSrc)
 
 	return &riskLookupResult{
 		Address:          addr,

@@ -197,3 +197,27 @@ func TestCheckGoPlus(t *testing.T) {
 		})
 	}
 }
+
+func TestBlockscoutRiskTag(t *testing.T) {
+	for tag, want := range map[string]bool{
+		"Tornado.Cash":                        true,
+		"Tornado.Cash: Router":                true,
+		"Tornado Cash 100 ETH":                true,
+		"tornado-cash":                        true,
+		"TornadoCash":                         true,
+		"Fake_Phishing123":                    true,
+		"Exploiter 7":                         true,
+		"Phishing (reported by Scam Sniffer)": true,
+		"Scam Sniffer: Phishing":              true,
+		"Scam Sniffer":                        false,
+		"ScamSniffer":                         false,
+		"SanctionsList":                       false,
+		"ETHGlobal Hackathon":                 false,
+		"OFAC compliance oracle":              false,
+		"Uniswap V3: Router":                  false,
+	} {
+		if got := blockscoutRiskTag(tag); got != want {
+			t.Errorf("blockscoutRiskTag(%q) = %v, want %v", tag, got, want)
+		}
+	}
+}

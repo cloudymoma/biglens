@@ -74,7 +74,7 @@ export default function EtherscanKeyPanel({ info, onChange }: {
       ) : (
         <>
           <p>
-            Association analysis (transfers with listed addresses) needs a free Etherscan API key.{' '}
+            Association analysis uses <span className="text-zinc-300">Blockscout</span> automatically when no Etherscan key is set. Add a free Etherscan API key for direct Etherscan queries:{' '}
             <a href={ETHERSCAN_SIGNUP_URL} target="_blank" rel="noopener noreferrer" className={link}>Get a free key <ExternalLink size={10} /></a>
             {' · '}
             <a href={ETHERSCAN_HELP_URL} target="_blank" rel="noopener noreferrer" className={link}>How? <ExternalLink size={10} /></a>

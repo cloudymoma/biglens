@@ -73,11 +73,11 @@ func main() {
 	// Address Risk (Crypto Pulse). A store failure must not stop the server:
 	// lookups then report local lists as unavailable and still run live checks.
 	var rstore *riskStore
+	invalidate := func() { api.cache.Delete(riskOverviewCacheKey) }
 	if s, err := openRiskStore(cfg.AddressRisk.dbPath()); err != nil {
 		slog.Error("address risk store unavailable", "path", cfg.AddressRisk.dbPath(), "error", err)
 	} else {
 		rstore = s
-		invalidate := func() { api.cache.Delete(riskOverviewCacheKey) }
 		lists := newRiskListSyncer(rstore)
 		lists.onChange = invalidate
 		stable := &stablecoinSyncer{store: rstore, src: bqStablecoinSource{client: bq.client}, now: time.Now,
@@ -86,6 +86,8 @@ func main() {
 	}
 	api.risk = newAddressRiskService(rstore, cfg.AddressRisk.rpcURLs())
 	api.risk.cfg = cfg
+	api.risk.bqSrc = bqStablecoinSource{client: bq.client}
+	api.risk.invalidateCache = invalidate
 	api.risk.setEtherscanKey(cfg.AddressRisk.EtherscanAPIKey)
 
 	mux := http.NewServeMux()
@@ -157,6 +159,7 @@ func main() {
 	mux.Handle("/api/opendata/crypto/address-risk/sources", h(api.AddressRiskSources))
 	mux.Handle("/api/opendata/crypto/address-risk/overview", h(api.AddressRiskOverview))
 	mux.Handle("/api/opendata/crypto/address-risk/keys", logMW(addressRiskKeysHandler(api)))
+	mux.Handle("/api/opendata/crypto/address-risk/backfill", logMW(addressRiskBackfillHandler(api)))
 	mux.Handle("/api/gcp_billing/config", h(api.BillingConfig))
 	mux.Handle("/api/gcp_billing/meta", h(api.BillingMeta))
 	mux.Handle("/api/gcp_billing/overview", h(api.BillingOverview))

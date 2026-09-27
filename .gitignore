@@ -1,6 +1,7 @@
 # Build output
 bin/
 backend/biglens
+backend/biglens-server
 backend/static/
 frontend/dist/
 

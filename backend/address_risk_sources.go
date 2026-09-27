@@ -10,6 +10,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -17,6 +19,10 @@ import (
 )
 
 var (
+	// riskSourceTimeout bounds each live source. A lookup's worst case is three
+	// budgets in sequence — Etherscan, then the Blockscout fallback, then live
+	// counterparty screening — about 15 s. Keep 3× this well under the
+	// server's 60 s WriteTimeout (main.go).
 	riskSourceTimeout = 5 * time.Second
 	riskHTTPClient    = &http.Client{Timeout: 10 * time.Second} // per-source ctx is the real budget
 )
@@ -259,4 +265,117 @@ func checkGoPlus(ctx context.Context, addr string, now time.Time) ([]riskClue, s
 		return nil, "bad_response"
 	}
 	return goplusClues(result, addr, fmtTime(now)), ""
+}
+
+const (
+	riskTitleBlockscoutScam   = "Blockscout: flagged as scam or phishing address"
+	riskTitleBlockscoutTagFmt = "Blockscout risk tag: %s"
+)
+
+// blockscoutRiskTagRe matches risk words in public/metadata tags (never
+// contract self-names). The tag is usually spelled "Tornado.Cash".
+var blockscoutRiskTagRe = regexp.MustCompile(`(?i)(?:\b|_)(phishing|scam|scammer|heist|exploiter|drainer|lazarus|tornado[\s._-]*cash|malicious|blackmail|darknet|rugpull|honeypot)(?:\b|[0-9_])`)
+
+// blockscoutVendorRe strips security-vendor names that contain a risk word
+// ("Scam Sniffer" is a company, not a verdict) before matching.
+var blockscoutVendorRe = regexp.MustCompile(`(?i)scam[\s_-]*sniffer`)
+
+// blockscoutRiskTag reports whether a tag's text names a risk.
+func blockscoutRiskTag(tag string) bool {
+	return blockscoutRiskTagRe.MatchString(blockscoutVendorRe.ReplaceAllString(tag, " "))
+}
+
+type blockscoutTag struct {
+	Name        string `json:"name"`
+	DisplayName string `json:"display_name"`
+	Label       string `json:"label"`
+}
+
+func (t blockscoutTag) text() string {
+	for _, s := range []string{t.DisplayName, t.Label, t.Name} {
+		if s = strings.TrimSpace(s); s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+// checkBlockscoutAddress inspects Blockscout V2 address metadata for scam
+// reputation and high-risk public/metadata tags (never contract self-names).
+func checkBlockscoutAddress(ctx context.Context, addr string, now time.Time) ([]riskClue, string) {
+	if blockscoutBaseURL == "" {
+		return nil, ""
+	}
+	ctx, cancel := context.WithTimeout(ctx, riskSourceTimeout)
+	defer cancel()
+	u := strings.TrimRight(blockscoutBaseURL, "/") + "/api/v2/addresses/" + addr
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, "bad_request"
+	}
+	resp, err := riskHTTPClient.Do(req)
+	if err != nil {
+		return nil, upstreamErrCode(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, ""
+	}
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return nil, "rate_limited"
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Sprintf("upstream_http_%d", resp.StatusCode)
+	}
+	body, err := readCapped(resp.Body, riskMaxBody)
+	if err != nil {
+		return nil, "bad_response"
+	}
+	var parsed struct {
+		IsScam     bool            `json:"is_scam"`
+		Reputation string          `json:"reputation"`
+		PublicTags []blockscoutTag `json:"public_tags"`
+		Metadata   *struct {
+			Tags []blockscoutTag `json:"tags"`
+		} `json:"metadata"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, "bad_response"
+	}
+	asOf := fmtTime(now)
+	ref := "https://eth.blockscout.com/address/" + addr
+	var out []riskClue
+	if parsed.IsScam || strings.EqualFold(parsed.Reputation, "scam") {
+		out = append(out, riskClue{
+			Severity: sevWarning, Source: "blockscout", Flag: "is_scam", Code: "blockscout_scam",
+			Title: riskTitleBlockscoutScam, AsOf: asOf, RefURL: ref,
+		})
+	}
+	var allTags []string
+	for _, t := range parsed.PublicTags {
+		if s := t.text(); s != "" {
+			allTags = append(allTags, s)
+		}
+	}
+	if parsed.Metadata != nil {
+		for _, t := range parsed.Metadata.Tags {
+			if s := t.text(); s != "" {
+				allTags = append(allTags, s)
+			}
+		}
+	}
+	var riskTags []string
+	for _, tag := range allTags {
+		if blockscoutRiskTag(tag) && !slices.Contains(riskTags, tag) {
+			riskTags = append(riskTags, tag)
+		}
+	}
+	if len(riskTags) > 0 {
+		out = append(out, riskClue{
+			Severity: sevWarning, Source: "blockscout", Flag: "risk_tag", Code: "blockscout_tag",
+			Title: fmt.Sprintf(riskTitleBlockscoutTagFmt, strings.Join(riskTags, ", ")),
+			AsOf:  asOf, RefURL: ref,
+		})
+	}
+	return out, ""
 }

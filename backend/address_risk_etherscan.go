@@ -24,8 +24,9 @@ const (
 )
 
 var (
-	etherscanBaseURL = "https://api.etherscan.io/v2/api"
-	etherscanLimiter = rate.NewLimiter(2.5, 1)
+	etherscanBaseURL  = "https://api.etherscan.io/v2/api"
+	blockscoutBaseURL = "https://eth.blockscout.com"
+	etherscanLimiter  = rate.NewLimiter(2.5, 1)
 )
 
 type etherscanEnvelope struct {
@@ -100,15 +101,26 @@ func etherscanCall(ctx context.Context, key string, params url.Values) (json.Raw
 }
 
 // etherscanRow covers txlist, tokentx and txlistinternal; fields absent from
-// a list stay "". All values are decimal strings.
+// a list stay "". All values are decimal strings. Blockscout's txlistinternal
+// names the tx hash field transactionHash.
 type etherscanRow struct {
 	Hash            string `json:"hash"`
+	TransactionHash string `json:"transactionHash"`
 	From            string `json:"from"`
 	To              string `json:"to"`
 	Value           string `json:"value"`
 	IsError         string `json:"isError"`
 	TimeStamp       string `json:"timeStamp"`
 	ContractAddress string `json:"contractAddress"`
+}
+
+func normalizeEtherscanRows(rows []etherscanRow) []etherscanRow {
+	for i := range rows {
+		if rows[i].Hash == "" && rows[i].TransactionHash != "" {
+			rows[i].Hash = rows[i].TransactionHash
+		}
+	}
+	return rows
 }
 
 // etherscanList fetches the newest 1000 rows of one account action. On
@@ -125,5 +137,51 @@ func etherscanList(ctx context.Context, key, action, addr string) ([]etherscanRo
 	if err := json.Unmarshal(raw, &rows); err != nil {
 		return nil, "", "bad_response"
 	}
-	return rows, "", ""
+	return normalizeEtherscanRows(rows), "", ""
+}
+
+// blockscoutList fetches the newest 1000 rows of one account action from
+// Blockscout's keyless Etherscan-compatible RPC endpoint.
+func blockscoutList(ctx context.Context, action, addr string) ([]etherscanRow, string) {
+	if blockscoutBaseURL == "" {
+		return nil, "not_configured"
+	}
+	q := url.Values{
+		"module": {"account"}, "action": {action}, "address": {addr},
+		"page": {"1"}, "offset": {etherscanPageSize}, "sort": {"desc"},
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(blockscoutBaseURL, "/")+"/api?"+q.Encode(), nil)
+	if err != nil {
+		return nil, "bad_request"
+	}
+	resp, err := riskHTTPClient.Do(req)
+	if err != nil {
+		return nil, upstreamErrCode(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return nil, "rate_limited"
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Sprintf("upstream_http_%d", resp.StatusCode)
+	}
+	body, err := readCapped(resp.Body, 8<<20)
+	if err != nil {
+		return nil, "bad_response"
+	}
+	var env etherscanEnvelope
+	if err := json.Unmarshal(body, &env); err != nil {
+		return nil, "bad_response"
+	}
+	// Blockscout returns status "1" (ok), "2" (partial internal index with a
+	// valid array result), or "0" with result [] when no rows exist.
+	if (env.Status == "1" || env.Status == "2" || env.Status == "0") &&
+		strings.HasPrefix(strings.TrimSpace(string(env.Result)), "[") {
+		var rows []etherscanRow
+		if err := json.Unmarshal(env.Result, &rows); err != nil {
+			return nil, "bad_response"
+		}
+		return normalizeEtherscanRows(rows), ""
+	}
+	return nil, "bad_response"
 }

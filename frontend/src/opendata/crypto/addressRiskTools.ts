@@ -41,7 +41,8 @@ export const RISK_SOURCE_LABELS: Record<string, string> = {
   stablecoin: 'USDT/USDC freezes',
   chainalysis_oracle: 'Chainalysis oracle',
   goplus: 'GoPlus',
-  etherscan: 'Etherscan',
+  blockscout: 'Blockscout',
+  etherscan: 'Etherscan / Blockscout',
 };
 
 export interface RiskSourceMeta {
@@ -59,7 +60,8 @@ export const RISK_SOURCE_META: RiskSourceMeta[] = [
   { id: 'stablecoin', delay: 'complete UTC days; up to ~1 day behind', terms: 'public on-chain data via BigQuery', link: 'https://console.cloud.google.com/marketplace/product/ethereum/crypto-ethereum-blockchain' },
   { id: 'chainalysis_oracle', delay: 'live per lookup; oracle last updated 2026-03', terms: 'public contract; Chainalysis makes no warranty of accuracy', link: 'https://go.chainalysis.com/chainalysis-oracle-docs.html' },
   { id: 'goplus', delay: 'live per lookup', terms: 'free public API', link: 'https://gopluslabs.io' },
-  { id: 'etherscan', delay: 'live per lookup with a key; newest 1000 rows per list', terms: 'Etherscan API terms: personal, non-commercial use; data provided by Etherscan', link: 'https://etherscan.io/apiterms' },
+  { id: 'blockscout', delay: 'live per lookup (scam reputation & public security tags)', terms: 'Blockscout public API', link: 'https://eth.blockscout.com' },
+  { id: 'etherscan', delay: 'live per lookup (Blockscout keyless fallback when no Etherscan key); newest 1000 rows per list + live counterparty screening', terms: 'Etherscan API terms (personal, non-commercial use) or Blockscout public API', link: 'https://etherscan.io/apiterms' },
 ];
 
 export const ETHERSCAN_SIGNUP_URL = 'https://etherscan.io/myapikey';

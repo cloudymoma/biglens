@@ -157,10 +157,15 @@ func newFakeUpstreams(t *testing.T, oracleBody, goplusBody string, goplusDelay t
 		time.Sleep(goplusDelay)
 		w.Write([]byte(goplusBody))
 	}))
-	origG, origT := goplusBaseURL, riskSourceTimeout
+	origG, origBS, origT := goplusBaseURL, blockscoutBaseURL, riskSourceTimeout
 	goplusBaseURL = f.goplus.URL + "/api/v1/address_security/"
+	blockscoutBaseURL = ""
 	riskSourceTimeout = 200 * time.Millisecond
-	t.Cleanup(func() { f.oracle.Close(); f.goplus.Close(); goplusBaseURL, riskSourceTimeout = origG, origT })
+	t.Cleanup(func() {
+		f.oracle.Close()
+		f.goplus.Close()
+		goplusBaseURL, blockscoutBaseURL, riskSourceTimeout = origG, origBS, origT
+	})
 	return f
 }
 
@@ -362,5 +367,253 @@ func TestServiceLookupPartialCoverage(t *testing.T) {
 	}
 	if !res.cacheable() {
 		t.Error("partial coverage is a lasting state and must be cacheable")
+	}
+}
+
+func TestBlockscoutFallbackAndLiveCounterpartyScreening(t *testing.T) {
+	const (
+		target     = "0x1111111111111111111111111111111111111111"
+		funderAddr = "0x5555555555555555555555555555555555555555"
+	)
+	oracleSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"result":"` + oracleFalse + `"}`))
+	}))
+	defer oracleSrv.Close()
+
+	// GoPlus returns clean for target, but flags funderAddr as phishing_activities!
+	goplusSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, funderAddr) {
+			w.Write([]byte(`{"code":1,"result":{"phishing_activities":"1","data_source":"SlowMist"}}`))
+			return
+		}
+		w.Write([]byte(`{"code":1,"result":{}}`))
+	}))
+	defer goplusSrv.Close()
+
+	// Blockscout handles both /api/v2/addresses/{addr} (scam tag check) and /api (1-hop txlist fallback).
+	bsSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/v2/addresses/"+target:
+			w.Write([]byte(`{"is_scam":true,"reputation":"scam","public_tags":[{"display_name":"Fake Phishing #99"}]}`))
+		case strings.HasPrefix(r.URL.Path, "/api/v2/addresses/"):
+			w.Write([]byte(`{"is_scam":false,"reputation":"ok"}`))
+		case r.URL.Path == "/api":
+			switch r.URL.Query().Get("action") {
+			case "txlist":
+				w.Write([]byte(`{"status":"1","message":"OK","result":[{"hash":"0xfund","from":"` + funderAddr + `","to":"` + target + `","value":"1000000000000000000","isError":"0","timeStamp":"1700000000"}]}`))
+			default:
+				w.Write([]byte(`{"status":"0","message":"No transactions found","result":[]}`))
+			}
+		}
+	}))
+	defer bsSrv.Close()
+
+	origG, origBS, origT := goplusBaseURL, blockscoutBaseURL, riskSourceTimeout
+	goplusBaseURL = goplusSrv.URL + "/api/v1/address_security/"
+	blockscoutBaseURL = bsSrv.URL
+	riskSourceTimeout = time.Second
+	defer func() { goplusBaseURL, blockscoutBaseURL, riskSourceTimeout = origG, origBS, origT }()
+
+	store := newTestRiskStore(t)
+	ctx := context.Background()
+	store.replaceList(ctx, "ofac", []listEntry{{Address: ronin}}, "h", riskNow)
+	store.replaceList(ctx, "mew_darklist", []listEntry{{Address: "0x2222222222222222222222222222222222222222"}}, "h", riskNow)
+	markStablecoinSynced(t, store)
+
+	// No Etherscan API key configured: should fall back to Blockscout!
+	svc := newAddressRiskService(store, []string{oracleSrv.URL})
+	svc.now = func() time.Time { return riskNow }
+
+	res := svc.lookup(ctx, target)
+	es := sourceByID(t, res.Sources, "etherscan")
+	if es.Status != "ok" || len(es.Hosts) == 0 {
+		t.Fatalf("etherscan source (via Blockscout fallback) = %+v", es)
+	}
+	bs := sourceByID(t, res.Sources, "blockscout")
+	if bs.Status != "ok" || len(bs.Hosts) == 0 {
+		t.Fatalf("blockscout source = %+v, want status=ok", bs)
+	}
+	if res.AssociationScope == nil || res.AssociationScope.CounterpartiesScreened != 1 || res.AssociationScope.CounterpartyErrors != 0 {
+		t.Fatalf("AssociationScope = %+v, want CounterpartiesScreened=1 CounterpartyErrors=0", res.AssociationScope)
+	}
+	if !res.cacheable() {
+		t.Error("a lookup whose counterparty screening fully succeeded must be cacheable")
+	}
+
+	var foundScam, foundFunderAssoc bool
+	for _, c := range res.Clues {
+		if c.Code == "blockscout_scam" && c.Severity == sevWarning {
+			foundScam = true
+		}
+		if c.Code == "association" && c.Association != nil && c.Association.Counterparty == funderAddr {
+			foundFunderAssoc = true
+			if !strings.Contains(c.Detail, "First ETH funder") || !strings.Contains(c.Detail, "phishing") {
+				t.Errorf("expected First ETH funder and phishing in Detail %q (sources=%v)", c.Detail, c.Association.CounterpartySources)
+			}
+		}
+	}
+	if !foundScam {
+		t.Errorf("missing blockscout_scam clue in %+v", res.Clues)
+	}
+	if !foundFunderAssoc {
+		t.Errorf("missing live-screened first-funder association clue in %+v", res.Clues)
+	}
+}
+
+func TestCounterpartyScreenErrorsAreNotCached(t *testing.T) {
+	const (
+		target     = "0x1111111111111111111111111111111111111111"
+		funderAddr = "0x5555555555555555555555555555555555555555"
+	)
+	oracleSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"result":"` + oracleFalse + `"}`))
+	}))
+	defer oracleSrv.Close()
+	// The target's own checks succeed; only screening the funder fails.
+	goplusSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, funderAddr) {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.Write([]byte(`{"code":1,"result":{}}`))
+	}))
+	defer goplusSrv.Close()
+	bsSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/v2/addresses/"+funderAddr:
+			w.WriteHeader(http.StatusInternalServerError)
+		case strings.HasPrefix(r.URL.Path, "/api/v2/addresses/"):
+			w.Write([]byte(`{"is_scam":false,"reputation":"ok"}`))
+		case r.URL.Query().Get("action") == "txlist":
+			w.Write([]byte(`{"status":"1","message":"OK","result":[{"hash":"0xfund","from":"` + funderAddr + `","to":"` + target + `","value":"1000000000000000000","isError":"0","timeStamp":"1700000000"}]}`))
+		default:
+			w.Write([]byte(`{"status":"0","message":"No transactions found","result":[]}`))
+		}
+	}))
+	defer bsSrv.Close()
+
+	origG, origBS, origT := goplusBaseURL, blockscoutBaseURL, riskSourceTimeout
+	goplusBaseURL = goplusSrv.URL + "/api/v1/address_security/"
+	blockscoutBaseURL = bsSrv.URL
+	riskSourceTimeout = time.Second
+	defer func() { goplusBaseURL, blockscoutBaseURL, riskSourceTimeout = origG, origBS, origT }()
+
+	store := newTestRiskStore(t)
+	ctx := context.Background()
+	store.replaceList(ctx, "ofac", []listEntry{{Address: ronin}}, "h", riskNow)
+	store.replaceList(ctx, "mew_darklist", []listEntry{{Address: "0x2222222222222222222222222222222222222222"}}, "h", riskNow)
+	markStablecoinSynced(t, store)
+	svc := newAddressRiskService(store, []string{oracleSrv.URL})
+	svc.now = func() time.Time { return riskNow }
+
+	res := svc.lookup(ctx, target)
+	if len(res.Summary.Failed) != 0 {
+		t.Fatalf("Summary.Failed = %v, want empty (the target's own sources are healthy)", res.Summary.Failed)
+	}
+	if res.AssociationScope == nil || res.AssociationScope.CounterpartiesScreened != 1 || res.AssociationScope.CounterpartyErrors != 2 {
+		t.Fatalf("AssociationScope = %+v, want 1 screened with 2 errors (GoPlus + Blockscout)", res.AssociationScope)
+	}
+	if res.cacheable() {
+		t.Error("a lookup with failed counterparty checks must not be cached")
+	}
+}
+
+func TestBlockscoutAddressErrorSurfacedInSources(t *testing.T) {
+	up := newFakeUpstreams(t, `{"result":"`+oracleFalse+`"}`, `{"code":1,"result":{}}`, 0)
+	bsSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/v2/addresses/") {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.Write([]byte(`{"status":"0","message":"No transactions found","result":[]}`))
+	}))
+	defer bsSrv.Close()
+
+	origBS := blockscoutBaseURL
+	blockscoutBaseURL = bsSrv.URL
+	defer func() { blockscoutBaseURL = origBS }()
+
+	store := newTestRiskStore(t)
+	ctx := context.Background()
+	store.replaceList(ctx, "ofac", []listEntry{{Address: ronin}}, "h", riskNow)
+	store.replaceList(ctx, "mew_darklist", []listEntry{{Address: "0x2222222222222222222222222222222222222222"}}, "h", riskNow)
+	markStablecoinSynced(t, store)
+
+	svc := newAddressRiskService(store, []string{up.oracle.URL})
+	svc.now = func() time.Time { return riskNow }
+
+	res := svc.lookup(ctx, "0x1111111111111111111111111111111111111111")
+	bs := sourceByID(t, res.Sources, "blockscout")
+	if bs.Status != "error" || bs.Error != "upstream_http_500" {
+		t.Fatalf("blockscout source = %+v, want status=error error=upstream_http_500", bs)
+	}
+	if len(res.Summary.Failed) != 1 || res.Summary.Failed[0] != "blockscout" {
+		t.Fatalf("Summary.Failed = %v, want [blockscout]", res.Summary.Failed)
+	}
+}
+
+func TestBlockscoutTagRegexRejectsFalsePositives(t *testing.T) {
+	bsSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Contract name "SanctionsList" and benign tags "ETHGlobal Hackathon" / "OFAC compliance oracle"
+		// must NOT produce false-positive warnings.
+		w.Write([]byte(`{
+			"is_scam": false,
+			"reputation": "ok",
+			"name": "SanctionsList",
+			"public_tags": [{"display_name": "ETHGlobal Hackathon"}, {"display_name": "OFAC compliance oracle"}],
+			"metadata": {"tags": [{"name": "SanctionsList", "tagType": "name"}]}
+		}`))
+	}))
+	defer bsSrv.Close()
+
+	origBS := blockscoutBaseURL
+	blockscoutBaseURL = bsSrv.URL
+	defer func() { blockscoutBaseURL = origBS }()
+
+	clues, code := checkBlockscoutAddress(context.Background(), "0x40c57923924b5c5c5455c48d93317139addac8fb", riskNow)
+	if code != "" || len(clues) != 0 {
+		t.Fatalf("clues = %+v, code = %q, want empty clues and empty code", clues, code)
+	}
+}
+
+func TestBlockscoutFallbackOnEtherscanTimeout(t *testing.T) {
+	up := newFakeUpstreams(t, `{"result":"`+oracleFalse+`"}`, `{"code":1,"result":{}}`, 0)
+	// Etherscan hangs past riskSourceTimeout.
+	withEtherscan(t, func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(150 * time.Millisecond)
+		w.Write([]byte(`{"status":"1","message":"OK","result":[]}`))
+	})
+
+	// Blockscout responds fast and healthy.
+	bsSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/v2/addresses/") {
+			w.Write([]byte(`{"is_scam":false,"reputation":"ok"}`))
+			return
+		}
+		w.Write([]byte(`{"status":"0","message":"No transactions found","result":[]}`))
+	}))
+	defer bsSrv.Close()
+
+	origBS, origT := blockscoutBaseURL, riskSourceTimeout
+	blockscoutBaseURL = bsSrv.URL
+	riskSourceTimeout = 40 * time.Millisecond
+	defer func() { blockscoutBaseURL, riskSourceTimeout = origBS, origT }()
+
+	store := newTestRiskStore(t)
+	ctx := context.Background()
+	store.replaceList(ctx, "ofac", []listEntry{{Address: ronin}}, "h", riskNow)
+	store.replaceList(ctx, "mew_darklist", []listEntry{{Address: "0x2222222222222222222222222222222222222222"}}, "h", riskNow)
+	markStablecoinSynced(t, store)
+
+	svc := newAddressRiskService(store, []string{up.oracle.URL})
+	svc.now = func() time.Time { return riskNow }
+
+	res := svc.lookupKey(ctx, "0x1111111111111111111111111111111111111111", "slow-key")
+	es := sourceByID(t, res.Sources, "etherscan")
+	if es.Status != "ok" {
+		t.Fatalf("etherscan source after timeout with Blockscout fallback = %+v, want status=ok", es)
+	}
+	if len(res.Summary.Failed) != 0 {
+		t.Fatalf("Summary.Failed = %v, want empty", res.Summary.Failed)
 	}
 }
