@@ -333,6 +333,49 @@ reported in native units (BTC, ETH, gwei) or counts:
 - **Whale thresholds** (≥100 BTC, ≥1,000 ETH) are named constants in native
   units; there is no USD equivalent in the datasets.
 
+#### Address Risk (Ethereum address risk clues)
+
+Paste an Ethereum address to see **risk clues** grouped as Critical / Warning / Association / Info. BigLens never
+labels an address "safe": when nothing is found it says how many sources were checked and which could not be.
+
+| Source | How | Sends the address to a third party? |
+|---|---|---|
+| OFAC SDN (via [0xB10C](https://github.com/0xB10C/ofac-sanctioned-digital-currency-addresses), MIT) | synced every 6 h into local SQLite | No |
+| [MEW darklist](https://github.com/MyEtherWallet/ethereum-lists) (MIT; historical list, frozen since 2020-11) | synced every 6 h | No |
+| USDT / USDC freeze, unfreeze and destroy events (`crypto_ethereum.logs`) | synced from BigQuery by complete UTC day | No |
+| Chainalysis sanctions oracle (on-chain `isSanctioned`) | live `eth_call` via public RPCs | Yes — the RPC provider |
+| [GoPlus](https://gopluslabs.io) address security | live, keyless | Yes — GoPlus |
+| Etherscan association analysis (optional, free key) | live `txlist` / `tokentx` / `txlistinternal`, 1 hop, poisoning-filtered | Yes — Etherscan (with your key) |
+
+Local data lives in `data/security.db` (relative to the working directory; override with `address_risk.db_path`).
+If the file cannot be opened the server still starts and lookups report the local lists as unavailable.
+Looked-up addresses are kept only in the 10-minute in-memory cache — never written to disk or logs.
+
+**Freeze history (BigQuery).** On first start the server syncs the last 30 days of USDT/USDC freeze events
+(~89 GB scanned, ~$0.5 once), then one new day per day (~3.3 GB, ~$0.02/day). `address_risk.initial_sync_days`
+changes the window (0 disables it, max 31). Until the full history is backfilled, lookups say
+"Freeze history covers … only". The backfill is safe to run while the server runs:
+
+```bash
+cd /opt/biglens/backend && sudo -u biglens ./biglens-server --address-risk-backfill        # dry run: per-year cost, bills nothing
+cd /opt/biglens/backend && sudo -u biglens ./biglens-server --address-risk-backfill --yes  # full history since 2017-11-28: ~3.4 TB, ~$20
+```
+
+`cd` is required (conf.yaml, `logs/` and `data/` are relative to the working directory), and so is
+`sudo -u biglens` (otherwise the database files become root-owned and the service cannot write them).
+`--since YYYY-MM-DD` limits the range; `--since-days N` is for development only. A failed run resumes where it stopped.
+
+**Etherscan key (optional).** With a free Etherscan API key (https://etherscan.io/myapikey) a lookup also checks the
+address's newest 1000 transactions, token transfers (USDT/USDC/DAI/WETH/WBTC only) and internal transfers against the
+local lists, one hop deep. Zero-value transfers, failed calls and counterfeit tokens are ignored (address poisoning).
+Set the key in the Address Risk tab: it is checked with Etherscan, then saved to `conf.yaml`, which is rewritten
+with mode 0600 (a hand-edited conf.yaml keeps its mode until the first save from the UI). Only the last 4 characters
+are ever shown, and the key is never logged. Etherscan's API terms allow personal, non-commercial use only
+(https://etherscan.io/apiterms): configure a key only on an instance you use alone.
+
+In **Whales & Flow** (ETH), addresses on the local lists carry `OFAC` / `Frozen` / `MEW` badges, and clicking any
+ETH address opens it in Address Risk.
+
 ### SEM Insights
 
 A keyword-arbitrage dashboard for search-engine marketers, combining the
@@ -460,3 +503,9 @@ BigLens is built entirely on BigQuery's `INFORMATION_SCHEMA` — a set of read-o
 
 For full documentation, see the official Google Cloud reference:
 [BigQuery INFORMATION_SCHEMA Introduction](https://cloud.google.com/bigquery/docs/information-schema-intro)
+
+## License
+
+BigLens is source-available under **The Bindiego License (BDL) 1.0** — see [LICENSE](LICENSE). It permits academic
+use (including personal study) and contributions to the official repository, `github.com/cloudymoma/biglens`;
+all commercial use requires a separate license from the author. Third-party components keep their own licenses.

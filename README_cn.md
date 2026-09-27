@@ -301,6 +301,34 @@ GDELT 是*新闻报道*的索引，而非经核实事件的登记册。每行是
 - **巨鲸阈值**（≥100 BTC、≥1,000 ETH）为原生单位常量；数据集中不存在美元
   汇率。
 
+#### Address Risk（以太坊地址风险线索）
+
+输入一个以太坊地址，查看按 Critical / Warning / Association / Info 分级的**风险线索**。BigLens 从不把地址标为"安全"：没有发现记录时，会说明查询了几个来源、哪些来源没能完成查询。
+
+| 来源 | 方式 | 会把地址发给第三方？ |
+|---|---|---|
+| OFAC SDN（经 [0xB10C](https://github.com/0xB10C/ofac-sanctioned-digital-currency-addresses) 提取，MIT） | 每 6 小时同步到本地 SQLite | 否 |
+| [MEW darklist](https://github.com/MyEtherWallet/ethereum-lists)（MIT；历史名单，2020-11 起未更新） | 每 6 小时同步 | 否 |
+| USDT / USDC 冻结、解冻、销毁事件（`crypto_ethereum.logs`） | 按完整 UTC 日从 BigQuery 同步 | 否 |
+| Chainalysis 链上制裁预言机（`isSanctioned`） | 通过公共 RPC 实时 `eth_call` | 是，发给 RPC 服务商 |
+| [GoPlus](https://gopluslabs.io) 地址安全接口 | 实时，免 key | 是，发给 GoPlus |
+| Etherscan 关联分析（可选，免费 key） | 实时查询 `txlist` / `tokentx` / `txlistinternal`，一跳，带防投毒过滤 | 是，发给 Etherscan（带你的 key） |
+
+本地数据存放在 `data/security.db`（相对于工作目录，可用 `address_risk.db_path` 修改）。文件打不开时服务照常启动，查询结果会标明本地名单不可用。查询过的地址只保存在 10 分钟的内存缓存里，不写磁盘，也不写日志。
+
+**冻结历史（BigQuery）**。服务首次启动时同步最近 30 天的 USDT/USDC 冻结事件（扫描约 89 GB，一次性约 $0.5），之后每天增量同步一天（约 3.3 GB，每天约 $0.02）。`address_risk.initial_sync_days` 可修改天数（0 关闭，最大 31）。全量回填之前，查询结果会注明 "Freeze history covers … only"。回填时服务可以继续运行：
+
+```bash
+cd /opt/biglens/backend && sudo -u biglens ./biglens-server --address-risk-backfill        # 只做 dry-run：打印每年的预估费用，不产生费用
+cd /opt/biglens/backend && sudo -u biglens ./biglens-server --address-risk-backfill --yes  # 全量（2017-11-28 至今）：约 3.4 TB，约 $20
+```
+
+必须先 `cd`（conf.yaml、`logs/`、`data/` 都按工作目录解析），也必须用 `sudo -u biglens`（否则数据库文件归 root 所有，服务写不进去）。`--since YYYY-MM-DD` 限定起始日期；`--since-days N` 只供开发环境使用。中途失败可以直接重跑，从断点继续。
+
+**Etherscan key（可选）**。配置免费的 Etherscan API key（https://etherscan.io/myapikey）后，查询还会把该地址最近 1000 笔交易、代币转账（只统计 USDT/USDC/DAI/WETH/WBTC）和内部交易与本地名单比对，只看一跳。0 金额转账、失败的调用和仿冒代币都会被忽略（防地址投毒）。在 Address Risk 页面里填写 key：先经 Etherscan 校验，再保存到 `conf.yaml`，文件会以 0600 权限重写（手动编辑过的 conf.yaml 要等第一次在 UI 保存后才会变成 0600）。页面上只显示 key 的最后 4 位，日志里也不会出现 key。Etherscan 的 API 条款只允许个人非商业使用（https://etherscan.io/apiterms），只在你一个人用的部署上配置 key。
+
+在 **Whales & Flow**（ETH 模式）中，命中本地名单的地址会带 `OFAC` / `Frozen` / `MEW` 标记；点击任意 ETH 地址即可跳到 Address Risk 查询。
+
 ### SEM Insights（搜索营销洞察）
 
 面向搜索引擎营销（SEM）从业者的关键词套利仪表盘，综合 Google Trends 每日表
@@ -417,3 +445,7 @@ BigLens 完全构建在 BigQuery 的 `INFORMATION_SCHEMA` 之上——这是一�
 
 完整文档请参阅 Google Cloud 官方参考：
 [BigQuery INFORMATION_SCHEMA 简介](https://cloud.google.com/bigquery/docs/information-schema-intro)
+
+## 许可证
+
+BigLens 以 **The Bindiego License (BDL) 1.0** 源码公开，详见 [LICENSE](LICENSE)。允许学术用途（包括个人学习）以及向官方仓库 `github.com/cloudymoma/biglens` 贡献代码；任何商业用途都需要另行向作者获取授权。第三方组件仍按各自的许可证。
