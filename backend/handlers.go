@@ -16,6 +16,7 @@ type APIHandler struct {
 	cache  *Cache
 	bundle *OKFBundle
 	res    ResourceAPI
+	risk   *addressRiskService
 }
 
 func NewAPIHandler(bq *BQClient) *APIHandler {

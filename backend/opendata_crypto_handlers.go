@@ -358,7 +358,7 @@ func (h *APIHandler) CryptoWhales(w http.ResponseWriter, r *http.Request) {
 
 	key := fmt.Sprintf("opendata:crypto:whales:%s:%d", chain, days)
 	if cached, ok := h.cache.Get(key); ok {
-		writeJSON(w, cached)
+		writeJSON(w, h.risk.tagWhales(r.Context(), cached.(*CryptoWhalesData)))
 		return
 	}
 
@@ -419,7 +419,7 @@ func (h *APIHandler) CryptoWhales(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, v)
+	writeJSON(w, h.risk.tagWhales(r.Context(), v.(*CryptoWhalesData)))
 }
 
 // --- /tokens ---

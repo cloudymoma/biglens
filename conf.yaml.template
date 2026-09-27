@@ -12,3 +12,12 @@ catalog:
     project_id: ""            # defaults to bigquery.project_id when empty
     location: "global"        # Dataplex search location, e.g. "global" or "us"
   lineage_location: "us"      # Data Lineage API region (regional, not "global") — usually your BQ job region
+
+# Crypto Pulse → Address Risk (all optional; defaults shown)
+# address_risk:
+#   db_path: "data/security.db"          # relative to the working directory
+#   eth_rpc_urls:                         # keyless RPCs for the Chainalysis oracle, tried in order
+#     - "https://ethereum-rpc.publicnode.com"
+#     - "https://eth.drpc.org"
+#   initial_sync_days: 30                 # first-start sync of USDT/USDC freeze history (days, max 31; 0 = off, ~$0.5 once)
+#   etherscan_api_key: ""                 # optional, free: https://etherscan.io/myapikey — easier to set in the UI (Address Risk tab)

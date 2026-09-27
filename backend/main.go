@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log"
 	"log/slog"
@@ -13,6 +14,12 @@ import (
 )
 
 func main() {
+	backfill := flag.Bool("address-risk-backfill", false, "backfill USDT/USDC freeze history from BigQuery, then exit")
+	since := flag.String("since", "", "backfill from this date, YYYY-MM-DD (default 2017-11-28: full history)")
+	sinceDays := flag.Int("since-days", 0, "backfill the last N days (dev only; excludes --since)")
+	yes := flag.Bool("yes", false, "run the backfill; without it only a dry-run estimate is printed")
+	flag.Parse()
+
 	cfg, err := LoadConfig("conf.yaml")
 	if err != nil {
 		cfg, err = LoadConfig("../conf.yaml")
@@ -50,6 +57,10 @@ func main() {
 		os.Exit(1)
 	}
 
+	if *backfill {
+		os.Exit(runBackfillCLI(ctx, cfg, bqStablecoinSource{client: bq.client}, *since, *sinceDays, *yes))
+	}
+
 	api := NewAPIHandler(bq)
 
 	res, err := NewResClients(ctx, cfg)
@@ -58,6 +69,24 @@ func main() {
 		os.Exit(1)
 	}
 	api.res = res
+
+	// Address Risk (Crypto Pulse). A store failure must not stop the server:
+	// lookups then report local lists as unavailable and still run live checks.
+	var rstore *riskStore
+	if s, err := openRiskStore(cfg.AddressRisk.dbPath()); err != nil {
+		slog.Error("address risk store unavailable", "path", cfg.AddressRisk.dbPath(), "error", err)
+	} else {
+		rstore = s
+		invalidate := func() { api.cache.Delete(riskOverviewCacheKey) }
+		lists := newRiskListSyncer(rstore)
+		lists.onChange = invalidate
+		stable := &stablecoinSyncer{store: rstore, src: bqStablecoinSource{client: bq.client}, now: time.Now,
+			initialDays: cfg.AddressRisk.initialSyncDays(), onChange: invalidate}
+		go runAddressRiskSync(ctx, time.Hour, lists.syncDue, stable.syncOnce)
+	}
+	api.risk = newAddressRiskService(rstore, cfg.AddressRisk.rpcURLs())
+	api.risk.cfg = cfg
+	api.risk.setEtherscanKey(cfg.AddressRisk.EtherscanAPIKey)
 
 	mux := http.NewServeMux()
 
@@ -124,6 +153,10 @@ func main() {
 	mux.Handle("/api/opendata/crypto/tokens", h(api.CryptoTokens))
 	mux.Handle("/api/opendata/crypto/mining", h(api.CryptoMining))
 	mux.Handle("/api/opendata/crypto/spot", h(api.CryptoSpot))
+	mux.Handle("/api/opendata/crypto/address-risk/lookup", h(api.AddressRiskLookup))
+	mux.Handle("/api/opendata/crypto/address-risk/sources", h(api.AddressRiskSources))
+	mux.Handle("/api/opendata/crypto/address-risk/overview", h(api.AddressRiskOverview))
+	mux.Handle("/api/opendata/crypto/address-risk/keys", logMW(addressRiskKeysHandler(api)))
 	mux.Handle("/api/gcp_billing/config", h(api.BillingConfig))
 	mux.Handle("/api/gcp_billing/meta", h(api.BillingMeta))
 	mux.Handle("/api/gcp_billing/overview", h(api.BillingOverview))

@@ -64,3 +64,4 @@ tfplan
 *.tfvars
 !*.tfvars.example
 terraform/.bin/
+data/

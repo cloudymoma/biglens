@@ -320,6 +320,10 @@ type WhaleTx struct {
 	From   string  `json:"from" bigquery:"from_address"`
 	To     string  `json:"to" bigquery:"to_address"`
 	Amount float64 `json:"amount" bigquery:"amount"`
+	// FromRisk/ToRisk: local Address Risk lists the address is on (ETH only,
+	// tagged per request on a copy; never cached, never from BigQuery).
+	FromRisk []string `json:"from_risk,omitempty" bigquery:"-"`
+	ToRisk   []string `json:"to_risk,omitempty" bigquery:"-"`
 }
 
 func whaleLargestSQL(chain string) string {
@@ -357,9 +361,10 @@ func (b *BQClient) GetCryptoLargestTxs(ctx context.Context, chain string, start,
 
 // WhaleAddress is one of the window's top value receivers.
 type WhaleAddress struct {
-	Address string  `json:"address" bigquery:"address"`
-	Total   float64 `json:"total" bigquery:"total"`
-	TxCount int64   `json:"tx_count" bigquery:"tx_count"`
+	Address string   `json:"address" bigquery:"address"`
+	Total   float64  `json:"total" bigquery:"total"`
+	TxCount int64    `json:"tx_count" bigquery:"tx_count"`
+	Risk    []string `json:"risk,omitempty" bigquery:"-"` // see WhaleTx.FromRisk
 }
 
 func whaleReceiversSQL(chain string) string {

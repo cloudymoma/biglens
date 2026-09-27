@@ -32,9 +32,51 @@ type Config struct {
 	GCPResources struct {
 		Projects []string `yaml:"projects"`
 	} `yaml:"gcp_resources"`
+	AddressRisk AddressRiskConfig `yaml:"address_risk,omitempty"`
 
 	// path is where this config was loaded from, so SaveConfig can write back.
 	path string
+}
+
+// AddressRiskConfig configures the Crypto Pulse "Address Risk" tab. Every
+// field has a code default because VMs provisioned before this feature have
+// no address_risk section in their generated conf.yaml.
+type AddressRiskConfig struct {
+	DBPath     string   `yaml:"db_path,omitempty"`
+	EthRPCURLs []string `yaml:"eth_rpc_urls,omitempty"`
+	// InitialSyncDays is a pointer so "absent" (nil → 30) differs from an
+	// explicit 0 (cold start off): existing VMs have no such key.
+	InitialSyncDays *int `yaml:"initial_sync_days,omitempty"`
+	// EtherscanAPIKey is optional; set and cleared from the UI via
+	// UpdateConfig. Never returned by any endpoint or logged.
+	EtherscanAPIKey string `yaml:"etherscan_api_key,omitempty"`
+}
+
+// defaultRiskRPCURLs are keyless public Ethereum RPCs, tried in order for
+// the Chainalysis oracle eth_call (both verified 2026-09-26).
+var defaultRiskRPCURLs = []string{"https://ethereum-rpc.publicnode.com", "https://eth.drpc.org"}
+
+func (c AddressRiskConfig) dbPath() string {
+	if c.DBPath == "" {
+		return "data/security.db"
+	}
+	return c.DBPath
+}
+
+// initialSyncDays is the cold-start window for USDT/USDC freeze history
+// (spec D14): absent → 30, explicit 0 → off, clamped to [0, 31].
+func (c AddressRiskConfig) initialSyncDays() int {
+	if c.InitialSyncDays == nil {
+		return 30
+	}
+	return min(max(*c.InitialSyncDays, 0), 31)
+}
+
+func (c AddressRiskConfig) rpcURLs() []string {
+	if len(c.EthRPCURLs) == 0 {
+		return defaultRiskRPCURLs
+	}
+	return c.EthRPCURLs
 }
 
 func LoadConfig(path string) (*Config, error) {
@@ -64,7 +106,28 @@ var configMu sync.Mutex
 func SaveConfig(cfg *Config) error {
 	configMu.Lock()
 	defer configMu.Unlock()
+	return writeConfigLocked(cfg)
+}
 
+// UpdateConfig applies mutate and saves, all under configMu, so a mutation
+// never races another handler's yaml.Marshal. If the write fails the
+// in-memory config is restored, keeping memory and file in agreement.
+func UpdateConfig(cfg *Config, mutate func(*Config)) error {
+	configMu.Lock()
+	defer configMu.Unlock()
+	old := *cfg
+	mutate(cfg)
+	if err := writeConfigLocked(cfg); err != nil {
+		*cfg = old
+		return err
+	}
+	return nil
+}
+
+// writeConfigLocked writes via a temp file and rename; the caller holds
+// configMu. The file can hold an API key, so it is always 0600: Chmod is
+// explicit because os.WriteFile keeps the mode of a leftover temp file.
+func writeConfigLocked(cfg *Config) error {
 	if cfg.path == "" {
 		return fmt.Errorf("config has no source path")
 	}
@@ -73,8 +136,11 @@ func SaveConfig(cfg *Config) error {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 	tmp := filepath.Join(filepath.Dir(cfg.path), ".conf.yaml.tmp")
-	if err := os.WriteFile(tmp, out, 0o644); err != nil {
+	if err := os.WriteFile(tmp, out, 0o600); err != nil {
 		return fmt.Errorf("failed to write config: %w", err)
+	}
+	if err := os.Chmod(tmp, 0o600); err != nil {
+		return fmt.Errorf("failed to chmod config: %w", err)
 	}
 	return os.Rename(tmp, cfg.path)
 }
