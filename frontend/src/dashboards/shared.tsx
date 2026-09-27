@@ -9,11 +9,12 @@ export function formatBytes(bytes: number): string {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 
-export function MetricCard({ label, value, icon, detail, accentColor }: {
-  label: string; value: string; icon: React.ReactNode; detail: string; accentColor: string;
+export function MetricCard({ label, value, valueTitle, icon, detail, accentColor }: {
+  label: string; value: string; valueTitle?: string; icon: React.ReactNode; detail: string; accentColor: string;
 }) {
   return (
     <div
+      title={valueTitle}
       className="relative rounded-2xl border border-zinc-800/50 p-5 overflow-hidden group transition-all duration-300 hover:border-zinc-700/60"
       style={{ background: '#111114' }}
     >
@@ -27,7 +28,7 @@ export function MetricCard({ label, value, icon, detail, accentColor }: {
             {icon}
           </div>
         </div>
-        <p className="text-2xl font-bold text-white font-mono tracking-tight">{value}</p>
+        <p className="text-2xl font-bold text-white font-mono tracking-tight" title={valueTitle}>{value}</p>
         <p className="text-[11px] text-zinc-600 mt-1">{detail}</p>
       </div>
     </div>
