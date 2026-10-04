@@ -1593,6 +1593,25 @@ export interface BtcFeeBand {
   vsize_mb: number;
 }
 
+export interface BtcProjectedBlock {
+  median_fee: number;
+  min_fee: number;
+  max_fee: number;
+  vsize_mb: number;
+  tx_count: number;
+  total_fee_btc: number;
+}
+
+export interface BtcMinedBlock {
+  height: number;
+  mined_at: string; // RFC3339 UTC
+  median_fee: number;
+  size_mb: number;
+  fullness_pct: number;
+  tx_count: number;
+  total_fee_btc: number;
+}
+
 export interface BtcLive {
   tiers: BtcFeeTier[];
   minimum_sat_vb: number;
@@ -1602,6 +1621,8 @@ export interface BtcLive {
   total_fee_btc: number;
   bands: BtcFeeBand[]; // ascending fee; empty when the histogram is empty
   standard_tx_vb: number;
+  projected: BtcProjectedBlock[]; // next to be mined first, up to 3
+  recent: BtcMinedBlock[]; // newest first, up to 5
 }
 
 export interface TronTransferCost {
@@ -1620,10 +1641,36 @@ export interface TronLive {
   note: string;
 }
 
+export interface L2ActionCost {
+  label: string;
+  approx: boolean;
+  exec_eth: number;
+  l1_eth: number;
+  total_eth: number;
+  total_usd: number | null;
+  l1_share_pct: number;
+  savings_pct: number | null; // vs Ethereum L1; null on the L1 row or when L1 is unavailable
+}
+
+export interface L2LadderRow {
+  id: string;
+  name: string;
+  kind: 'l1' | 'opstack' | 'arbitrum';
+  gas_price_gwei: number;
+  actions: L2ActionCost[];
+  error?: string;
+}
+
+export interface L2Ladder {
+  rows: L2LadderRow[];
+  note: string;
+}
+
 export interface GasLiveData {
   as_of: string;
   btc: BtcLive | null;
   btc_error?: string;
   tron: TronLive | null;
   tron_error?: string;
+  l2: L2Ladder;
 }

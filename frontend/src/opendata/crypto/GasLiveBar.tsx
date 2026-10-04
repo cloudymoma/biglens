@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { BtcLive, GasLiveData, TronLive } from '../../types';
+import type { BtcLive, GasLiveData, L2Ladder, TronLive } from '../../types';
 import { fetchGasLive } from '../../api';
 import { ErrorBanner } from '../../dashboards/shared';
 import { Panel } from './shared';
@@ -14,11 +14,11 @@ const BAND_COLORS = ['#34d399', '#a3e635', '#facc15', '#fb923c', '#f87171', '#e1
 const fmtRate = (v: number): string => v.toLocaleString('en', { maximumFractionDigits: 3 });
 
 const fmtUSD = (v: number | null): string =>
-  v == null ? '' : `$${v < 0.01 ? v.toFixed(4) : v.toFixed(2)}`;
+  v == null ? '' : `$${v >= 0.01 ? v.toFixed(2) : v.toPrecision(2)}`;
 
 const fmtAsOf = (iso: string): string => `${iso.slice(11, 19)} UTC`;
 
-export default function GasLiveBar({ chain }: { chain: 'btc' | 'tron' }) {
+export default function GasLiveBar({ chain, highlight }: { chain: 'btc' | 'tron' | 'l2'; highlight?: string }) {
   const [data, setData] = useState<GasLiveData | null>(null);
   const [error, setError] = useState('');
 
@@ -51,7 +51,14 @@ export default function GasLiveBar({ chain }: { chain: 'btc' | 'tron' }) {
   if (chain === 'btc') {
     return (
       <Panel title="Bitcoin live · mempool.space" note={note}>
-        {data.btc ? <BtcLiveBody live={data.btc} /> : <ErrorBanner message={data.btc_error || 'unavailable'} />}
+        {data.btc ? <BtcLiveBody live={data.btc} asOf={data.as_of} /> : <ErrorBanner message={data.btc_error || 'unavailable'} />}
+      </Panel>
+    );
+  }
+  if (chain === 'l2') {
+    return (
+      <Panel title="L1 vs L2 · full transaction cost" note={note}>
+        <L2LadderBody ladder={data.l2} highlight={highlight} />
       </Panel>
     );
   }
@@ -62,10 +69,11 @@ export default function GasLiveBar({ chain }: { chain: 'btc' | 'tron' }) {
   );
 }
 
-function BtcLiveBody({ live }: { live: BtcLive }) {
+function BtcLiveBody({ live, asOf }: { live: BtcLive; asOf: string }) {
   const total = live.bands.reduce((s, b) => s + b.vsize_mb, 0);
   return (
     <div className="space-y-4">
+      <BtcConveyor live={live} asOf={asOf} />
       <div className="grid grid-cols-3 gap-3">
         {live.tiers.map(t => (
           <div key={t.label} className="rounded-xl border border-zinc-800/50 px-3 py-2" style={{ background: '#0c0c0f' }}>
@@ -126,6 +134,78 @@ function TronLiveBody({ live }: { live: TronLive }) {
         energy {live.energy_price_sun} sun{live.energy_price_since ? ` since ${live.energy_price_since.slice(0, 10)}` : ''} ·
         bandwidth {live.bandwidth_price_sun} sun · {live.note}
       </div>
+    </div>
+  );
+}
+
+// mempool.space layout: projected blocks (+3 +2 +1) on the left, the newest
+// mined blocks on the right, split by the "now" line.
+function BtcConveyor({ live, asOf }: { live: BtcLive; asOf: string }) {
+  if (live.projected.length === 0 && live.recent.length === 0) return null;
+  const now = Date.parse(asOf);
+  const projected = [...live.projected].reverse();
+  return (
+    <div className="flex items-stretch gap-2 overflow-x-auto pb-1">
+      {projected.map((b, i) => (
+        <div key={`p${i}`} className="shrink-0 w-32 rounded-lg border border-dashed border-zinc-600 px-2 py-1.5 font-mono text-[10px] text-zinc-400">
+          <div className="text-zinc-300">+{projected.length - i} next</div>
+          <div className="text-sm text-zinc-100">~{fmtRate(b.median_fee)} <span className="text-[10px] text-zinc-500">sat/vB</span></div>
+          <div>{fmtRate(b.min_fee)} – {fmtRate(b.max_fee)}</div>
+          <div>{b.vsize_mb.toFixed(2)} vMB · {fmtGas(b.tx_count)} tx</div>
+        </div>
+      ))}
+      <div className="shrink-0 w-px bg-cyan-500/70 mx-1" title="now" />
+      {live.recent.map(b => (
+        <div key={b.height} className="shrink-0 w-32 rounded-lg border border-amber-500/40 px-2 py-1.5 font-mono text-[10px] text-zinc-400" style={{ background: 'rgba(245,158,11,0.08)' }}>
+          <div className="text-amber-300">#{b.height}</div>
+          <div className="text-sm text-zinc-100">{fmtRate(b.median_fee)} <span className="text-[10px] text-zinc-500">sat/vB</span></div>
+          <div>{b.size_mb.toFixed(2)} MB · {b.fullness_pct.toFixed(1)}%</div>
+          <div>{Math.max(0, Math.round((now - Date.parse(b.mined_at)) / 60000))}m ago · {b.total_fee_btc.toFixed(3)} BTC</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function L2LadderBody({ ladder, highlight }: { ladder: L2Ladder; highlight?: string }) {
+  const labels = ladder.rows.find(r => r.actions.length > 0)?.actions ?? [];
+  return (
+    <div className="space-y-2">
+      <table className="w-full text-xs font-mono">
+        <thead>
+          <tr className="text-zinc-500 text-left">
+            <th className="py-1 font-normal">Network</th>
+            <th className="py-1 font-normal">Gas price</th>
+            {labels.map(a => (
+              <th key={a.label} className="py-1 font-normal">{a.label}{a.approx ? ' (≈)' : ''}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {ladder.rows.map(r => (
+            <tr key={r.id} className="border-t border-zinc-800/60" style={r.id === highlight ? { background: '#18181b' } : undefined}>
+              <td className="py-1.5 text-zinc-200">{r.name}</td>
+              {r.error ? (
+                <td colSpan={1 + labels.length} className="py-1.5 text-red-400/80">{r.error}</td>
+              ) : (
+                <>
+                  <td className="py-1.5 text-zinc-400">{fmtGas(r.gas_price_gwei)} gwei</td>
+                  {r.actions.map(a => (
+                    <td key={a.label} className="py-1.5">
+                      <div className="text-zinc-100">{a.total_usd != null ? fmtUSD(a.total_usd) : `${fmtGas(a.total_eth)} ETH`}</div>
+                      <div className="text-[10px] text-zinc-500">
+                        {a.savings_pct != null ? `${a.savings_pct.toFixed(1)}% cheaper than L1` : r.kind === 'l1' ? 'L1 reference' : ''}
+                        {a.l1_share_pct > 0 ? ` · L1 data ${a.l1_share_pct.toFixed(1)}%` : ''}
+                      </div>
+                    </td>
+                  ))}
+                </>
+              )}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="text-[10px] text-zinc-600">{ladder.note}</div>
     </div>
   );
 }

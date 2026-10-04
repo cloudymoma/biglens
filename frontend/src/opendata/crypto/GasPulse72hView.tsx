@@ -27,7 +27,12 @@ export default function GasPulse72hView() {
   if (!data) return <EmptyState text="Loading 72h gas pulse…" />;
 
   const chain = data.chains.find(c => c.meta.id === selected) ?? data.chains[0];
-  const liveChain = chain.meta.id === 'btc' || chain.meta.id === 'tron' ? chain.meta.id : null;
+  const liveChain =
+    chain.meta.id === 'btc' || chain.meta.id === 'tron'
+      ? chain.meta.id
+      : chain.meta.id === 'eth' || chain.meta.id === 'arb' || chain.meta.id === 'op'
+        ? 'l2'
+        : null;
   return (
     <div className="space-y-4">
       <div className="flex justify-end">
@@ -43,7 +48,7 @@ export default function GasPulse72hView() {
       ) : (
         <>
           <StatCards chain={chain} />
-          {liveChain && <GasLiveBar key={liveChain} chain={liveChain} />}
+          {liveChain && <GasLiveBar key={liveChain} chain={liveChain} highlight={chain.meta.id} />}
           <Panel title={`${chain.meta.name} · ${chain.meta.primary_label}`} note={chain.meta.note}>
             <ReactECharts option={buildGasPulseOption(chain)} style={{ height: 380 }} notMerge />
           </Panel>
