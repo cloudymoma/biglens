@@ -18,9 +18,6 @@ const (
 	l2KindArbitrum = "arbitrum"
 
 	l2Recipient = "0xd8da6bf26964af9d7eed9e03e53415d37aa96045"
-	// transfer(l2Recipient, 1 USDC)
-	usdcTransferCalldata = "a9059cbb000000000000000000000000d8da6bf26964af9d7eed9e03e53415d37aa96045" +
-		"00000000000000000000000000000000000000000000000000000000000f4240"
 )
 
 type l2Action struct {
@@ -49,17 +46,11 @@ var l2Chains = []l2ChainConfig{
 	{ID: "eth", Name: "Ethereum", Kind: l2KindL1, RPC: "https://ethereum-rpc.publicnode.com"},
 	{ID: "arb", Name: "Arbitrum One", Kind: l2KindArbitrum, RPC: "https://arb1.arbitrum.io/rpc",
 		ArbTo:   []string{l2Recipient, "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"},
-		ArbData: []string{"", usdcTransferCalldata}},
+		ArbData: []string{"", hex.EncodeToString(erc20TransferCalldata(mustHexAddress(l2Recipient), sampleTxUSDCAmount))}},
 	{ID: "op", Name: "Optimism", Kind: l2KindOPStack, RPC: "https://mainnet.optimism.io",
-		UnsignedTx: []string{
-			"02ed0a2a830f42408402faf08082520894d8da6bf26964af9d7eed9e03e53415d37aa9604587038d7ea4c6800080c0",
-			"02f86b0a2a830f42408402faf08082fde8940b2c639c533813f4aa9d7837caf62653d097ff8580b844" + usdcTransferCalldata + "c0",
-		}},
+		UnsignedTx: opStackSampleTxs(10, "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85")},
 	{ID: "base", Name: "Base", Kind: l2KindOPStack, RPC: "https://mainnet.base.org",
-		UnsignedTx: []string{
-			"02ef8221052a830f42408402faf08082520894d8da6bf26964af9d7eed9e03e53415d37aa9604587038d7ea4c6800080c0",
-			"02f86d8221052a830f42408402faf08082fde894833589fcd6edb6e08f4c7c32d4f71b54bda0291380b844" + usdcTransferCalldata + "c0",
-		}},
+		UnsignedTx: opStackSampleTxs(8453, "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913")},
 }
 
 // l2Quote holds one chain's prices in wei, one entry per l2Actions item.
