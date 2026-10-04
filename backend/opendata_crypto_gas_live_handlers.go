@@ -7,6 +7,9 @@ package main
 // its own bar, and a missing spot only drops the USD figures.
 // The L1-vs-L2 ladder is cached per chain for 60s (nine public RPC calls per
 // refresh), so one rate-limited chain only blanks its own row.
+// The transfer profiles (USDT energy/bandwidth, USDC gas) come from a daily
+// calibration cached for 24h; without it the TRON bar and the USDC column say
+// so instead of guessing.
 
 import (
 	"fmt"
@@ -17,36 +20,47 @@ import (
 )
 
 const (
-	gasLiveBtcKey   = "opendata:crypto:gaslive:btc"
-	gasLiveTronKey  = "opendata:crypto:gaslive:tron_prices"
-	gasLiveSpotKey  = "opendata:crypto:spot:%s"
-	gasLiveL2Key    = "opendata:crypto:gaslive:l2:%s"
-	gasLiveBtcTTL   = 30 * time.Second
-	gasLivePriceTTL = 5 * time.Minute
-	gasLiveL2TTL    = time.Minute
+	gasLiveBtcKey         = "opendata:crypto:gaslive:btc"
+	gasLiveTronKey        = "opendata:crypto:gaslive:tron_prices"
+	gasLiveSpotKey        = "opendata:crypto:spot:%s"
+	gasLiveL2Key          = "opendata:crypto:gaslive:l2:%s:%d"
+	gasLiveCalibrationKey = "opendata:crypto:gaslive:calibration"
+	gasLiveBtcTTL         = 30 * time.Second
+	gasLivePriceTTL       = 5 * time.Minute
+	gasLiveL2TTL          = time.Minute
+	gasLiveCalibrationTTL = 24 * time.Hour
 )
 
 type GasLiveData struct {
-	AsOf      string    `json:"as_of"`
-	BTC       *BtcLive  `json:"btc"`
-	BTCError  string    `json:"btc_error,omitempty"`
-	Tron      *TronLive `json:"tron"`
-	TronError string    `json:"tron_error,omitempty"`
-	L2        L2Ladder  `json:"l2"`
+	AsOf             string          `json:"as_of"`
+	BTC              *BtcLive        `json:"btc"`
+	BTCError         string          `json:"btc_error,omitempty"`
+	Tron             *TronLive       `json:"tron"`
+	TronError        string          `json:"tron_error,omitempty"`
+	L2               L2Ladder        `json:"l2"`
+	Calibration      *GasCalibration `json:"calibration"`
+	CalibrationError string          `json:"calibration_error,omitempty"`
 }
 
-func buildGasLive(now time.Time, btc *btcLiveRaw, btcErr error, tron *tronLiveRaw, tronErr error, btcUSD, trxUSD *float64) GasLiveData {
-	d := GasLiveData{AsOf: now.UTC().Format(time.RFC3339)}
+func buildGasLive(now time.Time, btc *btcLiveRaw, btcErr error, tron *tronLiveRaw, tronErr error,
+	cal *GasCalibration, calErr error, btcUSD, trxUSD *float64) GasLiveData {
+	d := GasLiveData{AsOf: now.UTC().Format(time.RFC3339), Calibration: cal}
+	if calErr != nil {
+		d.CalibrationError = calErr.Error()
+	}
 	if btcErr != nil {
 		d.BTCError = btcErr.Error()
 	} else {
 		live := btcLiveFrom(*btc, btcUSD)
 		d.BTC = &live
 	}
-	if tronErr != nil {
+	switch {
+	case tronErr != nil:
 		d.TronError = tronErr.Error()
-	} else {
-		live := tronLiveFrom(*tron, trxUSD)
+	case cal == nil:
+		d.TronError = "USDT transfer profile unavailable: " + d.CalibrationError
+	default:
+		live := tronLiveFrom(*tron, *cal, trxUSD)
 		d.Tron = &live
 	}
 	return d
@@ -76,6 +90,18 @@ func (h *APIHandler) gasLiveTron(r *http.Request) (*tronLiveRaw, error) {
 	return v.(*tronLiveRaw), nil
 }
 
+func (h *APIHandler) gasCalibration(r *http.Request) (*GasCalibration, error) {
+	v, err := h.cachedFetch(gasLiveCalibrationKey, gasLiveCalibrationTTL, func() (any, error) {
+		ctx, cancel := gasFetchContext(r)
+		defer cancel()
+		return fetchGasCalibration(ctx, h.bq, time.Now())
+	})
+	if err != nil {
+		return nil, err
+	}
+	return v.(*GasCalibration), nil
+}
+
 // gasSpotUSD returns base's USD spot, or nil (logged) when Coinbase fails;
 // the bars then show native amounts only.
 func (h *APIHandler) gasSpotUSD(r *http.Request, base string) *float64 {
@@ -92,7 +118,13 @@ func (h *APIHandler) gasSpotUSD(r *http.Request, base string) *float64 {
 	return &price
 }
 
-func (h *APIHandler) gasL2Quotes(r *http.Request) (map[string]*l2Quote, map[string]error) {
+func (h *APIHandler) gasL2Quotes(r *http.Request, actions []l2Action) (map[string]*l2Quote, map[string]error) {
+	var usdcGas uint64
+	for _, a := range actions {
+		if a.Kind == l2ActionUSDC {
+			usdcGas = a.Gas
+		}
+	}
 	var (
 		wg     sync.WaitGroup
 		mu     sync.Mutex
@@ -101,10 +133,10 @@ func (h *APIHandler) gasL2Quotes(r *http.Request) (map[string]*l2Quote, map[stri
 	)
 	for _, c := range l2Chains {
 		wg.Go(func() {
-			v, err := h.cachedFetch(fmt.Sprintf(gasLiveL2Key, c.ID), gasLiveL2TTL, func() (any, error) {
+			v, err := h.cachedFetch(fmt.Sprintf(gasLiveL2Key, c.ID, usdcGas), gasLiveL2TTL, func() (any, error) {
 				ctx, cancel := gasFetchContext(r)
 				defer cancel()
-				return fetchL2Quote(ctx, c)
+				return fetchL2Quote(ctx, c, actions)
 			})
 			mu.Lock()
 			defer mu.Unlock()
@@ -126,19 +158,21 @@ func (h *APIHandler) CryptoGasLive(w http.ResponseWriter, r *http.Request) {
 		btcErr                 error
 		tron                   *tronLiveRaw
 		tronErr                error
+		cal                    *GasCalibration
+		calErr                 error
 		btcUSD, trxUSD, ethUSD *float64
-		l2Quotes               map[string]*l2Quote
-		l2Errs                 map[string]error
 	)
 	wg.Go(func() { btc, btcErr = h.gasLiveBtc(r) })
 	wg.Go(func() { tron, tronErr = h.gasLiveTron(r) })
+	wg.Go(func() { cal, calErr = h.gasCalibration(r) })
 	wg.Go(func() { btcUSD = h.gasSpotUSD(r, "BTC") })
 	wg.Go(func() { trxUSD = h.gasSpotUSD(r, "TRX") })
 	wg.Go(func() { ethUSD = h.gasSpotUSD(r, "ETH") })
-	wg.Go(func() { l2Quotes, l2Errs = h.gasL2Quotes(r) })
 	wg.Wait()
 
-	data := buildGasLive(time.Now(), btc, btcErr, tron, tronErr, btcUSD, trxUSD)
-	data.L2 = l2LadderFrom(l2Quotes, l2Errs, ethUSD)
+	actions := l2ActionsFor(cal)
+	l2Quotes, l2Errs := h.gasL2Quotes(r, actions)
+	data := buildGasLive(time.Now(), btc, btcErr, tron, tronErr, cal, calErr, btcUSD, trxUSD)
+	data.L2 = l2LadderFrom(l2Quotes, l2Errs, actions, ethUSD)
 	writeJSON(w, data)
 }

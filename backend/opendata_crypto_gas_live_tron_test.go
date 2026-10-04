@@ -13,7 +13,7 @@ import (
 // days of BigQuery receipts.
 func TestTronLiveFrom(t *testing.T) {
 	price := 0.3346
-	got := tronLiveFrom(tronLiveRaw{EnergySun: 100, BandwidthSun: 1000, EnergySince: "2025-08-29T12:00:00Z"}, &price)
+	got := tronLiveFrom(tronLiveRaw{EnergySun: 100, BandwidthSun: 1000, EnergySince: "2025-08-29T12:00:00Z"}, *testCalibration(), &price)
 	if got.EnergyPriceSun != 100 || got.BandwidthPriceSun != 1000 || got.EnergyPriceSince != "2025-08-29T12:00:00Z" {
 		t.Errorf("prices = %+v", got)
 	}
@@ -32,6 +32,9 @@ func TestTronLiveFrom(t *testing.T) {
 		if c.BurnUSD == nil || !almost(*c.BurnUSD, w.trx*price) {
 			t.Errorf("scenario %d USD = %v, want %v", i, c.BurnUSD, w.trx*price)
 		}
+		if c.SharePct == 0 {
+			t.Errorf("scenario %d has no share of transfers", i)
+		}
 	}
 	if got.Note == "" {
 		t.Error("the card must explain that staked or rented energy avoids the burn")
@@ -39,7 +42,7 @@ func TestTronLiveFrom(t *testing.T) {
 }
 
 func TestTronLiveFromWithoutSpot(t *testing.T) {
-	for _, c := range tronLiveFrom(tronLiveRaw{EnergySun: 100, BandwidthSun: 1000}, nil).Costs {
+	for _, c := range tronLiveFrom(tronLiveRaw{EnergySun: 100, BandwidthSun: 1000}, *testCalibration(), nil).Costs {
 		if c.BurnUSD != nil {
 			t.Errorf("%s: USD = %v, want nil when the spot price is unavailable", c.Label, *c.BurnUSD)
 		}

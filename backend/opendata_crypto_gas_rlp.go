@@ -79,14 +79,3 @@ func mustHexAddress(s string) []byte {
 	}
 	return b
 }
-
-// opStackSampleTxs returns the ETH-transfer and USDC-transfer sample txs for
-// an OP Stack chain as hex (transitional until Task 3 builds them per action).
-func opStackSampleTxs(chainID uint64, usdc string) []string {
-	recipient := mustHexAddress(l2Recipient)
-	return []string{
-		hex.EncodeToString(unsignedEIP1559(chainID, 21000, recipient, sampleTxEthValue, nil)),
-		hex.EncodeToString(unsignedEIP1559(chainID, 65000, mustHexAddress(usdc), 0,
-			erc20TransferCalldata(recipient, sampleTxUSDCAmount))),
-	}
-}

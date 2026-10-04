@@ -3,20 +3,11 @@ package main
 // TRC-20 USDT transfer burn cost for the TRON live bar (gas_fee_design.md §9).
 // A sender with no staked or rented resources burns TRX at the governance
 // prices for the energy and bandwidth the transfer consumes. Prices come from
-// TronGrid (5-minute cache); the TRX→USD spot is applied at assembly.
+// TronGrid (5-minute cache); the transfer profiles come from the daily
+// calibration; the TRX→USD spot is applied at assembly.
 
 import (
 	"context"
-)
-
-const (
-	// Modal USDT transfer energy in BigQuery receipts, stable for 90+ days:
-	// recipient already holds USDT vs. a brand-new recipient.
-	tronUSDTEnergyHolder = 64_285
-	tronUSDTEnergyNew    = 130_285
-	// tronUSDTBandwidth is the commonly cited transfer size (not re-measured;
-	// ~5% of the cost), shown with "≈" in the UI.
-	tronUSDTBandwidth = 345
 )
 
 type tronLiveRaw struct {
@@ -31,6 +22,7 @@ type TronTransferCost struct {
 	Bandwidth int64    `json:"bandwidth"`
 	BurnTRX   float64  `json:"burn_trx"`
 	BurnUSD   *float64 `json:"burn_usd"`
+	SharePct  float64  `json:"share_pct"`
 }
 
 type TronLive struct {
@@ -58,10 +50,12 @@ func fetchTronLiveRaw(ctx context.Context) (*tronLiveRaw, error) {
 	}, nil
 }
 
-func tronLiveFrom(raw tronLiveRaw, trxUSD *float64) TronLive {
-	cost := func(label string, energy int64) TronTransferCost {
-		burn := float64(energy*raw.EnergySun+tronUSDTBandwidth*raw.BandwidthSun) / 1e6
-		c := TronTransferCost{Label: label, Energy: energy, Bandwidth: tronUSDTBandwidth, BurnTRX: burn}
+// tronLiveFrom prices both USDT transfer cases from today's calibrated
+// energy and bandwidth at the current governance prices.
+func tronLiveFrom(raw tronLiveRaw, cal GasCalibration, trxUSD *float64) TronLive {
+	cost := func(label string, p TransferProfile) TronTransferCost {
+		burn := float64(p.Energy*raw.EnergySun+p.Bandwidth*raw.BandwidthSun) / 1e6
+		c := TronTransferCost{Label: label, Energy: p.Energy, Bandwidth: p.Bandwidth, BurnTRX: burn, SharePct: p.SharePct}
 		if trxUSD != nil {
 			usd := burn * *trxUSD
 			c.BurnUSD = &usd
@@ -73,9 +67,9 @@ func tronLiveFrom(raw tronLiveRaw, trxUSD *float64) TronLive {
 		EnergyPriceSince:  raw.EnergySince,
 		BandwidthPriceSun: raw.BandwidthSun,
 		Costs: []TronTransferCost{
-			cost("USDT to an existing holder", tronUSDTEnergyHolder),
-			cost("USDT to a new address", tronUSDTEnergyNew),
+			cost("USDT to an existing holder", cal.USDTHolder),
+			cost("USDT to a new address", cal.USDTNew),
 		},
-		Note: "Burned only when the sender has no staked or rented energy and bandwidth",
+		Note: "Burned only when the sender has no staked or rented energy and bandwidth; energy and bandwidth measured from the last 24h of transfers",
 	}
 }

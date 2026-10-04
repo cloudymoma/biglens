@@ -1,15 +1,15 @@
 package main
 
-// L1-vs-L2 cost ladder for the Ethereum family (gas_fee_design.md §10):
-// the full cost of an ETH transfer and a USDC transfer on Ethereum, Arbitrum
-// One, Optimism and Base, split into L2 execution and L1 data fee. OP Stack
-// L1 fees come from GasPriceOracle.getL1Fee over representative unsigned
-// transactions; Arbitrum's from NodeInterface.gasEstimateL1Component.
+// L1-vs-L2 cost ladder for the Ethereum family (gas_fee_design.md §10–§11):
+// the full cost of an ETH transfer and (when today's calibration measured it)
+// a USDC transfer on Ethereum, Arbitrum One, Optimism and Base, split into L2
+// execution and L1 data fee. Sample transactions are built at runtime; OP
+// Stack L1 fees come from GasPriceOracle.getL1Fee, Arbitrum's from
+// NodeInterface.gasEstimateL1Component.
 
 import (
 	"context"
 	"encoding/hex"
-	"fmt"
 )
 
 const (
@@ -17,63 +17,75 @@ const (
 	l2KindOPStack  = "opstack"
 	l2KindArbitrum = "arbitrum"
 
+	l2ActionNative = "native"
+	l2ActionUSDC   = "usdc"
+
 	l2Recipient = "0xd8da6bf26964af9d7eed9e03e53415d37aa96045"
+	// ethTransferGas is the protocol's intrinsic gas for a plain ETH transfer.
+	ethTransferGas = 21_000
 )
 
 type l2Action struct {
-	Label  string
-	Gas    float64
-	Approx bool
+	Kind, Label, Source string
+	Gas                 uint64
 }
 
-// Token transfer gas varies with storage state; ~65k is the usual figure.
-var l2Actions = []l2Action{
-	{Label: "ETH transfer", Gas: 21000},
-	{Label: "USDC transfer", Gas: 65000, Approx: true},
+// l2ActionsFor prices the ETH transfer always and the USDC transfer only when
+// today's calibration measured its gas — never a guessed figure.
+func l2ActionsFor(cal *GasCalibration) []l2Action {
+	actions := []l2Action{{Kind: l2ActionNative, Label: "ETH transfer", Gas: ethTransferGas, Source: "protocol intrinsic gas"}}
+	if cal != nil {
+		actions = append(actions, l2Action{Kind: l2ActionUSDC, Label: "USDC transfer",
+			Gas: uint64(cal.USDCTransferGas), Source: "median on Ethereum, last 6h"})
+	}
+	return actions
 }
 
+// l2ChainConfig holds on-chain facts (chain ID, USDC contract) that never
+// drift; endpoints come from conf.yaml (Task 4).
 type l2ChainConfig struct {
 	ID, Name, Kind, RPC string
-	// OP Stack: RLP-encoded unsigned EIP-1559 tx per action (hex), priced by
-	// getL1Fee. Both currently sit at Fjord's minimum size, so the exact
-	// bytes barely move the fee.
-	UnsignedTx []string
-	// Arbitrum: destination and calldata (hex) per action.
-	ArbTo, ArbData []string
+	ChainID             uint64
+	USDC                string
 }
 
 var l2Chains = []l2ChainConfig{
-	{ID: "eth", Name: "Ethereum", Kind: l2KindL1, RPC: "https://ethereum-rpc.publicnode.com"},
+	{ID: "eth", Name: "Ethereum", Kind: l2KindL1, RPC: "https://ethereum-rpc.publicnode.com",
+		ChainID: 1, USDC: ethUSDCAddress},
 	{ID: "arb", Name: "Arbitrum One", Kind: l2KindArbitrum, RPC: "https://arb1.arbitrum.io/rpc",
-		ArbTo:   []string{l2Recipient, "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"},
-		ArbData: []string{"", hex.EncodeToString(erc20TransferCalldata(mustHexAddress(l2Recipient), sampleTxUSDCAmount))}},
+		ChainID: 42161, USDC: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"},
 	{ID: "op", Name: "Optimism", Kind: l2KindOPStack, RPC: "https://mainnet.optimism.io",
-		UnsignedTx: opStackSampleTxs(10, "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85")},
+		ChainID: 10, USDC: "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85"},
 	{ID: "base", Name: "Base", Kind: l2KindOPStack, RPC: "https://mainnet.base.org",
-		UnsignedTx: opStackSampleTxs(8453, "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913")},
+		ChainID: 8453, USDC: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"},
 }
 
-// l2Quote holds one chain's prices in wei, one entry per l2Actions item.
+// actionCall returns the destination, value and calldata of a on chain c.
+func (c l2ChainConfig) actionCall(a l2Action) (to []byte, value uint64, data []byte) {
+	recipient := mustHexAddress(l2Recipient)
+	if a.Kind == l2ActionUSDC {
+		return mustHexAddress(c.USDC), 0, erc20TransferCalldata(recipient, sampleTxUSDCAmount)
+	}
+	return recipient, sampleTxEthValue, nil
+}
+
+// l2Quote holds a chain's gas price and per-action L1 data fee (wei); the
+// execution fee is gas × price, computed at assembly.
 type l2Quote struct {
 	GasPriceWei float64
-	ExecWei     []float64
 	L1Wei       []float64
 }
 
-func fetchL2Quote(ctx context.Context, c l2ChainConfig) (*l2Quote, error) {
+func fetchL2Quote(ctx context.Context, c l2ChainConfig, actions []l2Action) (*l2Quote, error) {
 	q := &l2Quote{}
 	if c.Kind == l2KindArbitrum {
-		for i, a := range l2Actions {
-			data, err := hex.DecodeString(c.ArbData[i])
-			if err != nil {
-				return nil, fmt.Errorf("%s calldata: %w", c.ID, err)
-			}
-			gasForL1, baseFee, err := arbL1Component(ctx, c.RPC, c.ArbTo[i], data)
+		for _, a := range actions {
+			to, _, data := c.actionCall(a)
+			gasForL1, baseFee, err := arbL1Component(ctx, c.RPC, "0x"+hex.EncodeToString(to), data)
 			if err != nil {
 				return nil, err
 			}
 			q.GasPriceWei = baseFee
-			q.ExecWei = append(q.ExecWei, a.Gas*baseFee)
 			q.L1Wei = append(q.L1Wei, gasForL1*baseFee)
 		}
 		return q, nil
@@ -83,18 +95,14 @@ func fetchL2Quote(ctx context.Context, c l2ChainConfig) (*l2Quote, error) {
 		return nil, err
 	}
 	q.GasPriceWei = gasPrice
-	for i, a := range l2Actions {
+	for _, a := range actions {
 		l1 := 0.0
 		if c.Kind == l2KindOPStack {
-			tx, err := hex.DecodeString(c.UnsignedTx[i])
-			if err != nil {
-				return nil, fmt.Errorf("%s unsigned tx: %w", c.ID, err)
-			}
-			if l1, err = opStackL1Fee(ctx, c.RPC, tx); err != nil {
+			to, value, data := c.actionCall(a)
+			if l1, err = opStackL1Fee(ctx, c.RPC, unsignedEIP1559(c.ChainID, a.Gas, to, value, data)); err != nil {
 				return nil, err
 			}
 		}
-		q.ExecWei = append(q.ExecWei, a.Gas*gasPrice)
 		q.L1Wei = append(q.L1Wei, l1)
 	}
 	return q, nil
@@ -102,7 +110,8 @@ func fetchL2Quote(ctx context.Context, c l2ChainConfig) (*l2Quote, error) {
 
 type L2ActionCost struct {
 	Label      string   `json:"label"`
-	Approx     bool     `json:"approx"`
+	Gas        uint64   `json:"gas"`
+	Source     string   `json:"source"`
 	ExecETH    float64  `json:"exec_eth"`
 	L1ETH      float64  `json:"l1_eth"`
 	TotalETH   float64  `json:"total_eth"`
@@ -127,12 +136,13 @@ type L2Ladder struct {
 
 // l2LadderFrom prices every chain in l2Chains order; a chain without a quote
 // gets an error row, and savings are only computed against a priced L1 row.
-func l2LadderFrom(quotes map[string]*l2Quote, errs map[string]error, ethUSD *float64) L2Ladder {
+func l2LadderFrom(quotes map[string]*l2Quote, errs map[string]error, actions []l2Action, ethUSD *float64) L2Ladder {
 	l1 := quotes["eth"]
-	ladder := L2Ladder{
-		Rows: make([]L2LadderRow, 0, len(l2Chains)),
-		Note: "Total = L2 execution + L1 data fee (GasPriceOracle on OP Stack, NodeInterface on Arbitrum); token transfer gas is approximate",
+	note := "Total = L2 execution + L1 data fee (GasPriceOracle on OP Stack, NodeInterface on Arbitrum)"
+	if len(actions) == 1 {
+		note += "; USDC transfer hidden until today's gas calibration succeeds"
 	}
+	ladder := L2Ladder{Rows: make([]L2LadderRow, 0, len(l2Chains)), Note: note}
 	for _, c := range l2Chains {
 		row := L2LadderRow{ID: c.ID, Name: c.Name, Kind: c.Kind, Actions: []L2ActionCost{}}
 		q, ok := quotes[c.ID]
@@ -145,14 +155,12 @@ func l2LadderFrom(quotes map[string]*l2Quote, errs map[string]error, ethUSD *flo
 			continue
 		}
 		row.GasPriceGwei = q.GasPriceWei / 1e9
-		for i, a := range l2Actions {
-			total := q.ExecWei[i] + q.L1Wei[i]
+		for i, a := range actions {
+			exec := float64(a.Gas) * q.GasPriceWei
+			total := exec + q.L1Wei[i]
 			cost := L2ActionCost{
-				Label:    a.Label,
-				Approx:   a.Approx,
-				ExecETH:  q.ExecWei[i] / 1e18,
-				L1ETH:    q.L1Wei[i] / 1e18,
-				TotalETH: total / 1e18,
+				Label: a.Label, Gas: a.Gas, Source: a.Source,
+				ExecETH: exec / 1e18, L1ETH: q.L1Wei[i] / 1e18, TotalETH: total / 1e18,
 			}
 			if total > 0 {
 				cost.L1SharePct = q.L1Wei[i] / total * 100
@@ -162,7 +170,7 @@ func l2LadderFrom(quotes map[string]*l2Quote, errs map[string]error, ethUSD *flo
 				cost.TotalUSD = &usd
 			}
 			if l1 != nil && c.ID != "eth" {
-				if ref := l1.ExecWei[i] + l1.L1Wei[i]; ref > 0 {
+				if ref := float64(a.Gas)*l1.GasPriceWei + l1.L1Wei[i]; ref > 0 {
 					saving := (1 - total/ref) * 100
 					cost.SavingsPct = &saving
 				}
