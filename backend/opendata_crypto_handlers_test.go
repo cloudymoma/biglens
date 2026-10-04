@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"math"
 	"net/http"
@@ -266,5 +267,37 @@ func TestCryptoSpot(t *testing.T) {
 				t.Errorf("source = %q, want coinbase", got.Source)
 			}
 		})
+	}
+}
+
+// The live bar prices TRX and BTC through the same Coinbase endpoint; the
+// base symbol must reach the URL and a bad amount must fail, not price at 0.
+func TestFetchSpot(t *testing.T) {
+	var gotPath string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		if strings.Contains(r.URL.Path, "BAD") {
+			w.Write([]byte(`{"data":{"amount":"0","currency":"USD"}}`))
+			return
+		}
+		w.Write([]byte(`{"data":{"amount":"0.3346","currency":"USD"}}`))
+	}))
+	defer upstream.Close()
+	orig := spotURLFormat
+	spotURLFormat = upstream.URL + "/v2/prices/%s-USD/spot"
+	defer func() { spotURLFormat = orig }()
+
+	got, err := fetchSpot(context.Background(), "TRX")
+	if err != nil {
+		t.Fatalf("fetchSpot(TRX): %v", err)
+	}
+	if gotPath != "/v2/prices/TRX-USD/spot" {
+		t.Errorf("requested %q, want /v2/prices/TRX-USD/spot", gotPath)
+	}
+	if got.PriceUSD != 0.3346 || got.Source != "coinbase" {
+		t.Errorf("got %+v, want 0.3346 from coinbase", got)
+	}
+	if _, err := fetchSpot(context.Background(), "BAD"); err == nil {
+		t.Error("a zero price must be an error, not a $0 quote")
 	}
 }

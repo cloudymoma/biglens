@@ -602,6 +602,7 @@ func (h *APIHandler) CryptoMining(w http.ResponseWriter, r *http.Request) {
 // any rate limit and the frontend treats failure as "type the price yourself".
 var (
 	btcSpotURL     = "https://api.coinbase.com/v2/prices/BTC-USD/spot"
+	spotURLFormat  = "https://api.coinbase.com/v2/prices/%s-USD/spot"
 	spotHTTPClient = &http.Client{Timeout: 5 * time.Second}
 )
 
@@ -612,7 +613,16 @@ type CryptoSpotData struct {
 }
 
 func fetchBtcSpot(ctx context.Context) (*CryptoSpotData, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, btcSpotURL, nil)
+	return fetchSpotURL(ctx, btcSpotURL)
+}
+
+// fetchSpot returns the Coinbase USD spot price for base (e.g. "TRX").
+func fetchSpot(ctx context.Context, base string) (*CryptoSpotData, error) {
+	return fetchSpotURL(ctx, fmt.Sprintf(spotURLFormat, base))
+}
+
+func fetchSpotURL(ctx context.Context, url string) (*CryptoSpotData, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("spot request: %w", err)
 	}
