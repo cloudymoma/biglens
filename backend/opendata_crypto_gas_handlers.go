@@ -10,6 +10,7 @@ package main
 // card it feeds, so one bad source cannot blank the other chains.
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"sync"
@@ -22,7 +23,17 @@ const (
 	gasAllTimeKey  = "opendata:crypto:gaspulse:alltime"
 	gasTronKey     = "opendata:crypto:gaspulse:tron_energy"
 	gasSeriesKeyFm = "opendata:crypto:gaspulse:72h:%s:%s"
+	// gasFetchTimeout bounds one shared fetch (the all-time scan is 11 GB).
+	gasFetchTimeout = 2 * time.Minute
 )
+
+// gasFetchContext detaches a shared fetch from the request that started it:
+// singleflight hands the result to every waiter and BigQuery bills a submitted
+// job either way, so one client disconnecting must not cancel the fetch for
+// everyone and force a paid re-run.
+func gasFetchContext(r *http.Request) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(r.Context()), gasFetchTimeout)
+}
 
 type GasPulseChain struct {
 	Meta         GasChainMeta `json:"meta"`
@@ -101,7 +112,9 @@ func buildGasPulse(start, end time.Time, series map[string]gasSeriesResult,
 func (h *APIHandler) gasSeries(r *http.Request, chain string, start, end time.Time) ([]GasHourRow, error) {
 	key := fmt.Sprintf(gasSeriesKeyFm, chain, end.Format("2006010215"))
 	v, err := h.cachedFetch(key, gasSeriesTTL, func() (any, error) {
-		rows, err := h.bq.GetGasHourly(r.Context(), chain, start, end)
+		ctx, cancel := gasFetchContext(r)
+		defer cancel()
+		rows, err := h.bq.GetGasHourly(ctx, chain, start, end)
 		if err != nil {
 			return nil, fmt.Errorf("%s 72h query: %w", chain, err)
 		}
@@ -115,7 +128,9 @@ func (h *APIHandler) gasSeries(r *http.Request, chain string, start, end time.Ti
 
 func (h *APIHandler) gasAllTime(r *http.Request) (map[string]GasAllTime, error) {
 	v, err := h.cachedFetch(gasAllTimeKey, gasAllTimeTTL, func() (any, error) {
-		rows, err := h.bq.GetGasAllTime(r.Context())
+		ctx, cancel := gasFetchContext(r)
+		defer cancel()
+		rows, err := h.bq.GetGasAllTime(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -133,7 +148,9 @@ func (h *APIHandler) gasAllTime(r *http.Request) (map[string]GasAllTime, error) 
 
 func (h *APIHandler) gasTronAllTime(r *http.Request) (*GasAllTime, error) {
 	v, err := h.cachedFetch(gasTronKey, gasAllTimeTTL, func() (any, error) {
-		pts, err := fetchTronEnergyPrices(r.Context())
+		ctx, cancel := gasFetchContext(r)
+		defer cancel()
+		pts, err := fetchTronEnergyPrices(ctx)
 		if err != nil {
 			return nil, err
 		}

@@ -1,7 +1,10 @@
 package main
 
 import (
+	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 )
@@ -136,5 +139,39 @@ func TestBuildGasPulseTronError(t *testing.T) {
 		if c.Meta.ID == gasChainTron && (c.AllTime != nil || c.AllTimeError == "" || c.Error != "") {
 			t.Errorf("tron: all_time=%+v all_time_error=%q error=%q; want only the record card to fail", c.AllTime, c.AllTimeError, c.Error)
 		}
+	}
+}
+
+// A client that disconnects during a cold load must not cancel the shared
+// fetch: singleflight hands the result to every waiter, and a cancelled
+// (already billed) BigQuery job would otherwise be re-run on the next request.
+func TestGasFetchSurvivesClientDisconnect(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-release
+		w.Write([]byte(`{"prices":"` + tronPricesFixture + `"}`))
+	}))
+	defer srv.Close()
+	old := tronEnergyPricesURL
+	tronEnergyPricesURL = srv.URL
+	defer func() { tronEnergyPricesURL = old }()
+
+	h := &APIHandler{cache: NewCache(time.Minute)}
+	ctx, cancel := context.WithCancel(context.Background())
+	r := httptest.NewRequest(http.MethodGet, "/api/opendata/crypto/gas-pulse", nil).WithContext(ctx)
+	done := make(chan error, 1)
+	go func() {
+		_, err := h.gasTronAllTime(r)
+		done <- err
+	}()
+
+	cancel() // the first client goes away while upstream is still working
+	close(release)
+
+	if err := <-done; err != nil {
+		t.Fatalf("shared fetch failed after the client disconnected: %v", err)
+	}
+	if _, ok := h.cache.Get(gasTronKey); !ok {
+		t.Error("result was not cached after the client disconnected")
 	}
 }
