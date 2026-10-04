@@ -1511,3 +1511,71 @@ export interface SlotsEstimate {
   best_commit?: SweepPoint;
   warnings: string[];
 }
+
+// --- Crypto Pulse: 72h Gas Pulse (/api/opendata/crypto/gas-pulse) ---
+
+export interface GasChainMeta {
+  id: string;
+  name: string;
+  primary_label: string;
+  primary_unit: string;
+  band_label: string; // '' = no shaded band
+  load_label: string;
+  load_unit: string;
+  fee_unit: string;
+  note: string;
+}
+
+export interface GasHourRow {
+  hour_utc: string; // "YYYY-MM-DD HH:00"
+  tx_count: number | null;
+  band_low: number | null;
+  primary_val: number | null;
+  band_high: number | null;
+  load_val: number | null;
+  total_fee: number | null;
+}
+
+export interface GasStats {
+  samples: number; // 0 = no data in the window
+  latest_hour: string;
+  latest: number;
+  percentile: number;
+  min_value: number;
+  min_hour: string;
+  max_value: number;
+  max_hour: string;
+  median: number;
+  p90: number;
+  load_max: number;
+  load_max_hour: string;
+  total_fee: number;
+  tx_count: number;
+}
+
+export interface GasAllTime {
+  unit: string; // 'gwei' | 'sun'
+  ath_value: number;
+  ath_time: string; // RFC3339 UTC; '' = genesis
+  atl_value: number;
+  atl_time: string; // first time reached
+  atl_is_floor: boolean;
+  current_value: number | null;
+  current_time?: string;
+}
+
+export interface GasPulseChain {
+  meta: GasChainMeta;
+  hours: GasHourRow[];
+  stats: GasStats;
+  error?: string;
+  all_time: GasAllTime | null;
+  all_time_error?: string;
+}
+
+export interface GasPulseData {
+  window_start: string;
+  window_end: string;
+  chains: GasPulseChain[];
+}
+
