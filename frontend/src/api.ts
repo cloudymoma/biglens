@@ -66,6 +66,7 @@ import type {
   CryptoPulseData,
   CryptoFeesData,
   GasPulseData,
+  GasLiveData,
   CryptoWhalesData,
   CryptoTokensData,
   CryptoMiningData,
@@ -393,6 +394,11 @@ export async function fetchCryptoFees(days: number): Promise<CryptoFeesData> {
 
 export async function fetchGasPulse(): Promise<GasPulseData> {
   const { data } = await axios.get('/api/opendata/crypto/gas-pulse');
+  return data;
+}
+
+export async function fetchGasLive(): Promise<GasLiveData> {
+  const { data } = await axios.get('/api/opendata/crypto/gas-live');
   return data;
 }
 

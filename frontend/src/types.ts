@@ -1579,3 +1579,51 @@ export interface GasPulseData {
   chains: GasPulseChain[];
 }
 
+// --- Crypto Pulse: live bars (/api/opendata/crypto/gas-live) ---
+
+export interface BtcFeeTier {
+  label: string;
+  sat_vb: number; // precise, may be < 1
+  usd: number | null; // cost of a standard_tx_vb transfer; null when spot is unavailable
+}
+
+export interface BtcFeeBand {
+  label: string;
+  min_sat_vb: number;
+  vsize_mb: number;
+}
+
+export interface BtcLive {
+  tiers: BtcFeeTier[];
+  minimum_sat_vb: number;
+  tx_count: number;
+  vsize_mb: number;
+  blocks_to_clear: number;
+  total_fee_btc: number;
+  bands: BtcFeeBand[]; // ascending fee; empty when the histogram is empty
+  standard_tx_vb: number;
+}
+
+export interface TronTransferCost {
+  label: string;
+  energy: number;
+  bandwidth: number;
+  burn_trx: number;
+  burn_usd: number | null;
+}
+
+export interface TronLive {
+  energy_price_sun: number;
+  energy_price_since: string;
+  bandwidth_price_sun: number;
+  costs: TronTransferCost[];
+  note: string;
+}
+
+export interface GasLiveData {
+  as_of: string;
+  btc: BtcLive | null;
+  btc_error?: string;
+  tron: TronLive | null;
+  tron_error?: string;
+}

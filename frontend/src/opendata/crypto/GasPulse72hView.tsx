@@ -9,6 +9,7 @@ import {
   GAS_CHAIN_COLORS, TONE_COLOR, buildGasPulseOption, fmtAllTime, fmtGas, fmtWhen,
   percentileTone, shortHour,
 } from './gasPulse';
+import GasLiveBar from './GasLiveBar';
 
 export default function GasPulse72hView() {
   const [data, setData] = useState<GasPulseData | null>(null);
@@ -26,6 +27,7 @@ export default function GasPulse72hView() {
   if (!data) return <EmptyState text="Loading 72h gas pulse…" />;
 
   const chain = data.chains.find(c => c.meta.id === selected) ?? data.chains[0];
+  const liveChain = chain.meta.id === 'btc' || chain.meta.id === 'tron' ? chain.meta.id : null;
   return (
     <div className="space-y-4">
       <div className="flex justify-end">
@@ -41,6 +43,7 @@ export default function GasPulse72hView() {
       ) : (
         <>
           <StatCards chain={chain} />
+          {liveChain && <GasLiveBar key={liveChain} chain={liveChain} />}
           <Panel title={`${chain.meta.name} · ${chain.meta.primary_label}`} note={chain.meta.note}>
             <ReactECharts option={buildGasPulseOption(chain)} style={{ height: 380 }} notMerge />
           </Panel>
