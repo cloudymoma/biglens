@@ -2,6 +2,9 @@ package main
 
 import (
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -55,5 +58,42 @@ func TestBuildGasLiveWithoutSpot(t *testing.T) {
 		if c.BurnUSD != nil || c.BurnTRX == 0 {
 			t.Errorf("tron %s = %+v, want TRX cost without USD", c.Label, c)
 		}
+	}
+}
+
+// Each chain is cached on its own: a healthy chain is not re-queried within
+// its TTL, while a failing one is retried on the next request.
+func TestGasL2QuotesCachePerChain(t *testing.T) {
+	var okHits, badHits atomic.Int32
+	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		okHits.Add(1)
+		w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":"0x3b9aca00"}`))
+	}))
+	defer ok.Close()
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		badHits.Add(1)
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer bad.Close()
+	old := l2Chains
+	l2Chains = []l2ChainConfig{
+		{ID: "eth", Name: "Ethereum", Kind: l2KindL1, RPC: ok.URL},
+		{ID: "arb", Name: "Arbitrum One", Kind: l2KindL1, RPC: bad.URL},
+	}
+	defer func() { l2Chains = old }()
+
+	h := &APIHandler{cache: NewCache(time.Minute)}
+	r := httptest.NewRequest(http.MethodGet, "/api/opendata/crypto/gas-live", nil)
+	for i := 0; i < 2; i++ {
+		quotes, errs := h.gasL2Quotes(r)
+		if quotes["eth"] == nil || errs["arb"] == nil {
+			t.Fatalf("round %d: quotes=%v errs=%v; want eth priced and arb failing", i, quotes, errs)
+		}
+	}
+	if okHits.Load() != 1 {
+		t.Errorf("healthy chain queried %d times, want 1 (cached)", okHits.Load())
+	}
+	if badHits.Load() != 2 {
+		t.Errorf("failing chain queried %d times, want 2 (errors are not cached)", badHits.Load())
 	}
 }

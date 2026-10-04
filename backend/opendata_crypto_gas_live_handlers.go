@@ -5,6 +5,8 @@ package main
 // is visible. Sources are cached independently (mempool.space 30s, TronGrid
 // prices and Coinbase spots 5m); a failure is never cached and only blanks
 // its own bar, and a missing spot only drops the USD figures.
+// The L1-vs-L2 ladder is cached per chain for 60s (nine public RPC calls per
+// refresh), so one rate-limited chain only blanks its own row.
 
 import (
 	"fmt"
@@ -18,8 +20,10 @@ const (
 	gasLiveBtcKey   = "opendata:crypto:gaslive:btc"
 	gasLiveTronKey  = "opendata:crypto:gaslive:tron_prices"
 	gasLiveSpotKey  = "opendata:crypto:spot:%s"
+	gasLiveL2Key    = "opendata:crypto:gaslive:l2:%s"
 	gasLiveBtcTTL   = 30 * time.Second
 	gasLivePriceTTL = 5 * time.Minute
+	gasLiveL2TTL    = time.Minute
 )
 
 type GasLiveData struct {
@@ -28,6 +32,7 @@ type GasLiveData struct {
 	BTCError  string    `json:"btc_error,omitempty"`
 	Tron      *TronLive `json:"tron"`
 	TronError string    `json:"tron_error,omitempty"`
+	L2        L2Ladder  `json:"l2"`
 }
 
 func buildGasLive(now time.Time, btc *btcLiveRaw, btcErr error, tron *tronLiveRaw, tronErr error, btcUSD, trxUSD *float64) GasLiveData {
@@ -87,20 +92,53 @@ func (h *APIHandler) gasSpotUSD(r *http.Request, base string) *float64 {
 	return &price
 }
 
+func (h *APIHandler) gasL2Quotes(r *http.Request) (map[string]*l2Quote, map[string]error) {
+	var (
+		wg     sync.WaitGroup
+		mu     sync.Mutex
+		quotes = make(map[string]*l2Quote, len(l2Chains))
+		errs   = make(map[string]error)
+	)
+	for _, c := range l2Chains {
+		wg.Go(func() {
+			v, err := h.cachedFetch(fmt.Sprintf(gasLiveL2Key, c.ID), gasLiveL2TTL, func() (any, error) {
+				ctx, cancel := gasFetchContext(r)
+				defer cancel()
+				return fetchL2Quote(ctx, c)
+			})
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				errs[c.ID] = err
+				return
+			}
+			quotes[c.ID] = v.(*l2Quote)
+		})
+	}
+	wg.Wait()
+	return quotes, errs
+}
+
 func (h *APIHandler) CryptoGasLive(w http.ResponseWriter, r *http.Request) {
 	var (
-		wg             sync.WaitGroup
-		btc            *btcLiveRaw
-		btcErr         error
-		tron           *tronLiveRaw
-		tronErr        error
-		btcUSD, trxUSD *float64
+		wg                     sync.WaitGroup
+		btc                    *btcLiveRaw
+		btcErr                 error
+		tron                   *tronLiveRaw
+		tronErr                error
+		btcUSD, trxUSD, ethUSD *float64
+		l2Quotes               map[string]*l2Quote
+		l2Errs                 map[string]error
 	)
 	wg.Go(func() { btc, btcErr = h.gasLiveBtc(r) })
 	wg.Go(func() { tron, tronErr = h.gasLiveTron(r) })
 	wg.Go(func() { btcUSD = h.gasSpotUSD(r, "BTC") })
 	wg.Go(func() { trxUSD = h.gasSpotUSD(r, "TRX") })
+	wg.Go(func() { ethUSD = h.gasSpotUSD(r, "ETH") })
+	wg.Go(func() { l2Quotes, l2Errs = h.gasL2Quotes(r) })
 	wg.Wait()
 
-	writeJSON(w, buildGasLive(time.Now(), btc, btcErr, tron, tronErr, btcUSD, trxUSD))
+	data := buildGasLive(time.Now(), btc, btcErr, tron, tronErr, btcUSD, trxUSD)
+	data.L2 = l2LadderFrom(l2Quotes, l2Errs, ethUSD)
+	writeJSON(w, data)
 }
