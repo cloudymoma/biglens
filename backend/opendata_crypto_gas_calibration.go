@@ -4,17 +4,20 @@ package main
 // (gas_fee_design.md §11), replacing Phase 2–3 constants:
 //   - USDT (TRC-20) energy: the two modal values over the last 24h of TRON
 //     receipts — updating an existing balance vs. writing a new one.
-//   - USDT bandwidth: computed from one recent sample transaction of each
-//     kind via TronGrid (java-tron's size rule, verified against net_usage).
+//   - USDT bandwidth: the most common size among up to five recent sample
+//     transactions of each kind via TronGrid (java-tron's size rule, verified
+//     against net_usage); one sample alone can be an unusually short encoding.
 //   - USDC transfer gas: median over the last 6h of Ethereum transactions,
 //     applied to every EVM chain in the ladder.
-// About 1.46 GB of BigQuery per run; callers cache the result for 24h.
+// About 1.3 GB of BigQuery per day. The BigQuery and TronGrid halves are
+// cached separately (24h), and a failed half is retried only after a back-off.
 
 import (
 	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -31,7 +34,15 @@ const (
 	// tronResultBytesPerContract is java-tron's MAX_RESULT_SIZE_IN_TX, charged
 	// as bandwidth on top of the serialized transaction.
 	tronResultBytesPerContract = 64
+	// usdtSamplesPerCase is how many candidate hashes BigQuery returns per
+	// transfer case; usdtSampleTarget is how many are actually measured.
+	usdtSamplesPerCase = 5
+	usdtSampleTarget   = 3
 )
+
+// usdtSamplePause spaces TronGrid lookups: its keyless API answers bursts
+// with 429 (seen live during Phase 4 verification).
+var usdtSamplePause = 250 * time.Millisecond
 
 var tronTxByIDURL = "https://api.trongrid.io/wallet/gettransactionbyid"
 
@@ -46,11 +57,11 @@ func tronUSDTModesSQL() string {
 
 func tronUSDTSamplesSQL() string {
 	return fmt.Sprintf(`
-		SELECT gas_used AS energy, ANY_VALUE(transaction_hash) AS tx_hash
+		SELECT gas_used AS energy, ARRAY_AGG(transaction_hash LIMIT %d) AS tx_hashes
 		FROM %s
 		WHERE block_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 15 MINUTE)
 			AND to_address = '%s' AND status = 1 AND gas_used IN UNNEST(@energies)
-		GROUP BY energy`, tronReceiptsTable, tronUSDTReceiptAddress)
+		GROUP BY energy`, usdtSamplesPerCase, tronReceiptsTable, tronUSDTReceiptAddress)
 }
 
 func usdcTransferGasSQL() string {
@@ -68,8 +79,8 @@ type usdtEnergyMode struct {
 }
 
 type usdtSample struct {
-	Energy int64  `bigquery:"energy"`
-	TxHash string `bigquery:"tx_hash"`
+	Energy   int64    `bigquery:"energy"`
+	TxHashes []string `bigquery:"tx_hashes"`
 }
 
 type usdcGasRow struct {
@@ -161,6 +172,50 @@ func fetchTronTxBandwidth(ctx context.Context, txHash string) (int64, error) {
 	return tronTxBandwidth(tx.RawDataHex, tx.Signature)
 }
 
+// modeBandwidth returns the most common value; a tie goes to the larger,
+// so the burn cost is never understated.
+func modeBandwidth(values []int64) int64 {
+	counts := make(map[int64]int, len(values))
+	var best int64
+	for _, v := range values {
+		counts[v]++
+		if c, bc := counts[v], counts[best]; c > bc || (c == bc && v > best) {
+			best = v
+		}
+	}
+	return best
+}
+
+// sampleBandwidth measures sample transactions one at a time, pausing between
+// TronGrid lookups and stopping once usdtSampleTarget have succeeded; failed
+// lookups are skipped. It fails only if none succeed.
+func sampleBandwidth(ctx context.Context, hashes []string) (int64, error) {
+	var sizes []int64
+	var errs []error
+	for i, h := range hashes {
+		if len(sizes) == usdtSampleTarget {
+			break
+		}
+		if i > 0 && usdtSamplePause > 0 {
+			select {
+			case <-time.After(usdtSamplePause):
+			case <-ctx.Done():
+				return 0, ctx.Err()
+			}
+		}
+		bw, err := fetchTronTxBandwidth(ctx, h)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		sizes = append(sizes, bw)
+	}
+	if len(sizes) == 0 {
+		return 0, fmt.Errorf("usdt bandwidth: no sample could be measured (%d tried): %w", len(errs), errors.Join(errs...))
+	}
+	return modeBandwidth(sizes), nil
+}
+
 func (b *BQClient) GetUSDTEnergyModes(ctx context.Context) ([]usdtEnergyMode, error) {
 	return collectRows[usdtEnergyMode](b.client.Query(tronUSDTModesSQL()), ctx)
 }
@@ -182,9 +237,16 @@ func (b *BQClient) GetUSDCTransferGas(ctx context.Context) (*usdcGasRow, error) 
 	return &rows[0], nil
 }
 
-// fetchGasCalibration runs every step; any failure fails the whole run so the
-// caller never mixes measured and missing values.
-func fetchGasCalibration(ctx context.Context, b *BQClient, now time.Time) (*GasCalibration, error) {
+// gasCalibrationSamples is the BigQuery half of the calibration (~1.3 GB):
+// the modal USDT energies with candidate sample hashes, and the USDC transfer
+// gas median. Cached on its own so a TronGrid failure never re-runs it.
+type gasCalibrationSamples struct {
+	Holder, New             TransferProfile
+	HolderHashes, NewHashes []string
+	USDCGas, USDCSamples    int64
+}
+
+func fetchCalibrationSamples(ctx context.Context, b *BQClient) (*gasCalibrationSamples, error) {
 	modes, err := b.GetUSDTEnergyModes(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("usdt energy modes: %w", err)
@@ -197,28 +259,43 @@ func fetchGasCalibration(ctx context.Context, b *BQClient, now time.Time) (*GasC
 	if err != nil {
 		return nil, fmt.Errorf("usdt samples: %w", err)
 	}
-	byEnergy := make(map[int64]string, len(samples))
+	byEnergy := make(map[int64][]string, len(samples))
 	for _, s := range samples {
-		byEnergy[s.Energy] = s.TxHash
+		byEnergy[s.Energy] = s.TxHashes
 	}
-	for _, p := range []*TransferProfile{&holder, &newAddr} {
-		hash, ok := byEnergy[p.Energy]
-		if !ok {
-			return nil, fmt.Errorf("usdt calibration: no recent sample with %d energy", p.Energy)
-		}
-		if p.Bandwidth, err = fetchTronTxBandwidth(ctx, hash); err != nil {
-			return nil, err
+	for _, e := range []int64{holder.Energy, newAddr.Energy} {
+		if len(byEnergy[e]) == 0 {
+			return nil, fmt.Errorf("usdt calibration: no recent sample with %d energy", e)
 		}
 	}
 	usdc, err := b.GetUSDCTransferGas(ctx)
 	if err != nil {
 		return nil, err
 	}
+	return &gasCalibrationSamples{
+		Holder: holder, New: newAddr,
+		HolderHashes: byEnergy[holder.Energy], NewHashes: byEnergy[newAddr.Energy],
+		USDCGas: usdc.Gas.Int64, USDCSamples: usdc.N,
+	}, nil
+}
+
+// measureCalibration is the TronGrid half: it measures each case's bandwidth
+// from its sample transactions; any failure fails the whole calibration so the
+// caller never mixes measured and missing values.
+func measureCalibration(ctx context.Context, s gasCalibrationSamples, now time.Time) (*GasCalibration, error) {
+	holder, newAddr := s.Holder, s.New
+	var err error
+	if holder.Bandwidth, err = sampleBandwidth(ctx, s.HolderHashes); err != nil {
+		return nil, err
+	}
+	if newAddr.Bandwidth, err = sampleBandwidth(ctx, s.NewHashes); err != nil {
+		return nil, err
+	}
 	return &GasCalibration{
 		USDTHolder:      holder,
 		USDTNew:         newAddr,
-		USDCTransferGas: usdc.Gas.Int64,
-		USDCSamples:     usdc.N,
+		USDCTransferGas: s.USDCGas,
+		USDCSamples:     s.USDCSamples,
 		MeasuredAt:      now.UTC().Format(time.RFC3339),
 		Windows:         "USDT: last 24h of TRON receipts · USDC: median of the last 6h on Ethereum",
 	}, nil

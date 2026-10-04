@@ -175,3 +175,38 @@ func TestGasFetchSurvivesClientDisconnect(t *testing.T) {
 		t.Error("result was not cached after the client disconnected")
 	}
 }
+
+// An expensive fetch that fails (calibration: ~1.3 GB of BigQuery) must not
+// re-run on every 30s poll; the failure is remembered for retryAfter.
+func TestCachedFetchOrBackoffThrottlesFailures(t *testing.T) {
+	h := &APIHandler{cache: NewCache(time.Minute)}
+	calls := 0
+	failing := func() (any, error) { calls++; return nil, errors.New("tron prices fetch: upstream status 429") }
+	for i := 0; i < 3; i++ {
+		if _, err := h.cachedFetchOrBackoff("k:cal", time.Hour, 30*time.Millisecond, failing); err == nil {
+			t.Fatal("expected the failure to propagate")
+		}
+	}
+	if calls != 1 {
+		t.Errorf("failing fetch ran %d times within the back-off window, want 1", calls)
+	}
+	time.Sleep(50 * time.Millisecond)
+	h.cachedFetchOrBackoff("k:cal", time.Hour, 30*time.Millisecond, failing)
+	if calls != 2 {
+		t.Errorf("failing fetch ran %d times after the window, want 2 (retried)", calls)
+	}
+}
+
+func TestCachedFetchOrBackoffCachesSuccess(t *testing.T) {
+	h := &APIHandler{cache: NewCache(time.Minute)}
+	calls := 0
+	ok := func() (any, error) { calls++; return "v", nil }
+	for i := 0; i < 2; i++ {
+		if v, err := h.cachedFetchOrBackoff("k:ok", time.Hour, time.Minute, ok); err != nil || v != "v" {
+			t.Fatalf("got %v, %v", v, err)
+		}
+	}
+	if calls != 1 {
+		t.Errorf("successful fetch ran %d times, want 1", calls)
+	}
+}

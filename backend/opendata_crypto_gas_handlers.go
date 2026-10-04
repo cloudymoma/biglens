@@ -72,6 +72,23 @@ func (h *APIHandler) cachedFetch(key string, ttl time.Duration, fetch func() (an
 	return v, err
 }
 
+// gasFetchFailure marks a remembered failure in the cache.
+type gasFetchFailure struct{ err error }
+
+// cachedFetchOrBackoff is cachedFetch for expensive fetches: a failure is
+// remembered for retryAfter, so repeated requests (the live bar polls every
+// 30s) do not re-run it in the meantime.
+func (h *APIHandler) cachedFetchOrBackoff(key string, ttl, retryAfter time.Duration, fetch func() (any, error)) (any, error) {
+	if f, ok := h.cache.Get(key + ":failed"); ok {
+		return nil, f.(gasFetchFailure).err
+	}
+	v, err := h.cachedFetch(key, ttl, fetch)
+	if err != nil {
+		h.cache.SetWithTTL(key+":failed", gasFetchFailure{err}, retryAfter)
+	}
+	return v, err
+}
+
 // buildGasPulse assembles the response in selector order. Every chain gets
 // 72 buckets even when its query failed, so the frontend's axis never shifts.
 func buildGasPulse(start, end time.Time, series map[string]gasSeriesResult,

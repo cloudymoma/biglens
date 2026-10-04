@@ -20,15 +20,19 @@ import (
 )
 
 const (
-	gasLiveBtcKey         = "opendata:crypto:gaslive:btc"
-	gasLiveTronKey        = "opendata:crypto:gaslive:tron_prices"
-	gasLiveSpotKey        = "opendata:crypto:spot:%s"
-	gasLiveL2Key          = "opendata:crypto:gaslive:l2:%s:%d"
-	gasLiveCalibrationKey = "opendata:crypto:gaslive:calibration"
-	gasLiveBtcTTL         = 30 * time.Second
-	gasLivePriceTTL       = 5 * time.Minute
-	gasLiveL2TTL          = time.Minute
-	gasLiveCalibrationTTL = 24 * time.Hour
+	gasLiveBtcKey                = "opendata:crypto:gaslive:btc"
+	gasLiveTronKey               = "opendata:crypto:gaslive:tron_prices"
+	gasLiveSpotKey               = "opendata:crypto:spot:%s"
+	gasLiveL2Key                 = "opendata:crypto:gaslive:l2:%s:%d"
+	gasLiveCalibrationKey        = "opendata:crypto:gaslive:calibration"
+	gasLiveCalibrationSamplesKey = "opendata:crypto:gaslive:calibration_samples"
+	// gasCalibrationRetryAfter keeps a failed calibration from re-running
+	// BigQuery (or hammering TronGrid) on every 30s poll.
+	gasCalibrationRetryAfter = 10 * time.Minute
+	gasLiveBtcTTL            = 30 * time.Second
+	gasLivePriceTTL          = 5 * time.Minute
+	gasLiveL2TTL             = time.Minute
+	gasLiveCalibrationTTL    = 24 * time.Hour
 )
 
 type GasLiveData struct {
@@ -91,10 +95,18 @@ func (h *APIHandler) gasLiveTron(r *http.Request) (*tronLiveRaw, error) {
 }
 
 func (h *APIHandler) gasCalibration(r *http.Request) (*GasCalibration, error) {
-	v, err := h.cachedFetch(gasLiveCalibrationKey, gasLiveCalibrationTTL, func() (any, error) {
+	v, err := h.cachedFetchOrBackoff(gasLiveCalibrationKey, gasLiveCalibrationTTL, gasCalibrationRetryAfter, func() (any, error) {
+		sv, err := h.cachedFetchOrBackoff(gasLiveCalibrationSamplesKey, gasLiveCalibrationTTL, gasCalibrationRetryAfter, func() (any, error) {
+			ctx, cancel := gasFetchContext(r)
+			defer cancel()
+			return fetchCalibrationSamples(ctx, h.bq)
+		})
+		if err != nil {
+			return nil, err
+		}
 		ctx, cancel := gasFetchContext(r)
 		defer cancel()
-		return fetchGasCalibration(ctx, h.bq, time.Now())
+		return measureCalibration(ctx, *sv.(*gasCalibrationSamples), time.Now())
 	})
 	if err != nil {
 		return nil, err
