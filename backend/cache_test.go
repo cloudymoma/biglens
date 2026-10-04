@@ -21,3 +21,31 @@ func TestCacheJanitorSweepsExpiredEntries(t *testing.T) {
 	}
 	t.Fatal("expired entry was never swept by the janitor")
 }
+
+// Gas Pulse keeps 1h and 24h entries in the shared 10-minute cache, so a
+// per-entry TTL must override the instance TTL in both directions.
+func TestCacheSetWithTTLOverridesInstanceTTL(t *testing.T) {
+	c := NewCache(time.Hour)
+	c.SetWithTTL("short", 1, 20*time.Millisecond)
+	c.Set("default", 2)
+
+	time.Sleep(40 * time.Millisecond)
+
+	if _, ok := c.Get("short"); ok {
+		t.Error("entry set with a 20ms TTL is still served after 40ms")
+	}
+	if v, ok := c.Get("default"); !ok || v != 2 {
+		t.Errorf("Set entry under the 1h instance TTL: got (%v, %v), want (2, true)", v, ok)
+	}
+}
+
+func TestCacheSetWithTTLOutlivesInstanceTTL(t *testing.T) {
+	c := NewCache(20 * time.Millisecond)
+	c.SetWithTTL("long", 1, time.Hour)
+
+	time.Sleep(40 * time.Millisecond)
+
+	if _, ok := c.Get("long"); !ok {
+		t.Error("entry set with a 1h TTL expired with the 20ms instance TTL")
+	}
+}

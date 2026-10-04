@@ -53,9 +53,15 @@ func (c *Cache) Get(key string) (any, bool) {
 }
 
 func (c *Cache) Set(key string, data any) {
+	c.SetWithTTL(key, data, c.ttl)
+}
+
+// SetWithTTL stores data with its own lifetime, for callers whose freshness
+// differs from the instance TTL (e.g. hourly Gas Pulse series, daily records).
+func (c *Cache) SetWithTTL(key string, data any, ttl time.Duration) {
 	c.store.Store(key, &cacheEntry{
 		data:      data,
-		expiresAt: time.Now().Add(c.ttl),
+		expiresAt: time.Now().Add(ttl),
 	})
 }
 
