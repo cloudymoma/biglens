@@ -9,6 +9,7 @@ package main
 //	GET /api/opendata/crypto/mining?days=7|30|90|365
 //	GET /api/opendata/crypto/spot                      (Coinbase proxy, not BigQuery)
 //	GET /api/opendata/crypto/gas-pulse                 (72h, 7 chains; opendata_crypto_gas_handlers.go)
+//	GET /api/opendata/crypto/gas-live                  (BTC/TRON live bars, 30s; opendata_crypto_gas_live_handlers.go)
 //
 // Each endpoint is fetched lazily by its tab, cached 10 minutes, and guarded
 // by singleflight so concurrent tab opens run one BigQuery round each.

@@ -156,6 +156,7 @@ func main() {
 	mux.Handle("/api/opendata/crypto/mining", h(api.CryptoMining))
 	mux.Handle("/api/opendata/crypto/spot", h(api.CryptoSpot))
 	mux.Handle("/api/opendata/crypto/gas-pulse", h(api.CryptoGasPulse))
+	mux.Handle("/api/opendata/crypto/gas-live", h(api.CryptoGasLive))
 	mux.Handle("/api/opendata/crypto/address-risk/lookup", h(api.AddressRiskLookup))
 	mux.Handle("/api/opendata/crypto/address-risk/sources", h(api.AddressRiskSources))
 	mux.Handle("/api/opendata/crypto/address-risk/overview", h(api.AddressRiskOverview))
