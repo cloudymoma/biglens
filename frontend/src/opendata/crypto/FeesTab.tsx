@@ -8,6 +8,7 @@ import {
   BTC_COLOR, ETH_COLOR, CHART_TOOLTIP, AXIS_LABEL, SPLIT_LINE,
   fmtNum, Panel, DaysPicker, mergeDates, seriesByDate,
 } from './shared';
+import GasPulse72hView from './GasPulse72hView';
 
 const DAY_OPTIONS = [7, 30, 90, 365];
 
@@ -21,7 +22,7 @@ function congestionPoints(
     .map(b => [b.fullness_pct, feeByDate.get(b.date) as number]);
 }
 
-export default function FeesTab() {
+function DailyFeesView() {
   const [days, setDays] = useState(90);
   const [data, setData] = useState<CryptoFeesData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -135,3 +136,33 @@ export default function FeesTab() {
     </div>
   );
 }
+
+type FeesView = 'pulse' | 'daily';
+
+const FEES_VIEWS: { id: FeesView; label: string }[] = [
+  { id: 'pulse', label: '72h Gas Pulse' },
+  { id: 'daily', label: 'Daily Economics (7d–1y)' },
+];
+
+export default function FeesTab() {
+  const [view, setView] = useState<FeesView>('pulse');
+  return (
+    <div className="space-y-4">
+      <div className="flex rounded-lg border border-zinc-800/50 overflow-hidden w-fit" style={{ background: '#09090b' }}>
+        {FEES_VIEWS.map(v => (
+          <button
+            key={v.id}
+            onClick={() => setView(v.id)}
+            className={`px-3 py-2 text-xs cursor-pointer transition-colors ${
+              view === v.id ? 'text-cyan-400 bg-cyan-500/10' : 'text-zinc-500 hover:text-zinc-300'
+            }`}
+          >
+            {v.label}
+          </button>
+        ))}
+      </div>
+      {view === 'pulse' ? <GasPulse72hView /> : <DailyFeesView />}
+    </div>
+  );
+}
+
