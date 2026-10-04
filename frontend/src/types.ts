@@ -1631,6 +1631,7 @@ export interface TronTransferCost {
   bandwidth: number;
   burn_trx: number;
   burn_usd: number | null;
+  share_pct: number; // share of USDT transfers in the last 24h
 }
 
 export interface TronLive {
@@ -1643,7 +1644,8 @@ export interface TronLive {
 
 export interface L2ActionCost {
   label: string;
-  approx: boolean;
+  gas: number;
+  source: string; // where the gas figure comes from
   exec_eth: number;
   l1_eth: number;
   total_eth: number;
@@ -1666,6 +1668,21 @@ export interface L2Ladder {
   note: string;
 }
 
+export interface TransferProfile {
+  energy: number;
+  bandwidth: number;
+  share_pct: number;
+}
+
+export interface GasCalibration {
+  usdt_holder: TransferProfile;
+  usdt_new: TransferProfile;
+  usdc_transfer_gas: number;
+  usdc_samples: number;
+  measured_at: string;
+  windows: string;
+}
+
 export interface GasLiveData {
   as_of: string;
   btc: BtcLive | null;
@@ -1673,4 +1690,6 @@ export interface GasLiveData {
   tron: TronLive | null;
   tron_error?: string;
   l2: L2Ladder;
+  calibration: GasCalibration | null;
+  calibration_error?: string;
 }

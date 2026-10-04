@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { BtcLive, GasLiveData, L2Ladder, TronLive } from '../../types';
+import type { BtcLive, GasCalibration, GasLiveData, L2Ladder, TronLive } from '../../types';
 import { fetchGasLive } from '../../api';
 import { ErrorBanner } from '../../dashboards/shared';
 import { Panel } from './shared';
@@ -64,7 +64,7 @@ export default function GasLiveBar({ chain, highlight }: { chain: 'btc' | 'tron'
   }
   return (
     <Panel title="TRON live · USDT transfer burn cost" note={note}>
-      {data.tron ? <TronLiveBody live={data.tron} /> : <ErrorBanner message={data.tron_error || 'unavailable'} />}
+      {data.tron ? <TronLiveBody live={data.tron} calibration={data.calibration} /> : <ErrorBanner message={data.tron_error || 'unavailable'} />}
     </Panel>
   );
 }
@@ -113,7 +113,7 @@ function BtcLiveBody({ live, asOf }: { live: BtcLive; asOf: string }) {
   );
 }
 
-function TronLiveBody({ live }: { live: TronLive }) {
+function TronLiveBody({ live, calibration }: { live: TronLive; calibration: GasCalibration | null }) {
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-2 gap-3">
@@ -125,7 +125,7 @@ function TronLiveBody({ live }: { live: TronLive }) {
               {c.burn_usd != null && <span className="text-xs text-zinc-500"> · {fmtUSD(c.burn_usd)}</span>}
             </div>
             <div className="text-[11px] font-mono text-zinc-500">
-              {c.energy.toLocaleString('en')} energy + ≈{c.bandwidth} bandwidth
+              {c.energy.toLocaleString('en')} energy + {c.bandwidth} bandwidth · {c.share_pct.toFixed(0)}% of transfers
             </div>
           </div>
         ))}
@@ -134,6 +134,11 @@ function TronLiveBody({ live }: { live: TronLive }) {
         energy {live.energy_price_sun} sun{live.energy_price_since ? ` since ${live.energy_price_since.slice(0, 10)}` : ''} ·
         bandwidth {live.bandwidth_price_sun} sun · {live.note}
       </div>
+      {calibration && (
+        <div className="text-[10px] text-zinc-600">
+          Measured {calibration.measured_at.slice(0, 16).replace('T', ' ')} UTC · {calibration.windows}
+        </div>
+      )}
     </div>
   );
 }
@@ -177,7 +182,9 @@ function L2LadderBody({ ladder, highlight }: { ladder: L2Ladder; highlight?: str
             <th className="py-1 font-normal">Network</th>
             <th className="py-1 font-normal">Gas price</th>
             {labels.map(a => (
-              <th key={a.label} className="py-1 font-normal">{a.label}{a.approx ? ' (≈)' : ''}</th>
+              <th key={a.label} className="py-1 font-normal" title={a.source}>
+                {a.label} <span className="text-zinc-600">({a.gas.toLocaleString('en')} gas)</span>
+              </th>
             ))}
           </tr>
         </thead>
