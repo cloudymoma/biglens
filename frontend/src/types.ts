@@ -420,6 +420,9 @@ export interface TrendsMeta {
   latest_refresh_date: string;
   refresh_dates: string[];
   countries: TrendsCountry[];
+  // US market dates come from the DMA tables, which publish separately.
+  us_latest_refresh_date: string;
+  us_refresh_dates: string[];
   dmas: SemDMA[];
 }
 

@@ -32,8 +32,9 @@ export default function GoogleTrendsDashboard() {
   const [metaError, setMetaError] = useState('');
 
   // Same filter model as the SEM dashboard: US market at Nielsen DMA grain
-  // ('' = national), Global market at country grain. US/international
-  // partition dates are aligned, so one meta payload serves both.
+  // ('' = national), Global market at country grain. One meta payload serves
+  // both, but the US tables publish on their own schedule, so each market
+  // has its own refresh-date list.
   const [market, setMarket] = useState<SemMarket>('us');
   const [refreshDate, setRefreshDate] = useState('');
   const [countryCode, setCountryCode] = useState(''); // global market
@@ -60,7 +61,7 @@ export default function GoogleTrendsDashboard() {
     fetchTrendsMeta()
       .then(m => {
         setMeta(m);
-        setRefreshDate(m.latest_refresh_date);
+        setRefreshDate(m.us_latest_refresh_date); // market starts as 'us'
         const codes = m.countries.map(c => c.code);
         const preferred = ['GB', 'JP'].find(c => codes.includes(c));
         setCountryCode(preferred || codes[0] || '');
@@ -124,6 +125,16 @@ export default function GoogleTrendsDashboard() {
   if (metaError) return <ErrorBanner message={metaError} />;
   if (!meta) return <LoadingPulse />;
 
+  const marketDates = (m: SemMarket) => (m === 'us' ? meta.us_refresh_dates : meta.refresh_dates);
+
+  // Keep the chosen snapshot when the other market has it, else jump to
+  // that market's latest.
+  function switchMarket(m: SemMarket) {
+    const dates = marketDates(m);
+    if (!dates.includes(refreshDate)) setRefreshDate(dates[0] ?? '');
+    setMarket(m);
+  }
+
   const countryName = meta.countries.find(c => c.code === countryCode)?.name || countryCode;
   const geoLabel = market === 'us' ? (dma || 'the United States') : countryName;
   const topTerms = data?.top_terms || [];
@@ -140,7 +151,7 @@ export default function GoogleTrendsDashboard() {
             {(['us', 'global'] as SemMarket[]).map(m => (
               <button
                 key={m}
-                onClick={() => setMarket(m)}
+                onClick={() => switchMarket(m)}
                 className={`px-3 py-2 text-xs cursor-pointer transition-colors ${
                   market === m ? 'text-cyan-400 bg-cyan-500/10' : 'text-zinc-500 hover:text-zinc-300'
                 }`}
@@ -167,7 +178,7 @@ export default function GoogleTrendsDashboard() {
               className="text-xs text-zinc-400 rounded-lg pl-3 pr-8 py-2 outline-none cursor-pointer appearance-none border border-zinc-800/50 transition-colors focus:border-cyan-500/30"
               style={{ background: '#09090b', minWidth: 140 }}
             >
-              {meta.refresh_dates.map(d => <option key={d} value={d}>{d}</option>)}
+              {marketDates(market).map(d => <option key={d} value={d}>{d}</option>)}
             </select>
             <ChevronDown size={12} className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none text-zinc-600" />
           </div>

@@ -17,10 +17,12 @@ import (
 const maxTrendsCompareTerms = 5
 
 type TrendsMeta struct {
-	LatestRefreshDate string          `json:"latest_refresh_date"`
-	RefreshDates      []string        `json:"refresh_dates"`
-	Countries         []TrendsCountry `json:"countries"`
-	Dmas              []SemDMA        `json:"dmas"`
+	LatestRefreshDate   string          `json:"latest_refresh_date"`
+	RefreshDates        []string        `json:"refresh_dates"`
+	Countries           []TrendsCountry `json:"countries"`
+	UsLatestRefreshDate string          `json:"us_latest_refresh_date"`
+	UsRefreshDates      []string        `json:"us_refresh_dates"`
+	Dmas                []SemDMA        `json:"dmas"`
 }
 
 // TrendsMetaHandler serves available partition dates and countries so the
@@ -33,49 +35,61 @@ func (h *APIHandler) TrendsMetaHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dates, err := h.bq.GetTrendsRefreshDates(r.Context())
-	if err != nil {
-		writeError(w, err.Error(), http.StatusInternalServerError)
-		return
+	// One payload carries both markets: countries for Global, DMAs for US.
+	// The US DMA tables publish on their own schedule (often a day or two
+	// behind the international ones), so each market gets its own dates and
+	// its geo list is read from its own latest partition. Slices start empty
+	// so a market with no rows encodes as [] rather than null.
+	data := &TrendsMeta{
+		RefreshDates:   []string{},
+		Countries:      []TrendsCountry{},
+		UsRefreshDates: []string{},
+		Dmas:           []SemDMA{},
 	}
-	if len(dates) == 0 {
-		writeJSON(w, &TrendsMeta{RefreshDates: []string{}, Countries: []TrendsCountry{}})
-		return
-	}
-
-	latest, err := civil.ParseDate(dates[0])
-	if err != nil {
-		writeError(w, fmt.Sprintf("unexpected refresh_date %q: %v", dates[0], err), http.StatusInternalServerError)
-		return
-	}
-
-	// The US market lives in the DMA-grained US tables (partition dates
-	// verified aligned with the international ones), so one meta payload
-	// carries both filter lists: countries for Global, DMAs for US.
-	var countries []TrendsCountry
-	var dmas []SemDMA
 	g, gctx := errgroup.WithContext(r.Context())
 	g.Go(func() error {
-		var err error
-		countries, err = h.bq.GetTrendsCountries(gctx, latest)
-		return err
+		dates, err := h.bq.GetTrendsRefreshDates(gctx)
+		if err != nil || len(dates) == 0 {
+			return err
+		}
+		latest, err := civil.ParseDate(dates[0])
+		if err != nil {
+			return fmt.Errorf("unexpected refresh_date %q: %w", dates[0], err)
+		}
+		countries, err := h.bq.GetTrendsCountries(gctx, latest)
+		if err != nil {
+			return err
+		}
+		data.LatestRefreshDate, data.RefreshDates = dates[0], dates
+		if countries != nil {
+			data.Countries = countries
+		}
+		return nil
 	})
 	g.Go(func() error {
-		var err error
-		dmas, err = h.bq.GetSemDMAs(gctx, latest)
-		return err
+		dates, err := h.bq.GetSemUSRefreshDates(gctx)
+		if err != nil || len(dates) == 0 {
+			return err
+		}
+		latest, err := civil.ParseDate(dates[0])
+		if err != nil {
+			return fmt.Errorf("unexpected US refresh_date %q: %w", dates[0], err)
+		}
+		dmas, err := h.bq.GetSemDMAs(gctx, latest)
+		if err != nil {
+			return err
+		}
+		data.UsLatestRefreshDate, data.UsRefreshDates = dates[0], dates
+		if dmas != nil {
+			data.Dmas = dmas
+		}
+		return nil
 	})
 	if err := g.Wait(); err != nil {
 		writeError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	data := &TrendsMeta{
-		LatestRefreshDate: dates[0],
-		RefreshDates:      dates,
-		Countries:         countries,
-		Dmas:              dmas,
-	}
 	h.cache.Set(key, data)
 	writeJSON(w, data)
 }
