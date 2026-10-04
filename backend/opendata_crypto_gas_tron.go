@@ -15,8 +15,9 @@ import (
 )
 
 var (
-	tronEnergyPricesURL = "https://api.trongrid.io/wallet/getenergyprices"
-	tronHTTPClient      = &http.Client{Timeout: 5 * time.Second}
+	tronEnergyPricesURL    = "https://api.trongrid.io/wallet/getenergyprices"
+	tronBandwidthPricesURL = "https://api.trongrid.io/wallet/getbandwidthprices"
+	tronHTTPClient         = &http.Client{Timeout: 5 * time.Second}
 )
 
 const tronFetchTimeout = 4 * time.Second
@@ -27,8 +28,9 @@ type tronPricePoint struct {
 	Sun int64
 }
 
-// parseTronEnergyPrices parses "ms:sun,ms:sun,..." (ms 0 = genesis).
-func parseTronEnergyPrices(s string) ([]tronPricePoint, error) {
+// parseTronPriceHistory parses TronGrid's "ms:sun,ms:sun,..." price history
+// (energy and bandwidth share the format; ms 0 = genesis).
+func parseTronPriceHistory(s string) ([]tronPricePoint, error) {
 	if s == "" {
 		return nil, fmt.Errorf("tron energy prices: empty history")
 	}
@@ -56,27 +58,32 @@ func parseTronEnergyPrices(s string) ([]tronPricePoint, error) {
 }
 
 func fetchTronEnergyPrices(ctx context.Context) ([]tronPricePoint, error) {
+	return fetchTronPrices(ctx, tronEnergyPricesURL)
+}
+
+// fetchTronPrices reads one TronGrid price history (energy or bandwidth).
+func fetchTronPrices(ctx context.Context, url string) ([]tronPricePoint, error) {
 	ctx, cancel := context.WithTimeout(ctx, tronFetchTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, tronEnergyPricesURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("tron energy prices request: %w", err)
+		return nil, fmt.Errorf("tron prices request: %w", err)
 	}
 	resp, err := tronHTTPClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("tron energy prices fetch: %w", err)
+		return nil, fmt.Errorf("tron prices fetch: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("tron energy prices fetch: upstream status %d", resp.StatusCode)
+		return nil, fmt.Errorf("tron prices fetch %s: upstream status %d", url, resp.StatusCode)
 	}
 	var body struct {
 		Prices string `json:"prices"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		return nil, fmt.Errorf("tron energy prices decode: %w", err)
+		return nil, fmt.Errorf("tron prices decode: %w", err)
 	}
-	return parseTronEnergyPrices(body.Prices)
+	return parseTronPriceHistory(body.Prices)
 }
 
 func tronTime(t time.Time) string {

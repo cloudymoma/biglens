@@ -12,7 +12,7 @@ import (
 const tronPricesFixture = "0:100,1542607200000:20,1544724000000:10,1670133600000:420,1726747200000:210,1756468800000:100"
 
 func TestParseTronEnergyPrices(t *testing.T) {
-	pts, err := parseTronEnergyPrices(tronPricesFixture)
+	pts, err := parseTronPriceHistory(tronPricesFixture)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,8 +29,8 @@ func TestParseTronEnergyPrices(t *testing.T) {
 
 func TestParseTronEnergyPricesMalformed(t *testing.T) {
 	for _, in := range []string{"", "abc", "0:100,oops", "0:100,1542607200000:"} {
-		if _, err := parseTronEnergyPrices(in); err == nil {
-			t.Errorf("parseTronEnergyPrices(%q): expected an error", in)
+		if _, err := parseTronPriceHistory(in); err == nil {
+			t.Errorf("parseTronPriceHistory(%q): expected an error", in)
 		}
 	}
 }
@@ -38,7 +38,7 @@ func TestParseTronEnergyPricesMalformed(t *testing.T) {
 // The card must reflect governance history: ATH 420 sun (2022-12-04), ATL
 // 10 sun (2018-12-13), current 100 sun since 2025-08-29 — not a constant.
 func TestTronAllTime(t *testing.T) {
-	pts, _ := parseTronEnergyPrices(tronPricesFixture)
+	pts, _ := parseTronPriceHistory(tronPricesFixture)
 	at := tronAllTime(pts)
 	if at.Unit != "sun" || at.AthValue != 420 || at.AthTime != "2022-12-04T06:00:00Z" {
 		t.Errorf("ath = %v %s @ %q", at.AthValue, at.Unit, at.AthTime)
@@ -53,7 +53,7 @@ func TestTronAllTime(t *testing.T) {
 
 // Genesis default counts as a record and is reported with an empty time.
 func TestTronAllTimeGenesisRecord(t *testing.T) {
-	pts, _ := parseTronEnergyPrices("0:100,1542607200000:20")
+	pts, _ := parseTronPriceHistory("0:100,1542607200000:20")
 	if at := tronAllTime(pts); at.AthValue != 100 || at.AthTime != "" {
 		t.Errorf("ath = %v @ %q, want 100 @ genesis", at.AthValue, at.AthTime)
 	}
