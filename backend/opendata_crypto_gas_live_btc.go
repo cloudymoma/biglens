@@ -14,16 +14,20 @@ import (
 )
 
 var (
-	mempoolFeesURL    = "https://mempool.space/api/v1/fees/precise"
-	mempoolStatsURL   = "https://mempool.space/api/mempool"
-	mempoolHTTPClient = &http.Client{Timeout: 5 * time.Second}
+	mempoolFeesURL      = "https://mempool.space/api/v1/fees/precise"
+	mempoolStatsURL     = "https://mempool.space/api/mempool"
+	mempoolProjectedURL = "https://mempool.space/api/v1/fees/mempool-blocks"
+	mempoolRecentURL    = "https://mempool.space/api/v1/blocks"
+	mempoolHTTPClient   = &http.Client{Timeout: 5 * time.Second}
 )
 
 const (
 	mempoolFetchTimeout = 4 * time.Second
 	// btcStandardTxVB prices a 1-input/2-output native SegWit transfer.
-	btcStandardTxVB = 140
-	btcBlockVB      = 1_000_000
+	btcStandardTxVB      = 140
+	btcBlockVB           = 1_000_000
+	btcConveyorProjected = 3
+	btcConveyorRecent    = 5
 )
 
 type btcPreciseFees struct {
@@ -43,9 +47,33 @@ type btcMempoolStats struct {
 	FeeHistogram [][2]float64 `json:"fee_histogram"`
 }
 
+// mempoolProjectedBlock is one block mempool.space expects to be mined next.
+type mempoolProjectedBlock struct {
+	BlockVSize float64   `json:"blockVSize"`
+	NTx        int64     `json:"nTx"`
+	TotalFees  int64     `json:"totalFees"`
+	MedianFee  float64   `json:"medianFee"`
+	FeeRange   []float64 `json:"feeRange"`
+}
+
+// mempoolMinedBlock is one recently mined block from /api/v1/blocks.
+type mempoolMinedBlock struct {
+	Height    int64 `json:"height"`
+	Timestamp int64 `json:"timestamp"`
+	TxCount   int64 `json:"tx_count"`
+	Size      int64 `json:"size"`
+	Weight    int64 `json:"weight"`
+	Extras    struct {
+		MedianFee float64 `json:"medianFee"`
+		TotalFees int64   `json:"totalFees"`
+	} `json:"extras"`
+}
+
 type btcLiveRaw struct {
-	Fees    btcPreciseFees
-	Mempool btcMempoolStats
+	Fees      btcPreciseFees
+	Mempool   btcMempoolStats
+	Projected []mempoolProjectedBlock
+	Recent    []mempoolMinedBlock
 }
 
 type BtcFeeTier struct {
@@ -60,15 +88,36 @@ type BtcFeeBand struct {
 	VsizeMB  float64 `json:"vsize_mb"`
 }
 
+type BtcProjectedBlock struct {
+	MedianFee   float64 `json:"median_fee"`
+	MinFee      float64 `json:"min_fee"`
+	MaxFee      float64 `json:"max_fee"`
+	VsizeMB     float64 `json:"vsize_mb"`
+	TxCount     int64   `json:"tx_count"`
+	TotalFeeBTC float64 `json:"total_fee_btc"`
+}
+
+type BtcMinedBlock struct {
+	Height      int64   `json:"height"`
+	MinedAt     string  `json:"mined_at"`
+	MedianFee   float64 `json:"median_fee"`
+	SizeMB      float64 `json:"size_mb"`
+	FullnessPct float64 `json:"fullness_pct"`
+	TxCount     int64   `json:"tx_count"`
+	TotalFeeBTC float64 `json:"total_fee_btc"`
+}
+
 type BtcLive struct {
-	Tiers         []BtcFeeTier `json:"tiers"`
-	MinimumSatVB  float64      `json:"minimum_sat_vb"`
-	TxCount       int64        `json:"tx_count"`
-	VsizeMB       float64      `json:"vsize_mb"`
-	BlocksToClear float64      `json:"blocks_to_clear"`
-	TotalFeeBTC   float64      `json:"total_fee_btc"`
-	Bands         []BtcFeeBand `json:"bands"`
-	StandardTxVB  int          `json:"standard_tx_vb"`
+	Tiers         []BtcFeeTier        `json:"tiers"`
+	MinimumSatVB  float64             `json:"minimum_sat_vb"`
+	TxCount       int64               `json:"tx_count"`
+	VsizeMB       float64             `json:"vsize_mb"`
+	BlocksToClear float64             `json:"blocks_to_clear"`
+	TotalFeeBTC   float64             `json:"total_fee_btc"`
+	Bands         []BtcFeeBand        `json:"bands"`
+	StandardTxVB  int                 `json:"standard_tx_vb"`
+	Projected     []BtcProjectedBlock `json:"projected"`
+	Recent        []BtcMinedBlock     `json:"recent"`
 }
 
 func mempoolGetJSON(ctx context.Context, url string, dst any) error {
@@ -98,6 +147,12 @@ func fetchBtcLiveRaw(ctx context.Context) (*btcLiveRaw, error) {
 		return nil, err
 	}
 	if err := mempoolGetJSON(ctx, mempoolStatsURL, &raw.Mempool); err != nil {
+		return nil, err
+	}
+	if err := mempoolGetJSON(ctx, mempoolProjectedURL, &raw.Projected); err != nil {
+		return nil, err
+	}
+	if err := mempoolGetJSON(ctx, mempoolRecentURL, &raw.Recent); err != nil {
 		return nil, err
 	}
 	return &raw, nil
@@ -145,8 +200,40 @@ func bandBtcMempool(hist [][2]float64) []BtcFeeBand {
 	return bands
 }
 
+// btcConveyor keeps the next three projected blocks and the five newest
+// mined blocks, in mempool.space's order.
+func btcConveyor(projected []mempoolProjectedBlock, recent []mempoolMinedBlock) ([]BtcProjectedBlock, []BtcMinedBlock) {
+	p := make([]BtcProjectedBlock, 0, btcConveyorProjected)
+	for _, b := range projected[:min(len(projected), btcConveyorProjected)] {
+		pb := BtcProjectedBlock{
+			MedianFee:   b.MedianFee,
+			VsizeMB:     b.BlockVSize / 1e6,
+			TxCount:     b.NTx,
+			TotalFeeBTC: float64(b.TotalFees) / 1e8,
+		}
+		if n := len(b.FeeRange); n > 0 {
+			pb.MinFee, pb.MaxFee = b.FeeRange[0], b.FeeRange[n-1]
+		}
+		p = append(p, pb)
+	}
+	r := make([]BtcMinedBlock, 0, btcConveyorRecent)
+	for _, b := range recent[:min(len(recent), btcConveyorRecent)] {
+		r = append(r, BtcMinedBlock{
+			Height:      b.Height,
+			MinedAt:     time.Unix(b.Timestamp, 0).UTC().Format(time.RFC3339),
+			MedianFee:   b.Extras.MedianFee,
+			SizeMB:      float64(b.Size) / 1e6,
+			FullnessPct: float64(b.Weight) / 4e6 * 100,
+			TxCount:     b.TxCount,
+			TotalFeeBTC: float64(b.Extras.TotalFees) / 1e8,
+		})
+	}
+	return p, r
+}
+
 func btcLiveFrom(raw btcLiveRaw, btcUSD *float64) BtcLive {
 	m := raw.Mempool
+	projected, recent := btcConveyor(raw.Projected, raw.Recent)
 	return BtcLive{
 		Tiers:         btcFeeTiers(raw.Fees, btcUSD),
 		MinimumSatVB:  raw.Fees.Minimum,
@@ -156,5 +243,7 @@ func btcLiveFrom(raw btcLiveRaw, btcUSD *float64) BtcLive {
 		TotalFeeBTC:   float64(m.TotalFee) / 1e8,
 		Bands:         bandBtcMempool(m.FeeHistogram),
 		StandardTxVB:  btcStandardTxVB,
+		Projected:     projected,
+		Recent:        recent,
 	}
 }
