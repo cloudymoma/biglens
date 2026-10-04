@@ -55,7 +55,7 @@ func TestL2ActionsFor(t *testing.T) {
 
 func TestFetchL2QuoteOPStack(t *testing.T) {
 	srv := rpcServer(t, map[string]string{"eth_gasPrice": "0xf4b63", "eth_call": "0x3ba8f408"}, "")
-	c := l2ChainConfig{ID: "op", Kind: l2KindOPStack, RPC: srv.URL, ChainID: 10, USDC: "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85"}
+	c := l2ChainConfig{ID: "op", Kind: l2KindOPStack, RPCs: []string{srv.URL}, ChainID: 10, USDC: "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85"}
 	q, err := fetchL2Quote(context.Background(), c, l2ActionsFor(testCalibration()))
 	if err != nil {
 		t.Fatal(err)
@@ -68,7 +68,7 @@ func TestFetchL2QuoteOPStack(t *testing.T) {
 func TestFetchL2QuoteArbitrum(t *testing.T) {
 	word := func(n string) string { return strings.Repeat("0", 64-len(n)) + n }
 	srv := rpcServer(t, map[string]string{"eth_call": "0x" + word("c8") + word("1314470") + word("183eca")}, "")
-	c := l2ChainConfig{ID: "arb", Kind: l2KindArbitrum, RPC: srv.URL, ChainID: 42161, USDC: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"}
+	c := l2ChainConfig{ID: "arb", Kind: l2KindArbitrum, RPCs: []string{srv.URL}, ChainID: 42161, USDC: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"}
 	q, err := fetchL2Quote(context.Background(), c, l2ActionsFor(nil))
 	if err != nil {
 		t.Fatal(err)

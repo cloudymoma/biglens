@@ -33,6 +33,7 @@ type Config struct {
 		Projects []string `yaml:"projects"`
 	} `yaml:"gcp_resources"`
 	AddressRisk AddressRiskConfig `yaml:"address_risk,omitempty"`
+	CryptoGas   CryptoGasConfig   `yaml:"crypto_gas,omitempty"`
 
 	// path is where this config was loaded from, so SaveConfig can write back.
 	path string
@@ -77,6 +78,44 @@ func (c AddressRiskConfig) rpcURLs() []string {
 		return defaultRiskRPCURLs
 	}
 	return c.EthRPCURLs
+}
+
+// CryptoGasConfig overrides the keyless endpoints the Gas Pulse live bars
+// call. Every field is optional; empty means the default in withDefaults.
+type CryptoGasConfig struct {
+	EthRPCURLs      []string `yaml:"eth_rpc_urls,omitempty"`
+	ArbitrumRPCURLs []string `yaml:"arbitrum_rpc_urls,omitempty"`
+	OptimismRPCURLs []string `yaml:"optimism_rpc_urls,omitempty"`
+	BaseRPCURLs     []string `yaml:"base_rpc_urls,omitempty"`
+	MempoolBaseURL  string   `yaml:"mempool_base_url,omitempty"`
+	TronGridBaseURL string   `yaml:"trongrid_base_url,omitempty"`
+	CoinbaseBaseURL string   `yaml:"coinbase_base_url,omitempty"`
+}
+
+// withDefaults fills every empty field with the endpoint verified in
+// gas_fee_design.md §9–§10 (Ethereum gets publicnode plus drpc as fallback).
+func (c CryptoGasConfig) withDefaults() CryptoGasConfig {
+	orList := func(v, def []string) []string {
+		if len(v) == 0 {
+			return def
+		}
+		return v
+	}
+	orStr := func(v, def string) string {
+		if v == "" {
+			return def
+		}
+		return v
+	}
+	return CryptoGasConfig{
+		EthRPCURLs:      orList(c.EthRPCURLs, []string{"https://ethereum-rpc.publicnode.com", "https://eth.drpc.org"}),
+		ArbitrumRPCURLs: orList(c.ArbitrumRPCURLs, []string{"https://arb1.arbitrum.io/rpc"}),
+		OptimismRPCURLs: orList(c.OptimismRPCURLs, []string{"https://mainnet.optimism.io"}),
+		BaseRPCURLs:     orList(c.BaseRPCURLs, []string{"https://mainnet.base.org"}),
+		MempoolBaseURL:  orStr(c.MempoolBaseURL, "https://mempool.space"),
+		TronGridBaseURL: orStr(c.TronGridBaseURL, "https://api.trongrid.io"),
+		CoinbaseBaseURL: orStr(c.CoinbaseBaseURL, "https://api.coinbase.com"),
+	}
 }
 
 func LoadConfig(path string) (*Config, error) {

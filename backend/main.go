@@ -61,6 +61,7 @@ func main() {
 		os.Exit(runBackfillCLI(ctx, cfg, bqStablecoinSource{client: bq.client}, *since, *sinceDays, *yes))
 	}
 
+	applyCryptoGasConfig(cfg.CryptoGas)
 	api := NewAPIHandler(bq)
 
 	res, err := NewResClients(ctx, cfg)

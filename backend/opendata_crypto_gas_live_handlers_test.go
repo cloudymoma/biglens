@@ -78,8 +78,8 @@ func TestGasL2QuotesCachePerChain(t *testing.T) {
 	defer bad.Close()
 	old := l2Chains
 	l2Chains = []l2ChainConfig{
-		{ID: "eth", Name: "Ethereum", Kind: l2KindL1, RPC: ok.URL, ChainID: 1},
-		{ID: "arb", Name: "Arbitrum One", Kind: l2KindL1, RPC: bad.URL, ChainID: 1},
+		{ID: "eth", Name: "Ethereum", Kind: l2KindL1, RPCs: []string{ok.URL}, ChainID: 1},
+		{ID: "arb", Name: "Arbitrum One", Kind: l2KindL1, RPCs: []string{bad.URL}, ChainID: 1},
 	}
 	defer func() { l2Chains = old }()
 
@@ -124,7 +124,7 @@ func TestGasL2QuotesKeyIncludesGas(t *testing.T) {
 	}))
 	defer srv.Close()
 	old := l2Chains
-	l2Chains = []l2ChainConfig{{ID: "eth", Name: "Ethereum", Kind: l2KindL1, RPC: srv.URL, ChainID: 1, USDC: ethUSDCAddress}}
+	l2Chains = []l2ChainConfig{{ID: "eth", Name: "Ethereum", Kind: l2KindL1, RPCs: []string{srv.URL}, ChainID: 1, USDC: ethUSDCAddress}}
 	defer func() { l2Chains = old }()
 
 	h := &APIHandler{cache: NewCache(time.Minute)}

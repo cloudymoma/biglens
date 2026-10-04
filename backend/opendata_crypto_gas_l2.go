@@ -10,6 +10,8 @@ package main
 import (
 	"context"
 	"encoding/hex"
+	"errors"
+	"fmt"
 )
 
 const (
@@ -44,19 +46,20 @@ func l2ActionsFor(cal *GasCalibration) []l2Action {
 // l2ChainConfig holds on-chain facts (chain ID, USDC contract) that never
 // drift; endpoints come from conf.yaml (Task 4).
 type l2ChainConfig struct {
-	ID, Name, Kind, RPC string
-	ChainID             uint64
-	USDC                string
+	ID, Name, Kind string
+	RPCs           []string
+	ChainID        uint64
+	USDC           string
 }
 
 var l2Chains = []l2ChainConfig{
-	{ID: "eth", Name: "Ethereum", Kind: l2KindL1, RPC: "https://ethereum-rpc.publicnode.com",
+	{ID: "eth", Name: "Ethereum", Kind: l2KindL1, RPCs: []string{"https://ethereum-rpc.publicnode.com", "https://eth.drpc.org"},
 		ChainID: 1, USDC: ethUSDCAddress},
-	{ID: "arb", Name: "Arbitrum One", Kind: l2KindArbitrum, RPC: "https://arb1.arbitrum.io/rpc",
+	{ID: "arb", Name: "Arbitrum One", Kind: l2KindArbitrum, RPCs: []string{"https://arb1.arbitrum.io/rpc"},
 		ChainID: 42161, USDC: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"},
-	{ID: "op", Name: "Optimism", Kind: l2KindOPStack, RPC: "https://mainnet.optimism.io",
+	{ID: "op", Name: "Optimism", Kind: l2KindOPStack, RPCs: []string{"https://mainnet.optimism.io"},
 		ChainID: 10, USDC: "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85"},
-	{ID: "base", Name: "Base", Kind: l2KindOPStack, RPC: "https://mainnet.base.org",
+	{ID: "base", Name: "Base", Kind: l2KindOPStack, RPCs: []string{"https://mainnet.base.org"},
 		ChainID: 8453, USDC: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"},
 }
 
@@ -76,12 +79,12 @@ type l2Quote struct {
 	L1Wei       []float64
 }
 
-func fetchL2Quote(ctx context.Context, c l2ChainConfig, actions []l2Action) (*l2Quote, error) {
+func fetchL2QuoteFrom(ctx context.Context, url string, c l2ChainConfig, actions []l2Action) (*l2Quote, error) {
 	q := &l2Quote{}
 	if c.Kind == l2KindArbitrum {
 		for _, a := range actions {
 			to, _, data := c.actionCall(a)
-			gasForL1, baseFee, err := arbL1Component(ctx, c.RPC, "0x"+hex.EncodeToString(to), data)
+			gasForL1, baseFee, err := arbL1Component(ctx, url, "0x"+hex.EncodeToString(to), data)
 			if err != nil {
 				return nil, err
 			}
@@ -90,7 +93,7 @@ func fetchL2Quote(ctx context.Context, c l2ChainConfig, actions []l2Action) (*l2
 		}
 		return q, nil
 	}
-	gasPrice, err := evmGasPrice(ctx, c.RPC)
+	gasPrice, err := evmGasPrice(ctx, url)
 	if err != nil {
 		return nil, err
 	}
@@ -99,13 +102,29 @@ func fetchL2Quote(ctx context.Context, c l2ChainConfig, actions []l2Action) (*l2
 		l1 := 0.0
 		if c.Kind == l2KindOPStack {
 			to, value, data := c.actionCall(a)
-			if l1, err = opStackL1Fee(ctx, c.RPC, unsignedEIP1559(c.ChainID, a.Gas, to, value, data)); err != nil {
+			if l1, err = opStackL1Fee(ctx, url, unsignedEIP1559(c.ChainID, a.Gas, to, value, data)); err != nil {
 				return nil, err
 			}
 		}
 		q.L1Wei = append(q.L1Wei, l1)
 	}
 	return q, nil
+}
+
+// fetchL2Quote tries the chain's RPCs in order and returns the first quote.
+func fetchL2Quote(ctx context.Context, c l2ChainConfig, actions []l2Action) (*l2Quote, error) {
+	var errs []error
+	for _, url := range c.RPCs {
+		q, err := fetchL2QuoteFrom(ctx, url, c, actions)
+		if err == nil {
+			return q, nil
+		}
+		errs = append(errs, err)
+	}
+	if len(errs) == 0 {
+		return nil, fmt.Errorf("%s: no RPC endpoint configured", c.ID)
+	}
+	return nil, errors.Join(errs...)
 }
 
 type L2ActionCost struct {

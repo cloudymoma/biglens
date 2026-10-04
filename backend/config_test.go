@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // SaveConfig must round-trip every existing field, not just the opendata
@@ -189,5 +191,31 @@ func TestUpdateConfigConcurrentWithSaveConfig(t *testing.T) {
 		if err := <-done; err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestCryptoGasConfigDefaults(t *testing.T) {
+	got := CryptoGasConfig{}.withDefaults()
+	if !reflect.DeepEqual(got.EthRPCURLs, []string{"https://ethereum-rpc.publicnode.com", "https://eth.drpc.org"}) {
+		t.Errorf("eth rpcs = %v; publicnode alone was the only L1 RPC that answered in §10, so a fallback is required", got.EthRPCURLs)
+	}
+	if got.MempoolBaseURL != "https://mempool.space" || got.TronGridBaseURL != "https://api.trongrid.io" ||
+		got.CoinbaseBaseURL != "https://api.coinbase.com" || len(got.ArbitrumRPCURLs) != 1 || len(got.BaseRPCURLs) != 1 {
+		t.Errorf("defaults = %+v", got)
+	}
+	custom := CryptoGasConfig{MempoolBaseURL: "https://mempool.example", OptimismRPCURLs: []string{}}.withDefaults()
+	if custom.MempoolBaseURL != "https://mempool.example" || len(custom.OptimismRPCURLs) != 1 {
+		t.Errorf("explicit values must win and empty lists fall back: %+v", custom)
+	}
+}
+
+// Existing conf.yaml files have no crypto_gas section; re-saving must not add one.
+func TestCryptoGasConfigAbsentSectionOmitted(t *testing.T) {
+	out, err := yaml.Marshal(&Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "crypto_gas") {
+		t.Errorf("empty crypto_gas section was written:\n%s", out)
 	}
 }
