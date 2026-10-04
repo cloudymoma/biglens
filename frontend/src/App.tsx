@@ -12,6 +12,7 @@ import CostDashboard from './dashboards/CostDashboard';
 import InsightsDashboard from './dashboards/InsightsDashboard';
 import JobsDashboard from './dashboards/JobsDashboard';
 import IAMDashboard from './dashboards/IAMDashboard';
+import DashboardErrorBoundary from './dashboards/DashboardErrorBoundary';
 import CatalogView from './catalog/CatalogView';
 import { OPEN_DATASETS } from './opendata/registry';
 import BillingDashboard from './billing/BillingDashboard';
@@ -470,29 +471,32 @@ function App() {
             )}
           </header>
 
-          {/* Dashboard content */}
-          {activeProduct === 'bigquery' && (
-            <>
-              {activeTab === 'storage' && <StorageDashboard filters={filters} />}
-              {activeTab === 'compute' && <ComputeDashboard filters={filters} />}
-              {activeTab === 'cost' && <CostDashboard filters={filters} />}
-              {activeTab === 'insights' && <InsightsDashboard filters={filters} onDrillToJobs={drillToJobs} />}
-              {activeTab === 'jobs' && <JobsDashboard filters={filters} />}
-              {activeTab === 'calculator' && <CalculatorDashboard />}
-            </>
-          )}
-          {activeProduct === 'iam' && (
-            <IAMDashboard region={selectedRegion} timeRange={timeRange} />
-          )}
-          {activeProduct === 'dataplex' && <CatalogView />}
-          {activeProduct === 'opendata' && (() => {
-            const ds = OPEN_DATASETS.find(d => d.id === activeDataset) ?? OPEN_DATASETS[0];
-            const DatasetDashboard = ds.component;
-            // Remounting on refreshKey makes the header Refresh button re-fetch.
-            return <DatasetDashboard key={`${ds.id}-${refreshKey}`} />;
-          })()}
-          {activeProduct === 'gcp_billing' && <BillingDashboard key={`gcp_billing-${refreshKey}`} />}
-          {activeProduct === 'gcp_resources' && <ResourcesDashboard key={`gcp_resources-${refreshKey}`} />}
+          {/* Dashboard content. The boundary resets whenever the view or the
+              Refresh button changes, so a crash never sticks across navigation. */}
+          <DashboardErrorBoundary key={`${activeProduct}-${activeTab}-${activeDataset}-${refreshKey}`}>
+            {activeProduct === 'bigquery' && (
+              <>
+                {activeTab === 'storage' && <StorageDashboard filters={filters} />}
+                {activeTab === 'compute' && <ComputeDashboard filters={filters} />}
+                {activeTab === 'cost' && <CostDashboard filters={filters} />}
+                {activeTab === 'insights' && <InsightsDashboard filters={filters} onDrillToJobs={drillToJobs} />}
+                {activeTab === 'jobs' && <JobsDashboard filters={filters} />}
+                {activeTab === 'calculator' && <CalculatorDashboard />}
+              </>
+            )}
+            {activeProduct === 'iam' && (
+              <IAMDashboard region={selectedRegion} timeRange={timeRange} />
+            )}
+            {activeProduct === 'dataplex' && <CatalogView />}
+            {activeProduct === 'opendata' && (() => {
+              const ds = OPEN_DATASETS.find(d => d.id === activeDataset) ?? OPEN_DATASETS[0];
+              const DatasetDashboard = ds.component;
+              // Remounting on refreshKey makes the header Refresh button re-fetch.
+              return <DatasetDashboard key={`${ds.id}-${refreshKey}`} />;
+            })()}
+            {activeProduct === 'gcp_billing' && <BillingDashboard key={`gcp_billing-${refreshKey}`} />}
+            {activeProduct === 'gcp_resources' && <ResourcesDashboard key={`gcp_resources-${refreshKey}`} />}
+          </DashboardErrorBoundary>
         </div>
       </main>
     </div>
