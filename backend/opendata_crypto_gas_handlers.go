@@ -18,14 +18,45 @@ import (
 )
 
 const (
-	gasSeriesTTL   = time.Hour
-	gasAllTimeTTL  = 24 * time.Hour
-	gasAllTimeKey  = "opendata:crypto:gaspulse:alltime"
-	gasTronKey     = "opendata:crypto:gaspulse:tron_energy"
-	gasSeriesKeyFm = "opendata:crypto:gaspulse:72h:%s:%s"
-	// gasFetchTimeout bounds one shared fetch (the all-time scan is 11 GB).
+	gasSeriesTTL     = time.Hour
+	gasSolSeriesTTL  = 4 * time.Hour
+	gasRollingTTL    = 2 * time.Hour
+	gasAllTimeTTL    = 24 * time.Hour
+	gasAllTimeKey    = "opendata:crypto:gaspulse:alltime"
+	gasTronKey       = "opendata:crypto:gaspulse:tron_energy"
+	gasSeriesKeyFm   = "opendata:crypto:gaspulse:72h:%s:%s"
+	gasRollingKeyFm  = "opendata:crypto:gaspulse:rolling:%s"
+	// gasFetchTimeout bounds one shared fetch.
 	gasFetchTimeout = 2 * time.Minute
 )
+
+type gasRollingSeries struct {
+	end  time.Time
+	byHr map[string]GasHourRow
+}
+
+// mergeRollingGasHours merges newly fetched hours into a rolling map and
+// returns the rows falling within [start, end).
+func mergeRollingGasHours(prev map[string]GasHourRow, delta []GasHourRow, start, end time.Time) (map[string]GasHourRow, []GasHourRow) {
+	startStr := start.UTC().Format(gasHourLayout)
+	endStr := end.UTC().Format(gasHourLayout)
+	next := make(map[string]GasHourRow, len(prev)+len(delta))
+	for k, r := range prev {
+		if k >= startStr && k < endStr {
+			next[k] = r
+		}
+	}
+	for _, r := range delta {
+		if r.HourUTC >= startStr && r.HourUTC < endStr {
+			next[r.HourUTC] = r
+		}
+	}
+	out := make([]GasHourRow, 0, len(next))
+	for _, r := range next {
+		out = append(out, r)
+	}
+	return next, out
+}
 
 // gasFetchContext detaches a shared fetch from the request that started it:
 // singleflight hands the result to every waiter and BigQuery bills a submitted
@@ -127,15 +158,50 @@ func buildGasPulse(start, end time.Time, series map[string]gasSeriesResult,
 }
 
 func (h *APIHandler) gasSeries(r *http.Request, chain string, start, end time.Time) ([]GasHourRow, error) {
+	// Solana is MONTH-partitioned on block_timestamp: narrowing the window below
+	// 72h scans the same monthly partition (~0.2–0.4 GB), so cache for 4 hours.
+	if chain == gasChainSol {
+		solBucket := end.Truncate(gasSolSeriesTTL).Format("2006010215")
+		key := fmt.Sprintf(gasSeriesKeyFm, chain, solBucket)
+		v, err := h.cachedFetch(key, gasSolSeriesTTL, func() (any, error) {
+			ctx, cancel := gasFetchContext(r)
+			defer cancel()
+			rows, err := h.bq.GetGasHourly(ctx, chain, start, end)
+			if err != nil {
+				return nil, fmt.Errorf("%s 72h query: %w", chain, err)
+			}
+			return rows, nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		return v.([]GasHourRow), nil
+	}
+
 	key := fmt.Sprintf(gasSeriesKeyFm, chain, end.Format("2006010215"))
 	v, err := h.cachedFetch(key, gasSeriesTTL, func() (any, error) {
 		ctx, cancel := gasFetchContext(r)
 		defer cancel()
-		rows, err := h.bq.GetGasHourly(ctx, chain, start, end)
+		rollingKey := fmt.Sprintf(gasRollingKeyFm, chain)
+		var prevMap map[string]GasHourRow
+		qStart := start
+		if prev, ok := h.cache.Get(rollingKey); ok {
+			rs := prev.(gasRollingSeries)
+			if rs.end.After(start) && rs.end.Before(end) && len(rs.byHr) >= gasWindowHours-4 {
+				prevMap = rs.byHr
+				// Re-read the last hour of the previous window to absorb late blocks.
+				if overlap := rs.end.Add(-time.Hour); overlap.After(start) {
+					qStart = overlap
+				}
+			}
+		}
+		rows, err := h.bq.GetGasHourly(ctx, chain, qStart, end)
 		if err != nil {
 			return nil, fmt.Errorf("%s 72h query: %w", chain, err)
 		}
-		return rows, nil
+		mergedMap, mergedRows := mergeRollingGasHours(prevMap, rows, start, end)
+		h.cache.SetWithTTL(rollingKey, gasRollingSeries{end: end, byHr: mergedMap}, gasRollingTTL)
+		return mergedRows, nil
 	})
 	if err != nil {
 		return nil, err
@@ -144,7 +210,7 @@ func (h *APIHandler) gasSeries(r *http.Request, chain string, start, end time.Ti
 }
 
 func (h *APIHandler) gasAllTime(r *http.Request) (map[string]GasAllTime, error) {
-	v, err := h.cachedFetch(gasAllTimeKey, gasAllTimeTTL, func() (any, error) {
+	v, err := h.cachedFetchOrBackoff(gasAllTimeKey, gasAllTimeTTL, gasCalibrationRetryAfter, func() (any, error) {
 		ctx, cancel := gasFetchContext(r)
 		defer cancel()
 		rows, err := h.bq.GetGasAllTime(ctx)
@@ -164,7 +230,7 @@ func (h *APIHandler) gasAllTime(r *http.Request) (map[string]GasAllTime, error) 
 }
 
 func (h *APIHandler) gasTronAllTime(r *http.Request) (*GasAllTime, error) {
-	v, err := h.cachedFetch(gasTronKey, gasAllTimeTTL, func() (any, error) {
+	v, err := h.cachedFetchOrBackoff(gasTronKey, gasAllTimeTTL, gasCalibrationRetryAfter, func() (any, error) {
 		ctx, cancel := gasFetchContext(r)
 		defer cancel()
 		pts, err := fetchTronEnergyPrices(ctx)

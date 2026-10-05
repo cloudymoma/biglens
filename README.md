@@ -320,7 +320,7 @@ Six lazily-loaded tabs, each behind its own endpoint and the shared
 | Tab | Widgets |
 |---|---|
 | **Network Pulse** | Per-chain KPI strip (latest complete UTC day), daily transactions, value settled, active addresses (approx. distinct senders, ≤90d), block fullness, block production |
-| **Fee Market** | **72h Gas Pulse** (default): last 72 complete UTC hours for Bitcoin, Ethereum, Arbitrum, Optimism, Polygon, TRON and Solana — hourly fee band + load chart, latest-hour 72h percentile, 72h low/high/median, all-time base-fee records (BigQuery, refreshed daily) and TRON energy price history (TronGrid). Selecting Bitcoin or TRON adds a live bar refreshed every 30s: BTC precise fee tiers (sub-1 sat/vB, USD per 140 vB transfer) and mempool backlog by fee band (mempool.space), or the TRX burned by a USDT transfer to an existing vs. new address (TronGrid prices, Coinbase spot). The Bitcoin bar also shows a block conveyor (next three projected blocks vs. the five latest mined), and selecting Ethereum, Arbitrum or Optimism shows an L1-vs-L2 ladder: full cost of an ETH and a USDC transfer on Ethereum, Arbitrum One, Optimism and Base — L2 execution plus L1 data fee (GasPriceOracle / NodeInterface) — with USD and savings vs. L1. Transfer profiles are measured daily rather than assumed — USDT energy and bandwidth from the last 24h of TRON transfers (BigQuery + TronGrid), USDC transfer gas as the 6h median on Ethereum — and every endpoint can be overridden in an optional `crypto_gas` section of `conf.yaml` (Ethereum RPCs are tried in order). **Daily Economics**: BTC median sat/vB vs ETH avg gwei trend, BTC miner revenue (subsidy vs fees), ETH EIP-1559 burned vs tips, congestion-vs-fee scatter |
+| **Fee Market** | **72h Gas Pulse** (default): last 72 complete UTC hours for Bitcoin, Ethereum, Arbitrum, Optimism, Polygon, TRON and Solana — hourly fee band + load chart, latest-hour 72h percentile, 72h low/high/median, all-time base-fee records (incremental BigQuery scan from a pre-seeded baseline, refreshed daily) and TRON energy price history (TronGrid). Selecting Bitcoin or TRON adds a live bar refreshed every 30s (paused while the tab is hidden): BTC precise fee tiers (sub-1 sat/vB, USD per 140 vB transfer) and mempool backlog by fee band (mempool.space), or the TRX burned by a USDT transfer to an existing vs. new address (TronGrid prices, Coinbase spot). The Bitcoin bar also shows a block conveyor (next three projected blocks vs. the five latest mined), and selecting Ethereum, Arbitrum or Optimism shows an L1-vs-L2 ladder: full cost of an ETH and a USDC transfer on Ethereum, Arbitrum One, Optimism and Base — L2 execution plus unpadded L1 data fee (GasPriceOracle / NodeInterface) — with USD and savings vs. L1. Transfer profiles are measured daily rather than assumed — USDT energy and bandwidth from the last 24h of TRON transfers (BigQuery + TronGrid), USDC transfer gas as the 6h median on Ethereum — and every endpoint can be overridden in an optional `crypto_gas` section of `conf.yaml` (Ethereum RPCs are tried in order). **Daily Economics**: BTC median sat/vB vs ETH avg gwei trend, BTC miner revenue (subsidy vs fees), ETH EIP-1559 burned vs tips, congestion-vs-fee scatter |
 | **Whales & Flow** | Top 50 largest transfers (explorer links), whale-sized tx trend (≥100 BTC / ≥1,000 ETH), top receiving addresses, top-1% value concentration (among value-bearing txs) |
 | **Token Economy** | Top 25 token contracts by Transfer event count (ERC-20 & ERC-721), token vs native activity, new contract deployments, token movement treemap |
 | **Mining Economics** | Network hashrate (7d avg + 1d implied), miner revenue, yield per TH/s, rig economics for the latest day, shutdown price by rig (editable electricity, PUE, pool fee, BTC price, custom rig) |
@@ -368,6 +368,7 @@ labels an address "safe": when nothing is found it says how many sources were ch
 | USDT / USDC freeze, unfreeze and destroy events (`crypto_ethereum.logs`) | synced from BigQuery by complete UTC day | No |
 | Chainalysis sanctions oracle (on-chain `isSanctioned`) | live `eth_call` via public RPCs | Yes — the RPC provider |
 | [GoPlus](https://gopluslabs.io) address security | live, keyless | Yes — GoPlus |
+| [Blockscout](https://eth.blockscout.com) public tags & scam badge | live, keyless | Yes — Blockscout |
 | Etherscan association analysis (optional, free key) | live `txlist` / `tokentx` / `txlistinternal`, 1 hop, poisoning-filtered | Yes — Etherscan (with your key) |
 
 Local data lives in `data/security.db` (relative to the working directory; override with `address_risk.db_path`).
@@ -375,7 +376,8 @@ If the file cannot be opened the server still starts and lookups report the loca
 Looked-up addresses are kept only in the 10-minute in-memory cache — never written to disk or logs.
 
 **Freeze history (BigQuery).** On first start the server syncs the last 30 days of USDT/USDC freeze events
-(~89 GB scanned, ~$0.5 once), then one new day per day (~3.3 GB, ~$0.02/day). `address_risk.initial_sync_days`
+(~89–100 GB scanned, ~$0.5–$0.6 once), then one new day per day (~3.3 GB for the logs scan plus ~25 MB for the
+partitioned completeness check, ~$0.02/day). `address_risk.initial_sync_days`
 changes the window (0 disables it, max 31). Until the full history is backfilled, lookups say
 "Freeze history covers … only". The backfill is safe to run while the server runs:
 
@@ -389,14 +391,14 @@ cd /opt/biglens/backend && sudo -u biglens ./biglens-server --address-risk-backf
 `--since YYYY-MM-DD` limits the range; `--since-days N` is for development only. A failed run resumes where it stopped.
 
 **Etherscan key (optional).** With a free Etherscan API key (https://etherscan.io/myapikey) a lookup also checks the
-address's newest 1000 transactions, token transfers (USDT/USDC/DAI/WETH/WBTC only) and internal transfers against the
+address's newest 1000 transactions, token transfers (12 allowlisted tokens: USDT/USDC/DAI/WETH/WBTC/stETH/wstETH/USDS/USDe/PYUSD/FDUSD/cbBTC) and internal transfers against the
 local lists, one hop deep. Zero-value transfers, failed calls and counterfeit tokens are ignored (address poisoning).
 Set the key in the Address Risk tab: it is checked with Etherscan, then saved to `conf.yaml`, which is rewritten
 with mode 0600 (a hand-edited conf.yaml keeps its mode until the first save from the UI). Only the last 4 characters
 are ever shown, and the key is never logged. Etherscan's API terms allow personal, non-commercial use only
 (https://etherscan.io/apiterms): configure a key only on an instance you use alone.
 
-In **Whales & Flow** (ETH), addresses on the local lists carry `OFAC` / `Frozen` / `MEW` badges, and clicking any
+In **Whales & Flow** (ETH), addresses on the local lists carry `OFAC` / `Frozen` / `MEW` badges (with a coverage note when local freeze history is partial), and clicking any
 ETH address opens it in Address Risk.
 
 ### SEM Insights

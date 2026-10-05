@@ -42,9 +42,15 @@ export default function GasPulse72hView() {
       </div>
       <ChainStrip chains={data.chains} selected={chain.meta.id} onSelect={setSelected} />
       {chain.error ? (
-        <ErrorBanner message={chain.error} />
+        <>
+          <ErrorBanner message={chain.error} />
+          {liveChain && <GasLiveBar key={liveChain} chain={liveChain} highlight={chain.meta.id} />}
+        </>
       ) : chain.stats.samples === 0 ? (
-        <EmptyState text={`No ${chain.meta.name} data in the last 72 complete hours.`} />
+        <>
+          <EmptyState text={`No ${chain.meta.name} data in the last 72 complete hours.`} />
+          {liveChain && <GasLiveBar key={liveChain} chain={liveChain} highlight={chain.meta.id} />}
+        </>
       ) : (
         <>
           <StatCards chain={chain} />
@@ -94,6 +100,25 @@ function StatCards({ chain }: { chain: GasPulseChain }) {
   const { meta, stats: s } = chain;
   const color = GAS_CHAIN_COLORS[meta.id];
   const unit = meta.primary_unit;
+  // For Arbitrum, band_low/band_high carry block-level min/max base fee inside
+  // each hour; surface the 72h block-level min/max when available so protocol-floor
+  // hourly medians don't show an uninformative "0.01 ↔ 0.01" while the chart band spikes.
+  let lowVal = s.min_value;
+  let lowHour = s.min_hour;
+  let highVal = s.max_value;
+  let highHour = s.max_hour;
+  if (meta.id === 'arb') {
+    for (const h of chain.hours) {
+      if (h.band_low != null && h.band_low < lowVal) {
+        lowVal = h.band_low;
+        lowHour = h.hour_utc;
+      }
+      if (h.band_high != null && h.band_high > highVal) {
+        highVal = h.band_high;
+        highHour = h.hour_utc;
+      }
+    }
+  }
   return (
     <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
       <MetricCard
@@ -104,17 +129,17 @@ function StatCards({ chain }: { chain: GasPulseChain }) {
         accentColor={TONE_COLOR[percentileTone(s.percentile)]}
       />
       <MetricCard
-        label="72h Low ↔ High"
-        value={`${fmtGas(s.min_value)} ↔ ${fmtGas(s.max_value)}`}
+        label={meta.id === 'arb' ? '72h Band Low ↔ High' : '72h Hourly Low ↔ High'}
+        value={`${fmtGas(lowVal)} ↔ ${fmtGas(highVal)}`}
         icon={<ArrowDownUp size={15} />}
-        detail={`low ${shortHour(s.min_hour)} · high ${shortHour(s.max_hour)} UTC`}
+        detail={`low ${shortHour(lowHour)} · high ${shortHour(highHour)} UTC`}
         accentColor={color}
       />
       <MetricCard
-        label="72h Median · P90"
+        label="72h Hourly Median · P90"
         value={`${fmtGas(s.median)} · ${fmtGas(s.p90)}`}
         icon={<Sigma size={15} />}
-        detail={`72h total ${fmtGas(s.total_fee)} ${meta.fee_unit}`}
+        detail={`${meta.fee_label || '72h total'} ${fmtGas(s.total_fee)} ${meta.fee_unit}`}
         accentColor={color}
       />
       <AllTimeCard chain={chain} />

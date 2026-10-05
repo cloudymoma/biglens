@@ -61,12 +61,14 @@ WHERE block_timestamp >= TIMESTAMP(@start_date) AND block_timestamp < TIMESTAMP(
   AND topics[SAFE_OFFSET(0)] IN ('` + topicUSDTAddedBlackList + `', '` + topicUSDTRemovedBlackList + `',
     '` + topicUSDTDestroyedBlackFunds + `', '` + topicUSDCBlacklisted + `', '` + topicUSDCUnBlacklisted + `')`
 
-// blockCheckSQL finds the newest exported block in the 2 hours after
-// end_date; the sync only trusts a day once blocks past end_date 00:30 exist
-// (spec §7.1). Billed at the 10 MB minimum.
+// blockCheckSQL finds the newest exported log in the 2 hours after
+// end_date; the sync only trusts a day once logs past end_date 00:30 exist
+// (spec §7.1). Querying logs directly (DAY-partitioned on block_timestamp)
+// prunes to a single day partition (~25 MB instead of scanning 209 MB of
+// unpartitioned blocks.timestamp) and verifies the exact table being synced.
 const blockCheckSQL = `
-SELECT MAX(timestamp) AS t FROM ` + ethBlocksTable + `
-WHERE timestamp >= TIMESTAMP(@end_date) AND timestamp < TIMESTAMP_ADD(TIMESTAMP(@end_date), INTERVAL 2 HOUR)`
+SELECT MAX(block_timestamp) AS t FROM ` + ethLogsTable + `
+WHERE block_timestamp >= TIMESTAMP(@end_date) AND block_timestamp < TIMESTAMP_ADD(TIMESTAMP(@end_date), INTERVAL 2 HOUR)`
 
 // stablecoinSource isolates BigQuery so the syncer and the backfill CLI can
 // be tested with a fake (spec §15). Windows are half-open [start, end).
@@ -137,7 +139,25 @@ func (b bqStablecoinSource) Fetch(ctx context.Context, start, end civil.Date, ma
 	}
 	status, err := job.Wait(ctx)
 	if err != nil {
-		return nil, 0, err
+		// If the local context timed out after the BigQuery job was already
+		// submitted, try to cancel the server-side job and check whether it
+		// already billed bytes (or assume conservatively that an orphaned
+		// timed-out job may still finish and bill on the server) so the
+		// caller applies the 6h billed-retry backoff instead of re-submitting
+		// the same query every hour.
+		cctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = job.Cancel(cctx)
+		var billed int64
+		if st, sErr := job.Status(cctx); sErr == nil && st != nil && st.Statistics != nil {
+			if qs, ok := st.Statistics.Details.(*bigquery.QueryStatistics); ok {
+				billed = qs.TotalBytesBilled
+			}
+		}
+		cancel()
+		if ctx.Err() != nil && billed == 0 {
+			billed = 1
+		}
+		return nil, billed, err
 	}
 	if err := status.Err(); err != nil {
 		return nil, 0, err
@@ -191,7 +211,7 @@ type blockMaxRow struct {
 func (b bqStablecoinSource) MaxBlockTime(ctx context.Context, end civil.Date) (time.Time, error) {
 	q := b.client.Query(blockCheckSQL)
 	q.Parameters = []bigquery.QueryParameter{{Name: "end_date", Value: end}}
-	q.MaxBytesBilled = 1 << 30
+	q.MaxBytesBilled = 256 << 20
 	rows, err := collectRows[blockMaxRow](q, ctx)
 	if err != nil {
 		return time.Time{}, err

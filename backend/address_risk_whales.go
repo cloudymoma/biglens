@@ -56,6 +56,9 @@ func (s *addressRiskService) tagWhales(ctx context.Context, d *CryptoWhalesData)
 	c := *d
 	c.Largest = slices.Clone(d.Largest)
 	c.TopReceivers = slices.Clone(d.TopReceivers)
+	if st, err := s.store.getSyncState(ctx, stablecoinSourceID); err == nil && st.CoverageFrom > stablecoinFirstDay {
+		c.FreezeCoverageFrom = st.CoverageFrom
+	}
 	for i := range c.Largest {
 		c.Largest[i].FromRisk = risk(c.Largest[i].From)
 		c.Largest[i].ToRisk = risk(c.Largest[i].To)

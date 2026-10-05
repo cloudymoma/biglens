@@ -296,7 +296,10 @@ func TestStablecoinSourceStatus(t *testing.T) {
 }
 
 func TestStablecoinClues(t *testing.T) {
-	destroyed := map[string]*big.Int{"USDT": big.NewInt(1642752780747)}
+	destroyed := map[string]*big.Int{
+		"USDT": big.NewInt(1642752780747),
+		"USDC": big.NewInt(500000000),
+	}
 	states := []stablecoinState{
 		{Token: "USDC", Action: "unfreeze", TxHash: "0xun", BlockTime: "2025-03-22T10:00:00Z"},
 		{Token: "USDT", Action: "destroy", TxHash: "0xdes", BlockTime: "2026-09-20T08:00:00Z"},
@@ -306,9 +309,15 @@ func TestStablecoinClues(t *testing.T) {
 		t.Fatalf("clues = %+v", got)
 	}
 	un, fr := got[0], got[1]
-	if un.Severity != sevInfo || un.Code != "stablecoin_unfrozen" || un.Token != "USDC" ||
-		un.Title != "Previously frozen by USDC contract (since unfrozen)" || *un.ObservedAt != "2025-03-22T10:00:00Z" {
-		t.Errorf("unfrozen clue = %+v", un)
+	if un.Severity != sevWarning || un.Code != "stablecoin_unfrozen" || un.Token != "USDC" ||
+		un.Title != "Previously frozen by USDC contract (since unfrozen)" ||
+		un.Detail != "Tether destroyed 500.00 USDT" || *un.ObservedAt != "2025-03-22T10:00:00Z" {
+		t.Errorf("unfrozen with prior destroy clue = %+v", un)
+	}
+	// Unfrozen without prior destroy stays sevInfo with empty detail.
+	plainUn := stablecoinClues([]stablecoinState{{Token: "USDC", Action: "unfreeze", TxHash: "0xun", BlockTime: "2025-03-22T10:00:00Z"}}, nil, "2026-09-25")
+	if len(plainUn) != 1 || plainUn[0].Severity != sevInfo || plainUn[0].Detail != "" {
+		t.Errorf("plain unfrozen clue = %+v", plainUn)
 	}
 	// Destroy-only history still means frozen (destroyBlackFunds requires the blacklist).
 	if fr.Severity != sevCritical || fr.Code != "stablecoin_frozen" || fr.Title != "Frozen by USDT contract" ||

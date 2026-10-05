@@ -92,6 +92,9 @@ export default function WhalesTab({ onInspect }: { onInspect?: (address: string)
 
   const renderChain = data.chain;
   const color = renderChain === 'btc' ? BTC_COLOR : ETH_COLOR;
+  const freezeNote = renderChain === 'eth' && data.freeze_coverage_from
+    ? ` · Frozen badges cover since ${data.freeze_coverage_from}`
+    : '';
 
   return (
     <div className="space-y-4">
@@ -130,7 +133,7 @@ export default function WhalesTab({ onInspect }: { onInspect?: (address: string)
       <div className="grid lg:grid-cols-2 gap-4">
         <Panel
           title="Largest Transfers"
-          note={renderChain === 'btc' ? 'total output value (incl. change); BTC has no single sender/receiver' : 'succeeded top-level txs (excl. internal transfers) · sender → receiver'}
+          note={renderChain === 'btc' ? 'total output value (incl. change); BTC has no single sender/receiver' : `succeeded top-level txs (excl. internal transfers) · sender → receiver${freezeNote}`}
         >
           {data.largest.length === 0 ? <EmptyState text="No transfers in range." /> : (
             <div className="overflow-y-auto max-h-96">
@@ -174,7 +177,7 @@ export default function WhalesTab({ onInspect }: { onInspect?: (address: string)
         </Panel>
         <Panel
           title="Top Receiving Addresses"
-          note={renderChain === 'btc' ? 'total output value received (excl. coinbase, incl. change)' : 'total value received in succeeded top-level txs'}
+          note={renderChain === 'btc' ? 'total output value received (excl. coinbase, incl. change)' : `total value received in succeeded top-level txs${freezeNote}`}
         >
           {data.top_receivers.length === 0 ? <EmptyState text="No receivers in range." /> : (
             <div className="overflow-y-auto max-h-96">

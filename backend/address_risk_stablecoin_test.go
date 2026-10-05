@@ -42,8 +42,9 @@ func TestStablecoinSQLShape(t *testing.T) {
 	if strings.Contains(stablecoinSQL, "ORDER BY") {
 		t.Error("ORDER BY adds cost and nothing else")
 	}
-	if !strings.Contains(blockCheckSQL, "TIMESTAMP_ADD(TIMESTAMP(@end_date), INTERVAL 2 HOUR)") {
-		t.Error("block check must bound the partition scan to 2 hours")
+	if !strings.Contains(blockCheckSQL, "TIMESTAMP_ADD(TIMESTAMP(@end_date), INTERVAL 2 HOUR)") ||
+		!strings.Contains(blockCheckSQL, "crypto_ethereum.logs") {
+		t.Error("block check must bound the logs partition scan to 2 hours")
 	}
 }
 

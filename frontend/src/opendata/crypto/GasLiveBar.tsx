@@ -23,11 +23,13 @@ export default function GasLiveBar({ chain, highlight }: { chain: 'btc' | 'tron'
   const [error, setError] = useState('');
 
   // Poll while mounted; the parent keys this component by chain, so switching
-  // chains unmounts it and the cleanup stops the timer.
+  // chains unmounts it and the cleanup stops the timer. Pause polling while
+  // the browser tab is hidden and refresh when it becomes visible again.
   useEffect(() => {
     let alive = true;
-    const load = () =>
-      fetchGasLive()
+    const load = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      fetchGasLive(chain)
         .then(d => {
           if (!alive) return;
           setData(d);
@@ -36,13 +38,23 @@ export default function GasLiveBar({ chain, highlight }: { chain: 'btc' | 'tron'
         .catch(e => {
           if (alive) setError(e.response?.data || e.message);
         });
+    };
+    const onVis = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') load();
+    };
     load();
     const id = setInterval(load, LIVE_POLL_MS);
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVis);
+    }
     return () => {
       alive = false;
       clearInterval(id);
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVis);
+      }
     };
-  }, []);
+  }, [chain]);
 
   if (error) return <ErrorBanner message={error} />;
   if (!data) return <div className="text-[11px] text-zinc-600">Loading live data…</div>;
@@ -125,7 +137,7 @@ function TronLiveBody({ live, calibration }: { live: TronLive; calibration: GasC
               {c.burn_usd != null && <span className="text-xs text-zinc-500"> · {fmtUSD(c.burn_usd)}</span>}
             </div>
             <div className="text-[11px] font-mono text-zinc-500">
-              {c.energy.toLocaleString('en')} energy + {c.bandwidth} bandwidth · {c.share_pct.toFixed(0)}% of transfers
+              {c.energy.toLocaleString('en')} energy + {c.bandwidth} bandwidth · {c.share_pct.toFixed(0)}% of the two modal transfer types
             </div>
           </div>
         ))}

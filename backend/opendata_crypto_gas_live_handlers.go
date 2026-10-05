@@ -164,6 +164,15 @@ func (h *APIHandler) gasL2Quotes(r *http.Request, actions []l2Action) (map[strin
 }
 
 func (h *APIHandler) CryptoGasLive(w http.ResponseWriter, r *http.Request) {
+	part := r.URL.Query().Get("part")
+	wantBTC := part == "" || part == "btc"
+	wantTron := part == "" || part == "tron"
+	wantL2 := part == "" || part == "l2"
+	if !wantBTC && !wantTron && !wantL2 {
+		writeError(w, "part must be btc, tron, or l2", http.StatusBadRequest)
+		return
+	}
+
 	var (
 		wg                     sync.WaitGroup
 		btc                    *btcLiveRaw
@@ -174,17 +183,43 @@ func (h *APIHandler) CryptoGasLive(w http.ResponseWriter, r *http.Request) {
 		calErr                 error
 		btcUSD, trxUSD, ethUSD *float64
 	)
-	wg.Go(func() { btc, btcErr = h.gasLiveBtc(r) })
-	wg.Go(func() { tron, tronErr = h.gasLiveTron(r) })
-	wg.Go(func() { cal, calErr = h.gasCalibration(r) })
-	wg.Go(func() { btcUSD = h.gasSpotUSD(r, "BTC") })
-	wg.Go(func() { trxUSD = h.gasSpotUSD(r, "TRX") })
-	wg.Go(func() { ethUSD = h.gasSpotUSD(r, "ETH") })
+	if wantBTC {
+		wg.Go(func() { btc, btcErr = h.gasLiveBtc(r) })
+		wg.Go(func() { btcUSD = h.gasSpotUSD(r, "BTC") })
+	}
+	if wantTron {
+		wg.Go(func() { tron, tronErr = h.gasLiveTron(r) })
+		wg.Go(func() { cal, calErr = h.gasCalibration(r) })
+		wg.Go(func() { trxUSD = h.gasSpotUSD(r, "TRX") })
+	} else if wantL2 {
+		// Do not block the first L2 ladder render on a cold BigQuery + TronGrid
+		// calibration: use a cached calibration when warm, otherwise warm it in
+		// the background while serving the 21,000-gas ETH transfer immediately.
+		if cached, ok := h.cache.Get(gasLiveCalibrationKey); ok {
+			cal = cached.(*GasCalibration)
+		} else {
+			go func() { _, _ = h.gasCalibration(r) }()
+		}
+	}
+	if wantL2 {
+		wg.Go(func() { ethUSD = h.gasSpotUSD(r, "ETH") })
+	}
 	wg.Wait()
 
-	actions := l2ActionsFor(cal)
-	l2Quotes, l2Errs := h.gasL2Quotes(r, actions)
-	data := buildGasLive(time.Now(), btc, btcErr, tron, tronErr, cal, calErr, btcUSD, trxUSD)
-	data.L2 = l2LadderFrom(l2Quotes, l2Errs, actions, ethUSD)
+	data := GasLiveData{AsOf: time.Now().UTC().Format(time.RFC3339), Calibration: cal}
+	if wantBTC || wantTron {
+		data = buildGasLive(time.Now(), btc, btcErr, tron, tronErr, cal, calErr, btcUSD, trxUSD)
+		if !wantBTC {
+			data.BTC, data.BTCError = nil, ""
+		}
+		if !wantTron {
+			data.Tron, data.TronError = nil, ""
+		}
+	}
+	if wantL2 {
+		actions := l2ActionsFor(cal)
+		l2Quotes, l2Errs := h.gasL2Quotes(r, actions)
+		data.L2 = l2LadderFrom(l2Quotes, l2Errs, actions, ethUSD)
+	}
 	writeJSON(w, data)
 }

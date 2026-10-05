@@ -39,10 +39,11 @@ func TestTagWhales(t *testing.T) {
 	got := svc.tagWhales(context.Background(), orig)
 	if strings.Join(got.Largest[0].FromRisk, ",") != "ofac" || strings.Join(got.Largest[0].ToRisk, ",") != "mew_darklist" ||
 		got.Largest[1].FromRisk != nil || got.Largest[1].ToRisk != nil ||
-		strings.Join(got.TopReceivers[0].Risk, ",") != "stablecoin" || got.TopReceivers[1].Risk != nil {
-		t.Errorf("tagged = %+v / %+v", got.Largest, got.TopReceivers)
+		strings.Join(got.TopReceivers[0].Risk, ",") != "stablecoin" || got.TopReceivers[1].Risk != nil ||
+		got.FreezeCoverageFrom != "2026-08-27" {
+		t.Errorf("tagged = %+v / %+v (coverage=%q)", got.Largest, got.TopReceivers, got.FreezeCoverageFrom)
 	}
-	if orig.Largest[0].FromRisk != nil || orig.TopReceivers[0].Risk != nil {
+	if orig.Largest[0].FromRisk != nil || orig.TopReceivers[0].Risk != nil || orig.FreezeCoverageFrom != "" {
 		t.Error("tagging wrote into the original (cached) slices")
 	}
 }

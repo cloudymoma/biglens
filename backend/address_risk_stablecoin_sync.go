@@ -50,6 +50,10 @@ func blocksComplete(ctx context.Context, src stablecoinSource, end civil.Date) (
 // means "not exported yet"; a non-nil error is a BigQuery failure (auth,
 // quota) that the caller must report as such.
 func safeEnd(ctx context.Context, src stablecoinSource, now time.Time) (civil.Date, bool, error) {
+	return safeEndFrom(ctx, src, now, civil.Date{})
+}
+
+func safeEndFrom(ctx context.Context, src stablecoinSource, now time.Time, start civil.Date) (civil.Date, bool, error) {
 	now = now.UTC()
 	today := civil.DateOf(now)
 	cand := today
@@ -59,7 +63,10 @@ func safeEnd(ctx context.Context, src stablecoinSource, now time.Time) (civil.Da
 	if ok, err := blocksComplete(ctx, src, cand); err != nil || ok {
 		return cand, ok, err
 	}
-	if cand == today {
+	// Only probe yesterday as a fallback when the caller's start precedes
+	// yesterday; in steady-state daily sync (start == yesterday), falling back
+	// to end == yesterday produces an empty [start, start) window anyway.
+	if cand == today && (!start.IsValid() || start.Before(today.AddDays(-1))) {
 		if ok, err := blocksComplete(ctx, src, today.AddDays(-1)); err != nil || ok {
 			return today.AddDays(-1), ok, err
 		}
@@ -150,7 +157,7 @@ func (s *stablecoinSyncer) sync(ctx context.Context) (stablecoinRun, bool) {
 			return stablecoinRun{}, false
 		}
 	}
-	end, ok, err := safeEnd(ctx, s.src, now)
+	end, ok, err := safeEndFrom(ctx, s.src, now, start)
 	if err != nil {
 		slog.Warn("address_risk bigquery", "source", stablecoinSourceID, "error", err)
 		return stablecoinRun{start: start, errCode: bqErrCode(err)}, true

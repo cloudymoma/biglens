@@ -70,6 +70,6 @@ func tronLiveFrom(raw tronLiveRaw, cal GasCalibration, trxUSD *float64) TronLive
 			cost("USDT to an existing holder", cal.USDTHolder),
 			cost("USDT to a new address", cal.USDTNew),
 		},
-		Note: "Burned only when the sender has no staked or rented energy and bandwidth; energy and bandwidth measured from the last 24h of transfers",
+		Note: "Upper bound: burned when the sender has no staked/rented energy and has used today's 600 free bandwidth; energy from the last 24h, bandwidth from recent sample transfers",
 	}
 }

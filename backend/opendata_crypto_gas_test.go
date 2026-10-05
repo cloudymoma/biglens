@@ -29,7 +29,7 @@ func TestGasHourlySQL(t *testing.T) {
 			[]string{"optimism_mainnet_us.blocks"}},
 		{gasChainPoly, []string{"goog_blockchain_polygon_mainnet_us.receipts", "IF(effective_gas_price > 0"}, nil},
 		{gasChainTron, []string{"goog_blockchain_tron_mainnet_us.receipts", "COUNTIF(gas_used > 0)"},
-			[]string{"tron_mainnet_us.blocks"}},
+			[]string{"tron_mainnet_us.blocks", "effective_gas_price"}},
 		{gasChainSol, []string{"crypto_solana_mainnet_us.Blocks", "leader_reward"},
 			[]string{"_month"}},
 	}
@@ -124,13 +124,40 @@ func TestGasAllTimeSQL(t *testing.T) {
 	sql := gasAllTimeSQL()
 	for _, w := range []string{"crypto_ethereum.blocks", "goog_blockchain_arbitrum_one_us.blocks",
 		"goog_blockchain_optimism_mainnet_us.blocks", "goog_blockchain_polygon_mainnet_us.blocks",
-		"base_fee_per_gas > 0", "ORDER BY fee DESC, ts LIMIT 1", "ORDER BY fee, ts LIMIT 2"} {
+		"base_fee_per_gas > 0", "@since_ts", "@eth_start_block",
+		"ORDER BY fee DESC, ts LIMIT 1", "ORDER BY fee, ts LIMIT 2"} {
 		if !strings.Contains(sql, w) {
 			t.Errorf("missing %q in SQL:\n%s", w, sql)
 		}
 	}
 	if strings.Contains(sql, "MIN_BY") || strings.Contains(sql, "MAX_BY") {
 		t.Error("MIN_BY/MAX_BY pick an arbitrary row among ties; use ORDER BY fee, ts")
+	}
+}
+
+func TestMergeGasRecordRow(t *testing.T) {
+	seed := gasAllTimeSeeds[gasChainETH]
+	later := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+
+	// Delta does not beat seed ATH or ATL: seed survives unchanged.
+	unchanged := mergeGasRecordRow(seed, gasRecordRow{
+		Chain: gasChainETH,
+		Ath:   gasFeePoint{Fee: 100000000000, Ts: later},
+		Atl:   []gasFeePoint{{Fee: 50000000, Ts: later}},
+	})
+	if unchanged.Ath != seed.Ath || len(unchanged.Atl) < 2 || unchanged.Atl[0] != seed.Atl[0] {
+		t.Errorf("expected seed to win, got %+v", unchanged)
+	}
+
+	// Delta beats ATH and ties ATL: ATH updates, ATL becomes a floor tie.
+	tied := mergeGasRecordRow(seed, gasRecordRow{
+		Chain: gasChainETH,
+		Ath:   gasFeePoint{Fee: seed.Ath.Fee + 1, Ts: later},
+		Atl:   []gasFeePoint{{Fee: seed.Atl[0].Fee, Ts: later}},
+	})
+	got := gasAllTimeFromRow(tied)
+	if tied.Ath.Fee != seed.Ath.Fee+1 || !got.AtlIsFloor || got.AtlTime != seed.Atl[0].Ts.UTC().Format(time.RFC3339) {
+		t.Errorf("unexpected merged record: row=%+v, out=%+v", tied, got)
 	}
 }
 

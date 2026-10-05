@@ -73,7 +73,7 @@ func TestFetchL2QuoteArbitrum(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if q.GasPriceWei != 20006000 || q.L1Wei[0] != 200*20006000 {
+	if q.GasPriceWei != 20006000 || !relAlmost(q.L1Wei[0], 200*20006000*10_000.0/11_000.0) {
 		t.Errorf("quote = %+v", q)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -142,18 +143,30 @@ func mempoolGetJSON(ctx context.Context, url string, dst any) error {
 }
 
 func fetchBtcLiveRaw(ctx context.Context) (*btcLiveRaw, error) {
-	var raw btcLiveRaw
-	if err := mempoolGetJSON(ctx, mempoolFeesURL, &raw.Fees); err != nil {
-		return nil, err
+	var (
+		raw                btcLiveRaw
+		feesErr, statsErr  error
+		projErr, recentErr error
+		wg                 sync.WaitGroup
+	)
+	wg.Go(func() { feesErr = mempoolGetJSON(ctx, mempoolFeesURL, &raw.Fees) })
+	wg.Go(func() { statsErr = mempoolGetJSON(ctx, mempoolStatsURL, &raw.Mempool) })
+	wg.Go(func() { projErr = mempoolGetJSON(ctx, mempoolProjectedURL, &raw.Projected) })
+	wg.Go(func() { recentErr = mempoolGetJSON(ctx, mempoolRecentURL, &raw.Recent) })
+	wg.Wait()
+	if feesErr != nil {
+		return nil, feesErr
 	}
-	if err := mempoolGetJSON(ctx, mempoolStatsURL, &raw.Mempool); err != nil {
-		return nil, err
+	if statsErr != nil {
+		return nil, statsErr
 	}
-	if err := mempoolGetJSON(ctx, mempoolProjectedURL, &raw.Projected); err != nil {
-		return nil, err
+	// Conveyor endpoints are optional: if either fails, keep the fee tiers and
+	// mempool backlog intact and hide only the missing half of the conveyor.
+	if projErr != nil {
+		raw.Projected = nil
 	}
-	if err := mempoolGetJSON(ctx, mempoolRecentURL, &raw.Recent); err != nil {
-		return nil, err
+	if recentErr != nil {
+		raw.Recent = nil
 	}
 	return &raw, nil
 }

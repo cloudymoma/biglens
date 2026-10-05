@@ -160,6 +160,10 @@ func stablecoinClues(states []stablecoinState, destroyed map[string]*big.Int, cu
 			}
 		case "unfreeze":
 			c.Severity, c.Code, c.Title = sevInfo, "stablecoin_unfrozen", fmt.Sprintf(riskTitleUnfrozenFmt, st.Token)
+			if n := destroyed[st.Token]; n != nil && n.Sign() > 0 {
+				c.Severity = sevWarning
+				c.Detail = fmt.Sprintf(riskDestroyedFmt, formatTokenAmount(n, 6))
+			}
 		default:
 			continue
 		}

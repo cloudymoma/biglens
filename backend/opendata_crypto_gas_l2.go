@@ -79,6 +79,11 @@ type l2Quote struct {
 	L1Wei       []float64
 }
 
+// arbL1PaddingBips is Nitro's GasEstimationL1PricePadding (11,000 bips = 1.1x) applied
+// by NodeInterface.gasEstimateL1Component to pad eth_estimateGas; divide it out
+// so the ladder reports the unpadded expected L1 data fee.
+const arbL1PaddingBips = 11_000
+
 func fetchL2QuoteFrom(ctx context.Context, url string, c l2ChainConfig, actions []l2Action) (*l2Quote, error) {
 	q := &l2Quote{}
 	if c.Kind == l2KindArbitrum {
@@ -89,7 +94,7 @@ func fetchL2QuoteFrom(ctx context.Context, url string, c l2ChainConfig, actions 
 				return nil, err
 			}
 			q.GasPriceWei = baseFee
-			q.L1Wei = append(q.L1Wei, gasForL1*baseFee)
+			q.L1Wei = append(q.L1Wei, gasForL1*baseFee*10_000/arbL1PaddingBips)
 		}
 		return q, nil
 	}
@@ -157,7 +162,7 @@ type L2Ladder struct {
 // gets an error row, and savings are only computed against a priced L1 row.
 func l2LadderFrom(quotes map[string]*l2Quote, errs map[string]error, actions []l2Action, ethUSD *float64) L2Ladder {
 	l1 := quotes["eth"]
-	note := "Total = L2 execution + L1 data fee (GasPriceOracle on OP Stack, NodeInterface on Arbitrum)"
+	note := "Total = L2 execution + L1 data fee (GasPriceOracle on OP Stack, NodeInterface on Arbitrum with 10% estimation padding removed)"
 	if len(actions) == 1 {
 		note += "; USDC transfer hidden until today's gas calibration succeeds"
 	}

@@ -222,7 +222,11 @@ func estimateBackfill(ctx context.Context, src stablecoinSource, store *riskStor
 	}
 	planState := st
 	if force && planState.Cursor != "" {
-		planState.CoverageFrom = planState.Cursor
+		if c, err := civil.ParseDate(planState.Cursor); err == nil {
+			planState.CoverageFrom = c.AddDays(1).String()
+		} else {
+			planState.CoverageFrom = planState.Cursor
+		}
 	}
 	batches, err = planBackfill(planState, since, end)
 	if err != nil {

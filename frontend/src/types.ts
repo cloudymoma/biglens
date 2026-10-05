@@ -927,6 +927,7 @@ export interface CryptoWhalesData {
   top_receivers: WhaleAddress[];
   trend: WhaleTrendRow[];
   concentration: ConcentrationRow[];
+  freeze_coverage_from?: string;
 }
 
 export interface TokenRow {
@@ -1561,6 +1562,7 @@ export interface GasChainMeta {
   load_label: string;
   load_unit: string;
   fee_unit: string;
+  fee_label?: string;
   note: string;
 }
 

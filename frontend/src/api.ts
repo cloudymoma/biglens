@@ -411,8 +411,8 @@ export async function fetchGasPulse(): Promise<GasPulseData> {
   return data;
 }
 
-export async function fetchGasLive(): Promise<GasLiveData> {
-  const { data } = await axios.get('/api/opendata/crypto/gas-live');
+export async function fetchGasLive(part?: 'btc' | 'tron' | 'l2'): Promise<GasLiveData> {
+  const { data } = await axios.get('/api/opendata/crypto/gas-live', { params: part ? { part } : undefined });
   return data;
 }
 

@@ -210,3 +210,27 @@ func TestCachedFetchOrBackoffCachesSuccess(t *testing.T) {
 		t.Errorf("successful fetch ran %d times, want 1", calls)
 	}
 }
+
+func TestMergeRollingGasHours(t *testing.T) {
+	start := time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 10, 4, 10, 0, 0, 0, time.UTC)
+	existing := map[string]GasHourRow{
+		"2026-10-01 09:00": {HourUTC: "2026-10-01 09:00", Primary: nf(1)}, // outside window: pruned
+		"2026-10-01 10:00": {HourUTC: "2026-10-01 10:00", Primary: nf(2)},
+		"2026-10-04 08:00": {HourUTC: "2026-10-04 08:00", Primary: nf(3)}, // overlapped hour: overwritten
+	}
+	delta := []GasHourRow{
+		{HourUTC: "2026-10-04 08:00", Primary: nf(30)},
+		{HourUTC: "2026-10-04 09:00", Primary: nf(40)},
+	}
+	gotMap, gotRows := mergeRollingGasHours(existing, delta, start, end)
+	if len(gotMap) != 3 || len(gotRows) != 3 {
+		t.Fatalf("len = %d/%d, want 3: %+v", len(gotMap), len(gotRows), gotMap)
+	}
+	if _, pruned := gotMap["2026-10-01 09:00"]; pruned {
+		t.Error("expected 2026-10-01 09:00 to be pruned")
+	}
+	if gotMap["2026-10-01 10:00"].Primary.Float64 != 2 || gotMap["2026-10-04 08:00"].Primary.Float64 != 30 || gotMap["2026-10-04 09:00"].Primary.Float64 != 40 {
+		t.Errorf("unexpected merged hours: %+v", gotMap)
+	}
+}

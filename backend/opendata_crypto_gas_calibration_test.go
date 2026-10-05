@@ -28,8 +28,8 @@ func TestCalibrationSQL(t *testing.T) {
 		{"usdt modes", tronUSDTModesSQL(), []string{"goog_blockchain_tron_mainnet_us.receipts",
 			"INTERVAL 24 HOUR", tronUSDTReceiptAddress, "status = 1", "gas_used > 0", "LIMIT 2"}},
 		{"usdt samples", tronUSDTSamplesSQL(), []string{"goog_blockchain_tron_mainnet_us.receipts",
-			"INTERVAL 15 MINUTE", tronUSDTReceiptAddress, "status = 1", "UNNEST(@energies)",
-			"ARRAY_AGG(transaction_hash LIMIT 5)"}},
+			"INTERVAL 60 MINUTE", tronUSDTReceiptAddress, "status = 1", "UNNEST(@energies)",
+			"ARRAY_AGG(transaction_hash ORDER BY block_timestamp DESC LIMIT 5)"}},
 		{"usdc gas", usdcTransferGasSQL(), []string{"crypto_ethereum.transactions",
 			"INTERVAL 6 HOUR", ethUSDCAddress, "STARTS_WITH(input, '0xa9059cbb')", "receipt_status = 1", "OFFSET(50)"}},
 	}

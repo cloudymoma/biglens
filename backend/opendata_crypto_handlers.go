@@ -507,13 +507,14 @@ func filterWhaleTxs(chain string, txs []WhaleTx) []WhaleTx {
 }
 
 type CryptoWhalesData struct {
-	Days          int                `json:"days"`
-	Chain         string             `json:"chain"`
-	Threshold     float64            `json:"threshold"`
-	Largest       []WhaleTx          `json:"largest"`
-	TopReceivers  []WhaleAddress     `json:"top_receivers"`
-	Trend         []WhaleTrendRow    `json:"trend"`
-	Concentration []ConcentrationRow `json:"concentration"`
+	Days               int                `json:"days"`
+	Chain              string             `json:"chain"`
+	Threshold          float64            `json:"threshold"`
+	Largest            []WhaleTx          `json:"largest"`
+	TopReceivers       []WhaleAddress     `json:"top_receivers"`
+	Trend              []WhaleTrendRow    `json:"trend"`
+	Concentration      []ConcentrationRow `json:"concentration"`
+	FreezeCoverageFrom string             `json:"freeze_coverage_from,omitempty"`
 }
 
 func (h *APIHandler) CryptoWhales(w http.ResponseWriter, r *http.Request) {

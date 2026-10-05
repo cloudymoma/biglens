@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"cloud.google.com/go/bigquery"
@@ -57,9 +58,9 @@ func tronUSDTModesSQL() string {
 
 func tronUSDTSamplesSQL() string {
 	return fmt.Sprintf(`
-		SELECT gas_used AS energy, ARRAY_AGG(transaction_hash LIMIT %d) AS tx_hashes
+		SELECT gas_used AS energy, ARRAY_AGG(transaction_hash ORDER BY block_timestamp DESC LIMIT %d) AS tx_hashes
 		FROM %s
-		WHERE block_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 15 MINUTE)
+		WHERE block_timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 60 MINUTE)
 			AND to_address = '%s' AND status = 1 AND gas_used IN UNNEST(@energies)
 		GROUP BY energy`, usdtSamplesPerCase, tronReceiptsTable, tronUSDTReceiptAddress)
 }
@@ -217,17 +218,22 @@ func sampleBandwidth(ctx context.Context, hashes []string) (int64, error) {
 }
 
 func (b *BQClient) GetUSDTEnergyModes(ctx context.Context) ([]usdtEnergyMode, error) {
-	return collectRows[usdtEnergyMode](b.client.Query(tronUSDTModesSQL()), ctx)
+	q := b.client.Query(tronUSDTModesSQL())
+	q.MaxBytesBilled = cryptoDefaultMaxBytesBilled
+	return collectRows[usdtEnergyMode](q, ctx)
 }
 
 func (b *BQClient) GetUSDTSamples(ctx context.Context, energies []int64) ([]usdtSample, error) {
 	q := b.client.Query(tronUSDTSamplesSQL())
 	q.Parameters = []bigquery.QueryParameter{{Name: "energies", Value: energies}}
+	q.MaxBytesBilled = cryptoDefaultMaxBytesBilled
 	return collectRows[usdtSample](q, ctx)
 }
 
 func (b *BQClient) GetUSDCTransferGas(ctx context.Context) (*usdcGasRow, error) {
-	rows, err := collectRows[usdcGasRow](b.client.Query(usdcTransferGasSQL()), ctx)
+	q := b.client.Query(usdcTransferGasSQL())
+	q.MaxBytesBilled = cryptoDefaultMaxBytesBilled
+	rows, err := collectRows[usdcGasRow](q, ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -247,9 +253,20 @@ type gasCalibrationSamples struct {
 }
 
 func fetchCalibrationSamples(ctx context.Context, b *BQClient) (*gasCalibrationSamples, error) {
-	modes, err := b.GetUSDTEnergyModes(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("usdt energy modes: %w", err)
+	var (
+		modes               []usdtEnergyMode
+		usdc                *usdcGasRow
+		modesErr, usdcErr   error
+		wg                  sync.WaitGroup
+	)
+	wg.Go(func() { modes, modesErr = b.GetUSDTEnergyModes(ctx) })
+	wg.Go(func() { usdc, usdcErr = b.GetUSDCTransferGas(ctx) })
+	wg.Wait()
+	if modesErr != nil {
+		return nil, fmt.Errorf("usdt energy modes: %w", modesErr)
+	}
+	if usdcErr != nil {
+		return nil, usdcErr
 	}
 	holder, newAddr, err := usdtProfilesFromModes(modes)
 	if err != nil {
@@ -267,10 +284,6 @@ func fetchCalibrationSamples(ctx context.Context, b *BQClient) (*gasCalibrationS
 		if len(byEnergy[e]) == 0 {
 			return nil, fmt.Errorf("usdt calibration: no recent sample with %d energy", e)
 		}
-	}
-	usdc, err := b.GetUSDCTransferGas(ctx)
-	if err != nil {
-		return nil, err
 	}
 	return &gasCalibrationSamples{
 		Holder: holder, New: newAddr,
