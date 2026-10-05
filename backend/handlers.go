@@ -539,15 +539,30 @@ func (h *APIHandler) SearchEmails(w http.ResponseWriter, r *http.Request) {
 	region = validateRegion(region)
 	prefix := r.URL.Query().Get("q")
 
-	emails, err := h.bq.SearchEmails(r.Context(), region, prefix, 20)
-	if err != nil {
-		writeError(w, err.Error(), http.StatusInternalServerError)
-		return
+	cacheKey := "iam_distinct_emails_180d:" + region
+	var allEmails []string
+	if cached, ok := h.cache.Get(cacheKey); ok {
+		allEmails = cached.([]string)
+	} else {
+		v, err, _ := h.sf.Do(cacheKey, func() (any, error) {
+			if c, ok := h.cache.Get(cacheKey); ok {
+				return c, nil
+			}
+			emails, err := h.bq.GetDistinctEmails180d(r.Context(), region)
+			if err != nil {
+				return nil, err
+			}
+			h.cache.SetWithTTL(cacheKey, emails, 30*time.Minute)
+			return emails, nil
+		})
+		if err != nil {
+			writeError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		allEmails = v.([]string)
 	}
-	if emails == nil {
-		emails = []string{}
-	}
-	writeJSON(w, emails)
+
+	writeJSON(w, filterEmailsByPrefix(allEmails, prefix, 20))
 }
 
 func parseEmails(r *http.Request) []string {

@@ -85,5 +85,18 @@ func TestIAMQueriesAndRollups(t *testing.T) {
 	if len(ohTop) != 1 || ohTop[0].Email != "weekend@example.com" || ohTop[0].Jobs != 9 {
 		t.Errorf("unexpected off-hours top: %+v", ohTop)
 	}
+
+	if got := escapeLikePattern(`sa_prod%1\test`); got != `sa\_prod\%1\\test` {
+		t.Errorf("escapeLikePattern = %q", got)
+	}
+	filtered := filterEmailsByPrefix([]string{"alice@example.com", "sa_alice@p.iam.gserviceaccount.com", "bob@example.com"}, "alice", 20)
+	if len(filtered) != 2 || filtered[0] != "alice@example.com" || filtered[1] != "sa_alice@p.iam.gserviceaccount.com" {
+		t.Errorf("unexpected filterEmailsByPrefix: %+v", filtered)
+	}
+
+	exSQL := exfilSignalsSQL("`p`.`region-us`", "creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)")
+	if !strings.Contains(exSQL, "QUALIFY ROW_NUMBER() OVER (PARTITION BY signal") {
+		t.Errorf("exfilSignalsSQL missing per-signal QUALIFY:\n%s", exSQL)
+	}
 }
 

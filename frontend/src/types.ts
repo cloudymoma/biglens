@@ -324,6 +324,7 @@ export interface SecurityDashboardData {
 export interface NewActor {
   email: string;
   first_seen: string;
+  prior_active?: string;
   jobs: number;
   is_sa: boolean;
 }

@@ -119,15 +119,18 @@ function EmailSearchBar({ region, selectedEmails, onAdd, onRemove, onClear }: {
   const ref = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const reqSeqRef = useRef(0);
 
   const fetchSuggestions = useCallback((q: string) => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
+    const seq = ++reqSeqRef.current;
     if (q.length < 1) {
       setSuggestions([]);
       return;
     }
     debounceRef.current = setTimeout(() => {
       fetchEmailSuggestions(region, q).then(results => {
+        if (seq !== reqSeqRef.current) return;
         setSuggestions(results.filter(e => !selectedEmails.includes(e)));
         setActiveIndex(-1);
       });
@@ -665,6 +668,15 @@ function NewActorsCard({ actors }: { actors: NewActor[] }) {
                           SERVICE ACCT
                         </span>
                       )}
+                      {actor.prior_active ? (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full font-medium border bg-rose-500/10 text-rose-400 border-rose-500/20" title={`Prior activity: ${actor.prior_active}`}>
+                          REACTIVATED
+                        </span>
+                      ) : (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full font-medium border bg-cyan-500/10 text-cyan-400 border-cyan-500/20">
+                          NEW
+                        </span>
+                      )}
                     </div>
                   </td>
                   <td className="py-3 px-3 text-right font-mono text-zinc-400">{formatRelativeTime(actor.first_seen)}</td>
@@ -783,7 +795,7 @@ function ExfilSignalsTable({ signals }: { signals: ExfilSignal[] }) {
         <h3 className="text-sm font-semibold text-white">Exfiltration Signals</h3>
       </div>
       <p className="text-xs text-zinc-500 mb-4">
-        Extracts, EXPORT DATA, cross-project writes, and &gt;1 TiB scans — not visible: Storage Read API reads, RLS-blanked bytes
+        Extracts, EXPORT DATA, cross-project writes, and &gt;1 TiB scans — not visible: Storage Read API reads, RLS-blanked bytes, and jobs run from other projects (visible only via JOBS_BY_ORGANIZATION or Data Access audit logs)
       </p>
 
       {signals.length > 0 ? (

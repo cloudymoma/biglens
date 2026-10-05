@@ -11,6 +11,67 @@ import (
 
 // --- Email autocomplete ---
 
+// escapeLikePattern escapes '\', '%', and '_' so they match literally in a
+// SQL LIKE expression with ESCAPE '\\'.
+func escapeLikePattern(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return r.Replace(s)
+}
+
+func filterEmailsByPrefix(all []string, prefix string, limit int) []string {
+	if limit <= 0 || limit > 50 {
+		limit = 20
+	}
+	q := strings.ToLower(strings.TrimSpace(prefix))
+	if q == "" {
+		return []string{}
+	}
+	out := make([]string, 0, limit)
+	for _, e := range all {
+		if strings.HasPrefix(strings.ToLower(e), q) {
+			out = append(out, e)
+			if len(out) >= limit {
+				return out
+			}
+		}
+	}
+	for _, e := range all {
+		le := strings.ToLower(e)
+		if !strings.HasPrefix(le, q) && strings.Contains(le, q) {
+			out = append(out, e)
+			if len(out) >= limit {
+				return out
+			}
+		}
+	}
+	return out
+}
+
+func (b *BQClient) GetDistinctEmails180d(ctx context.Context, region string) ([]string, error) {
+	q := b.client.Query(fmt.Sprintf(
+		`SELECT DISTINCT user_email
+		FROM %s.INFORMATION_SCHEMA.JOBS_BY_PROJECT
+		WHERE creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 180 DAY)
+			AND user_email IS NOT NULL
+			AND IFNULL(statement_type, '') != 'SCRIPT'
+		ORDER BY user_email`,
+		b.regionRef(region)))
+	type row struct {
+		UserEmail string `bigquery:"user_email"`
+	}
+	rows, err := collectRows[row](q, ctx)
+	if err != nil {
+		return nil, fmt.Errorf("distinct emails 180d query failed: %w", err)
+	}
+	emails := make([]string, 0, len(rows))
+	for _, r := range rows {
+		if r.UserEmail != "" {
+			emails = append(emails, r.UserEmail)
+		}
+	}
+	return emails, nil
+}
+
 func (b *BQClient) SearchEmails(ctx context.Context, region, prefix string, limit int) ([]string, error) {
 	if limit <= 0 || limit > 50 {
 		limit = 20
@@ -20,12 +81,13 @@ func (b *BQClient) SearchEmails(ctx context.Context, region, prefix string, limi
 	var params []bigquery.QueryParameter
 
 	whereParts = append(whereParts,
-		"creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 90 DAY)",
-		"user_email IS NOT NULL")
+		"creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 180 DAY)",
+		"user_email IS NOT NULL",
+		"IFNULL(statement_type, '') != 'SCRIPT'")
 
 	if prefix != "" {
-		whereParts = append(whereParts, "LOWER(user_email) LIKE CONCAT(LOWER(@prefix), '%')")
-		params = append(params, bigquery.QueryParameter{Name: "prefix", Value: prefix})
+		whereParts = append(whereParts, `LOWER(user_email) LIKE CONCAT(LOWER(@prefix), '%') ESCAPE '\\'`)
+		params = append(params, bigquery.QueryParameter{Name: "prefix", Value: escapeLikePattern(prefix)})
 	}
 
 	q := b.client.Query(fmt.Sprintf(
@@ -221,6 +283,7 @@ type longWindowIAMRow struct {
 	DaysIdle     int64  `bigquery:"days_idle"`
 	TotalCalls   int64  `bigquery:"total_calls"`
 	FirstSeen90d string `bigquery:"first_seen_90d"`
+	PriorActive  string `bigquery:"prior_active"`
 	Jobs90d      int64  `bigquery:"jobs_90d"`
 	IsNewActor   bool   `bigquery:"is_new_actor"`
 }
@@ -235,6 +298,8 @@ func longWindowIAMSQL(regionRef string) string {
 			COUNT(*) AS total_calls,
 			IFNULL(FORMAT_TIMESTAMP("%%Y-%%m-%%dT%%H:%%M:%%SZ",
 				MIN(IF(creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 90 DAY), creation_time, NULL))), '') AS first_seen_90d,
+			IFNULL(FORMAT_TIMESTAMP("%%Y-%%m-%%dT%%H:%%M:%%SZ",
+				MAX(IF(creation_time < TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 90 DAY), creation_time, NULL))), '') AS prior_active,
 			COUNTIF(creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 90 DAY)) AS jobs_90d,
 			IFNULL(MIN(IF(creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 90 DAY), creation_time, NULL)) >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY), FALSE) AS is_new_actor
 		FROM %s.INFORMATION_SCHEMA.JOBS_BY_PROJECT
@@ -271,10 +336,11 @@ func splitLongWindowIAM(rows []longWindowIAMRow, minIdleDays int64, filterEmails
 		}
 		if r.IsNewActor && r.FirstSeen90d != "" {
 			newActors = append(newActors, NewActor{
-				Email:     r.Email,
-				FirstSeen: r.FirstSeen90d,
-				Jobs:      r.Jobs90d,
-				IsSA:      r.IsSA,
+				Email:       r.Email,
+				FirstSeen:   r.FirstSeen90d,
+				PriorActive: r.PriorActive,
+				Jobs:        r.Jobs90d,
+				IsSA:        r.IsSA,
 			})
 		}
 	}
@@ -415,10 +481,11 @@ func timeRangeToBucket(tr string) (interval, truncUnit string) {
 // --- New actors: first job ever (90d baseline) within the last 7 days ---
 
 type NewActor struct {
-	Email     string `json:"email" bigquery:"email"`
-	FirstSeen string `json:"first_seen" bigquery:"first_seen"`
-	Jobs      int64  `json:"jobs" bigquery:"jobs"`
-	IsSA      bool   `json:"is_sa" bigquery:"is_sa"`
+	Email       string `json:"email" bigquery:"email"`
+	FirstSeen   string `json:"first_seen" bigquery:"first_seen"`
+	PriorActive string `json:"prior_active,omitempty" bigquery:"prior_active"`
+	Jobs        int64  `json:"jobs" bigquery:"jobs"`
+	IsSA        bool   `json:"is_sa" bigquery:"is_sa"`
 }
 
 func (b *BQClient) GetNewActors(ctx context.Context, region string) ([]NewActor, error) {
@@ -549,22 +616,8 @@ type ExfilSignal struct {
 	Created     string `json:"created" bigquery:"created"`
 }
 
-func (b *BQClient) GetExfilSignals(ctx context.Context, region string, emails []string, timeRange string) ([]ExfilSignal, error) {
-	interval := timeRangeToInterval(timeRange)
-	var clauses []string
-	params := []bigquery.QueryParameter{
-		{Name: "project", Value: b.config.BigQuery.ProjectID},
-	}
-	clauses = append(clauses,
-		fmt.Sprintf("creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL %s)", interval),
-		"user_email IS NOT NULL",
-		"IFNULL(statement_type, '') != 'SCRIPT'")
-	if len(emails) > 0 {
-		clauses = append(clauses, "LOWER(user_email) IN UNNEST(@emails)")
-		params = append(params, bigquery.QueryParameter{Name: "emails", Value: emails})
-	}
-
-	q := b.client.Query(fmt.Sprintf(
+func exfilSignalsSQL(regionRef, where string) string {
+	return fmt.Sprintf(
 		`SELECT user_email AS email, IFNULL(job_id, '') AS job_id,
 			CASE
 				WHEN job_type = 'EXTRACT' THEN 'EXTRACT_TO_GCS'
@@ -582,8 +635,32 @@ func (b *BQClient) GetExfilSignals(ctx context.Context, region string, emails []
 			OR statement_type = 'EXPORT_DATA'
 			OR (destination_table.project_id IS NOT NULL AND destination_table.project_id != @project)
 			OR total_bytes_processed > 1099511627776)
-		ORDER BY bytes DESC LIMIT 50`,
-		b.regionRef(region), strings.Join(clauses, " AND ")))
+		QUALIFY ROW_NUMBER() OVER (PARTITION BY signal ORDER BY IFNULL(total_bytes_processed, 0) DESC, creation_time DESC) <= 25
+		ORDER BY CASE signal
+			WHEN 'EXTRACT_TO_GCS' THEN 1
+			WHEN 'EXPORT_DATA' THEN 2
+			WHEN 'CROSS_PROJECT_WRITE' THEN 3
+			ELSE 4
+		END, bytes DESC`,
+		regionRef, where)
+}
+
+func (b *BQClient) GetExfilSignals(ctx context.Context, region string, emails []string, timeRange string) ([]ExfilSignal, error) {
+	interval := timeRangeToInterval(timeRange)
+	var clauses []string
+	params := []bigquery.QueryParameter{
+		{Name: "project", Value: b.config.BigQuery.ProjectID},
+	}
+	clauses = append(clauses,
+		fmt.Sprintf("creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL %s)", interval),
+		"user_email IS NOT NULL",
+		"IFNULL(statement_type, '') != 'SCRIPT'")
+	if len(emails) > 0 {
+		clauses = append(clauses, "LOWER(user_email) IN UNNEST(@emails)")
+		params = append(params, bigquery.QueryParameter{Name: "emails", Value: emails})
+	}
+
+	q := b.client.Query(exfilSignalsSQL(b.regionRef(region), strings.Join(clauses, " AND ")))
 	q.Parameters = params
 	return collectRows[ExfilSignal](q, ctx)
 }
