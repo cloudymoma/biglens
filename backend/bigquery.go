@@ -759,17 +759,26 @@ type Recommendation struct {
 	ProjectedSavingsUSD float64 `json:"projected_savings_usd" bigquery:"projected_savings_usd"`
 }
 
-func (b *BQClient) GetRecommendations(ctx context.Context, region string) ([]Recommendation, error) {
-	q := b.client.Query(fmt.Sprintf(
+func recommendationsSQL(regionRef string) string {
+	return fmt.Sprintf(
 		`SELECT
 			recommender,
 			description,
 			primary_impact.category AS category,
-			0 AS projected_savings_usd
+			COALESCE(
+				SAFE_CAST(JSON_VALUE(additional_details.overview, '$.bytesSavedMonthly') AS FLOAT64) / POW(1024, 4) * 6.25,
+				SAFE_CAST(JSON_VALUE(additional_details.overview, '$.slotMsSavedMonthly') AS FLOAT64) / (1000.0 * 3600.0) * 0.04,
+				SAFE_CAST(JSON_VALUE(additional_details.overview, '$.costSavedMonthly') AS FLOAT64),
+				0.0
+			) AS projected_savings_usd
 		FROM %s.INFORMATION_SCHEMA.RECOMMENDATIONS
 		WHERE state = 'ACTIVE'
 		ORDER BY recommender`,
-		b.regionRef(region)))
+		regionRef)
+}
+
+func (b *BQClient) GetRecommendations(ctx context.Context, region string) ([]Recommendation, error) {
+	q := b.client.Query(recommendationsSQL(b.regionRef(region)))
 
 	return collectRows[Recommendation](q, ctx)
 }

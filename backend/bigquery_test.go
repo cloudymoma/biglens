@@ -134,4 +134,28 @@ func TestStorageOverviewSQLAndRollup(t *testing.T) {
 	}
 }
 
+func TestRecommendationsAndErrorSQL(t *testing.T) {
+	recSQL := recommendationsSQL("`p`.`region-us`")
+	for _, want := range []string{
+		"JSON_VALUE(additional_details.overview, '$.bytesSavedMonthly')",
+		"JSON_VALUE(additional_details.overview, '$.slotMsSavedMonthly')",
+		"AS projected_savings_usd",
+	} {
+		if !strings.Contains(recSQL, want) {
+			t.Errorf("recommendationsSQL missing %q in:\n%s", want, recSQL)
+		}
+	}
+
+	where, _ := QueryFilters{TimeRange: "7d"}.JobsWhere("creation_time")
+	for name, sql := range map[string]string{
+		"errorStatsSQL":      errorStatsSQL("`p`.`region-us`", where),
+		"topFailingUsersSQL": topFailingUsersSQL("`p`.`region-us`", where),
+	} {
+		if !strings.Contains(sql, "(statement_type IS NULL OR statement_type != 'SCRIPT')") {
+			t.Errorf("%s missing SCRIPT exclusion in:\n%s", name, sql)
+		}
+	}
+}
+
+
 

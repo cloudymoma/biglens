@@ -4,6 +4,7 @@ import { Lightbulb, Sparkles, AlertTriangle, DollarSign, XCircle, Gauge, Repeat 
 import type { QueryFilters, InsightsDashboardData, PerfInsightJob } from '../types';
 import { fetchInsightsDashboard } from '../api';
 import { formatBytes, EmptyState, ErrorBanner, DegradedNotice } from './shared';
+import { ON_DEMAND_PER_TIB } from './pricing';
 
 const INSIGHT_FLAGS: { key: keyof PerfInsightJob; label: string }[] = [
   { key: 'slot_contention', label: 'Slot Contention' },
@@ -37,7 +38,7 @@ export default function InsightsDashboard({ filters, onDrillToJobs }: {
 
   const recs = data.recommendations || [];
   const totalSavings = recs.reduce((s, r) => s + (r.projected_savings_usd || 0), 0);
-  const isClustering = (r: string) => r.includes('Clustering');
+  const isClustering = (r: string, cat?: string) => /PartitionCluster|Clustering/i.test(r) || cat === 'PERFORMANCE';
 
   const errorStats = data.error_stats || [];
   const failingUsers = data.failing_users || [];
@@ -127,7 +128,9 @@ export default function InsightsDashboard({ filters, onDrillToJobs }: {
             <DollarSign size={20} className="text-emerald-400" />
           </div>
           <div>
-            <p className="text-2xl font-bold text-white font-mono">${totalSavings.toFixed(0)}</p>
+            <p className="text-2xl font-bold text-white font-mono">
+              {totalSavings > 0 ? `$${totalSavings.toFixed(0)}` : recs.length > 0 ? 'N/A' : '$0'}
+            </p>
             <p className="text-xs text-zinc-500">Projected Savings (USD)</p>
           </div>
         </div>
@@ -137,7 +140,7 @@ export default function InsightsDashboard({ filters, onDrillToJobs }: {
           </div>
           <div>
             <p className="text-2xl font-bold text-white font-mono">
-              {recs.filter(r => isClustering(r.recommender)).length}
+              {recs.filter(r => isClustering(r.recommender, r.category)).length}
             </p>
             <p className="text-xs text-zinc-500">Performance Tuning</p>
           </div>
@@ -271,7 +274,7 @@ export default function InsightsDashboard({ filters, onDrillToJobs }: {
                     <td className="py-2.5 px-3 text-right text-white font-mono">{q.runs}</td>
                     <td className="py-2.5 px-3 text-right text-zinc-400 font-mono">{q.user_count}</td>
                     <td className="py-2.5 px-3 text-right text-zinc-300 font-mono">{formatBytes(q.total_bytes)}</td>
-                    <td className="py-2.5 px-3 text-right text-amber-400 font-mono">${((q.total_bytes / Math.pow(1024, 4)) * 6.25).toFixed(2)}</td>
+                    <td className="py-2.5 px-3 text-right text-amber-400 font-mono">${((q.total_bytes / Math.pow(1024, 4)) * ON_DEMAND_PER_TIB).toFixed(2)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -291,20 +294,20 @@ export default function InsightsDashboard({ filters, onDrillToJobs }: {
             {recs.map((r, i) => (
               <div key={i} className="flex items-start gap-4 p-4 rounded-xl border border-zinc-800/30 hover:border-zinc-700/50 transition-colors" style={{ background: '#09090b' }}>
                 <div className={`mt-0.5 p-2 rounded-lg border shrink-0 ${
-                  isClustering(r.recommender)
+                  isClustering(r.recommender, r.category)
                     ? 'border-emerald-500/20 text-emerald-400'
                     : 'border-amber-500/20 text-amber-400'
-                }`} style={{ background: isClustering(r.recommender) ? '#052e1610' : '#78350f10' }}>
-                  {isClustering(r.recommender) ? <Sparkles size={16} /> : <AlertTriangle size={16} />}
+                }`} style={{ background: isClustering(r.recommender, r.category) ? '#052e1610' : '#78350f10' }}>
+                  {isClustering(r.recommender, r.category) ? <Sparkles size={16} /> : <AlertTriangle size={16} />}
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1">
                     <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-md border ${
-                      isClustering(r.recommender)
+                      isClustering(r.recommender, r.category)
                         ? 'text-emerald-400 border-emerald-500/20 bg-emerald-500/5'
                         : 'text-amber-400 border-amber-500/20 bg-amber-500/5'
                     }`}>
-                      {isClustering(r.recommender) ? 'Performance Tuning' : r.category || 'Cost'}
+                      {isClustering(r.recommender, r.category) ? 'Performance Tuning' : r.category || 'Cost'}
                     </span>
                     {r.projected_savings_usd > 0 && (
                       <span className="text-[10px] font-mono text-zinc-500">

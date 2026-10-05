@@ -16,20 +16,25 @@ type ErrorStat struct {
 	SlotMs   int64  `json:"slot_ms" bigquery:"slot_ms"`
 }
 
-// GetErrorStats ranks failure reasons by wasted slot time: a handful of
-// resource-exceeded errors typically outweigh thousands of syntax errors.
-func (b *BQClient) GetErrorStats(ctx context.Context, filters QueryFilters) ([]ErrorStat, error) {
-	where, params := filters.JobsWhere("creation_time")
-	q := b.client.Query(fmt.Sprintf(
+func errorStatsSQL(regionRef, where string) string {
+	return fmt.Sprintf(
 		`SELECT
 			IFNULL(error_result.reason, 'unknown') AS reason,
 			COUNT(*) AS job_count,
 			IFNULL(SUM(total_slot_ms), 0) AS slot_ms
 		FROM %s.INFORMATION_SCHEMA.JOBS_BY_PROJECT
 		%s AND error_result IS NOT NULL
+			AND (statement_type IS NULL OR statement_type != 'SCRIPT')
 		GROUP BY reason
 		ORDER BY slot_ms DESC`,
-		b.regionRef(filters.Region), where))
+		regionRef, where)
+}
+
+// GetErrorStats ranks failure reasons by wasted slot time: a handful of
+// resource-exceeded errors typically outweigh thousands of syntax errors.
+func (b *BQClient) GetErrorStats(ctx context.Context, filters QueryFilters) ([]ErrorStat, error) {
+	where, params := filters.JobsWhere("creation_time")
+	q := b.client.Query(errorStatsSQL(b.regionRef(filters.Region), where))
 	q.Parameters = params
 
 	return collectRows[ErrorStat](q, ctx)
@@ -41,19 +46,24 @@ type FailingUser struct {
 	SlotMs    int64  `json:"slot_ms" bigquery:"slot_ms"`
 }
 
-func (b *BQClient) GetTopFailingUsers(ctx context.Context, filters QueryFilters) ([]FailingUser, error) {
-	where, params := filters.JobsWhere("creation_time")
-	q := b.client.Query(fmt.Sprintf(
+func topFailingUsersSQL(regionRef, where string) string {
+	return fmt.Sprintf(
 		`SELECT
 			user_email,
 			COUNT(*) AS job_count,
 			IFNULL(SUM(total_slot_ms), 0) AS slot_ms
 		FROM %s.INFORMATION_SCHEMA.JOBS_BY_PROJECT
 		%s AND error_result IS NOT NULL
+			AND (statement_type IS NULL OR statement_type != 'SCRIPT')
 		GROUP BY user_email
 		ORDER BY slot_ms DESC
 		LIMIT 10`,
-		b.regionRef(filters.Region), where))
+		regionRef, where)
+}
+
+func (b *BQClient) GetTopFailingUsers(ctx context.Context, filters QueryFilters) ([]FailingUser, error) {
+	where, params := filters.JobsWhere("creation_time")
+	q := b.client.Query(topFailingUsersSQL(b.regionRef(filters.Region), where))
 	q.Parameters = params
 
 	return collectRows[FailingUser](q, ctx)
