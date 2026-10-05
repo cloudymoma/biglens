@@ -59,8 +59,27 @@ export default function StorageDashboard({ filters }: { filters: QueryFilters })
   const storageRates = getRegionPricing(filters.region).storageRates;
   const logicalCost = logicalCostUSD(totals.activeLogical, totals.longTermLogical, filters.region);
   const physicalCost = physicalCostUSD(totals.activePhysical, totals.longTermPhysical, totals.failSafe, filters.region);
-  const savings = Math.abs(logicalCost - physicalCost);
   const cheaperModel = logicalCost <= physicalCost ? 'Logical' : 'Physical';
+
+  // Per-dataset billing model optimization: sum each dataset's current cost
+  // (from INFORMATION_SCHEMA.SCHEMATA_OPTIONS storage_billing_model) vs min(L, P).
+  const dsOptimization = datasetStorage.reduce((acc, d) => {
+    const lCost = logicalCostUSD(d.active_logical, d.long_term_logical, filters.region);
+    const pCost = physicalCostUSD(d.active_physical, d.long_term_physical, d.fail_safe, filters.region);
+    const curModel = (d.billing_model || 'LOGICAL').toUpperCase();
+    const curCost = curModel === 'PHYSICAL' ? pCost : lCost;
+    const optCost = Math.min(lCost, pCost);
+    return {
+      currentCost: acc.currentCost + curCost,
+      optimalCost: acc.optimalCost + optCost,
+      savings: acc.savings + Math.max(0, curCost - optCost),
+    };
+  }, { currentCost: 0, optimalCost: 0, savings: 0 });
+
+  const savings = datasetStorage.length > 0 ? dsOptimization.savings : Math.abs(logicalCost - physicalCost);
+  const savingsDetail = datasetStorage.length > 0
+    ? `Current ~$${dsOptimization.currentCost.toFixed(2)}/mo → Optimal ~$${dsOptimization.optimalCost.toFixed(2)}/mo (saves ~$${savings.toFixed(2)}/mo)`
+    : `Saves ~$${savings.toFixed(2)}/mo (tiered rates, incl. TT+FS)`;
 
   const totalPhysical = totals.activePhysical + totals.longTermPhysical + totals.failSafe;
   const ttShare = totalPhysical > 0 ? (totals.timeTravel / totalPhysical) * 100 : 0;
@@ -121,7 +140,7 @@ export default function StorageDashboard({ filters }: { filters: QueryFilters })
           label="Recommended Model"
           value={cheaperModel}
           icon={<Box size={18} />}
-          detail={`Saves ~$${savings.toFixed(2)}/mo (tiered rates, incl. TT+FS)`}
+          detail={savingsDetail}
           accentColor="#4ade80"
         />
       </div>
@@ -213,6 +232,7 @@ export default function StorageDashboard({ filters }: { filters: QueryFilters })
               <thead>
                 <tr className="text-zinc-500 border-b border-zinc-800/50">
                   <th className="text-left py-2 px-3 font-medium">Dataset</th>
+                  <th className="text-left py-2 px-3 font-medium">Current</th>
                   <th className="text-right py-2 px-3 font-medium">Logical</th>
                   <th className="text-right py-2 px-3 font-medium">Physical</th>
                   <th className="text-right py-2 px-3 font-medium">Compression</th>
@@ -230,9 +250,11 @@ export default function StorageDashboard({ filters }: { filters: QueryFilters })
                   const pCost = physicalCostUSD(d.active_physical, d.long_term_physical, d.fail_safe, filters.region);
                   const ratio = physicalNoTT > 0 ? logical / physicalNoTT : 0;
                   const physicalWins = pCost < lCost;
+                  const currentModel = (d.billing_model || 'LOGICAL').toUpperCase();
                   return (
                     <tr key={i} className="border-b border-zinc-800/30 hover:bg-zinc-800/20 transition-colors">
                       <td className="py-2.5 px-3 text-white font-mono">{d.dataset}</td>
+                      <td className="py-2.5 px-3 text-zinc-400 font-mono">{currentModel}</td>
                       <td className="py-2.5 px-3 text-right text-zinc-300 font-mono">{formatBytes(logical)}</td>
                       <td className="py-2.5 px-3 text-right text-zinc-300 font-mono">{formatBytes(physical)}</td>
                       <td className="py-2.5 px-3 text-right text-zinc-400 font-mono">{ratio > 0 ? `${ratio.toFixed(1)}x` : '--'}</td>
@@ -265,7 +287,7 @@ export default function StorageDashboard({ filters }: { filters: QueryFilters })
           <h3 className="text-sm font-semibold text-white">Cold Tables</h3>
         </div>
         <p className="text-xs text-zinc-500 mb-4">
-          Not read by any job in this project &amp; region during the selected window — archival / deletion candidates
+          Created before the window and not referenced by non-cached jobs submitted in this project &amp; region (excludes cross-project queries, cache hits, and Storage Read API) — archival / deletion candidates
         </p>
         {coldTables.length > 0 ? (
           <div className="overflow-x-auto">
@@ -282,8 +304,12 @@ export default function StorageDashboard({ filters }: { filters: QueryFilters })
               </thead>
               <tbody>
                 {coldTables.map((t, i) => {
-                  const rate = t.storage_tier === 'LONG_TERM' ? storageRates.longTermLogical : storageRates.activeLogical;
-                  const saved = (t.total_bytes / Math.pow(1024, 3)) * rate;
+                  const gib = Math.pow(1024, 3);
+                  const saved = (t.billing_model || 'LOGICAL').toUpperCase() === 'PHYSICAL'
+                    ? ((t.active_physical ?? 0) / gib) * storageRates.activePhysical + ((t.long_term_physical ?? 0) / gib) * storageRates.longTermPhysical
+                    : (t.active_logical !== undefined && t.long_term_logical !== undefined)
+                      ? (t.active_logical / gib) * storageRates.activeLogical + (t.long_term_logical / gib) * storageRates.longTermLogical
+                      : (t.total_bytes / gib) * (t.storage_tier === 'LONG_TERM' ? storageRates.longTermLogical : storageRates.activeLogical);
                   return (
                     <tr key={i} className="border-b border-zinc-800/30 hover:bg-zinc-800/20 transition-colors">
                       <td className="py-2.5 px-3 text-zinc-600 font-mono">{i + 1}</td>

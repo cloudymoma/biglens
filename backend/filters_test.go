@@ -38,9 +38,8 @@ func TestJobsWhereNewFilters(t *testing.T) {
 	}
 }
 
-// The timeline view (JOBS_TIMELINE_BY_PROJECT) has no cache_hit or
-// error_result columns, so TimelineWhere must silently drop those filters
-// instead of generating SQL that fails.
+// JOBS_TIMELINE_BY_PROJECT includes both cache_hit and error_result columns,
+// so TimelineWhere must apply the same Status and CacheHit filters as JobsWhere.
 func TestTimelineWhereSubset(t *testing.T) {
 	f := QueryFilters{
 		TimeRange: "7d", JobType: "QUERY", Status: "failed",
@@ -48,14 +47,17 @@ func TestTimelineWhereSubset(t *testing.T) {
 	}
 	where, _ := f.TimelineWhere("period_start")
 
-	for _, want := range []string{"job_type = @job_type", "reservation_id IS NOT NULL", "user_email LIKE '%gserviceaccount%'", "user_email = @user_email", "period_start >="} {
+	for _, want := range []string{
+		"job_type = @job_type",
+		"reservation_id IS NOT NULL",
+		"user_email LIKE '%gserviceaccount%'",
+		"user_email = @user_email",
+		"period_start >=",
+		"error_result IS NOT NULL",
+		"cache_hit = TRUE",
+	} {
 		if !strings.Contains(where, want) {
 			t.Errorf("TimelineWhere() = %q, missing %q", where, want)
-		}
-	}
-	for _, reject := range []string{"error_result", "cache_hit"} {
-		if strings.Contains(where, reject) {
-			t.Errorf("TimelineWhere() = %q, must not contain %q", where, reject)
 		}
 	}
 }

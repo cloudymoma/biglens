@@ -168,9 +168,8 @@ type JobRow struct {
 	PartitionSkew  bool     `json:"partition_skew" bigquery:"partition_skew"`
 }
 
-func (b *BQClient) ListJobs(ctx context.Context, filters QueryFilters) ([]JobRow, error) {
-	where, params := filters.JobsWhere("creation_time")
-	q := b.client.Query(fmt.Sprintf(
+func listJobsSQL(regionRef, where string) string {
+	return fmt.Sprintf(
 		`SELECT
 			job_id,
 			user_email,
@@ -187,11 +186,36 @@ func (b *BQClient) ListJobs(ctx context.Context, filters QueryFilters) ([]JobRow
 			IFNULL(cache_hit, FALSE) AS cache_hit,
 			ARRAY(SELECT CONCAT(rt.dataset_id, '.', rt.table_id) FROM UNNEST(referenced_tables) rt) AS ref_tables,
 			IFNULL(LEFT(query, 1024), '') AS query,%s
-		FROM %s.INFORMATION_SCHEMA.JOBS_BY_PROJECT
-		%s
-		ORDER BY creation_time DESC
-		LIMIT 100`,
-		perfInsightFlags, b.regionRef(filters.Region), where))
+		FROM (
+			SELECT
+				job_id,
+				user_email,
+				job_type,
+				statement_type,
+				state,
+				error_result,
+				creation_time,
+				reservation_id,
+				start_time,
+				end_time,
+				total_slot_ms,
+				total_bytes_billed,
+				cache_hit,
+				referenced_tables,
+				query,
+				query_info
+			FROM %s.INFORMATION_SCHEMA.JOBS_BY_PROJECT
+			%s
+			ORDER BY creation_time DESC
+			LIMIT 100
+		)
+		ORDER BY creation_time DESC`,
+		perfInsightFlags, regionRef, where)
+}
+
+func (b *BQClient) ListJobs(ctx context.Context, filters QueryFilters) ([]JobRow, error) {
+	where, params := filters.JobsWhere("creation_time")
+	q := b.client.Query(listJobsSQL(b.regionRef(filters.Region), where))
 	q.Parameters = params
 
 	return collectRows[JobRow](q, ctx)

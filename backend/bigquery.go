@@ -73,6 +73,7 @@ func storageBaseTableWhere(where string) string {
 type storageRollupRow struct {
 	Dataset          string `bigquery:"dataset"`
 	IsRollup         int64  `bigquery:"is_rollup"`
+	BillingModel     string `bigquery:"billing_model"`
 	ActiveLogical    int64  `bigquery:"active_logical"`
 	LongTermLogical  int64  `bigquery:"long_term_logical"`
 	ActivePhysical   int64  `bigquery:"active_physical"`
@@ -83,16 +84,23 @@ type storageRollupRow struct {
 
 func storageOverviewSQL(regionRef, where string) string {
 	return fmt.Sprintf(
-		`SELECT
+		`WITH ds_models AS (
+			SELECT schema_name, IFNULL(option_value, 'LOGICAL') AS billing_model
+			FROM %[1]s.INFORMATION_SCHEMA.SCHEMATA_OPTIONS
+			WHERE option_name = 'storage_billing_model'
+		)
+		SELECT
 			IFNULL(table_schema, '') AS dataset,
 			GROUPING(table_schema) AS is_rollup,
+			IFNULL(ANY_VALUE(dm.billing_model), 'LOGICAL') AS billing_model,
 			COALESCE(SUM(IF(NOT deleted, active_logical_bytes, 0)), 0) AS active_logical,
 			COALESCE(SUM(IF(NOT deleted, long_term_logical_bytes, 0)), 0) AS long_term_logical,
 			COALESCE(SUM(active_physical_bytes), 0) AS active_physical,
 			COALESCE(SUM(long_term_physical_bytes), 0) AS long_term_physical,
 			COALESCE(SUM(time_travel_physical_bytes), 0) AS time_travel,
 			COALESCE(SUM(fail_safe_physical_bytes), 0) AS fail_safe
-		FROM %s.INFORMATION_SCHEMA.TABLE_STORAGE_BY_PROJECT%s
+		FROM %[1]s.INFORMATION_SCHEMA.TABLE_STORAGE_BY_PROJECT
+		LEFT JOIN ds_models dm ON dm.schema_name = table_schema%[2]s
 		GROUP BY ROLLUP(table_schema)
 		ORDER BY is_rollup DESC, (active_logical + long_term_logical) DESC
 		LIMIT 51`,
@@ -125,8 +133,13 @@ func rollupStorageOverview(rows []storageRollupRow) (*StorageStats, *StorageBrea
 			continue
 		}
 		if len(datasets) < 50 {
+			model := r.BillingModel
+			if model == "" {
+				model = "LOGICAL"
+			}
 			datasets = append(datasets, DatasetStorage{
 				Dataset:          r.Dataset,
+				BillingModel:     model,
 				ActiveLogical:    r.ActiveLogical,
 				LongTermLogical:  r.LongTermLogical,
 				ActivePhysical:   r.ActivePhysical,
@@ -172,20 +185,14 @@ func (b *BQClient) GetStorageStats(ctx context.Context, filters QueryFilters) (*
 		b.regionRef(filters.Region), storageBaseTableWhere(where)))
 	q.Parameters = params
 
-	it, err := q.Read(ctx)
+	rows, err := collectRows[StorageStats](q, ctx)
 	if err != nil {
 		return nil, fmt.Errorf("storage stats query failed: %w", err)
 	}
-
-	var stats StorageStats
-	err = it.Next(&stats)
-	if err == iterator.Done {
+	if len(rows) == 0 {
 		return &StorageStats{}, nil
 	}
-	if err != nil {
-		return nil, fmt.Errorf("storage stats iteration failed: %w", err)
-	}
-	return &stats, nil
+	return &rows[0], nil
 }
 
 // --- Widget 1.2: Active vs. Long-Term Storage Breakdown ---
@@ -205,20 +212,14 @@ func (b *BQClient) GetStorageBreakdown(ctx context.Context, filters QueryFilters
 		b.regionRef(filters.Region), storageBaseTableWhere(where)))
 	q.Parameters = params
 
-	it, err := q.Read(ctx)
+	rows, err := collectRows[StorageBreakdown](q, ctx)
 	if err != nil {
 		return nil, fmt.Errorf("storage breakdown query failed: %w", err)
 	}
-
-	var bd StorageBreakdown
-	err = it.Next(&bd)
-	if err == iterator.Done {
+	if len(rows) == 0 {
 		return &StorageBreakdown{}, nil
 	}
-	if err != nil {
-		return nil, fmt.Errorf("storage breakdown iteration failed: %w", err)
-	}
-	return &bd, nil
+	return &rows[0], nil
 }
 
 // --- Widget 1.3: Top 10 Heaviest Tables ---
@@ -255,6 +256,7 @@ func (b *BQClient) GetTopTables(ctx context.Context, filters QueryFilters) ([]To
 
 type DatasetStorage struct {
 	Dataset          string `json:"dataset" bigquery:"dataset"`
+	BillingModel     string `json:"billing_model" bigquery:"billing_model"`
 	ActiveLogical    int64  `json:"active_logical" bigquery:"active_logical"`
 	LongTermLogical  int64  `json:"long_term_logical" bigquery:"long_term_logical"`
 	ActivePhysical   int64  `json:"active_physical" bigquery:"active_physical"`
@@ -266,15 +268,22 @@ type DatasetStorage struct {
 func (b *BQClient) GetDatasetStorage(ctx context.Context, filters QueryFilters) ([]DatasetStorage, error) {
 	where, params := filters.StorageWhere()
 	q := b.client.Query(fmt.Sprintf(
-		`SELECT
+		`WITH ds_models AS (
+			SELECT schema_name, IFNULL(option_value, 'LOGICAL') AS billing_model
+			FROM %[1]s.INFORMATION_SCHEMA.SCHEMATA_OPTIONS
+			WHERE option_name = 'storage_billing_model'
+		)
+		SELECT
 			table_schema AS dataset,
+			IFNULL(ANY_VALUE(dm.billing_model), 'LOGICAL') AS billing_model,
 			COALESCE(SUM(IF(NOT deleted, active_logical_bytes, 0)), 0) AS active_logical,
 			COALESCE(SUM(IF(NOT deleted, long_term_logical_bytes, 0)), 0) AS long_term_logical,
 			COALESCE(SUM(active_physical_bytes), 0) AS active_physical,
 			COALESCE(SUM(long_term_physical_bytes), 0) AS long_term_physical,
 			COALESCE(SUM(time_travel_physical_bytes), 0) AS time_travel,
 			COALESCE(SUM(fail_safe_physical_bytes), 0) AS fail_safe
-		FROM %s.INFORMATION_SCHEMA.TABLE_STORAGE_BY_PROJECT%s
+		FROM %[1]s.INFORMATION_SCHEMA.TABLE_STORAGE_BY_PROJECT
+		LEFT JOIN ds_models dm ON dm.schema_name = table_schema%[2]s
 		GROUP BY dataset
 		ORDER BY active_logical + long_term_logical DESC
 		LIMIT 50`,
@@ -287,10 +296,54 @@ func (b *BQClient) GetDatasetStorage(ctx context.Context, filters QueryFilters) 
 // --- Widget 1.6: Cold Tables (no references in the time window) ---
 
 type ColdTable struct {
-	Dataset     string `json:"dataset" bigquery:"dataset"`
-	TableName   string `json:"table_name" bigquery:"table_name"`
-	TotalBytes  int64  `json:"total_bytes" bigquery:"total_bytes"`
-	StorageTier string `json:"storage_tier" bigquery:"storage_tier"`
+	Dataset          string `json:"dataset" bigquery:"dataset"`
+	TableName        string `json:"table_name" bigquery:"table_name"`
+	TotalBytes       int64  `json:"total_bytes" bigquery:"total_bytes"`
+	ActiveLogical    int64  `json:"active_logical" bigquery:"active_logical"`
+	LongTermLogical  int64  `json:"long_term_logical" bigquery:"long_term_logical"`
+	ActivePhysical   int64  `json:"active_physical" bigquery:"active_physical"`
+	LongTermPhysical int64  `json:"long_term_physical" bigquery:"long_term_physical"`
+	BillingModel     string `json:"billing_model" bigquery:"billing_model"`
+	StorageTier      string `json:"storage_tier" bigquery:"storage_tier"`
+}
+
+func coldTablesSQL(regionRef, interval, extraWhere string) string {
+	return fmt.Sprintf(
+		`WITH refs AS (
+			SELECT DISTINCT rt.dataset_id, rt.table_id
+			FROM %[1]s.INFORMATION_SCHEMA.JOBS_BY_PROJECT j, UNNEST(j.referenced_tables) rt
+			WHERE j.creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL %[2]s)
+				AND rt.project_id = @project
+		),
+		ds_models AS (
+			SELECT schema_name, IFNULL(option_value, 'LOGICAL') AS billing_model
+			FROM %[1]s.INFORMATION_SCHEMA.SCHEMATA_OPTIONS
+			WHERE option_name = 'storage_billing_model'
+		)
+		SELECT
+			ts.table_schema AS dataset,
+			ts.table_name,
+			(ts.active_logical_bytes + ts.long_term_logical_bytes) AS total_bytes,
+			COALESCE(ts.active_logical_bytes, 0) AS active_logical,
+			COALESCE(ts.long_term_logical_bytes, 0) AS long_term_logical,
+			COALESCE(ts.active_physical_bytes, 0) + COALESCE(ts.fail_safe_physical_bytes, 0) AS active_physical,
+			COALESCE(ts.long_term_physical_bytes, 0) AS long_term_physical,
+			IFNULL(dm.billing_model, 'LOGICAL') AS billing_model,
+			CASE WHEN ts.long_term_logical_bytes > ts.active_logical_bytes THEN 'LONG_TERM' ELSE 'ACTIVE' END AS storage_tier
+		FROM %[1]s.INFORMATION_SCHEMA.TABLE_STORAGE_BY_PROJECT ts
+		LEFT JOIN refs r
+			ON r.dataset_id = ts.table_schema AND r.table_id = ts.table_name
+		LEFT JOIN ds_models dm
+			ON dm.schema_name = ts.table_schema
+		WHERE r.table_id IS NULL
+			AND ts.deleted = FALSE
+			AND ts.table_type = 'BASE TABLE'
+			AND (ts.active_logical_bytes + ts.long_term_logical_bytes) > 0
+			AND ts.creation_time < TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL %[2]s)
+			AND NOT STARTS_WITH(ts.table_schema, '_')%[3]s
+		ORDER BY total_bytes DESC
+		LIMIT 20`,
+		regionRef, interval, extraWhere)
 }
 
 func (b *BQClient) GetColdTables(ctx context.Context, filters QueryFilters) ([]ColdTable, error) {
@@ -299,25 +352,8 @@ func (b *BQClient) GetColdTables(ctx context.Context, filters QueryFilters) ([]C
 	if extra != "" {
 		extra = " AND " + extra
 	}
-	q := b.client.Query(fmt.Sprintf(
-		`SELECT
-			ts.table_schema AS dataset,
-			ts.table_name,
-			(ts.active_logical_bytes + ts.long_term_logical_bytes) AS total_bytes,
-			CASE WHEN ts.long_term_logical_bytes > ts.active_logical_bytes THEN 'LONG_TERM' ELSE 'ACTIVE' END AS storage_tier
-		FROM %[1]s.INFORMATION_SCHEMA.TABLE_STORAGE_BY_PROJECT ts
-		WHERE ts.deleted = FALSE
-			AND NOT STARTS_WITH(ts.table_schema, '_')
-			AND NOT EXISTS (
-				SELECT 1
-				FROM %[1]s.INFORMATION_SCHEMA.JOBS_BY_PROJECT j, UNNEST(j.referenced_tables) rt
-				WHERE j.creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL %[2]s)
-					AND rt.dataset_id = ts.table_schema
-					AND rt.table_id = ts.table_name
-			)%[3]s
-		ORDER BY total_bytes DESC
-		LIMIT 20`,
-		b.regionRef(filters.Region), filters.TimeInterval(), extra))
+	params = append(params, bigquery.QueryParameter{Name: "project", Value: b.config.BigQuery.ProjectID})
+	q := b.client.Query(coldTablesSQL(b.regionRef(filters.Region), filters.TimeInterval(), extra))
 	q.Parameters = params
 
 	return collectRows[ColdTable](q, ctx)
@@ -536,19 +572,14 @@ func (b *BQClient) GetQueueStats(ctx context.Context, filters QueryFilters) (*Qu
 		b.regionRef(filters.Region), where))
 	q.Parameters = params
 
-	it, err := q.Read(ctx)
+	rows, err := collectRows[QueueStats](q, ctx)
 	if err != nil {
 		return nil, fmt.Errorf("queue stats query failed: %w", err)
 	}
-	var qs QueueStats
-	err = it.Next(&qs)
-	if err == iterator.Done {
+	if len(rows) == 0 {
 		return &QueueStats{}, nil
 	}
-	if err != nil {
-		return nil, fmt.Errorf("queue stats iteration failed: %w", err)
-	}
-	return &qs, nil
+	return &rows[0], nil
 }
 
 // --- Widget 2.4: Reservation Utilization ---
@@ -559,20 +590,35 @@ type ReservationPoint struct {
 	Autoscale   float64 `json:"autoscale" bigquery:"autoscale"`
 }
 
-// GetReservationTimeline returns baseline + autoscaled capacity per minute.
+func reservationTimelineSQL(regionRef, interval string) string {
+	return fmt.Sprintf(
+		`SELECT
+			FORMAT_TIMESTAMP("%%Y-%%m-%%dT%%H:%%M:%%SZ", TIMESTAMP_SECONDS(DIV(UNIX_SECONDS(period_start), @bucket_secs) * @bucket_secs)) AS period_start,
+			CAST(AVG(assigned_slots) AS FLOAT64) AS assigned,
+			CAST(AVG(autoscale_slots) AS FLOAT64) AS autoscale
+		FROM (
+			SELECT
+				period_start,
+				IFNULL(SUM(slots_assigned), 0) AS assigned_slots,
+				IFNULL(SUM(COALESCE(SAFE_DIVIDE(period_autoscale_slot_seconds, 60), CAST(autoscale.current_slots AS FLOAT64), 0)), 0) AS autoscale_slots
+			FROM %s.INFORMATION_SCHEMA.RESERVATIONS_TIMELINE
+			WHERE period_start >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL %s)
+			GROUP BY period_start
+		)
+		GROUP BY 1
+		ORDER BY 1 ASC`,
+		regionRef, interval)
+}
+
+// GetReservationTimeline returns bucketed baseline + autoscaled capacity using
+// period_autoscale_slot_seconds / 60 (falling back to autoscale.current_slots).
 // Projects without reservations (or without permission on the admin
 // project) get an empty result; callers treat errors as "no reservations".
 func (b *BQClient) GetReservationTimeline(ctx context.Context, filters QueryFilters) ([]ReservationPoint, error) {
-	q := b.client.Query(fmt.Sprintf(
-		`SELECT
-			FORMAT_TIMESTAMP("%%Y-%%m-%%dT%%H:%%M:%%SZ", period_start) AS period_start,
-			CAST(SUM(slots_assigned) AS FLOAT64) AS assigned,
-			CAST(SUM(IFNULL(autoscale.current_slots, 0)) AS FLOAT64) AS autoscale
-		FROM %s.INFORMATION_SCHEMA.RESERVATIONS_TIMELINE
-		WHERE period_start >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL %s)
-		GROUP BY period_start
-		ORDER BY period_start ASC`,
-		b.regionRef(filters.Region), filters.TimeInterval()))
+	q := b.client.Query(reservationTimelineSQL(b.regionRef(filters.Region), filters.TimeInterval()))
+	q.Parameters = []bigquery.QueryParameter{
+		{Name: "bucket_secs", Value: filters.TimelineBucketSeconds()},
+	}
 
 	return collectRows[ReservationPoint](q, ctx)
 }
@@ -636,9 +682,10 @@ func (b *BQClient) GetSlotUsage(ctx context.Context, filters QueryFilters) ([]Sl
 // --- Widget 3.1: On-Demand Cost Extrapolator ---
 
 type CostSummary struct {
-	BytesBilled    int64 `json:"bytes_billed" bigquery:"bytes_billed"`
-	BytesProcessed int64 `json:"bytes_processed" bigquery:"bytes_processed"`
-	TotalSlotMs    int64 `json:"total_slot_ms" bigquery:"total_slot_ms"`
+	BytesBilled         int64 `json:"bytes_billed" bigquery:"bytes_billed"`
+	OnDemandBytesBilled int64 `json:"ondemand_bytes_billed" bigquery:"ondemand_bytes_billed"`
+	BytesProcessed      int64 `json:"bytes_processed" bigquery:"bytes_processed"`
+	TotalSlotMs         int64 `json:"total_slot_ms" bigquery:"total_slot_ms"`
 }
 
 func (b *BQClient) GetCostSummary(ctx context.Context, filters QueryFilters) (*CostSummary, error) {
@@ -646,6 +693,7 @@ func (b *BQClient) GetCostSummary(ctx context.Context, filters QueryFilters) (*C
 	q := b.client.Query(fmt.Sprintf(
 		`SELECT
 			IFNULL(SUM(total_bytes_billed), 0) AS bytes_billed,
+			IFNULL(SUM(IF(reservation_id IS NULL, total_bytes_billed, 0)), 0) AS ondemand_bytes_billed,
 			IFNULL(SUM(total_bytes_processed), 0) AS bytes_processed,
 			IFNULL(SUM(total_slot_ms), 0) AS total_slot_ms
 		FROM %s.INFORMATION_SCHEMA.JOBS_BY_PROJECT
@@ -653,20 +701,113 @@ func (b *BQClient) GetCostSummary(ctx context.Context, filters QueryFilters) (*C
 		b.regionRef(filters.Region), where))
 	q.Parameters = params
 
-	it, err := q.Read(ctx)
+	rows, err := collectRows[CostSummary](q, ctx)
 	if err != nil {
 		return nil, fmt.Errorf("cost summary query failed: %w", err)
 	}
-
-	var cs CostSummary
-	err = it.Next(&cs)
-	if err == iterator.Done {
+	if len(rows) == 0 {
 		return &CostSummary{}, nil
 	}
-	if err != nil {
-		return nil, fmt.Errorf("cost summary iteration failed: %w", err)
+	return &rows[0], nil
+}
+
+type costGroupingRow struct {
+	GDay                int64  `bigquery:"g_day"`
+	GName               int64  `bigquery:"g_name"`
+	Day                 string `bigquery:"day"`
+	Name                string `bigquery:"name"`
+	BytesBilled         int64  `bigquery:"bytes_billed"`
+	OnDemandBytesBilled int64  `bigquery:"ondemand_bytes_billed"`
+	BytesProcessed      int64  `bigquery:"bytes_processed"`
+	TotalSlotMs         int64  `bigquery:"total_slot_ms"`
+}
+
+func costOverviewSQL(regionRef, where, spendExpr string, includeSpend bool) string {
+	groupSets := "((), (day))"
+	gNameExpr := "1 AS g_name,\n\t\t\t\t'' AS spend_name,"
+	if includeSpend {
+		groupSets = "((), (day), (spend_name))"
+		gNameExpr = "GROUPING(spend_name) AS g_name,\n\t\t\t\tspend_name,"
 	}
-	return &cs, nil
+	return fmt.Sprintf(
+		`SELECT
+			g_day,
+			g_name,
+			IFNULL(day, '') AS day,
+			IFNULL(spend_name, '') AS name,
+			bytes_billed,
+			ondemand_bytes_billed,
+			bytes_processed,
+			total_slot_ms
+		FROM (
+			SELECT
+				GROUPING(day) AS g_day,
+				%s
+				day,
+				IFNULL(SUM(total_bytes_billed), 0) AS bytes_billed,
+				IFNULL(SUM(IF(reservation_id IS NULL, total_bytes_billed, 0)), 0) AS ondemand_bytes_billed,
+				IFNULL(SUM(total_bytes_processed), 0) AS bytes_processed,
+				IFNULL(SUM(total_slot_ms), 0) AS total_slot_ms
+			FROM (
+				SELECT
+					FORMAT_DATE("%%Y-%%m-%%d", DATE(creation_time)) AS day,
+					%s AS spend_name,
+					total_bytes_billed,
+					total_bytes_processed,
+					total_slot_ms,
+					reservation_id
+				FROM %s.INFORMATION_SCHEMA.JOBS_BY_PROJECT
+				%s AND (statement_type IS NULL OR statement_type != 'SCRIPT')
+			)
+			GROUP BY GROUPING SETS %s
+		)
+		ORDER BY g_day DESC, g_name DESC, day ASC, bytes_billed DESC`,
+		gNameExpr, spendExpr, regionRef, where, groupSets)
+}
+
+func rollupCostOverview(rows []costGroupingRow) (*CostSummary, []DailyCost, []SpendEntry) {
+	summary := &CostSummary{}
+	var daily []DailyCost
+	var spend []SpendEntry
+	for _, r := range rows {
+		switch {
+		case r.GDay == 1 && r.GName == 1:
+			summary = &CostSummary{
+				BytesBilled:         r.BytesBilled,
+				OnDemandBytesBilled: r.OnDemandBytesBilled,
+				BytesProcessed:      r.BytesProcessed,
+				TotalSlotMs:         r.TotalSlotMs,
+			}
+		case r.GDay == 0 && r.GName == 1:
+			if r.Day != "" {
+				daily = append(daily, DailyCost{Day: r.Day, BytesBilled: r.BytesBilled})
+			}
+		case r.GDay == 1 && r.GName == 0:
+			if len(spend) < 25 {
+				spend = append(spend, SpendEntry{Name: r.Name, TotalBytes: r.BytesBilled})
+			}
+		}
+	}
+	return summary, daily, spend
+}
+
+// GetCostOverview scans JOBS_BY_PROJECT once using GROUPING SETS to produce
+// CostSummary, DailyCost, and (when GroupBy is user or reservation) SpendEntry.
+func (b *BQClient) GetCostOverview(ctx context.Context, filters QueryFilters, includeSpend bool) (*CostSummary, []DailyCost, []SpendEntry, error) {
+	where, params := filters.JobsWhere("creation_time")
+	spendExpr := "IFNULL(user_email, '')"
+	if filters.GroupBy == "reservation" {
+		spendExpr = "IFNULL(reservation_id, 'on-demand')"
+	}
+	q := b.client.Query(costOverviewSQL(b.regionRef(filters.Region), where, spendExpr, includeSpend))
+	q.Parameters = params
+
+	rows, err := collectRows[costGroupingRow](q, ctx)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("cost overview query failed: %w", err)
+	}
+	s, daily, spend := rollupCostOverview(rows)
+	return s, daily, spend, nil
 }
 
 // --- Widget 3.2: Spend by <group-by dimension> (Treemap) ---
@@ -819,7 +960,24 @@ func (b *BQClient) ListTables(ctx context.Context, datasetID string) ([]string, 
 
 // --- Generic row collector ---
 
+const defaultInfoSchemaMaxBytesBilled int64 = 10 << 30 // 10 GiB safety cap
+
+// applyQueryDefaults tags every BigLens query with app=biglens so the tool's
+// own diagnostic jobs can be excluded from JOBS_BY_PROJECT dashboards, and
+// applies a 10 GiB MaxBytesBilled safety cap to INFORMATION_SCHEMA queries.
+func applyQueryDefaults(q *bigquery.Query) {
+	if q.Labels == nil {
+		q.Labels = map[string]string{"app": "biglens"}
+	} else if _, ok := q.Labels["app"]; !ok {
+		q.Labels["app"] = "biglens"
+	}
+	if q.MaxBytesBilled == 0 && strings.Contains(q.QueryConfig.Q, "INFORMATION_SCHEMA") {
+		q.MaxBytesBilled = defaultInfoSchemaMaxBytesBilled
+	}
+}
+
 func collectRows[T any](q *bigquery.Query, ctx context.Context) ([]T, error) {
+	applyQueryDefaults(q)
 	it, err := q.Read(ctx)
 	if err != nil {
 		return nil, err

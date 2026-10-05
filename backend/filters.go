@@ -106,6 +106,31 @@ func (f QueryFilters) CacheKey(prefix string) string {
 		f.UserEmail, f.TimeRange, f.JobType, f.Status, f.CacheHit, f.Billing, f.Principal, f.GroupBy)
 }
 
+// StorageCoreCacheKey scopes cache entries for TABLE_STORAGE_BY_PROJECT and
+// SEARCH_INDEXES, which only depend on region, dataset, and table.
+func (f QueryFilters) StorageCoreCacheKey(prefix string) string {
+	return fmt.Sprintf("%s:%s:%s:%s", prefix, f.Region, f.Dataset, f.Table)
+}
+
+// StorageColdCacheKey scopes cache entries for GetColdTables, which depends on
+// region, dataset, table, and the lookback time_range.
+func (f QueryFilters) StorageColdCacheKey(prefix string) string {
+	return fmt.Sprintf("%s:%s:%s:%s:%s", prefix, f.Region, f.Dataset, f.Table, f.TimeRange)
+}
+
+// JobsCacheKey scopes cache entries for JOBS_BY_PROJECT / JOBS_TIMELINE_BY_PROJECT
+// queries that do not depend on the Cost spend breakdown dimension (group_by).
+func (f QueryFilters) JobsCacheKey(prefix string) string {
+	return fmt.Sprintf("%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s", prefix, f.Region, f.Dataset, f.Table,
+		f.UserEmail, f.TimeRange, f.JobType, f.Status, f.CacheHit, f.Billing, f.Principal)
+}
+
+// ReservationCacheKey scopes cache entries for RESERVATIONS_TIMELINE, which only
+// depends on region and time_range.
+func (f QueryFilters) ReservationCacheKey(prefix string) string {
+	return fmt.Sprintf("%s:%s:%s", prefix, f.Region, f.TimeRange)
+}
+
 func (f QueryFilters) StorageWhere() (string, []bigquery.QueryParameter) {
 	var clauses []string
 	var params []bigquery.QueryParameter
@@ -129,17 +154,22 @@ func (f QueryFilters) JobsWhere(timeCol string) (string, []bigquery.QueryParamet
 	clauses, params := f.jobsClauses(
 		fmt.Sprintf("%s >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL %s)", timeCol, f.TimeInterval()))
 
-	switch f.Status {
-	case "success":
-		clauses = append(clauses, "error_result IS NULL")
-	case "failed":
-		clauses = append(clauses, "error_result IS NOT NULL")
-	}
-	switch f.CacheHit {
-	case "hit":
-		clauses = append(clauses, "cache_hit = TRUE")
-	case "miss":
-		clauses = append(clauses, "(cache_hit IS NULL OR cache_hit = FALSE)")
+	// Exclude BigLens's own diagnostic queries labeled app=biglens so the tool
+	// does not pollute Cost, Insights, or Jobs metrics.
+	clauses = append(clauses, "NOT EXISTS (SELECT 1 FROM UNNEST(labels) l WHERE l.key = 'app' AND l.value = 'biglens')")
+
+	if f.Dataset != "" && f.Table != "" {
+		clauses = append(clauses, "EXISTS (SELECT 1 FROM UNNEST(referenced_tables) rt WHERE rt.dataset_id = @dataset AND rt.table_id = @table_name)")
+		params = append(params,
+			bigquery.QueryParameter{Name: "dataset", Value: f.Dataset},
+			bigquery.QueryParameter{Name: "table_name", Value: f.Table},
+		)
+	} else if f.Dataset != "" {
+		clauses = append(clauses, "EXISTS (SELECT 1 FROM UNNEST(referenced_tables) rt WHERE rt.dataset_id = @dataset)")
+		params = append(params, bigquery.QueryParameter{Name: "dataset", Value: f.Dataset})
+	} else if f.Table != "" {
+		clauses = append(clauses, "EXISTS (SELECT 1 FROM UNNEST(referenced_tables) rt WHERE rt.table_id = @table_name)")
+		params = append(params, bigquery.QueryParameter{Name: "table_name", Value: f.Table})
 	}
 
 	return " WHERE " + strings.Join(clauses, " AND "), params
@@ -169,8 +199,8 @@ const timelineWindowEnd = "TIMESTAMP_SECONDS(DIV(UNIX_SECONDS(CURRENT_TIMESTAMP(
 // more than 24h before the window start.
 const timelineCreationMarginHours = 24
 
-// TimelineWhere builds the WHERE for JOBS_TIMELINE_BY_PROJECT, which lacks
-// the cache_hit and error_result columns, so those filters are dropped.
+// TimelineWhere builds the WHERE for JOBS_TIMELINE_BY_PROJECT, which exposes
+// user_email, job_type, reservation_id, error_result, and cache_hit.
 //
 // timeCol is bounded to whole buckets of TimelineBucketSeconds (bound as
 // @bucket_secs in the returned params): the window ends where the current,
@@ -213,6 +243,18 @@ func (f QueryFilters) jobsClauses(window ...string) ([]string, []bigquery.QueryP
 		clauses = append(clauses, "user_email LIKE '%gserviceaccount%'")
 	case "human":
 		clauses = append(clauses, "user_email NOT LIKE '%gserviceaccount%'")
+	}
+	switch f.Status {
+	case "success":
+		clauses = append(clauses, "error_result IS NULL")
+	case "failed":
+		clauses = append(clauses, "error_result IS NOT NULL")
+	}
+	switch f.CacheHit {
+	case "hit":
+		clauses = append(clauses, "cache_hit = TRUE")
+	case "miss":
+		clauses = append(clauses, "(cache_hit IS NULL OR cache_hit = FALSE)")
 	}
 	return clauses, params
 }

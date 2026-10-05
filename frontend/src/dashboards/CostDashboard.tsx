@@ -32,20 +32,23 @@ export default function CostDashboard({ filters }: { filters: QueryFilters }) {
   if (!data) return null;
 
   const bytesBilled = data.summary?.bytes_billed || 0;
+  const onDemandBytesBilled = data.summary?.ondemand_bytes_billed ?? bytesBilled;
   const bytesProcessed = data.summary?.bytes_processed || 0;
   const slotMs = data.summary?.total_slot_ms || 0;
   const spendBy = data.spend_by || [];
   const dailyCost = data.daily_cost || [];
 
   const { onDemandPerTiB, slotHourRates } = getRegionPricing(filters.region);
-  const onDemandCost = (bytesBilled / TIB) * onDemandPerTiB;
+  const onDemandCost = (onDemandBytesBilled / TIB) * onDemandPerTiB;
+  const allOnDemandWhatIfCost = (bytesBilled / TIB) * onDemandPerTiB;
   const slotHours = slotMs / 3_600_000;
   const editionCost = slotHours * slotHourRates[edition];
-  const editionsCheaper = editionCost < onDemandCost;
+  const editionsCheaper = editionCost < allOnDemandWhatIfCost;
   const gapPct = bytesProcessed > 0 ? ((bytesBilled - bytesProcessed) / bytesProcessed) * 100 : 0;
 
   const groupLabel = GROUP_LABELS[filters.group_by] || 'User';
   const totalSpendBytes = spendBy.reduce((s, u) => s + u.total_bytes, 0);
+  const denomBytes = bytesBilled > 0 ? bytesBilled : totalSpendBytes;
 
   const treemapOption = {
     backgroundColor: 'transparent',
@@ -54,10 +57,10 @@ export default function CostDashboard({ filters }: { filters: QueryFilters }) {
       borderColor: '#27272a',
       textStyle: { color: '#e4e4e7', fontSize: 12 },
       formatter: (p: any) => {
-        const pct = totalSpendBytes > 0 ? ((p.value / totalSpendBytes) * 100).toFixed(1) : '0';
+        const pct = denomBytes > 0 ? ((p.value / denomBytes) * 100).toFixed(1) : '0';
         return `<div style="font-weight:600;color:#a1a1aa;font-size:11px;margin-bottom:4px">${p.name}</div>
                 <div style="color:#f4f4f5;font-size:13px">${formatBytes(p.value)}</div>
-                <div style="color:#71717a;font-size:11px">${pct}% of total</div>`;
+                <div style="color:#71717a;font-size:11px">${pct}% of project billed bytes</div>`;
       },
     },
     series: [{
@@ -105,7 +108,9 @@ export default function CostDashboard({ filters }: { filters: QueryFilters }) {
       formatter: (params: any) => {
         const p = params[0];
         const usd = (p.value / TIB) * onDemandPerTiB;
-        return `<div style="font-weight:600;color:#a1a1aa;font-size:11px;margin-bottom:4px">${p.name}</div>
+        const isPartial = dailyCost.length > 1 && (p.dataIndex === 0 || p.dataIndex === dailyCost.length - 1);
+        const partialNote = isPartial ? ' <span style="color:#fbbf24">(partial UTC day)</span>' : '';
+        return `<div style="font-weight:600;color:#a1a1aa;font-size:11px;margin-bottom:4px">${p.name}${partialNote}</div>
                 <div style="color:#f4f4f5;font-size:13px">${formatBytes(p.value)} · ~$${usd.toFixed(2)}</div>`;
       },
     },
@@ -149,14 +154,14 @@ export default function CostDashboard({ filters }: { filters: QueryFilters }) {
           label="Data Scanned (Billed)"
           value={formatBytes(bytesBilled)}
           icon={<TrendingUp size={18} />}
-          detail={`${(bytesBilled / TIB).toFixed(4)} TiB billed`}
+          detail={`${(bytesBilled / TIB).toFixed(4)} TiB total (${(onDemandBytesBilled / TIB).toFixed(4)} TiB on-demand)`}
           accentColor="#38bdf8"
         />
         <MetricCard
-          label="Estimated Cost"
+          label="Estimated On-Demand Cost"
           value={`$${onDemandCost.toFixed(2)}`}
           icon={<DollarSign size={18} />}
-          detail={`On-demand @ $${onDemandPerTiB}/TiB (excl. scripts)`}
+          detail={`Unreserved jobs @ $${onDemandPerTiB}/TiB list rate (before 1 TiB/mo free tier)`}
           accentColor="#fbbf24"
         />
         <MetricCard
@@ -186,25 +191,27 @@ export default function CostDashboard({ filters }: { filters: QueryFilters }) {
             ))}
           </select>
         </div>
-        <p className="text-xs text-zinc-500 mb-5">The same filtered workload priced both ways. Note: bytes billed can read 0 for reservation-billed jobs.</p>
+        <p className="text-xs text-zinc-500 mb-5">
+          The same filtered workload priced both ways. Editions PAYG shown is a 100%-utilization theoretical lower bound (actual autoscaling rounds up in 50-slot increments with a 1-minute minimum).
+        </p>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="p-4 rounded-xl border border-zinc-800/30" style={{ background: '#09090b' }}>
-            <p className="text-[10px] text-zinc-600 uppercase font-semibold tracking-wider mb-1">On-demand</p>
-            <p className="text-xl font-bold text-white font-mono">${onDemandCost.toFixed(2)}</p>
+            <p className="text-[10px] text-zinc-600 uppercase font-semibold tracking-wider mb-1">On-demand (All Bytes)</p>
+            <p className="text-xl font-bold text-white font-mono">${allOnDemandWhatIfCost.toFixed(2)}</p>
             <p className="text-[11px] text-zinc-600 mt-1">{(bytesBilled / TIB).toFixed(3)} TiB × ${onDemandPerTiB}</p>
           </div>
           <div className="p-4 rounded-xl border border-zinc-800/30" style={{ background: '#09090b' }}>
-            <p className="text-[10px] text-zinc-600 uppercase font-semibold tracking-wider mb-1">{EDITION_LABELS[edition]} (PAYG)</p>
+            <p className="text-[10px] text-zinc-600 uppercase font-semibold tracking-wider mb-1">{EDITION_LABELS[edition]} (100% Util. Bound)</p>
             <p className="text-xl font-bold text-white font-mono">${editionCost.toFixed(2)}</p>
             <p className="text-[11px] text-zinc-600 mt-1">{slotHours.toFixed(1)} slot-hrs × ${slotHourRates[edition]}</p>
           </div>
           <div className="p-4 rounded-xl border" style={{ background: '#09090b', borderColor: editionsCheaper ? '#4ade8030' : '#38bdf830' }}>
-            <p className="text-[10px] text-zinc-600 uppercase font-semibold tracking-wider mb-1">Verdict</p>
+            <p className="text-[10px] text-zinc-600 uppercase font-semibold tracking-wider mb-1">Verdict (Ideal Lower Bound)</p>
             <p className="text-xl font-bold font-mono" style={{ color: editionsCheaper ? '#4ade80' : '#38bdf8' }}>
               {editionsCheaper ? EDITION_LABELS[edition] : 'On-demand'}
             </p>
             <p className="text-[11px] text-zinc-600 mt-1">
-              cheaper by ${Math.abs(onDemandCost - editionCost).toFixed(2)} for this window
+              cheaper by ${Math.abs(allOnDemandWhatIfCost - editionCost).toFixed(2)} at 100% slot utilization
             </p>
           </div>
         </div>
@@ -213,7 +220,7 @@ export default function CostDashboard({ filters }: { filters: QueryFilters }) {
       {/* Widget 3.3: Daily cost trend */}
       <div className="rounded-2xl border border-zinc-800/50 p-6" style={{ background: '#111114' }}>
         <h3 className="text-sm font-semibold text-white mb-1">Daily Spend Trend</h3>
-        <p className="text-xs text-zinc-500 mb-4">Bytes billed per day — spot cost regressions the day they happen</p>
+        <p className="text-xs text-zinc-500 mb-4">Bytes billed per UTC day (rolling window — first and current UTC days are partial)</p>
         {dailyCost.length > 0 ? (
           <div className="h-[280px]">
             <ReactECharts option={dailyOption} style={{ height: '100%' }} />
@@ -227,8 +234,8 @@ export default function CostDashboard({ filters }: { filters: QueryFilters }) {
       <div className="rounded-2xl border border-zinc-800/50 p-6" style={{ background: '#111114' }}>
         <h3 className="text-sm font-semibold text-white mb-1">Spend by {groupLabel}</h3>
         <p className="text-xs text-zinc-500 mb-4">
-          Bytes billed per {groupLabel.toLowerCase()}{filters.group_by === 'dataset' || filters.group_by === 'table'
-            ? ' — a job referencing N tables counts once under each' : ''}
+          Top 25 by bytes billed per {groupLabel.toLowerCase()}{filters.group_by === 'dataset' || filters.group_by === 'table'
+            ? ' — a job referencing N tables counts once under each (group sum can exceed 100% of project bytes)' : ''}
         </p>
         {spendBy.length > 0 ? (
           <div className="h-[380px]">

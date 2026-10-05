@@ -47,6 +47,8 @@ func filterEmailsByPrefix(all []string, prefix string, limit int) []string {
 	return out
 }
 
+const selfJobExclusionClause = "NOT EXISTS (SELECT 1 FROM UNNEST(labels) l WHERE l.key = 'app' AND l.value = 'biglens')"
+
 func (b *BQClient) GetDistinctEmails180d(ctx context.Context, region string) ([]string, error) {
 	q := b.client.Query(fmt.Sprintf(
 		`SELECT DISTINCT user_email
@@ -54,8 +56,9 @@ func (b *BQClient) GetDistinctEmails180d(ctx context.Context, region string) ([]
 		WHERE creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 180 DAY)
 			AND user_email IS NOT NULL
 			AND IFNULL(statement_type, '') != 'SCRIPT'
+			AND %s
 		ORDER BY user_email`,
-		b.regionRef(region)))
+		b.regionRef(region), selfJobExclusionClause))
 	type row struct {
 		UserEmail string `bigquery:"user_email"`
 	}
@@ -83,7 +86,8 @@ func (b *BQClient) SearchEmails(ctx context.Context, region, prefix string, limi
 	whereParts = append(whereParts,
 		"creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 180 DAY)",
 		"user_email IS NOT NULL",
-		"IFNULL(statement_type, '') != 'SCRIPT'")
+		"IFNULL(statement_type, '') != 'SCRIPT'",
+		selfJobExclusionClause)
 
 	if prefix != "" {
 		whereParts = append(whereParts, `LOWER(user_email) LIKE CONCAT(LOWER(@prefix), '%') ESCAPE '\\'`)
@@ -159,7 +163,8 @@ func (b *BQClient) GetUsageTimeline(ctx context.Context, region string, emails [
 	clauses = append(clauses,
 		fmt.Sprintf("creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL %s)", interval),
 		"user_email IS NOT NULL",
-		"IFNULL(statement_type, '') != 'SCRIPT'")
+		"IFNULL(statement_type, '') != 'SCRIPT'",
+		selfJobExclusionClause)
 
 	if len(emails) > 0 {
 		clauses = append(clauses, "LOWER(user_email) IN UNNEST(@emails)")
@@ -245,6 +250,7 @@ func (b *BQClient) GetIdentityStats(ctx context.Context, region string, emails [
 		fmt.Sprintf("creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL %s)", interval),
 		"user_email IS NOT NULL",
 		"IFNULL(statement_type, '') != 'SCRIPT'",
+		selfJobExclusionClause,
 	}
 	var params []bigquery.QueryParameter
 	if len(emails) > 0 {
@@ -306,10 +312,11 @@ func longWindowIAMSQL(regionRef string) string {
 		WHERE creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 180 DAY)
 			AND user_email IS NOT NULL
 			AND IFNULL(statement_type, '') != 'SCRIPT'
+			AND %s
 		GROUP BY email
 		HAVING TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), MAX(creation_time), DAY) >= 7
 			OR MIN(IF(creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 90 DAY), creation_time, NULL)) >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)`,
-		regionRef)
+		regionRef, selfJobExclusionClause)
 }
 
 func splitLongWindowIAM(rows []longWindowIAMRow, minIdleDays int64, filterEmails []string) ([]InactiveEmail, []NewActor) {
@@ -392,6 +399,7 @@ func (b *BQClient) GetInactiveEmails(ctx context.Context, region string, inactiv
 			WHERE creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 180 DAY)
 				AND user_email IS NOT NULL
 				AND IFNULL(statement_type, '') != 'SCRIPT'
+				AND %s
 			GROUP BY email
 		)
 		SELECT
@@ -402,7 +410,7 @@ func (b *BQClient) GetInactiveEmails(ctx context.Context, region string, inactiv
 		FROM recent
 		WHERE TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), last_active, DAY) >= @inactive_days
 		ORDER BY days_idle DESC`,
-		b.regionRef(region)))
+		b.regionRef(region), selfJobExclusionClause))
 	q.Parameters = params
 
 	return collectRows[InactiveEmail](q, ctx)
@@ -431,23 +439,22 @@ func iamSummarySQL(regionRef, interval string) string {
 		FROM %s.INFORMATION_SCHEMA.JOBS_BY_PROJECT
 		WHERE creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL %s)
 			AND user_email IS NOT NULL
-			AND IFNULL(statement_type, '') != 'SCRIPT'`,
-		regionRef, interval)
+			AND IFNULL(statement_type, '') != 'SCRIPT'
+			AND %s`,
+		regionRef, interval, selfJobExclusionClause)
 }
 
 func (b *BQClient) GetIAMSummary(ctx context.Context, region, timeRange string) (*IAMSummary, error) {
 	q := b.client.Query(iamSummarySQL(b.regionRef(region), timeRangeToInterval(timeRange)))
 
-	it, err := q.Read(ctx)
+	rows, err := collectRows[IAMSummary](q, ctx)
 	if err != nil {
 		return nil, fmt.Errorf("iam summary query failed: %w", err)
 	}
-
-	var s IAMSummary
-	if err := it.Next(&s); err != nil {
+	if len(rows) == 0 {
 		return &IAMSummary{}, nil
 	}
-	return &s, nil
+	return &rows[0], nil
 }
 
 func timeRangeToInterval(tr string) string {
@@ -498,9 +505,10 @@ func (b *BQClient) GetNewActors(ctx context.Context, region string) ([]NewActor,
 		WHERE creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 90 DAY)
 			AND user_email IS NOT NULL
 			AND IFNULL(statement_type, '') != 'SCRIPT'
+			AND %s
 		GROUP BY email
 		HAVING MIN(creation_time) >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)
-		ORDER BY first_seen DESC LIMIT 50`, b.regionRef(region)))
+		ORDER BY first_seen DESC LIMIT 50`, b.regionRef(region), selfJobExclusionClause))
 	return collectRows[NewActor](q, ctx)
 }
 
@@ -588,7 +596,8 @@ func (b *BQClient) GetOffHours(ctx context.Context, region string, emails []stri
 		fmt.Sprintf("creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL %s)", interval),
 		"user_email IS NOT NULL",
 		"NOT ENDS_WITH(user_email, '.gserviceaccount.com')",
-		"IFNULL(statement_type, '') != 'SCRIPT'")
+		"IFNULL(statement_type, '') != 'SCRIPT'",
+		selfJobExclusionClause)
 	if len(emails) > 0 {
 		clauses = append(clauses, "LOWER(user_email) IN UNNEST(@emails)")
 		params = append(params, bigquery.QueryParameter{Name: "emails", Value: emails})
@@ -654,7 +663,8 @@ func (b *BQClient) GetExfilSignals(ctx context.Context, region string, emails []
 	clauses = append(clauses,
 		fmt.Sprintf("creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL %s)", interval),
 		"user_email IS NOT NULL",
-		"IFNULL(statement_type, '') != 'SCRIPT'")
+		"IFNULL(statement_type, '') != 'SCRIPT'",
+		selfJobExclusionClause)
 	if len(emails) > 0 {
 		clauses = append(clauses, "LOWER(user_email) IN UNNEST(@emails)")
 		params = append(params, bigquery.QueryParameter{Name: "emails", Value: emails})

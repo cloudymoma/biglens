@@ -115,7 +115,12 @@ export default function JobsDashboard({ filters }: { filters: QueryFilters }) {
                     <td className="py-2.5 px-3 text-right text-zinc-300 font-mono">{fmtMs(j.duration_ms)}</td>
                     <td className="py-2.5 px-3 text-right text-zinc-300 font-mono">{(j.slot_ms / 1000).toFixed(1)}s</td>
                     <td className="py-2.5 px-3 text-right text-zinc-300 font-mono">{formatBytes(j.bytes_billed)}</td>
-                    <td className="py-2.5 px-3 text-right text-amber-400 font-mono">${((j.bytes_billed / TIB) * onDemandPerTiB).toFixed(4)}</td>
+                    <td
+                      className={`py-2.5 px-3 text-right font-mono ${j.reservation ? 'text-zinc-500' : 'text-amber-400'}`}
+                      title={j.reservation ? `Reservation: ${j.reservation} (billed by slot capacity)` : undefined}
+                    >
+                      {j.reservation ? '—' : `$${((j.bytes_billed / TIB) * onDemandPerTiB).toFixed(4)}`}
+                    </td>
                     <td className="py-2.5 px-3 text-zinc-400 font-mono">{j.cache_hit ? 'HIT' : '—'}</td>
                   </tr>
                 ))}

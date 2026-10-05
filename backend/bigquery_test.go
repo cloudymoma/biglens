@@ -157,5 +157,146 @@ func TestRecommendationsAndErrorSQL(t *testing.T) {
 	}
 }
 
+func TestColdTablesSQLAndReservationTimelineSQL(t *testing.T) {
+	where, _ := QueryFilters{Dataset: "ds1"}.StorageWhere()
+	extra := strings.TrimPrefix(where, " WHERE ")
+	if extra != "" {
+		extra = " AND " + extra
+	}
+	coldSQL := coldTablesSQL("`p`.`region-us`", "90 DAY", extra)
+	for _, want := range []string{
+		"WITH refs AS (",
+		"SELECT DISTINCT rt.dataset_id, rt.table_id",
+		"WHERE j.creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 90 DAY)",
+		"AND rt.project_id = @project",
+		"AND ts.deleted = FALSE",
+		"AND ts.table_type = 'BASE TABLE'",
+		"AND ts.creation_time < TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 90 DAY)",
+		"LEFT JOIN refs r",
+		"WHERE r.table_id IS NULL",
+		"AS billing_model",
+	} {
+		if !strings.Contains(coldSQL, want) {
+			t.Errorf("coldTablesSQL missing %q in:\n%s", want, coldSQL)
+		}
+	}
+
+	resSQL := reservationTimelineSQL("`p`.`region-us`", "7 DAY")
+	for _, want := range []string{
+		"DIV(UNIX_SECONDS(period_start), @bucket_secs) * @bucket_secs",
+		"SAFE_DIVIDE(period_autoscale_slot_seconds, 60)",
+		"CAST(AVG(autoscale_slots) AS FLOAT64) AS autoscale",
+	} {
+		if !strings.Contains(resSQL, want) {
+			t.Errorf("reservationTimelineSQL missing %q in:\n%s", want, resSQL)
+		}
+	}
+}
+
+func TestCostOverviewSQLAndRollup(t *testing.T) {
+	where, _ := QueryFilters{TimeRange: "30d"}.JobsWhere("creation_time")
+	sqlUser := costOverviewSQL("`p`.`region-us`", where, "IFNULL(user_email, '')", true)
+	for _, want := range []string{
+		"GROUP BY GROUPING SETS ((), (day), (spend_name))",
+		"SUM(IF(reservation_id IS NULL, total_bytes_billed, 0))",
+	} {
+		if !strings.Contains(sqlUser, want) {
+			t.Errorf("costOverviewSQL(user) missing %q in:\n%s", want, sqlUser)
+		}
+	}
+
+	sqlDataset := costOverviewSQL("`p`.`region-us`", where, "IFNULL(user_email, '')", false)
+	if !strings.Contains(sqlDataset, "GROUP BY GROUPING SETS ((), (day))") {
+		t.Errorf("costOverviewSQL(dataset) unexpected grouping sets:\n%s", sqlDataset)
+	}
+
+	summary, daily, spend := rollupCostOverview([]costGroupingRow{
+		{
+			GDay:                1,
+			GName:               1,
+			BytesBilled:         1000,
+			OnDemandBytesBilled: 600,
+			BytesProcessed:      1200,
+			TotalSlotMs:         5000,
+		},
+		{
+			Day:                 "2026-04-01",
+			GDay:                0,
+			GName:               1,
+			BytesBilled:         300,
+			OnDemandBytesBilled: 200,
+			TotalSlotMs:         2000,
+		},
+		{
+			Day:                 "2026-04-02",
+			GDay:                0,
+			GName:               1,
+			BytesBilled:         700,
+			OnDemandBytesBilled: 400,
+			TotalSlotMs:         3000,
+		},
+		{
+			Name:        "alice@example.com",
+			GDay:        1,
+			GName:       0,
+			BytesBilled: 800,
+			TotalSlotMs: 4000,
+		},
+	})
+	if summary.BytesBilled != 1000 || summary.OnDemandBytesBilled != 600 || summary.BytesProcessed != 1200 {
+		t.Errorf("unexpected CostSummary: %+v", summary)
+	}
+	if len(daily) != 2 || daily[0].Day != "2026-04-01" || daily[1].Day != "2026-04-02" {
+		t.Errorf("unexpected DailyCost order: %+v", daily)
+	}
+	if len(spend) != 1 || spend[0].Name != "alice@example.com" || spend[0].TotalBytes != 800 {
+		t.Errorf("unexpected SpendEntry: %+v", spend)
+	}
+}
+
+func TestListJobsSQLAndFilters(t *testing.T) {
+	f := QueryFilters{
+		TimeRange: "7d",
+		Dataset:   "ds1",
+		Table:     "tbl1",
+		Status:    "failed",
+		CacheHit:  "miss",
+	}
+	jobsWhere, _ := f.JobsWhere("creation_time")
+	for _, want := range []string{
+		"EXISTS (SELECT 1 FROM UNNEST(referenced_tables) rt WHERE rt.dataset_id = @dataset AND rt.table_id = @table_name)",
+		"NOT EXISTS (SELECT 1 FROM UNNEST(labels) l WHERE l.key = 'app' AND l.value = 'biglens')",
+		"error_result IS NOT NULL",
+		"cache_hit = FALSE",
+	} {
+		if !strings.Contains(jobsWhere, want) {
+			t.Errorf("JobsWhere missing %q in:\n%s", want, jobsWhere)
+		}
+	}
+
+	tlWhere, _ := f.TimelineWhere("period_start")
+	for _, want := range []string{
+		"error_result IS NOT NULL",
+		"cache_hit = FALSE",
+	} {
+		if !strings.Contains(tlWhere, want) {
+			t.Errorf("TimelineWhere missing %q in:\n%s", want, tlWhere)
+		}
+	}
+
+	sql := listJobsSQL("`p`.`region-us`", jobsWhere)
+	if !strings.Contains(sql, "FROM (\n\t\t\tSELECT") || !strings.Contains(sql, "ORDER BY creation_time DESC\n\t\t\tLIMIT 100\n\t\t)") {
+		t.Errorf("listJobsSQL missing inner LIMIT 100 subquery:\n%s", sql)
+	}
+
+	// Scoped cache keys should ignore irrelevant filters.
+	f1 := QueryFilters{Region: "US", TimeRange: "7d", Dataset: "ds1", UserEmail: "u1@x.com"}
+	f2 := QueryFilters{Region: "US", TimeRange: "30d", Dataset: "ds1", UserEmail: "u2@x.com"}
+	if f1.StorageCoreCacheKey("storage") != f2.StorageCoreCacheKey("storage") {
+		t.Errorf("StorageCoreCacheKey should ignore TimeRange and UserEmail")
+	}
+}
+
+
 
 

@@ -45,17 +45,58 @@ export default function ComputeDashboard({ filters }: { filters: QueryFilters })
 
   // Areas are bucket averages. The dashed line and the peak KPIs use the
   // busiest single second of each bucket, so averaging doesn't hide spikes.
-  const bucket = fmtBucket(data.slot_bucket_seconds);
-  const periods = timeline.map(p => p.bucket_start);
-  const running = timeline.map(p => Number(p.avg_running.toFixed(1)));
-  const pending = timeline.map(p => Number(p.avg_pending.toFixed(1)));
-  const peaks = timeline.map(p => Number(p.peak_total.toFixed(1)));
+  const bucketSec = data.slot_bucket_seconds || 600;
+  const bucket = fmtBucket(bucketSec);
+
+  // Zero-fill idle buckets between the first and last bucket so idle gaps
+  // are proportionally spaced rather than compressed on the category axis.
+  const filledTimeline = (() => {
+    if (timeline.length <= 1) return timeline;
+    const stepMs = bucketSec * 1000;
+    const firstMs = Date.parse(timeline[0].bucket_start);
+    const lastMs = Date.parse(timeline[timeline.length - 1].bucket_start);
+    if (!Number.isFinite(firstMs) || !Number.isFinite(lastMs) || lastMs <= firstMs) return timeline;
+    const count = Math.floor((lastMs - firstMs) / stepMs) + 1;
+    if (count > 2500) return timeline;
+    const byMs = new Map<number, typeof timeline[0]>();
+    for (const p of timeline) {
+      byMs.set(Date.parse(p.bucket_start), p);
+    }
+    const out: typeof timeline = [];
+    for (let ms = firstMs; ms <= lastMs; ms += stepMs) {
+      const hit = byMs.get(ms);
+      if (hit) {
+        out.push(hit);
+      } else {
+        out.push({
+          bucket_start: new Date(ms).toISOString().replace('.000Z', 'Z'),
+          avg_running: 0,
+          avg_pending: 0,
+          peak_total: 0,
+          peak_pending: 0,
+        });
+      }
+    }
+    return out;
+  })();
+
+  const periods = filledTimeline.map(p => p.bucket_start);
+  const running = filledTimeline.map(p => Number(p.avg_running.toFixed(1)));
+  const pending = filledTimeline.map(p => Number(p.avg_pending.toFixed(1)));
+  const peaks = filledTimeline.map(p => Number(p.peak_total.toFixed(1)));
   const peakConcurrent = timeline.reduce((m, p) => Math.max(m, p.peak_total), 0);
   const peakPending = timeline.reduce((m, p) => Math.max(m, p.peak_pending), 0);
 
   const fmtTick = (t: string) => {
     const d = new Date(t);
-    return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}:${d.getSeconds().toString().padStart(2, '0')}`;
+    const hh = d.getUTCHours().toString().padStart(2, '0');
+    const mm = d.getUTCMinutes().toString().padStart(2, '0');
+    if (filters.time_range === '1d') {
+      return `${hh}:${mm} UTC`;
+    }
+    const mo = (d.getUTCMonth() + 1).toString().padStart(2, '0');
+    const day = d.getUTCDate().toString().padStart(2, '0');
+    return `${mo}-${day} ${hh}:${mm}`;
   };
 
   const axisStyle = {
@@ -79,7 +120,7 @@ export default function ComputeDashboard({ filters }: { filters: QueryFilters })
       type: 'category',
       data: periods.map(fmtTick),
       ...axisStyle,
-      axisLabel: { ...axisStyle.axisLabel, interval: Math.max(Math.floor(periods.length / 10), 1) },
+      axisLabel: { ...axisStyle.axisLabel, interval: Math.max(Math.floor(periods.length / 8), 1) },
     },
     yAxis: {
       type: 'value',
@@ -120,7 +161,7 @@ export default function ComputeDashboard({ filters }: { filters: QueryFilters })
       type: 'category',
       data: reservations.map(r => fmtTick(r.period_start)),
       ...axisStyle,
-      axisLabel: { ...axisStyle.axisLabel, interval: Math.max(Math.floor(reservations.length / 10), 1) },
+      axisLabel: { ...axisStyle.axisLabel, interval: Math.max(Math.floor(reservations.length / 8), 1) },
     },
     yAxis: {
       type: 'value',
@@ -130,13 +171,13 @@ export default function ComputeDashboard({ filters }: { filters: QueryFilters })
     series: [
       {
         name: 'Baseline', type: 'line', showSymbol: false, step: 'end',
-        data: reservations.map(r => r.assigned),
+        data: reservations.map(r => Number(r.assigned.toFixed(1))),
         lineStyle: { color: '#4ade80', width: 2, type: 'dashed' },
         itemStyle: { color: '#4ade80' },
       },
       {
         name: 'Baseline + Autoscale', type: 'line', showSymbol: false, step: 'end',
-        data: reservations.map(r => Number((r.assigned + r.autoscale).toFixed(0))),
+        data: reservations.map(r => Number((r.assigned + r.autoscale).toFixed(1))),
         lineStyle: { color: '#c084fc', width: 2 },
         itemStyle: { color: '#c084fc' },
       },

@@ -47,6 +47,7 @@ export interface SearchIndexInfo {
 
 export interface DatasetStorage {
   dataset: string;
+  billing_model?: string;
   active_logical: number;
   long_term_logical: number;
   active_physical: number;   // includes time-travel bytes (BQ semantics)
@@ -59,6 +60,11 @@ export interface ColdTable {
   dataset: string;
   table_name: string;
   total_bytes: number;
+  active_logical?: number;
+  long_term_logical?: number;
+  active_physical?: number;
+  long_term_physical?: number;
+  billing_model?: string;
   storage_tier: string; // ACTIVE | LONG_TERM
 }
 
@@ -124,6 +130,7 @@ export interface ComputeDashboardData {
 
 export interface CostSummary {
   bytes_billed: number;
+  ondemand_bytes_billed?: number;
   bytes_processed: number;
   total_slot_ms: number;
 }

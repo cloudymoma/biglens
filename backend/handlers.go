@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -56,87 +57,137 @@ func searchIndexesCacheKey(f QueryFilters) string {
 	return "storage_search_indexes:" + f.Region + ":" + f.Dataset + ":" + f.Table
 }
 
+type storageCoreData struct {
+	Billing        *StorageStats
+	Breakdown      *StorageBreakdown
+	DatasetStorage []DatasetStorage
+	TopTables      []TopTable
+}
+
 func (h *APIHandler) StorageDashboard(w http.ResponseWriter, r *http.Request) {
 	filters := ParseFilters(r)
 	if filters.Dataset != "" && !datasetNameRe.MatchString(filters.Dataset) {
 		writeError(w, "invalid dataset name", http.StatusBadRequest)
 		return
 	}
-	key := filters.CacheKey("storage_dashboard")
+	key := filters.StorageColdCacheKey("storage_dashboard")
 
 	if cached, ok := h.cache.Get(key); ok {
 		writeJSON(w, cached)
 		return
 	}
 
-	var data StorageDashboardData
-	var mu sync.Mutex
-	addDegraded := func(name string) {
-		mu.Lock()
-		data.DegradedWidgets = append(data.DegradedWidgets, name)
-		mu.Unlock()
-	}
-	g, ctx := errgroup.WithContext(r.Context())
-
-	g.Go(func() error {
-		stats, bd, ds, err := h.bq.GetStorageOverview(ctx, filters)
-		if err != nil {
-			return err
+	val, err, _ := h.sf.Do(key, func() (any, error) {
+		if cached, ok := h.cache.Get(key); ok {
+			return cached, nil
 		}
-		data.Billing = stats
-		data.Breakdown = bd
-		data.DatasetStorage = ds
-		return nil
-	})
-
-	g.Go(func() error {
-		tables, err := h.bq.GetTopTables(ctx, filters)
-		if err != nil {
-			return err
+		var data StorageDashboardData
+		var mu sync.Mutex
+		addDegraded := func(name string) {
+			mu.Lock()
+			data.DegradedWidgets = append(data.DegradedWidgets, name)
+			mu.Unlock()
 		}
-		data.TopTables = tables
-		return nil
-	})
+		bgCtx := context.WithoutCancel(r.Context())
+		g, ctx := errgroup.WithContext(bgCtx)
 
-	g.Go(func() error {
-		idxKey := searchIndexesCacheKey(filters)
-		if cached, ok := h.cache.Get(idxKey); ok {
-			if indexes, ok := cached.([]SearchIndexInfo); ok {
-				data.SearchIndexes = indexes
+		g.Go(func() error {
+			coreKey := filters.StorageCoreCacheKey("storage_core")
+			if cached, ok := h.cache.Get(coreKey); ok {
+				if core, ok := cached.(*storageCoreData); ok {
+					data.Billing = core.Billing
+					data.Breakdown = core.Breakdown
+					data.DatasetStorage = core.DatasetStorage
+					data.TopTables = core.TopTables
+					return nil
+				}
+			}
+			cVal, err, _ := h.sf.Do(coreKey, func() (any, error) {
+				if cached, ok := h.cache.Get(coreKey); ok {
+					return cached, nil
+				}
+				var core storageCoreData
+				cg, cctx := errgroup.WithContext(ctx)
+				cg.Go(func() error {
+					stats, bd, ds, err := h.bq.GetStorageOverview(cctx, filters)
+					if err != nil {
+						return err
+					}
+					core.Billing = stats
+					core.Breakdown = bd
+					core.DatasetStorage = ds
+					return nil
+				})
+				cg.Go(func() error {
+					tables, err := h.bq.GetTopTables(cctx, filters)
+					if err != nil {
+						return err
+					}
+					core.TopTables = tables
+					return nil
+				})
+				if err := cg.Wait(); err != nil {
+					return nil, err
+				}
+				h.cache.Set(coreKey, &core)
+				return &core, nil
+			})
+			if err != nil {
+				return err
+			}
+			core := cVal.(*storageCoreData)
+			data.Billing = core.Billing
+			data.Breakdown = core.Breakdown
+			data.DatasetStorage = core.DatasetStorage
+			data.TopTables = core.TopTables
+			return nil
+		})
+
+		g.Go(func() error {
+			idxKey := searchIndexesCacheKey(filters)
+			if cached, ok := h.cache.Get(idxKey); ok {
+				if indexes, ok := cached.([]SearchIndexInfo); ok {
+					data.SearchIndexes = indexes
+					return nil
+				}
+			}
+			indexes, err := h.bq.GetSearchIndexes(ctx, filters)
+			if err != nil {
+				slog.Warn("search indexes widget degraded", "error", err)
+				addDegraded("search_indexes")
 				return nil
 			}
-		}
-		indexes, err := h.bq.GetSearchIndexes(ctx, filters)
-		if err != nil {
-			slog.Warn("search indexes widget degraded", "error", err)
-			addDegraded("search_indexes")
+			h.cache.SetWithTTL(idxKey, indexes, time.Hour)
+			data.SearchIndexes = indexes
 			return nil
-		}
-		h.cache.SetWithTTL(idxKey, indexes, time.Hour)
-		data.SearchIndexes = indexes
-		return nil
-	})
+		})
 
-	g.Go(func() error {
-		// Cold-table detection needs jobs history; degrade to empty if the
-		// caller lacks bigquery.jobs.listAll rather than failing storage.
-		cold, err := h.bq.GetColdTables(ctx, filters)
-		if err != nil {
-			slog.Warn("cold tables widget degraded", "error", err)
-			addDegraded("cold_tables")
+		g.Go(func() error {
+			// Cold-table detection needs jobs history; degrade to empty if the
+			// caller lacks bigquery.jobs.listAll rather than failing storage.
+			cold, err := h.bq.GetColdTables(ctx, filters)
+			if err != nil {
+				slog.Warn("cold tables widget degraded", "error", err)
+				addDegraded("cold_tables")
+				return nil
+			}
+			data.ColdTables = cold
 			return nil
-		}
-		data.ColdTables = cold
-		return nil
-	})
+		})
 
-	if err := g.Wait(); err != nil {
+		if err := g.Wait(); err != nil {
+			return nil, err
+		}
+
+		h.cache.Set(key, &data)
+		return &data, nil
+	})
+	if err != nil {
 		writeError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	h.cache.Set(key, &data)
-	writeJSON(w, &data)
+	writeJSON(w, val)
 }
 
 // --- Dashboard 2: Slots & Compute ---
@@ -153,69 +204,88 @@ type ComputeDashboardData struct {
 
 func (h *APIHandler) ComputeDashboard(w http.ResponseWriter, r *http.Request) {
 	filters := ParseFilters(r)
-	key := filters.CacheKey("compute_dashboard")
+	key := filters.JobsCacheKey("compute_dashboard")
 
 	if cached, ok := h.cache.Get(key); ok {
 		writeJSON(w, cached)
 		return
 	}
 
-	data := ComputeDashboardData{SlotBucketSeconds: filters.TimelineBucketSeconds()}
-	var mu sync.Mutex
-	addDegraded := func(name string) {
-		mu.Lock()
-		data.DegradedWidgets = append(data.DegradedWidgets, name)
-		mu.Unlock()
-	}
-	g, ctx := errgroup.WithContext(r.Context())
-
-	g.Go(func() error {
-		timeline, err := h.bq.GetConcurrentSlotsByState(ctx, filters)
-		if err != nil {
-			return err
+	val, err, _ := h.sf.Do(key, func() (any, error) {
+		if cached, ok := h.cache.Get(key); ok {
+			return cached, nil
 		}
-		data.SlotTimeline = timeline
-		return nil
-	})
-
-	g.Go(func() error {
-		jobs, err := h.bq.GetTopSlotJobs(ctx, filters)
-		if err != nil {
-			return err
+		data := ComputeDashboardData{SlotBucketSeconds: filters.TimelineBucketSeconds()}
+		var mu sync.Mutex
+		addDegraded := func(name string) {
+			mu.Lock()
+			data.DegradedWidgets = append(data.DegradedWidgets, name)
+			mu.Unlock()
 		}
-		data.TopJobs = jobs
-		return nil
-	})
+		bgCtx := context.WithoutCancel(r.Context())
+		g, ctx := errgroup.WithContext(bgCtx)
 
-	g.Go(func() error {
-		qs, err := h.bq.GetQueueStats(ctx, filters)
-		if err != nil {
-			return err
-		}
-		data.QueueStats = qs
-		return nil
-	})
-
-	g.Go(func() error {
-		// RESERVATIONS_TIMELINE is empty or unauthorized on pure on-demand
-		// projects; the widget shows an empty state instead of an error.
-		res, err := h.bq.GetReservationTimeline(ctx, filters)
-		if err != nil {
-			slog.Warn("reservation widget degraded", "error", err)
-			addDegraded("reservations")
+		g.Go(func() error {
+			timeline, err := h.bq.GetConcurrentSlotsByState(ctx, filters)
+			if err != nil {
+				return err
+			}
+			data.SlotTimeline = timeline
 			return nil
-		}
-		data.Reservations = res
-		return nil
-	})
+		})
 
-	if err := g.Wait(); err != nil {
+		g.Go(func() error {
+			jobs, err := h.bq.GetTopSlotJobs(ctx, filters)
+			if err != nil {
+				return err
+			}
+			data.TopJobs = jobs
+			return nil
+		})
+
+		g.Go(func() error {
+			qs, err := h.bq.GetQueueStats(ctx, filters)
+			if err != nil {
+				return err
+			}
+			data.QueueStats = qs
+			return nil
+		})
+
+		g.Go(func() error {
+			resKey := filters.ReservationCacheKey("compute_reservations")
+			if cached, ok := h.cache.Get(resKey); ok {
+				if res, ok := cached.([]ReservationPoint); ok {
+					data.Reservations = res
+					return nil
+				}
+			}
+			// RESERVATIONS_TIMELINE is empty or unauthorized on pure on-demand
+			// projects; the widget shows an empty state instead of an error.
+			res, err := h.bq.GetReservationTimeline(ctx, filters)
+			if err != nil {
+				slog.Warn("reservation widget degraded", "error", err)
+				addDegraded("reservations")
+				return nil
+			}
+			h.cache.Set(resKey, res)
+			data.Reservations = res
+			return nil
+		})
+
+		if err := g.Wait(); err != nil {
+			return nil, err
+		}
+
+		h.cache.Set(key, &data)
+		return &data, nil
+	})
+	if err != nil {
 		writeError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	h.cache.Set(key, &data)
-	writeJSON(w, &data)
+	writeJSON(w, val)
 }
 
 // --- Dashboard 3: Pricing & Cost ---
@@ -224,6 +294,11 @@ type CostDashboardData struct {
 	Summary   *CostSummary `json:"summary"`
 	SpendBy   []SpendEntry `json:"spend_by"`
 	DailyCost []DailyCost  `json:"daily_cost"`
+}
+
+type costBaseData struct {
+	Summary   *CostSummary
+	DailyCost []DailyCost
 }
 
 func (h *APIHandler) CostDashboard(w http.ResponseWriter, r *http.Request) {
@@ -235,43 +310,74 @@ func (h *APIHandler) CostDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var data CostDashboardData
-	g, ctx := errgroup.WithContext(r.Context())
-
-	g.Go(func() error {
-		cs, err := h.bq.GetCostSummary(ctx, filters)
-		if err != nil {
-			return err
+	val, err, _ := h.sf.Do(key, func() (any, error) {
+		if cached, ok := h.cache.Get(key); ok {
+			return cached, nil
 		}
-		data.Summary = cs
-		return nil
-	})
+		var data CostDashboardData
+		bgCtx := context.WithoutCancel(r.Context())
+		baseKey := filters.JobsCacheKey("cost_base")
+		needsUnnest := filters.GroupBy == "dataset" || filters.GroupBy == "table"
 
-	g.Go(func() error {
-		spend, err := h.bq.GetSpend(ctx, filters)
-		if err != nil {
-			return err
+		if cachedBase, ok := h.cache.Get(baseKey); ok {
+			if cb, ok := cachedBase.(*costBaseData); ok {
+				data.Summary = cb.Summary
+				data.DailyCost = cb.DailyCost
+				spend, err := h.bq.GetSpend(bgCtx, filters)
+				if err != nil {
+					return nil, err
+				}
+				data.SpendBy = spend
+				h.cache.Set(key, &data)
+				return &data, nil
+			}
 		}
-		data.SpendBy = spend
-		return nil
-	})
 
-	g.Go(func() error {
-		daily, err := h.bq.GetDailyCost(ctx, filters)
-		if err != nil {
-			return err
+		if !needsUnnest {
+			cs, daily, spend, err := h.bq.GetCostOverview(bgCtx, filters, true)
+			if err != nil {
+				return nil, err
+			}
+			data.Summary = cs
+			data.DailyCost = daily
+			data.SpendBy = spend
+			h.cache.Set(baseKey, &costBaseData{Summary: cs, DailyCost: daily})
+			h.cache.Set(key, &data)
+			return &data, nil
 		}
-		data.DailyCost = daily
-		return nil
-	})
 
-	if err := g.Wait(); err != nil {
+		g, ctx := errgroup.WithContext(bgCtx)
+		g.Go(func() error {
+			cs, daily, _, err := h.bq.GetCostOverview(ctx, filters, false)
+			if err != nil {
+				return err
+			}
+			data.Summary = cs
+			data.DailyCost = daily
+			h.cache.Set(baseKey, &costBaseData{Summary: cs, DailyCost: daily})
+			return nil
+		})
+		g.Go(func() error {
+			spend, err := h.bq.GetSpend(ctx, filters)
+			if err != nil {
+				return err
+			}
+			data.SpendBy = spend
+			return nil
+		})
+		if err := g.Wait(); err != nil {
+			return nil, err
+		}
+
+		h.cache.Set(key, &data)
+		return &data, nil
+	})
+	if err != nil {
 		writeError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	h.cache.Set(key, &data)
-	writeJSON(w, &data)
+	writeJSON(w, val)
 }
 
 // --- Dashboard 4: Insights ---
@@ -287,80 +393,99 @@ type InsightsDashboardData struct {
 
 func (h *APIHandler) InsightsDashboard(w http.ResponseWriter, r *http.Request) {
 	filters := ParseFilters(r)
-	key := filters.CacheKey("insights_dashboard")
+	key := filters.JobsCacheKey("insights_dashboard")
 
 	if cached, ok := h.cache.Get(key); ok {
 		writeJSON(w, cached)
 		return
 	}
 
-	var data InsightsDashboardData
-	var mu sync.Mutex
-	addDegraded := func(name string) {
-		mu.Lock()
-		data.DegradedWidgets = append(data.DegradedWidgets, name)
-		mu.Unlock()
-	}
-	g, ctx := errgroup.WithContext(r.Context())
-
-	g.Go(func() error {
-		recs, err := h.bq.GetRecommendations(ctx, filters.Region)
-		if err != nil {
-			return err
+	val, err, _ := h.sf.Do(key, func() (any, error) {
+		if cached, ok := h.cache.Get(key); ok {
+			return cached, nil
 		}
-		data.Recommendations = recs
-		return nil
-	})
-
-	g.Go(func() error {
-		es, err := h.bq.GetErrorStats(ctx, filters)
-		if err != nil {
-			return err
+		var data InsightsDashboardData
+		var mu sync.Mutex
+		addDegraded := func(name string) {
+			mu.Lock()
+			data.DegradedWidgets = append(data.DegradedWidgets, name)
+			mu.Unlock()
 		}
-		data.ErrorStats = es
-		return nil
-	})
+		bgCtx := context.WithoutCancel(r.Context())
+		g, ctx := errgroup.WithContext(bgCtx)
 
-	g.Go(func() error {
-		fu, err := h.bq.GetTopFailingUsers(ctx, filters)
-		if err != nil {
-			return err
-		}
-		data.FailingUsers = fu
-		return nil
-	})
-
-	g.Go(func() error {
-		// performance_insights schema availability varies by region/edition;
-		// degrade to empty rather than failing the whole tab.
-		pi, err := h.bq.GetPerfInsightJobs(ctx, filters)
-		if err != nil {
-			slog.Warn("perf insights widget degraded", "error", err)
-			addDegraded("perf_insights")
+		g.Go(func() error {
+			recKey := "insights_recs:" + filters.Region
+			if cached, ok := h.cache.Get(recKey); ok {
+				if recs, ok := cached.([]Recommendation); ok {
+					data.Recommendations = recs
+					return nil
+				}
+			}
+			recs, err := h.bq.GetRecommendations(ctx, filters.Region)
+			if err != nil {
+				return err
+			}
+			h.cache.Set(recKey, recs)
+			data.Recommendations = recs
 			return nil
-		}
-		data.PerfInsights = pi
-		return nil
-	})
+		})
 
-	g.Go(func() error {
-		rq, err := h.bq.GetRepeatedQueries(ctx, filters)
-		if err != nil {
-			slog.Warn("repeated queries widget degraded", "error", err)
-			addDegraded("repeated_queries")
+		g.Go(func() error {
+			es, err := h.bq.GetErrorStats(ctx, filters)
+			if err != nil {
+				return err
+			}
+			data.ErrorStats = es
 			return nil
-		}
-		data.RepeatedQueries = rq
-		return nil
-	})
+		})
 
-	if err := g.Wait(); err != nil {
+		g.Go(func() error {
+			fu, err := h.bq.GetTopFailingUsers(ctx, filters)
+			if err != nil {
+				return err
+			}
+			data.FailingUsers = fu
+			return nil
+		})
+
+		g.Go(func() error {
+			// performance_insights schema availability varies by region/edition;
+			// degrade to empty rather than failing the whole tab.
+			pi, err := h.bq.GetPerfInsightJobs(ctx, filters)
+			if err != nil {
+				slog.Warn("perf insights widget degraded", "error", err)
+				addDegraded("perf_insights")
+				return nil
+			}
+			data.PerfInsights = pi
+			return nil
+		})
+
+		g.Go(func() error {
+			rq, err := h.bq.GetRepeatedQueries(ctx, filters)
+			if err != nil {
+				slog.Warn("repeated queries widget degraded", "error", err)
+				addDegraded("repeated_queries")
+				return nil
+			}
+			data.RepeatedQueries = rq
+			return nil
+		})
+
+		if err := g.Wait(); err != nil {
+			return nil, err
+		}
+
+		h.cache.Set(key, &data)
+		return &data, nil
+	})
+	if err != nil {
 		writeError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	h.cache.Set(key, &data)
-	writeJSON(w, &data)
+	writeJSON(w, val)
 }
 
 // --- Dashboard 6: Jobs Explorer ---
@@ -371,22 +496,32 @@ type JobsDashboardData struct {
 
 func (h *APIHandler) JobsDashboard(w http.ResponseWriter, r *http.Request) {
 	filters := ParseFilters(r)
-	key := filters.CacheKey("jobs_dashboard")
+	key := filters.JobsCacheKey("jobs_dashboard")
 
 	if cached, ok := h.cache.Get(key); ok {
 		writeJSON(w, cached)
 		return
 	}
 
-	jobs, err := h.bq.ListJobs(r.Context(), filters)
+	val, err, _ := h.sf.Do(key, func() (any, error) {
+		if cached, ok := h.cache.Get(key); ok {
+			return cached, nil
+		}
+		bgCtx := context.WithoutCancel(r.Context())
+		jobs, err := h.bq.ListJobs(bgCtx, filters)
+		if err != nil {
+			return nil, err
+		}
+		data := &JobsDashboardData{Jobs: jobs}
+		h.cache.Set(key, data)
+		return data, nil
+	})
 	if err != nil {
 		writeError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	data := &JobsDashboardData{Jobs: jobs}
-	h.cache.Set(key, data)
-	writeJSON(w, data)
+	writeJSON(w, val)
 }
 
 // --- Dashboard 5: IAM Security ---
