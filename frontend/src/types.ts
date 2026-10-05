@@ -512,12 +512,15 @@ export interface SemDashboardData {
 
 export interface SemGeoRow {
   geo: string; // DMA name (us) or region name (global)
-  score: number;
+  // vs. this geo's own 5-year peak (not comparable across geos);
+  // null = insufficient data (below the Trends reporting threshold)
+  score: number | null;
   rising_rank: number; // 0 = not rising in this geo
   percent_gain: number;
 }
 
 export interface SemGeoData {
+  week: string; // Sunday starting the snapshot's latest complete week ('' = no rows)
   rows: SemGeoRow[];
 }
 

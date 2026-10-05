@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -66,5 +67,36 @@ func TestTrendsTermValidation(t *testing.T) {
 				t.Errorf("error %q does not mention %q", w.Body.String(), tt.wantMsg)
 			}
 		})
+	}
+}
+
+// In the US view the Trends geo chart lists DMAs: names arrive in
+// country_name with plain numeric scores (the chart's contract, unaffected by
+// the SEM W2 geo query's NULL-preserving rows).
+func TestTrendsTermUSGeoListsDMAs(t *testing.T) {
+	fake := &fakeBigQuery{
+		columns: []fakeBQColumn{{"geo", "STRING"}, {"score", "INTEGER"}, {"rising_rank", "INTEGER"}, {"percent_gain", "INTEGER"}},
+		rows:    [][]any{{"New York NY", "28", "0", "0"}, {"Glendive MT", "0", "0", "0"}},
+	}
+	h := newFakeBQHandler(t, fake)
+	w := httptest.NewRecorder()
+	h.TrendsTerm(w, httptest.NewRequest(http.MethodGet,
+		"/api/opendata/trends/term?refresh_date=2026-10-04&country_code=US&term=usury", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("got status %d (%s), want 200", w.Code, w.Body.String())
+	}
+
+	var got TrendsTermData
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode %s: %v", w.Body.String(), err)
+	}
+	want := []TrendsGeoPoint{{CountryName: "New York NY", Score: 28}, {CountryName: "Glendive MT", Score: 0}}
+	if len(got.Geo) != len(want) {
+		t.Fatalf("got %d geo points, want %d: %s", len(got.Geo), len(want), w.Body.String())
+	}
+	for i := range want {
+		if got.Geo[i] != want[i] {
+			t.Errorf("geo[%d] = %+v, want %+v", i, got.Geo[i], want[i])
+		}
 	}
 }

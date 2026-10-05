@@ -5,6 +5,7 @@ package main
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -133,11 +134,14 @@ func (h *APIHandler) SemDashboard(w http.ResponseWriter, r *http.Request) {
 }
 
 type SemGeoData struct {
+	// Week is the Sunday (YYYY-MM-DD) starting the snapshot's latest complete
+	// week, which every row describes; empty when there are no rows.
+	Week string      `json:"week"`
 	Rows []SemGeoRow `json:"rows"`
 }
 
-// SemGeo serves one term's per-geo demand (W2 bid-modifier table): all 210
-// DMAs for the US market, or the selected country's regions for global.
+// SemGeo serves one term's per-geo interest (W2): all 210 DMAs for the US
+// market, or the selected country's regions for global.
 func (h *APIHandler) SemGeo(w http.ResponseWriter, r *http.Request) {
 	market, refreshDate, geo, term, ok := parseSemTermSelection(w, r)
 	if !ok {
@@ -158,7 +162,9 @@ func (h *APIHandler) SemGeo(w http.ResponseWriter, r *http.Request) {
 		rows, err = h.bq.GetSemGeoGlobal(r.Context(), refreshDate, geo, term)
 	}
 	if err != nil {
-		writeError(w, err.Error(), http.StatusInternalServerError)
+		// The raw error can name projects, tables and SQL: log it, don't echo it.
+		slog.Error("sem geo query failed", "market", market, "refresh_date", refreshDate, "error", err)
+		writeError(w, "failed to load geo interest", http.StatusInternalServerError)
 		return
 	}
 	if rows == nil {
@@ -166,6 +172,9 @@ func (h *APIHandler) SemGeo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := &SemGeoData{Rows: rows}
+	if len(rows) > 0 {
+		data.Week = rows[0].Week
+	}
 	h.cache.Set(key, data)
 	writeJSON(w, data)
 }

@@ -12,8 +12,9 @@ package main
 //     filtered to one DMA (empty geo = national view across 210 DMAs).
 //
 // Every query filters on the partition key refresh_date and pins
-// week = MAX(week) within that partition — the partition carries the full
-// 5-year weekly history, so an unpinned scan would mix snapshots.
+// week = MAX(week) within that partition (the W2 geo table pins the latest
+// complete week instead, see semLatestCompleteWeek) — the partition carries
+// the full 5-year weekly history, so an unpinned scan would mix snapshots.
 
 import (
 	"context"
@@ -175,49 +176,68 @@ func (b *BQClient) GetSemMatrixGlobal(ctx context.Context, refreshDate civil.Dat
 	return collectRows[SemMatrixRow](q, ctx)
 }
 
-// --- Widget 2: per-geo demand for one term (bid-modifier table) ---
+// --- Widget 2: per-geo interest for one term ---
 
-// SemGeoRow is one geo's demand for a single term: score is the normalized
-// search interest (the higher of the top-25 and rising readings — both are
-// 0–100), RisingRank/PercentGain are 0 when the term is not rising there.
-// The suggested Google Ads location bid modifier is derived client-side from
-// score vs the average across geos.
+// SemGeoRow is one geo's reading for a single term in the snapshot's latest
+// complete week. Score is the higher of the top-25 and rising readings (both
+// 0–100) and, like every Trends score, is indexed to that geo's own 5-year
+// peak: it says how close the term is to its local high, not how much demand
+// the geo has, so scores are not comparable across geos and no bid
+// adjustment can be derived from them. Score is NULL (JSON null) when Trends
+// reports no value for the geo that week (below its reporting threshold).
+// RisingRank/PercentGain are 0 when the term is not rising there. Week is
+// reported once per response (SemGeoData.Week).
 type SemGeoRow struct {
-	Geo         string `json:"geo" bigquery:"geo"`
-	Score       int64  `json:"score" bigquery:"score"`
-	RisingRank  int64  `json:"rising_rank" bigquery:"rising_rank"`
-	PercentGain int64  `json:"percent_gain" bigquery:"percent_gain"`
+	Geo         string             `json:"geo" bigquery:"geo"`
+	Score       bigquery.NullInt64 `json:"score" bigquery:"score"`
+	RisingRank  int64              `json:"rising_rank" bigquery:"rising_rank"`
+	PercentGain int64              `json:"percent_gain" bigquery:"percent_gain"`
+	Week        string             `json:"-" bigquery:"week"`
 }
 
-// GetSemGeoUS returns one term's demand across all 210 DMAs (always national:
-// the point of the widget is choosing where to bid).
+// semLatestCompleteWeek is a scalar subquery for the newest week in table's
+// refresh_date partition that has fully elapsed. Weeks start on Sunday, so
+// week W is complete once W + 7 days <= refresh_date. The US partitions also
+// carry the in-progress week that starts on the refresh day itself (partition
+// 2026-10-04 ends with week 2026-10-04), where most DMAs have no score yet.
+// The partition filter stays a plain parameter comparison so the scan is
+// pruned to the one partition.
+func semLatestCompleteWeek(table string) string {
+	return `(SELECT MAX(week) FROM ` + table + `
+				WHERE refresh_date = @refresh_date
+				  AND DATE_ADD(week, INTERVAL 7 DAY) <= @refresh_date)`
+}
+
+// GetSemGeoUS returns one term's reading in each of the 210 DMAs (always
+// national: the widget lists every geo of the market).
 func (b *BQClient) GetSemGeoUS(ctx context.Context, refreshDate civil.Date, term string) ([]SemGeoRow, error) {
 	q := b.client.Query(`
 		WITH charting AS (
-			SELECT dma_name AS geo, CAST(COALESCE(AVG(score), 0) AS INT64) AS score
+			SELECT dma_name AS geo, ANY_VALUE(week) AS week, CAST(AVG(score) AS INT64) AS score
 			FROM ` + semUSTopTable + `
 			WHERE refresh_date = @refresh_date
-			  AND week = (SELECT MAX(week) FROM ` + semUSTopTable + ` WHERE refresh_date = @refresh_date)
+			  AND week = ` + semLatestCompleteWeek(semUSTopTable) + `
 			  AND LOWER(term) = LOWER(@term)
 			GROUP BY geo
 		),
 		rising AS (
-			SELECT dma_name AS geo, CAST(COALESCE(AVG(score), 0) AS INT64) AS score,
+			SELECT dma_name AS geo, ANY_VALUE(week) AS week, CAST(AVG(score) AS INT64) AS score,
 				MIN(rank) AS rising_rank, CAST(COALESCE(MAX(percent_gain), 0) AS INT64) AS percent_gain
 			FROM ` + semUSRisingTable + `
 			WHERE refresh_date = @refresh_date
-			  AND week = (SELECT MAX(week) FROM ` + semUSRisingTable + ` WHERE refresh_date = @refresh_date)
+			  AND week = ` + semLatestCompleteWeek(semUSRisingTable) + `
 			  AND LOWER(term) = LOWER(@term)
 			GROUP BY geo
 		)
 		SELECT
 			COALESCE(c.geo, r.geo) AS geo,
-			GREATEST(COALESCE(c.score, 0), COALESCE(r.score, 0)) AS score,
+			FORMAT_DATE('%Y-%m-%d', COALESCE(c.week, r.week)) AS week,
+			GREATEST(COALESCE(c.score, r.score), COALESCE(r.score, c.score)) AS score,
 			COALESCE(r.rising_rank, 0) AS rising_rank,
 			COALESCE(r.percent_gain, 0) AS percent_gain
 		FROM charting c
 		FULL OUTER JOIN rising r ON c.geo = r.geo
-		ORDER BY score DESC`)
+		ORDER BY score DESC NULLS LAST, geo`)
 	q.Parameters = []bigquery.QueryParameter{
 		{Name: "refresh_date", Value: refreshDate},
 		{Name: "term", Value: term},
@@ -225,36 +245,38 @@ func (b *BQClient) GetSemGeoUS(ctx context.Context, refreshDate civil.Date, term
 	return collectRows[SemGeoRow](q, ctx)
 }
 
-// GetSemGeoGlobal returns one term's demand across the selected country's regions.
+// GetSemGeoGlobal returns one term's reading in each of the selected
+// country's regions.
 func (b *BQClient) GetSemGeoGlobal(ctx context.Context, refreshDate civil.Date, countryCode, term string) ([]SemGeoRow, error) {
 	q := b.client.Query(`
 		WITH charting AS (
-			SELECT region_name AS geo, CAST(COALESCE(AVG(score), 0) AS INT64) AS score
+			SELECT region_name AS geo, ANY_VALUE(week) AS week, CAST(AVG(score) AS INT64) AS score
 			FROM ` + trendsTopTable + `
 			WHERE refresh_date = @refresh_date
 			  AND country_code = @country_code
-			  AND week = (SELECT MAX(week) FROM ` + trendsTopTable + ` WHERE refresh_date = @refresh_date)
+			  AND week = ` + semLatestCompleteWeek(trendsTopTable) + `
 			  AND LOWER(term) = LOWER(@term)
 			GROUP BY geo
 		),
 		rising AS (
-			SELECT region_name AS geo, CAST(COALESCE(AVG(score), 0) AS INT64) AS score,
+			SELECT region_name AS geo, ANY_VALUE(week) AS week, CAST(AVG(score) AS INT64) AS score,
 				MIN(rank) AS rising_rank, CAST(COALESCE(MAX(percent_gain), 0) AS INT64) AS percent_gain
 			FROM ` + trendsRisingTable + `
 			WHERE refresh_date = @refresh_date
 			  AND country_code = @country_code
-			  AND week = (SELECT MAX(week) FROM ` + trendsRisingTable + ` WHERE refresh_date = @refresh_date)
+			  AND week = ` + semLatestCompleteWeek(trendsRisingTable) + `
 			  AND LOWER(term) = LOWER(@term)
 			GROUP BY geo
 		)
 		SELECT
 			COALESCE(c.geo, r.geo) AS geo,
-			GREATEST(COALESCE(c.score, 0), COALESCE(r.score, 0)) AS score,
+			FORMAT_DATE('%Y-%m-%d', COALESCE(c.week, r.week)) AS week,
+			GREATEST(COALESCE(c.score, r.score), COALESCE(r.score, c.score)) AS score,
 			COALESCE(r.rising_rank, 0) AS rising_rank,
 			COALESCE(r.percent_gain, 0) AS percent_gain
 		FROM charting c
 		FULL OUTER JOIN rising r ON c.geo = r.geo
-		ORDER BY score DESC`)
+		ORDER BY score DESC NULLS LAST, geo`)
 	q.Parameters = []bigquery.QueryParameter{
 		{Name: "refresh_date", Value: refreshDate},
 		{Name: "country_code", Value: countryCode},

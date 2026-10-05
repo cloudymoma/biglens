@@ -228,6 +228,59 @@ func (b *BQClient) GetTrendsRisingTermsUS(ctx context.Context, refreshDate civil
 	return collectRows[TrendsRisingTerm](q, ctx)
 }
 
+// GetTrendsGeoUS is the US view of GetTrendsGeo: the term's score in each DMA
+// where it charts or rises (top-25 ∪ rising), DMA names in country_name. It
+// deliberately stays separate from the SEM W2 query (GetSemGeoUS), which
+// reads the latest complete week and keeps NULL scores: this chart, like the
+// rest of the Trends dashboard, shows the snapshot's latest week with missing
+// scores as 0.
+func (b *BQClient) GetTrendsGeoUS(ctx context.Context, refreshDate civil.Date, term string) ([]TrendsGeoPoint, error) {
+	q := b.client.Query(`
+		WITH charting AS (
+			SELECT dma_name AS geo, CAST(COALESCE(AVG(score), 0) AS INT64) AS score
+			FROM ` + semUSTopTable + `
+			WHERE refresh_date = @refresh_date
+			  AND week = (SELECT MAX(week) FROM ` + semUSTopTable + ` WHERE refresh_date = @refresh_date)
+			  AND LOWER(term) = LOWER(@term)
+			GROUP BY geo
+		),
+		rising AS (
+			SELECT dma_name AS geo, CAST(COALESCE(AVG(score), 0) AS INT64) AS score,
+				MIN(rank) AS rising_rank, CAST(COALESCE(MAX(percent_gain), 0) AS INT64) AS percent_gain
+			FROM ` + semUSRisingTable + `
+			WHERE refresh_date = @refresh_date
+			  AND week = (SELECT MAX(week) FROM ` + semUSRisingTable + ` WHERE refresh_date = @refresh_date)
+			  AND LOWER(term) = LOWER(@term)
+			GROUP BY geo
+		)
+		SELECT
+			COALESCE(c.geo, r.geo) AS geo,
+			GREATEST(COALESCE(c.score, 0), COALESCE(r.score, 0)) AS score,
+			COALESCE(r.rising_rank, 0) AS rising_rank,
+			COALESCE(r.percent_gain, 0) AS percent_gain
+		FROM charting c
+		FULL OUTER JOIN rising r ON c.geo = r.geo
+		ORDER BY score DESC`)
+	q.Parameters = []bigquery.QueryParameter{
+		{Name: "refresh_date", Value: refreshDate},
+		{Name: "term", Value: term},
+	}
+
+	type dmaRow struct {
+		Geo   string `bigquery:"geo"`
+		Score int64  `bigquery:"score"`
+	}
+	rows, err := collectRows[dmaRow](q, ctx)
+	if err != nil {
+		return nil, err
+	}
+	points := make([]TrendsGeoPoint, 0, len(rows))
+	for _, r := range rows {
+		points = append(points, TrendsGeoPoint{CountryName: r.Geo, Score: r.Score})
+	}
+	return points, nil
+}
+
 func (b *BQClient) GetTrendsHistoryUS(ctx context.Context, refreshDate civil.Date, dma string, terms []string) ([]TrendsHistoryPoint, error) {
 	q := b.client.Query(`
 		SELECT

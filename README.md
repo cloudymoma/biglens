@@ -394,7 +394,7 @@ hasn't repriced it and CPCs are still low. That window is the arbitrage.
 | Widget | Description |
 |---|---|
 | **Breakout Keyword Matrix** | Bubble chart of rising terms: velocity (week-over-week gain, log scale) vs mainstream volume rank. The far-left **Unranked** band + amber bubbles are the arbitrage zone. Click a bubble to drill down |
-| **Geo Demand & Bid Modifiers** | The selected term's demand across all 210 US DMAs (or a country's regions), with a suggested Google Ads location bid adjustment per geo |
+| **Geo Interest** | The selected term's score in each of the 210 US DMAs (or a country's regions) for the snapshot's latest complete week — indexed to each geo's own 5-year peak, so not comparable across geos; geos without a reported score show as *insufficient data* |
 | **Brand Safety & Tone Radar** | 14 days of GDELT news tone + conflict-event share for the market, rolled into a 🟢/🟡/🔴 banner with a plain-language SEM action |
 | **Keyword Opportunities** | The actionable table — respects all filters, exports one-click Google Ads Editor CSVs (keywords + checked-row negatives) |
 | **US Real-Time Pulse** | US mode only: the latest intraday snapshot from the hourly table (~4×/day, hours ahead of the 1–2-day-lagged daily tables) |
@@ -424,10 +424,15 @@ where the columns *disagree* (high gain, no rank):
 - **Geo spread** — in how many DMAs/regions the term is rising: distinguishes
   a national breakout (bid broadly) from a local phenomenon (bid with geo
   targeting).
-- **Suggested modifier** — `clamp((geo score / average − 1) × 100, −90…+900)`,
-  the exact bounds of a Google Ads location bid adjustment. It maps *relative
-  demand*, not conversion data — treat it as a starting point for geo
-  targeting, never as a finished bid.
+- **Geo Interest score** — the term's score in each DMA/region for the
+  snapshot's latest *complete* week (the US tables also carry the week that
+  starts on the snapshot day, where most DMAs have no score yet, so it is
+  skipped). Every geo is indexed to its own 5-year peak (100 = the term's
+  local high), so a score says how close the term is to its peak *there*, not
+  how much demand the geo has: scores are not comparable across geos and no
+  bid adjustment is suggested. The panel names the week and how many geos
+  have data; geos with no reported score show as *insufficient data*, are
+  listed last and are left out of the chart.
 - **Safety banner** — event-weighted 3-day average of GDELT news tone and
   conflict share for the market: 🟢 tone ≥ −1 · 🟡 −2…−1 · 🔴 tone < −2 or
   conflict share > 30%. The signal is country-grained (US-national in DMA
@@ -446,7 +451,7 @@ where the columns *disagree* (high gain, no rank):
   Negatives CSV ships only the rows you checked.
 
 A practical pass: pick market + geo → scan the matrix top-left (unranked,
-high-gain, sizable bubbles) → click one to check its geo concentration and
+high-gain, sizable bubbles) → click one to check its geo interest and
 seasonality → glance at the safety banner → export the keywords CSV and the
 checked negatives.
 

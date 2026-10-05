@@ -13,8 +13,8 @@ import TermPanel from './TermPanel';
 import SafetyPanel, { computeSafetyStatus } from './SafetyPanel';
 import type { SafetyLevel } from './SafetyPanel';
 
-// SEM Insights dashboard: breakout keyword matrix (W1), geo bid modifiers
-// (W2), opportunity table with Google Ads Editor CSV exports (W4), US hourly
+// SEM Insights dashboard: breakout keyword matrix (W1), geo interest (W2),
+// opportunity table with Google Ads Editor CSV exports (W4), US hourly
 // pulse (W5) and term drill-down (W6), driven by the market / geo / snapshot /
 // velocity controls. See sem_dashboard_design.md.
 
@@ -245,7 +245,7 @@ export default function SemDashboard() {
               detail="Daily refresh · lags 1–2 days" accentColor="#a78bfa" />
           </div>
 
-          {/* W1: Breakout Keyword Matrix · W2: Geo Bid Modifiers */}
+          {/* W1: Breakout Keyword Matrix · W2: Geo Interest */}
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
             <div className="rounded-2xl border border-zinc-800/50 p-6" style={{ background: '#111114' }}>
               <h3 className="text-sm font-semibold text-white mb-1">Breakout Keyword Matrix</h3>
@@ -276,7 +276,7 @@ export default function SemDashboard() {
               <GeoPanel market={market} refreshDate={refreshDate} geo={geo} term={selectedTerm} />
             ) : (
               <div className="rounded-2xl border border-zinc-800/50 p-6" style={{ background: '#111114' }}>
-                <EmptyState text="Select a term to see geo demand and bid modifiers" />
+                <EmptyState text="Select a term to see its geo interest" />
               </div>
             )}
           </div>

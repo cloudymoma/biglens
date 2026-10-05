@@ -207,19 +207,15 @@ func (h *APIHandler) TrendsTerm(w http.ResponseWriter, r *http.Request) {
 		g.Go(func() error {
 			// In the US view the cross-country chart becomes a DMA breakdown:
 			// the US never appears in the international tables, and metro
-			// grain is the useful spread there. Reuses the SEM geo query
-			// (top-25 ∪ rising across all 210 DMAs).
+			// grain is the useful spread there (top-25 ∪ rising across all
+			// 210 DMAs).
+			var geo []TrendsGeoPoint
+			var err error
 			if countryCode == "US" {
-				rows, err := h.bq.GetSemGeoUS(ctx, refreshDate, term)
-				if err != nil {
-					return err
-				}
-				for _, row := range rows {
-					data.Geo = append(data.Geo, TrendsGeoPoint{CountryName: row.Geo, Score: row.Score})
-				}
-				return nil
+				geo, err = h.bq.GetTrendsGeoUS(ctx, refreshDate, term)
+			} else {
+				geo, err = h.bq.GetTrendsGeo(ctx, refreshDate, term)
 			}
-			geo, err := h.bq.GetTrendsGeo(ctx, refreshDate, term)
 			if err != nil {
 				return err
 			}

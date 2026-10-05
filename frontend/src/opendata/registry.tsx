@@ -66,7 +66,7 @@ export const OPEN_DATASETS: OpenDataset[] = [
     description:
       'Keyword arbitrage for search marketers: rising queries joined against the top-25 chart ' +
       'to spot momentum before mainstream volume, across 210 US metros or country level worldwide, ' +
-      'with geo bid modifiers, hourly US pulse, GDELT brand-safety radar and Google Ads Editor CSV export.',
+      'with per-geo interest, hourly US pulse, GDELT brand-safety radar and Google Ads Editor CSV export.',
     sourceTable: 'bigquery-public-data.google_trends · google_trends_hourly · gdelt-bq.gdeltv2',
     component: SemDashboard,
   },
