@@ -29,19 +29,22 @@ function DailyFeesView() {
   const [error, setError] = useState('');
 
   useEffect(() => {
+    let stale = false;
     setLoading(true);
     setError('');
     fetchCryptoFees(days)
-      .then(setData)
-      .catch(e => setError(e.response?.data || e.message))
-      .finally(() => setLoading(false));
+      .then(d => { if (!stale) setData(d); })
+      .catch(e => { if (!stale) setError(e.response?.data || e.message); })
+      .finally(() => { if (!stale) setLoading(false); });
+    return () => { stale = true; };
   }, [days]);
 
   if (error) return <div className="space-y-4"><DaysPicker options={DAY_OPTIONS} value={days} onChange={setDays} /><ErrorBanner message={error} /></div>;
-  if (loading || !data) return <EmptyState text="Loading fee market…" />;
+  if (loading || !data || data.days !== days) return <EmptyState text="Loading fee market…" />;
 
   const latestBtc = data.btc[data.btc.length - 1];
   const latestEth = data.eth[data.eth.length - 1];
+  const latestDate = latestBtc?.date || latestEth?.date || '—';
   const btcDates = data.btc.map(r => r.date);
   const ethDates = data.eth.map(r => r.date);
   const feeTrendDates = mergeDates(data.btc, data.eth);
@@ -52,7 +55,7 @@ function DailyFeesView() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <DaysPicker options={DAY_OPTIONS} value={days} onChange={setDays} />
-        <span className="text-[11px] text-zinc-600">Complete UTC days · latest = yesterday</span>
+        <span className="text-[11px] text-zinc-600">Complete UTC days · latest = {latestDate}</span>
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
@@ -99,7 +102,7 @@ function DailyFeesView() {
             }}
           />
         </Panel>
-        <Panel title="ETH Burned vs Tips" note="EIP-1559: base fee burned vs validator priority tips (ETH)">
+        <Panel title="ETH Burned vs Tips" note="EIP-1559 base + EIP-4844 blob fees burned vs validator priority tips (ETH)">
           <ReactECharts
             style={{ height: 260 }}
             option={{
@@ -117,7 +120,7 @@ function DailyFeesView() {
         </Panel>
       </div>
 
-      <Panel title="Cost of Congestion" note="each dot = one day · x: block fullness % · y: fee level (native fee units)">
+      <Panel title="Cost of Congestion" note="each dot = one day · x: block fullness % (ETH EIP-1559 targets 50%) · y: fee level">
         <ReactECharts
           style={{ height: 260 }}
           option={{
@@ -146,13 +149,20 @@ const FEES_VIEWS: { id: FeesView; label: string }[] = [
 
 export default function FeesTab() {
   const [view, setView] = useState<FeesView>('pulse');
+  const [visited, setVisited] = useState<ReadonlySet<FeesView>>(new Set<FeesView>(['pulse']));
+
+  const selectView = (id: FeesView) => {
+    setView(id);
+    setVisited(prev => new Set(prev).add(id));
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex rounded-lg border border-zinc-800/50 overflow-hidden w-fit" style={{ background: '#09090b' }}>
         {FEES_VIEWS.map(v => (
           <button
             key={v.id}
-            onClick={() => setView(v.id)}
+            onClick={() => selectView(v.id)}
             className={`px-3 py-2 text-xs cursor-pointer transition-colors ${
               view === v.id ? 'text-cyan-400 bg-cyan-500/10' : 'text-zinc-500 hover:text-zinc-300'
             }`}
@@ -161,8 +171,18 @@ export default function FeesTab() {
           </button>
         ))}
       </div>
-      {view === 'pulse' ? <GasPulse72hView /> : <DailyFeesView />}
+      {visited.has('pulse') && (
+        <div className={view === 'pulse' ? '' : 'hidden'}>
+          <GasPulse72hView />
+        </div>
+      )}
+      {visited.has('daily') && (
+        <div className={view === 'daily' ? '' : 'hidden'}>
+          <DailyFeesView />
+        </div>
+      )}
     </div>
   );
 }
+
 

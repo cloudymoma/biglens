@@ -20,7 +20,29 @@ func (s *addressRiskService) tagWhales(ctx context.Context, d *CryptoWhalesData)
 	if s == nil || s.store == nil || d.Chain != "eth" {
 		return d
 	}
-	pool, err := s.store.riskPoolEntries(ctx)
+	seen := make(map[string]struct{}, len(d.Largest)*2+len(d.TopReceivers))
+	addrs := make([]string, 0, len(d.Largest)*2+len(d.TopReceivers))
+	addAddr := func(raw string) {
+		if raw == "" {
+			return
+		}
+		low := strings.ToLower(raw)
+		if _, ok := seen[low]; !ok {
+			seen[low] = struct{}{}
+			addrs = append(addrs, low)
+		}
+	}
+	for _, tx := range d.Largest {
+		addAddr(tx.From)
+		addAddr(tx.To)
+	}
+	for _, r := range d.TopReceivers {
+		addAddr(r.Address)
+	}
+	if len(addrs) == 0 {
+		return d
+	}
+	pool, err := s.store.riskPoolForAddresses(ctx, addrs)
 	if err != nil {
 		slog.Warn("address_risk whales badges skipped", "error", err)
 		return d
@@ -43,3 +65,4 @@ func (s *addressRiskService) tagWhales(ctx context.Context, d *CryptoWhalesData)
 	}
 	return &c
 }
+

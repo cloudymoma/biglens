@@ -19,28 +19,30 @@ export default function TokensTab() {
   const [error, setError] = useState('');
 
   useEffect(() => {
+    let stale = false;
     setLoading(true);
     setError('');
     fetchCryptoTokens(days)
-      .then(setData)
-      .catch(e => setError(e.response?.data || e.message))
-      .finally(() => setLoading(false));
+      .then(d => { if (!stale) setData(d); })
+      .catch(e => { if (!stale) setError(e.response?.data || e.message); })
+      .finally(() => { if (!stale) setLoading(false); });
+    return () => { stale = true; };
   }, [days]);
 
   if (error) return <div className="space-y-4"><DaysPicker options={DAY_OPTIONS} value={days} onChange={setDays} /><ErrorBanner message={error} /></div>;
-  if (loading || !data) return <EmptyState text="Loading token economy…" />;
+  if (loading || !data || data.days !== days) return <EmptyState text="Loading token economy…" />;
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <DaysPicker options={DAY_OPTIONS} value={days} onChange={setDays} />
         <span className="text-[11px] text-zinc-600">
-          activity measured in transfer counts — cross-token value sums are meaningless without prices
+          activity measured in Transfer event counts (ERC-20 & ERC-721, incl. zero-value) — cross-token value sums are meaningless without prices
         </span>
       </div>
 
       <div className="grid lg:grid-cols-2 gap-4">
-        <Panel title="Token vs Native Activity" note="daily ERC-20 transfer events vs plain ETH transactions">
+        <Panel title="Token vs Native Activity" note="daily token Transfer events (ERC-20 / ERC-721) vs all ETH transactions">
           <ReactECharts
             style={{ height: 260 }}
             option={{
@@ -50,8 +52,8 @@ export default function TokensTab() {
               xAxis: { type: 'category', data: data.daily.map(r => r.date), axisLabel: AXIS_LABEL },
               yAxis: { type: 'value', axisLabel: { ...AXIS_LABEL, formatter: (v: number) => fmtNum(v) }, splitLine: SPLIT_LINE },
               series: [
-                { name: 'ERC-20 transfers', type: 'line', showSymbol: false, areaStyle: { color: '#a855f7', opacity: 0.12 }, data: data.daily.map(r => r.transfers), lineStyle: { color: '#a855f7', width: 2 }, itemStyle: { color: '#a855f7' } },
-                { name: 'ETH transactions', type: 'line', showSymbol: false, data: data.daily.map(r => r.native_txs), lineStyle: { color: ETH_COLOR, width: 2 }, itemStyle: { color: ETH_COLOR } },
+                { name: 'Token transfers', type: 'line', showSymbol: false, areaStyle: { color: '#a855f7', opacity: 0.12 }, data: data.daily.map(r => r.transfers), lineStyle: { color: '#a855f7', width: 2 }, itemStyle: { color: '#a855f7' } },
+                { name: 'ETH transactions (all)', type: 'line', showSymbol: false, data: data.daily.map(r => r.native_txs), lineStyle: { color: ETH_COLOR, width: 2 }, itemStyle: { color: ETH_COLOR } },
               ],
             }}
           />
@@ -76,13 +78,14 @@ export default function TokensTab() {
       </div>
 
       <div className="grid lg:grid-cols-2 gap-4">
-        <Panel title="Token Movement" note="top 25 ERC-20 tokens sized by transfer count">
+        <Panel title="Token Movement" note="top 25 token contracts sized by Transfer event count">
           <ReactECharts
             style={{ height: 340 }}
             option={{
               tooltip: {
                 ...CHART_TOOLTIP,
-                formatter: (p: { value: number }) => `${fmtNum(p.value)} transfers`,
+                formatter: (p: { name: string; value: number; data?: { addr?: string } }) =>
+                  `${p.name}${p.data?.addr ? ` (${shortHash(p.data.addr)})` : ''}<br/>${fmtNum(p.value)} transfers`,
               },
               series: [{
                 type: 'treemap',
@@ -94,13 +97,14 @@ export default function TokensTab() {
                 data: data.top_tokens.map((t, i) => ({
                   name: tokenLabel(t),
                   value: t.transfers,
+                  addr: t.token_address,
                   itemStyle: { color: ['#a855f7', '#627eea', '#22c55e', '#fbbf24', '#ef4444'][i % 5], opacity: 0.55 + 0.45 * (1 - i / 25) },
                 })),
               }],
             }}
           />
         </Panel>
-        <Panel title="Top Tokens by Activity">
+        <Panel title="Top Tokens by Activity" note="≈ Senders/Receivers use APPROX_COUNT_DISTINCT (~1% error)">
           {data.top_tokens.length === 0 ? <EmptyState text="No token transfers in range." /> : (
             <div className="overflow-y-auto max-h-[340px]">
               <table className="w-full text-xs">
@@ -109,8 +113,8 @@ export default function TokensTab() {
                     <th className="pb-2 font-medium">#</th>
                     <th className="pb-2 font-medium">Token</th>
                     <th className="pb-2 font-medium text-right">Transfers</th>
-                    <th className="pb-2 font-medium text-right">Senders</th>
-                    <th className="pb-2 font-medium text-right">Receivers</th>
+                    <th className="pb-2 font-medium text-right">≈ Senders</th>
+                    <th className="pb-2 font-medium text-right">≈ Receivers</th>
                   </tr>
                 </thead>
                 <tbody className="font-mono">
@@ -135,3 +139,4 @@ export default function TokensTab() {
     </div>
   );
 }
+

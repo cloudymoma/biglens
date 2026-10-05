@@ -26,7 +26,6 @@ import (
 	"time"
 
 	"cloud.google.com/go/civil"
-	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -35,11 +34,24 @@ const (
 	// cryptoAddressMaxDays caps the heavy distinct-address scans; the 365-day
 	// pulse view simply omits the addresses series.
 	cryptoAddressMaxDays = 90
+	// cryptoIngestLag holds the daily window on the previous UTC day for 20
+	// minutes past midnight so late-arriving blocks (BTC lags 2–8 minutes)
+	// settle before the new day is locked into the daily cache.
+	cryptoIngestLag    = 20 * time.Minute
+	cryptoFetchTimeout = 2 * time.Minute
+	cryptoPartialTTL   = 2 * time.Minute
 )
 
 var cryptoPulseDaysAllowed = []int{7, 30, 90, 365}
 
 var cryptoFlight singleflight.Group
+
+// cryptoFetchContext detaches from the triggering HTTP request's cancellation
+// so one client disconnecting does not abort the shared singleflight BigQuery
+// jobs for other waiters or discard already-billed results before caching.
+func cryptoFetchContext(r *http.Request) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(r.Context()), cryptoFetchTimeout)
+}
 
 func parseCryptoDays(r *http.Request, def int, allowed []int) (int, error) {
 	raw := r.URL.Query().Get("days")
@@ -58,11 +70,75 @@ func parseCryptoDays(r *http.Request, def int, allowed []int) (int, error) {
 	return 0, fmt.Errorf("days must be one of %v", allowed)
 }
 
-// cryptoWindow returns the half-open [start, end) day window ending at
-// today UTC, so every returned day is complete.
+// cryptoWindow returns the half-open [start, end) day window ending at the
+// latest settled UTC day boundary (accounting for cryptoIngestLag).
 func cryptoWindow(days int) (start, end civil.Date) {
-	end = civil.DateOf(time.Now().UTC())
+	return cryptoWindowAt(days, time.Now().UTC())
+}
+
+func cryptoWindowAt(days int, now time.Time) (start, end civil.Date) {
+	end = civil.DateOf(now.UTC().Add(-cryptoIngestLag))
 	return end.AddDays(-days), end
+}
+
+// cryptoTTL returns the cache TTL until the next daily window rollover
+// (end + 1 day at 00:20 UTC), clamped to [1m, 24h].
+func cryptoTTL(end civil.Date, now time.Time) time.Duration {
+	nextRollover := end.AddDays(1).In(time.UTC).Add(cryptoIngestLag)
+	ttl := nextRollover.Sub(now.UTC())
+	if ttl < time.Minute {
+		return time.Minute
+	}
+	if ttl > 24*time.Hour {
+		return 24 * time.Hour
+	}
+	return ttl
+}
+
+// getCachedBtcBlocks shares BTC block stats between /pulse and /fees.
+func (h *APIHandler) getCachedBtcBlocks(ctx context.Context, start, end civil.Date) ([]CryptoBlockRow, error) {
+	qKey := fmt.Sprintf("opendata:crypto:q:btc_blocks:%s:%s", start, end)
+	if cached, ok := h.cache.Get(qKey); ok {
+		return cached.([]CryptoBlockRow), nil
+	}
+	v, err, _ := cryptoFlight.Do(qKey, func() (any, error) {
+		rows, err := h.bq.GetCryptoBlockStats(ctx, "btc", start, end)
+		if err != nil {
+			return nil, err
+		}
+		if rows == nil {
+			rows = []CryptoBlockRow{}
+		}
+		h.cache.SetWithTTL(qKey, rows, cryptoTTL(end, time.Now().UTC()))
+		return rows, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return v.([]CryptoBlockRow), nil
+}
+
+// getCachedBtcCoinbase shares BTC coinbase revenue between /fees and /mining.
+func (h *APIHandler) getCachedBtcCoinbase(ctx context.Context, start, end civil.Date) ([]BtcCoinbaseRow, error) {
+	qKey := fmt.Sprintf("opendata:crypto:q:btc_coinbase:%s:%s", start, end)
+	if cached, ok := h.cache.Get(qKey); ok {
+		return cached.([]BtcCoinbaseRow), nil
+	}
+	v, err, _ := cryptoFlight.Do(qKey, func() (any, error) {
+		rows, err := h.bq.GetBtcCoinbase(ctx, start, end)
+		if err != nil {
+			return nil, err
+		}
+		if rows == nil {
+			rows = []BtcCoinbaseRow{}
+		}
+		h.cache.SetWithTTL(qKey, rows, cryptoTTL(end, time.Now().UTC()))
+		return rows, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return v.([]BtcCoinbaseRow), nil
 }
 
 // --- /pulse ---
@@ -84,9 +160,10 @@ type CryptoChainPulse struct {
 }
 
 type CryptoPulseData struct {
-	Days int              `json:"days"`
-	BTC  CryptoChainPulse `json:"btc"`
-	ETH  CryptoChainPulse `json:"eth"`
+	Days     int              `json:"days"`
+	BTC      CryptoChainPulse `json:"btc"`
+	ETH      CryptoChainPulse `json:"eth"`
+	Warnings []string         `json:"warnings,omitempty"`
 }
 
 // rollupCryptoKpi derives the KPI strip from the latest complete day,
@@ -111,43 +188,6 @@ func rollupCryptoKpi(daily []CryptoActivityRow, blocks []CryptoBlockRow) CryptoK
 	return kpi
 }
 
-// fetchChainPulse launches the per-chain queries on g, writing into dst.
-// The addresses series is skipped beyond cryptoAddressMaxDays (cost cap).
-func (h *APIHandler) fetchChainPulse(g *errgroup.Group, ctx context.Context, chain string, start, end civil.Date, days int, dst *CryptoChainPulse) {
-	g.Go(func() error {
-		rows, err := h.bq.GetCryptoActivity(ctx, chain, start, end)
-		if err != nil {
-			return fmt.Errorf("%s activity: %w", chain, err)
-		}
-		if rows != nil {
-			dst.Daily = rows
-		}
-		return nil
-	})
-	g.Go(func() error {
-		rows, err := h.bq.GetCryptoBlockStats(ctx, chain, start, end)
-		if err != nil {
-			return fmt.Errorf("%s blocks: %w", chain, err)
-		}
-		if rows != nil {
-			dst.Blocks = rows
-		}
-		return nil
-	})
-	if days <= cryptoAddressMaxDays {
-		g.Go(func() error {
-			rows, err := h.bq.GetCryptoActiveAddresses(ctx, chain, start, end)
-			if err != nil {
-				return fmt.Errorf("%s addresses: %w", chain, err)
-			}
-			if rows != nil {
-				dst.Addresses = rows
-			}
-			return nil
-		})
-	}
-}
-
 func (h *APIHandler) CryptoPulse(w http.ResponseWriter, r *http.Request) {
 	days, err := parseCryptoDays(r, cryptoDefaultDays, cryptoPulseDaysAllowed)
 	if err != nil {
@@ -155,14 +195,23 @@ func (h *APIHandler) CryptoPulse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	key := fmt.Sprintf("opendata:crypto:pulse:%d", days)
+	now := time.Now().UTC()
+	start, end := cryptoWindowAt(days, now)
+	baseKey := fmt.Sprintf("opendata:crypto:pulse:%d", days)
+	key := fmt.Sprintf("%s:%s", baseKey, end)
 	if cached, ok := h.cache.Get(key); ok {
+		writeJSON(w, cached)
+		return
+	}
+	if cached, ok := h.cache.Get(baseKey); ok {
 		writeJSON(w, cached)
 		return
 	}
 
 	v, err, _ := cryptoFlight.Do(key, func() (any, error) {
-		start, end := cryptoWindow(days)
+		ctx, cancel := cryptoFetchContext(r)
+		defer cancel()
+
 		empty := func() CryptoChainPulse {
 			return CryptoChainPulse{
 				Daily:     []CryptoActivityRow{},
@@ -171,17 +220,89 @@ func (h *APIHandler) CryptoPulse(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		data := CryptoPulseData{Days: days, BTC: empty(), ETH: empty()}
+		includeAddr := days <= cryptoAddressMaxDays
 
-		g, ctx := errgroup.WithContext(r.Context())
-		h.fetchChainPulse(g, ctx, "btc", start, end, days, &data.BTC)
-		h.fetchChainPulse(g, ctx, "eth", start, end, days, &data.ETH)
-		if err := g.Wait(); err != nil {
-			return nil, err
+		type pulseResult struct {
+			btcRows   []cryptoPulseRow
+			btcBlocks []CryptoBlockRow
+			ethRows   []cryptoPulseRow
+			btcErr    error
+			btcBlkErr error
+			ethErr    error
+		}
+		var res pulseResult
+		done := make(chan struct{}, 3)
+		go func() {
+			res.btcRows, res.btcErr = h.bq.getCryptoPulseChain(ctx, "btc", start, end, includeAddr)
+			done <- struct{}{}
+		}()
+		go func() {
+			res.btcBlocks, res.btcBlkErr = h.getCachedBtcBlocks(ctx, start, end)
+			done <- struct{}{}
+		}()
+		go func() {
+			res.ethRows, res.ethErr = h.bq.getCryptoPulseChain(ctx, "eth", start, end, includeAddr)
+			done <- struct{}{}
+		}()
+		for i := 0; i < 3; i++ {
+			<-done
+		}
+
+		if res.btcErr != nil && res.ethErr != nil {
+			return nil, fmt.Errorf("btc pulse: %v; eth pulse: %w", res.btcErr, res.ethErr)
+		}
+		if res.btcErr != nil {
+			slog.Warn("crypto pulse: btc query failed", "error", res.btcErr)
+			data.Warnings = append(data.Warnings, "btc: "+res.btcErr.Error())
+		} else {
+			for _, r := range res.btcRows {
+				data.BTC.Daily = append(data.BTC.Daily, CryptoActivityRow{
+					Date: r.Date, TxCount: r.TxCount, ValueSettled: r.ValueSettled, FeesTotal: r.FeesTotal,
+				})
+				if includeAddr {
+					data.BTC.Addresses = append(data.BTC.Addresses, CryptoAddressRow{
+						Date: r.Date, ActiveAddresses: r.ActiveAddresses,
+					})
+				}
+			}
+		}
+		if res.btcBlkErr != nil {
+			slog.Warn("crypto pulse: btc blocks query failed", "error", res.btcBlkErr)
+			data.Warnings = append(data.Warnings, "btc_blocks: "+res.btcBlkErr.Error())
+		} else if res.btcBlocks != nil {
+			data.BTC.Blocks = res.btcBlocks
+		}
+
+		if res.ethErr != nil {
+			slog.Warn("crypto pulse: eth query failed", "error", res.ethErr)
+			data.Warnings = append(data.Warnings, "eth: "+res.ethErr.Error())
+		} else {
+			for _, r := range res.ethRows {
+				if r.TxCount > 0 || r.ValueSettled > 0 || r.FeesTotal > 0 {
+					data.ETH.Daily = append(data.ETH.Daily, CryptoActivityRow{
+						Date: r.Date, TxCount: r.TxCount, ValueSettled: r.ValueSettled, FeesTotal: r.FeesTotal,
+					})
+				}
+				if includeAddr && r.ActiveAddresses > 0 {
+					data.ETH.Addresses = append(data.ETH.Addresses, CryptoAddressRow{
+						Date: r.Date, ActiveAddresses: r.ActiveAddresses,
+					})
+				}
+				if r.Blocks > 0 {
+					data.ETH.Blocks = append(data.ETH.Blocks, CryptoBlockRow{
+						Date: r.Date, Blocks: r.Blocks, FullnessPct: r.FullnessPct,
+					})
+				}
+			}
 		}
 
 		data.BTC.Kpi = rollupCryptoKpi(data.BTC.Daily, data.BTC.Blocks)
 		data.ETH.Kpi = rollupCryptoKpi(data.ETH.Daily, data.ETH.Blocks)
-		h.cache.Set(key, &data)
+		ttl := cryptoTTL(end, time.Now().UTC())
+		if len(data.Warnings) > 0 {
+			ttl = cryptoPartialTTL
+		}
+		h.cache.SetWithTTL(key, &data, ttl)
 		return &data, nil
 	})
 	if err != nil {
@@ -199,10 +320,12 @@ type CryptoFeesData struct {
 	ETH       []EthFeeRow      `json:"eth"`
 	BTCBlocks []CryptoBlockRow `json:"btc_blocks"`
 	ETHBlocks []CryptoBlockRow `json:"eth_blocks"`
+	Warnings  []string         `json:"warnings,omitempty"`
 }
 
 // mergeBtcFees returns new rows with SubsidyBTC = coinbase revenue − fees,
-// clamped at 0. Inputs are not mutated.
+// clamped at 0. Inputs are not mutated. When coinbase is nil/empty, each row's
+// inline CoinbaseBTC field (from conditional aggregation) is used.
 func mergeBtcFees(fees []BtcFeeRow, coinbase []BtcCoinbaseRow) []BtcFeeRow {
 	revenue := make(map[string]float64, len(coinbase))
 	for _, c := range coinbase {
@@ -210,7 +333,11 @@ func mergeBtcFees(fees []BtcFeeRow, coinbase []BtcCoinbaseRow) []BtcFeeRow {
 	}
 	out := make([]BtcFeeRow, 0, len(fees))
 	for _, f := range fees {
-		if subsidy := revenue[f.Date] - f.TotalFeesBTC; subsidy > 0 {
+		cb, ok := revenue[f.Date]
+		if !ok {
+			cb = f.CoinbaseBTC
+		}
+		if subsidy := cb - f.TotalFeesBTC; subsidy > 0 {
 			f.SubsidyBTC = subsidy
 		}
 		out = append(out, f)
@@ -242,14 +369,23 @@ func (h *APIHandler) CryptoFees(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	key := fmt.Sprintf("opendata:crypto:fees:%d", days)
+	now := time.Now().UTC()
+	start, end := cryptoWindowAt(days, now)
+	baseKey := fmt.Sprintf("opendata:crypto:fees:%d", days)
+	key := fmt.Sprintf("%s:%s", baseKey, end)
 	if cached, ok := h.cache.Get(key); ok {
+		writeJSON(w, cached)
+		return
+	}
+	if cached, ok := h.cache.Get(baseKey); ok {
 		writeJSON(w, cached)
 		return
 	}
 
 	v, err, _ := cryptoFlight.Do(key, func() (any, error) {
-		start, end := cryptoWindow(days)
+		ctx, cancel := cryptoFetchContext(r)
+		defer cancel()
+
 		data := CryptoFeesData{
 			Days:      days,
 			BTC:       []BtcFeeRow{},
@@ -257,37 +393,71 @@ func (h *APIHandler) CryptoFees(w http.ResponseWriter, r *http.Request) {
 			BTCBlocks: []CryptoBlockRow{},
 			ETHBlocks: []CryptoBlockRow{},
 		}
-		var btcFees []BtcFeeRow
-		var btcCoinbase []BtcCoinbaseRow
-		var ethFees []EthFeeRow
-		var ethBurn []EthBurnRow
+		var (
+			btcFees      []BtcFeeRow
+			btcBlocks    []CryptoBlockRow
+			ethFees      []EthFeeRow
+			btcFeeErr    error
+			btcBlocksErr error
+			ethFeeErr    error
+		)
 
-		g, ctx := errgroup.WithContext(r.Context())
-		g.Go(func() (err error) { btcFees, err = h.bq.GetBtcFees(ctx, start, end); return })
-		g.Go(func() (err error) { btcCoinbase, err = h.bq.GetBtcCoinbase(ctx, start, end); return })
-		g.Go(func() (err error) { ethFees, err = h.bq.GetEthFees(ctx, start, end); return })
-		g.Go(func() (err error) { ethBurn, err = h.bq.GetEthBurn(ctx, start, end); return })
-		g.Go(func() error {
-			rows, err := h.bq.GetCryptoBlockStats(ctx, "btc", start, end)
-			if rows != nil {
-				data.BTCBlocks = rows
-			}
-			return err
-		})
-		g.Go(func() error {
-			rows, err := h.bq.GetCryptoBlockStats(ctx, "eth", start, end)
-			if rows != nil {
-				data.ETHBlocks = rows
-			}
-			return err
-		})
-		if err := g.Wait(); err != nil {
-			return nil, err
+		done := make(chan struct{}, 3)
+		go func() {
+			btcFees, btcFeeErr = h.bq.GetBtcFees(ctx, start, end)
+			done <- struct{}{}
+		}()
+		go func() {
+			btcBlocks, btcBlocksErr = h.getCachedBtcBlocks(ctx, start, end)
+			done <- struct{}{}
+		}()
+		go func() {
+			ethFees, ethFeeErr = h.bq.GetEthFees(ctx, start, end)
+			done <- struct{}{}
+		}()
+		for i := 0; i < 3; i++ {
+			<-done
 		}
 
-		data.BTC = mergeBtcFees(btcFees, btcCoinbase)
-		data.ETH = mergeEthFees(ethFees, ethBurn)
-		h.cache.Set(key, &data)
+		if btcFeeErr != nil && ethFeeErr != nil {
+			return nil, fmt.Errorf("btc fees: %v; eth fees: %w", btcFeeErr, ethFeeErr)
+		}
+		if btcFeeErr != nil {
+			slog.Warn("crypto fees: btc query failed", "error", btcFeeErr)
+			data.Warnings = append(data.Warnings, "btc_fees: "+btcFeeErr.Error())
+		} else {
+			data.BTC = mergeBtcFees(btcFees, nil)
+			// Populate the shared coinbase cache so /mining can reuse it without a BigQuery scan.
+			cbRows := make([]BtcCoinbaseRow, 0, len(btcFees))
+			for _, f := range btcFees {
+				cbRows = append(cbRows, BtcCoinbaseRow{Date: f.Date, CoinbaseBTC: f.CoinbaseBTC})
+			}
+			cbKey := fmt.Sprintf("opendata:crypto:q:btc_coinbase:%s:%s", start, end)
+			h.cache.SetWithTTL(cbKey, cbRows, cryptoTTL(end, time.Now().UTC()))
+		}
+		if btcBlocksErr != nil {
+			slog.Warn("crypto fees: btc blocks query failed", "error", btcBlocksErr)
+			data.Warnings = append(data.Warnings, "btc_blocks: "+btcBlocksErr.Error())
+		} else if btcBlocks != nil {
+			data.BTCBlocks = btcBlocks
+		}
+		if ethFeeErr != nil {
+			slog.Warn("crypto fees: eth query failed", "error", ethFeeErr)
+			data.Warnings = append(data.Warnings, "eth_fees: "+ethFeeErr.Error())
+		} else if ethFees != nil {
+			data.ETH = ethFees
+			for _, r := range ethFees {
+				data.ETHBlocks = append(data.ETHBlocks, CryptoBlockRow{
+					Date: r.Date, Blocks: r.Blocks, FullnessPct: r.FullnessPct,
+				})
+			}
+		}
+
+		ttl := cryptoTTL(end, time.Now().UTC())
+		if len(data.Warnings) > 0 {
+			ttl = cryptoPartialTTL
+		}
+		h.cache.SetWithTTL(key, &data, ttl)
 		return &data, nil
 	})
 	if err != nil {
@@ -358,14 +528,23 @@ func (h *APIHandler) CryptoWhales(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	key := fmt.Sprintf("opendata:crypto:whales:%s:%d", chain, days)
+	now := time.Now().UTC()
+	start, end := cryptoWindowAt(days, now)
+	baseKey := fmt.Sprintf("opendata:crypto:whales:%s:%d", chain, days)
+	key := fmt.Sprintf("%s:%s", baseKey, end)
 	if cached, ok := h.cache.Get(key); ok {
+		writeJSON(w, h.risk.tagWhales(r.Context(), cached.(*CryptoWhalesData)))
+		return
+	}
+	if cached, ok := h.cache.Get(baseKey); ok {
 		writeJSON(w, h.risk.tagWhales(r.Context(), cached.(*CryptoWhalesData)))
 		return
 	}
 
 	v, err, _ := cryptoFlight.Do(key, func() (any, error) {
-		start, end := cryptoWindow(days)
+		ctx, cancel := cryptoFetchContext(r)
+		defer cancel()
+
 		threshold := whaleThresholdBTC
 		if chain == "eth" {
 			threshold = whaleThresholdETH
@@ -380,41 +559,20 @@ func (h *APIHandler) CryptoWhales(w http.ResponseWriter, r *http.Request) {
 			Concentration: []ConcentrationRow{},
 		}
 
-		g, ctx := errgroup.WithContext(r.Context())
-		g.Go(func() error {
-			rows, err := h.bq.GetCryptoLargestTxs(ctx, chain, start, end)
-			if err != nil {
-				return err
-			}
-			data.Largest = filterWhaleTxs(chain, rows)
-			return nil
-		})
-		g.Go(func() error {
-			rows, err := h.bq.GetCryptoTopReceivers(ctx, chain, start, end)
-			if rows != nil {
-				data.TopReceivers = rows
-			}
-			return err
-		})
-		g.Go(func() error {
-			rows, err := h.bq.GetCryptoWhaleTrend(ctx, chain, start, end)
-			if rows != nil {
-				data.Trend = rows
-			}
-			return err
-		})
-		g.Go(func() error {
-			rows, err := h.bq.GetCryptoConcentration(ctx, chain, start, end)
-			if rows != nil {
-				data.Concentration = rows
-			}
-			return err
-		})
-		if err := g.Wait(); err != nil {
+		bundle, err := h.bq.getCryptoWhalesBundle(ctx, chain, start, end)
+		if err != nil {
 			return nil, err
 		}
+		data.Largest = filterWhaleTxs(chain, bundle.Largest)
+		if bundle.TopReceivers != nil {
+			data.TopReceivers = bundle.TopReceivers
+		}
+		for _, d := range bundle.Daily {
+			data.Trend = append(data.Trend, WhaleTrendRow{Date: d.Date, WhaleCount: d.WhaleCount})
+			data.Concentration = append(data.Concentration, ConcentrationRow{Date: d.Date, Top1PctShare: d.Top1PctShare})
+		}
 
-		h.cache.Set(key, &data)
+		h.cache.SetWithTTL(key, &data, cryptoTTL(end, time.Now().UTC()))
 		return &data, nil
 	})
 	if err != nil {
@@ -435,6 +593,7 @@ type CryptoTokensData struct {
 	TopTokens []TokenRow      `json:"top_tokens"`
 	Daily     []TokenDailyRow `json:"daily"`
 	Contracts []ContractRow   `json:"contracts"`
+	Warnings  []string        `json:"warnings,omitempty"`
 }
 
 // mergeTokenDaily zips transfer counts with native tx counts over the union
@@ -470,46 +629,91 @@ func (h *APIHandler) CryptoTokens(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	key := fmt.Sprintf("opendata:crypto:tokens:%d", days)
+	now := time.Now().UTC()
+	start, end := cryptoWindowAt(days, now)
+	baseKey := fmt.Sprintf("opendata:crypto:tokens:%d", days)
+	key := fmt.Sprintf("%s:%s", baseKey, end)
 	if cached, ok := h.cache.Get(key); ok {
+		writeJSON(w, cached)
+		return
+	}
+	if cached, ok := h.cache.Get(baseKey); ok {
 		writeJSON(w, cached)
 		return
 	}
 
 	v, err, _ := cryptoFlight.Do(key, func() (any, error) {
-		start, end := cryptoWindow(days)
+		ctx, cancel := cryptoFetchContext(r)
+		defer cancel()
+
 		data := CryptoTokensData{
 			Days:      days,
 			TopTokens: []TokenRow{},
 			Daily:     []TokenDailyRow{},
 			Contracts: []ContractRow{},
 		}
-		var transfers []TokenDailyRow
-		var native []CryptoActivityRow
+		var (
+			topTokens    []TokenRow
+			transfers    []TokenDailyRow
+			native       []CryptoActivityRow
+			contracts    []ContractRow
+			topErr       error
+			transfersErr error
+			nativeErr    error
+			contractsErr error
+		)
 
-		g, ctx := errgroup.WithContext(r.Context())
-		g.Go(func() error {
-			rows, err := h.bq.GetTokenTop(ctx, start, end)
-			if rows != nil {
-				data.TopTokens = rows
-			}
-			return err
-		})
-		g.Go(func() (err error) { transfers, err = h.bq.GetTokenDaily(ctx, start, end); return })
-		g.Go(func() (err error) { native, err = h.bq.GetCryptoActivity(ctx, "eth", start, end); return })
-		g.Go(func() error {
-			rows, err := h.bq.GetContractsDaily(ctx, start, end)
-			if rows != nil {
-				data.Contracts = rows
-			}
-			return err
-		})
-		if err := g.Wait(); err != nil {
-			return nil, err
+		done := make(chan struct{}, 4)
+		go func() {
+			topTokens, topErr = h.bq.GetTokenTop(ctx, start, end)
+			done <- struct{}{}
+		}()
+		go func() {
+			transfers, transfersErr = h.bq.GetTokenDaily(ctx, start, end)
+			done <- struct{}{}
+		}()
+		go func() {
+			native, nativeErr = h.bq.GetEthNativeTxs(ctx, start, end)
+			done <- struct{}{}
+		}()
+		go func() {
+			contracts, contractsErr = h.bq.GetContractsDaily(ctx, start, end)
+			done <- struct{}{}
+		}()
+		for i := 0; i < 4; i++ {
+			<-done
+		}
+
+		if topErr != nil && transfersErr != nil && contractsErr != nil {
+			return nil, fmt.Errorf("tokens top: %v; daily: %v; contracts: %w", topErr, transfersErr, contractsErr)
+		}
+		if topErr != nil {
+			slog.Warn("crypto tokens: top tokens query failed", "error", topErr)
+			data.Warnings = append(data.Warnings, "top_tokens: "+topErr.Error())
+		} else if topTokens != nil {
+			data.TopTokens = topTokens
+		}
+		if transfersErr != nil {
+			slog.Warn("crypto tokens: token daily query failed", "error", transfersErr)
+			data.Warnings = append(data.Warnings, "token_daily: "+transfersErr.Error())
+		}
+		if nativeErr != nil {
+			slog.Warn("crypto tokens: native txs query failed", "error", nativeErr)
+			data.Warnings = append(data.Warnings, "native_txs: "+nativeErr.Error())
+		}
+		if contractsErr != nil {
+			slog.Warn("crypto tokens: contracts query failed", "error", contractsErr)
+			data.Warnings = append(data.Warnings, "contracts: "+contractsErr.Error())
+		} else if contracts != nil {
+			data.Contracts = contracts
 		}
 
 		data.Daily = mergeTokenDaily(transfers, native)
-		h.cache.Set(key, &data)
+		ttl := cryptoTTL(end, time.Now().UTC())
+		if len(data.Warnings) > 0 {
+			ttl = cryptoPartialTTL
+		}
+		h.cache.SetWithTTL(key, &data, ttl)
 		return &data, nil
 	})
 	if err != nil {
@@ -539,8 +743,9 @@ type CryptoMiningData struct {
 
 // mergeBtcMining joins daily block stats with coinbase revenue by date and
 // derives hashrate = difficulty * 2^32 * blocks / 86400 (using the actual
-// block count absorbs luck and intra-epoch hashrate growth). Inputs are not
-// mutated; days missing from blocks are dropped (no hashrate to show).
+// daily block count reflects Poisson block-finding luck, ~±8% 1σ at 144
+// blocks/day; the frontend KPI smooths this with a 7-day average). Inputs are
+// not mutated; days missing from blocks are dropped (no hashrate to show).
 func mergeBtcMining(blocks []BtcMiningBlockRow, coinbase []BtcCoinbaseRow) []BtcMiningRow {
 	const twoTo32 = 4294967296.0
 	revenue := make(map[string]float64, len(coinbase))
@@ -567,26 +772,51 @@ func (h *APIHandler) CryptoMining(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	key := fmt.Sprintf("opendata:crypto:mining:%d", days)
+	now := time.Now().UTC()
+	start, end := cryptoWindowAt(days, now)
+	baseKey := fmt.Sprintf("opendata:crypto:mining:%d", days)
+	key := fmt.Sprintf("%s:%s", baseKey, end)
 	if cached, ok := h.cache.Get(key); ok {
+		writeJSON(w, cached)
+		return
+	}
+	if cached, ok := h.cache.Get(baseKey); ok {
 		writeJSON(w, cached)
 		return
 	}
 
 	v, err, _ := cryptoFlight.Do(key, func() (any, error) {
-		start, end := cryptoWindow(days)
-		var blocks []BtcMiningBlockRow
-		var coinbase []BtcCoinbaseRow
+		ctx, cancel := cryptoFetchContext(r)
+		defer cancel()
 
-		g, ctx := errgroup.WithContext(r.Context())
-		g.Go(func() (err error) { blocks, err = h.bq.GetBtcMiningBlocks(ctx, start, end); return })
-		g.Go(func() (err error) { coinbase, err = h.bq.GetBtcCoinbase(ctx, start, end); return })
-		if err := g.Wait(); err != nil {
-			return nil, err
+		var (
+			blocks      []BtcMiningBlockRow
+			coinbase    []BtcCoinbaseRow
+			blocksErr   error
+			coinbaseErr error
+		)
+
+		done := make(chan struct{}, 2)
+		go func() {
+			blocks, blocksErr = h.bq.GetBtcMiningBlocks(ctx, start, end)
+			done <- struct{}{}
+		}()
+		go func() {
+			coinbase, coinbaseErr = h.getCachedBtcCoinbase(ctx, start, end)
+			done <- struct{}{}
+		}()
+		<-done
+		<-done
+
+		if blocksErr != nil {
+			return nil, blocksErr
+		}
+		if coinbaseErr != nil {
+			return nil, coinbaseErr
 		}
 
 		data := CryptoMiningData{Days: days, Daily: mergeBtcMining(blocks, coinbase)}
-		h.cache.Set(key, &data)
+		h.cache.SetWithTTL(key, &data, cryptoTTL(end, time.Now().UTC()))
 		return &data, nil
 	})
 	if err != nil {
@@ -661,7 +891,9 @@ func (h *APIHandler) CryptoSpot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v, err, _ := cryptoFlight.Do(key, func() (any, error) {
-		data, err := fetchBtcSpot(r.Context())
+		ctx, cancel := cryptoFetchContext(r)
+		defer cancel()
+		data, err := fetchBtcSpot(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -674,3 +906,4 @@ func (h *APIHandler) CryptoSpot(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, v)
 }
+

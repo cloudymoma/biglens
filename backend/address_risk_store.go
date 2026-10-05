@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -382,6 +383,59 @@ func (s *riskStore) riskPoolEntries(ctx context.Context) (riskPool, error) {
 	}
 	return pool, nil
 }
+
+// riskPoolForAddresses queries only the specified lowercase addresses against
+// list_entries and stablecoin_events using their address indexes, avoiding a
+// full-table scan on every cached ETH Whales request.
+func (s *riskStore) riskPoolForAddresses(ctx context.Context, addrs []string) (riskPool, error) {
+	pool := riskPool{}
+	if len(addrs) == 0 {
+		return pool, nil
+	}
+	placeholders := make([]string, len(addrs))
+	args := make([]any, len(addrs))
+	for i, a := range addrs {
+		placeholders[i] = "?"
+		args[i] = a
+	}
+	inClause := "WHERE address IN (" + strings.Join(placeholders, ",") + ")"
+
+	listQuery := `SELECT address, source FROM list_entries ` + inClause + ` ORDER BY source DESC`
+	rows, err := s.db.QueryContext(ctx, listQuery, args...)
+	if err != nil {
+		return nil, fmt.Errorf("pool lists subset: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var addr, source string
+		if err := rows.Scan(&addr, &source); err != nil {
+			return nil, fmt.Errorf("scan pool subset: %w", err)
+		}
+		pool[addr] = append(pool[addr], source)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	stQuery := fmt.Sprintf(latestStablecoinStateSQL, inClause)
+	stRows, err := s.db.QueryContext(ctx, stQuery, args...)
+	if err != nil {
+		return nil, fmt.Errorf("stablecoin states subset: %w", err)
+	}
+	defer stRows.Close()
+	for stRows.Next() {
+		var st stablecoinState
+		if err := stRows.Scan(&st.Token, &st.Address, &st.Action, &st.TxHash, &st.BlockTime); err != nil {
+			return nil, fmt.Errorf("scan stablecoin state subset: %w", err)
+		}
+		if st.Action == "unfreeze" || slices.Contains(pool[st.Address], "stablecoin") {
+			continue
+		}
+		pool[st.Address] = append(pool[st.Address], "stablecoin")
+	}
+	return pool, stRows.Err()
+}
+
 
 type backfillMeta struct {
 	Status, SinceDate, ThroughDate             string

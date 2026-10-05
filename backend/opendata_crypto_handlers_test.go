@@ -43,18 +43,32 @@ func TestParseCryptoDays(t *testing.T) {
 	}
 }
 
-// The window is half-open [start, end): end is today UTC so results cover
-// complete days only and span exactly `days` days.
+// The window is half-open [start, end): end is the latest settled UTC day
+// (accounting for cryptoIngestLag) so results cover complete days only and
+// span exactly `days` days.
 func TestCryptoWindow(t *testing.T) {
-	start, end := cryptoWindow(90)
-	today := civil.DateOf(time.Now().UTC())
-	if end != today {
-		t.Errorf("end = %s, want today UTC %s", end, today)
+	now := time.Date(2026, 10, 5, 0, 10, 0, 0, time.UTC) // 00:10 UTC: within 20m ingest lag
+	start, end := cryptoWindowAt(90, now)
+	wantEnd := civil.Date{Year: 2026, Month: 10, Day: 4}
+	if end != wantEnd {
+		t.Errorf("end at 00:10 UTC = %s, want previous day %s", end, wantEnd)
 	}
 	if got := end.DaysSince(start); got != 90 {
 		t.Errorf("window spans %d days, want 90", got)
 	}
+
+	later := time.Date(2026, 10, 5, 0, 25, 0, 0, time.UTC) // 00:25 UTC: past ingest lag
+	_, end2 := cryptoWindowAt(90, later)
+	wantEnd2 := civil.Date{Year: 2026, Month: 10, Day: 5}
+	if end2 != wantEnd2 {
+		t.Errorf("end at 00:25 UTC = %s, want %s", end2, wantEnd2)
+	}
+	ttl := cryptoTTL(end2, later)
+	if ttl < 23*time.Hour || ttl > 24*time.Hour {
+		t.Errorf("ttl at 00:25 UTC = %v, want ~23h55m", ttl)
+	}
 }
+
 
 func TestRollupCryptoKpi(t *testing.T) {
 	daily := []CryptoActivityRow{

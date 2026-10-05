@@ -52,15 +52,16 @@ export default function WhalesTab({ onInspect }: { onInspect?: (address: string)
   const [error, setError] = useState('');
 
   useEffect(() => {
+    let stale = false;
     setLoading(true);
     setError('');
     fetchCryptoWhales(days, chain)
-      .then(setData)
-      .catch(e => setError(e.response?.data || e.message))
-      .finally(() => setLoading(false));
+      .then(d => { if (!stale) setData(d); })
+      .catch(e => { if (!stale) setError(e.response?.data || e.message); })
+      .finally(() => { if (!stale) setLoading(false); });
+    return () => { stale = true; };
   }, [days, chain]);
 
-  const color = chain === 'btc' ? BTC_COLOR : ETH_COLOR;
   const controls = (
     <div className="flex items-center justify-between">
       <div className="flex items-center gap-3">
@@ -85,14 +86,22 @@ export default function WhalesTab({ onInspect }: { onInspect?: (address: string)
   );
 
   if (error) return <div className="space-y-4">{controls}<ErrorBanner message={error} /></div>;
-  if (loading || !data) return <div className="space-y-4">{controls}<EmptyState text="Loading whale activity…" /></div>;
+  if (loading || !data || data.chain !== chain || data.days !== days) {
+    return <div className="space-y-4">{controls}<EmptyState text="Loading whale activity…" /></div>;
+  }
+
+  const renderChain = data.chain;
+  const color = renderChain === 'btc' ? BTC_COLOR : ETH_COLOR;
 
   return (
     <div className="space-y-4">
       {controls}
 
       <div className="grid lg:grid-cols-2 gap-4">
-        <Panel title={`Whale Activity (≥ ${fmtNum(data.threshold)} ${unit(chain)} per tx)`}>
+        <Panel
+          title={`Whale Activity (≥ ${fmtNum(data.threshold)} ${unit(renderChain)} per tx)`}
+          note={renderChain === 'btc' ? 'tx total output incl. change — upper bound' : 'succeeded top-level txs (excl. internal transfers)'}
+        >
           <ReactECharts
             style={{ height: 240 }}
             option={{
@@ -104,7 +113,7 @@ export default function WhalesTab({ onInspect }: { onInspect?: (address: string)
             }}
           />
         </Panel>
-        <Panel title="Value Concentration" note="share of each day's moved value carried by the top 1% largest txs">
+        <Panel title="Value Concentration" note="share of each day's moved value carried by the top 1% of value-bearing txs">
           <ReactECharts
             style={{ height: 240 }}
             option={{
@@ -121,7 +130,7 @@ export default function WhalesTab({ onInspect }: { onInspect?: (address: string)
       <div className="grid lg:grid-cols-2 gap-4">
         <Panel
           title="Largest Transfers"
-          note={chain === 'btc' ? 'total output value; BTC has no single sender/receiver' : 'sender → receiver'}
+          note={renderChain === 'btc' ? 'total output value (incl. change); BTC has no single sender/receiver' : 'succeeded top-level txs (excl. internal transfers) · sender → receiver'}
         >
           {data.largest.length === 0 ? <EmptyState text="No transfers in range." /> : (
             <div className="overflow-y-auto max-h-96">
@@ -130,8 +139,8 @@ export default function WhalesTab({ onInspect }: { onInspect?: (address: string)
                   <tr className="text-zinc-500 text-left">
                     <th className="pb-2 font-medium">Time (UTC)</th>
                     <th className="pb-2 font-medium">Transaction</th>
-                    {chain === 'eth' && <th className="pb-2 font-medium">From → To</th>}
-                    <th className="pb-2 font-medium text-right">{unit(chain)}</th>
+                    {renderChain === 'eth' && <th className="pb-2 font-medium">From → To</th>}
+                    <th className="pb-2 font-medium text-right">{unit(renderChain)}</th>
                   </tr>
                 </thead>
                 <tbody className="font-mono">
@@ -140,7 +149,7 @@ export default function WhalesTab({ onInspect }: { onInspect?: (address: string)
                       <td className="py-1.5 text-zinc-500">{tx.time}</td>
                       <td className="py-1.5">
                         <a
-                          href={explorerUrl(chain, tx.hash)}
+                          href={explorerUrl(renderChain, tx.hash)}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="inline-flex items-center gap-1 hover:text-white"
@@ -149,7 +158,7 @@ export default function WhalesTab({ onInspect }: { onInspect?: (address: string)
                           {shortHash(tx.hash)} <ExternalLink size={11} />
                         </a>
                       </td>
-                      {chain === 'eth' && (
+                      {renderChain === 'eth' && (
                         <td className="py-1.5 text-zinc-500">
                           <EthAddress address={tx.from} risk={tx.from_risk} onInspect={onInspect} /> →{' '}
                           <EthAddress address={tx.to} risk={tx.to_risk} onInspect={onInspect} />
@@ -163,22 +172,25 @@ export default function WhalesTab({ onInspect }: { onInspect?: (address: string)
             </div>
           )}
         </Panel>
-        <Panel title="Top Receiving Addresses" note="total value received in the window">
+        <Panel
+          title="Top Receiving Addresses"
+          note={renderChain === 'btc' ? 'total output value received (excl. coinbase, incl. change)' : 'total value received in succeeded top-level txs'}
+        >
           {data.top_receivers.length === 0 ? <EmptyState text="No receivers in range." /> : (
             <div className="overflow-y-auto max-h-96">
               <table className="w-full text-xs">
                 <thead>
                   <tr className="text-zinc-500 text-left">
                     <th className="pb-2 font-medium">Address</th>
-                    <th className="pb-2 font-medium text-right">Outputs</th>
-                    <th className="pb-2 font-medium text-right">{unit(chain)} received</th>
+                    <th className="pb-2 font-medium text-right">{renderChain === 'btc' ? 'Outputs' : 'Txs'}</th>
+                    <th className="pb-2 font-medium text-right">{unit(renderChain)} received</th>
                   </tr>
                 </thead>
                 <tbody className="font-mono">
                   {data.top_receivers.map(a => (
                     <tr key={a.address} className="border-t border-zinc-800/40 text-zinc-300">
                       <td className="py-1.5">
-                        {chain === 'eth' ? <EthAddress address={a.address} risk={a.risk} onInspect={onInspect} /> : shortHash(a.address)}
+                        {renderChain === 'eth' ? <EthAddress address={a.address} risk={a.risk} onInspect={onInspect} /> : shortHash(a.address)}
                       </td>
                       <td className="py-1.5 text-right text-zinc-500">{fmtNum(a.tx_count)}</td>
                       <td className="py-1.5 text-right font-semibold text-white">{fmtNum(a.total)}</td>
@@ -193,3 +205,4 @@ export default function WhalesTab({ onInspect }: { onInspect?: (address: string)
     </div>
   );
 }
+

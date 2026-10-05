@@ -53,26 +53,29 @@ export default function PulseTab() {
   const [error, setError] = useState('');
 
   useEffect(() => {
+    let stale = false;
     setLoading(true);
     setError('');
     fetchCryptoPulse(days)
-      .then(setData)
-      .catch(e => setError(e.response?.data || e.message))
-      .finally(() => setLoading(false));
+      .then(d => { if (!stale) setData(d); })
+      .catch(e => { if (!stale) setError(e.response?.data || e.message); })
+      .finally(() => { if (!stale) setLoading(false); });
+    return () => { stale = true; };
   }, [days]);
 
   if (error) return <div className="space-y-4"><DaysPicker options={DAY_OPTIONS} value={days} onChange={setDays} /><ErrorBanner message={error} /></div>;
-  if (loading || !data) return <EmptyState text="Loading network pulse…" />;
+  if (loading || !data || data.days !== days) return <EmptyState text="Loading network pulse…" />;
 
   const dates = mergeDates(data.btc.daily, data.eth.daily);
   const blockDates = mergeDates(data.btc.blocks, data.eth.blocks);
   const addrDates = mergeDates(data.btc.addresses, data.eth.addresses);
+  const latestDate = data.btc.kpi.date || data.eth.kpi.date || '—';
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <DaysPicker options={DAY_OPTIONS} value={days} onChange={setDays} />
-        <span className="text-[11px] text-zinc-600">Complete UTC days · latest = yesterday</span>
+        <span className="text-[11px] text-zinc-600">Complete UTC days · latest = {latestDate}</span>
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
@@ -92,7 +95,7 @@ export default function PulseTab() {
         </Panel>
         <Panel
           title="Value Settled (native units)"
-          note="BTC totals include change outputs returning to the sender — an upper bound on economic volume"
+          note="BTC: total outputs incl. change (upper bound) · ETH: succeeded top-level txs (excl. internal transfers)"
         >
           <ReactECharts
             style={{ height: 260 }}
@@ -118,7 +121,7 @@ export default function PulseTab() {
             />
           )}
         </Panel>
-        <Panel title="Congestion — Block Fullness %" note="BTC: avg weight / 4M limit · ETH: avg gas_used / gas_limit">
+        <Panel title="Congestion — Block Fullness %" note="BTC: avg weight / 4M limit · ETH: avg gas_used / gas_limit (EIP-1559 targets 50%)">
           <ReactECharts
             style={{ height: 260 }}
             option={dualChainLineOption(blockDates,
@@ -128,6 +131,7 @@ export default function PulseTab() {
           />
         </Panel>
       </div>
+
 
       <Panel title="Block Production (blocks per day)" note="BTC targets ~144/day with variance · ETH holds ~7,100/day on its 12s slot cadence">
         <ReactECharts

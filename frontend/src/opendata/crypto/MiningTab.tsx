@@ -83,12 +83,14 @@ export default function MiningTab() {
   const [customJthStr, setCustomJthStr] = useState('18');
 
   useEffect(() => {
+    let stale = false;
     setLoading(true);
     setError('');
     fetchCryptoMining(days)
-      .then(setData)
-      .catch(e => setError(e.response?.data || e.message))
-      .finally(() => setLoading(false));
+      .then(d => { if (!stale) setData(d); })
+      .catch(e => { if (!stale) setError(e.response?.data || e.message); })
+      .finally(() => { if (!stale) setLoading(false); });
+    return () => { stale = true; };
   }, [days]);
 
   useEffect(() => {
@@ -101,10 +103,15 @@ export default function MiningTab() {
   }, []);
 
   if (error) return <div className="space-y-4"><DaysPicker options={DAY_OPTIONS} value={days} onChange={setDays} /><ErrorBanner message={error} /></div>;
-  if (loading || !data) return <EmptyState text="Loading mining economics…" />;
+  if (loading || !data || data.days !== days) return <EmptyState text="Loading mining economics…" />;
 
   const latest = data.daily[data.daily.length - 1];
   if (!latest) return <EmptyState text="No mining data in this window" />;
+
+  // Smooth single-day Poisson block-count variance (~±8% 1σ at 144 blocks/day)
+  // with a 7-day trailing mean for the Network Hashrate headline KPI.
+  const tail7 = data.daily.slice(-7);
+  const avg7dHashrate = tail7.reduce((sum, r) => sum + r.hashrate_ehs, 0) / tail7.length;
 
   const price = Math.max(0, parseFloat(priceStr) || 0);
   const elec = Math.max(0, parseFloat(elecStr) || 0);
@@ -127,15 +134,16 @@ export default function MiningTab() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <DaysPicker options={DAY_OPTIONS} value={days} onChange={setDays} />
-        <span className="text-[11px] text-zinc-600">Complete UTC days · latest = yesterday</span>
+        <span className="text-[11px] text-zinc-600">Complete UTC days · latest = {latest.date}</span>
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <MetricCard label="Network Hashrate" value={`${fmtNum(latest.hashrate_ehs)} EH/s`} icon={<Cpu size={15} />} detail={`${latest.blocks} blocks · ${latest.date}`} accentColor={BTC_COLOR} />
+        <MetricCard label="Network Hashrate (7d avg)" value={`${fmtNum(avg7dHashrate)} EH/s`} icon={<Cpu size={15} />} detail={`1d implied ${fmtNum(latest.hashrate_ehs)} EH/s · ${latest.blocks} blocks (${latest.date})`} accentColor={BTC_COLOR} />
         <MetricCard label="Miner Revenue" value={`${fmtNum(latest.revenue_btc)} BTC`} icon={<Pickaxe size={15} />} detail={price > 0 ? `≈ $${fmtNum(latest.revenue_btc * price)}/day` : 'subsidy + fees'} accentColor={BTC_COLOR} />
         <MetricCard label="Yield per TH/s" value={`${satsPerThDay.toFixed(1)} sats/day`} icon={<Coins size={15} />} detail="net of pool fee · avg luck" accentColor={BTC_COLOR} />
         <MetricCard label={`Shutdown price (${newestRig.jth} J/TH)`} value={price > 0 ? `$${breakEvenKwh(latest, newestRig.jth, price, assumptions).toFixed(3)}/kWh` : '—'} icon={<Zap size={15} />} detail={price > 0 ? `at $${fmtNum(price)}/BTC` : 'enter a BTC price'} accentColor="#22c55e" />
       </div>
+
 
       <Panel title="Assumptions" note={spotNote}>
         <div className="flex flex-wrap items-center gap-6">
