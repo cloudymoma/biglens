@@ -137,12 +137,13 @@ func (h *APIHandler) StorageDashboard(w http.ResponseWriter, r *http.Request) {
 // --- Dashboard 2: Slots & Compute ---
 
 type ComputeDashboardData struct {
-	SlotTimeline    []SlotStatePoint   `json:"slot_timeline"`
-	TopJobs         []TopSlotJob       `json:"top_jobs"`
-	SlotUsage       []SlotUsage        `json:"slot_usage"`
-	QueueStats      *QueueStats        `json:"queue_stats"`
-	Reservations    []ReservationPoint `json:"reservations"`
-	DegradedWidgets []string           `json:"degraded_widgets,omitempty"`
+	SlotTimeline      []SlotBucket       `json:"slot_timeline"`
+	SlotBucketSeconds int64              `json:"slot_bucket_seconds"`
+	TopJobs           []TopSlotJob       `json:"top_jobs"`
+	SlotUsage         []SlotUsage        `json:"slot_usage"`
+	QueueStats        *QueueStats        `json:"queue_stats"`
+	Reservations      []ReservationPoint `json:"reservations"`
+	DegradedWidgets   []string           `json:"degraded_widgets,omitempty"`
 }
 
 func (h *APIHandler) ComputeDashboard(w http.ResponseWriter, r *http.Request) {
@@ -154,7 +155,7 @@ func (h *APIHandler) ComputeDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var data ComputeDashboardData
+	data := ComputeDashboardData{SlotBucketSeconds: filters.TimelineBucketSeconds()}
 	var mu sync.Mutex
 	addDegraded := func(name string) {
 		mu.Lock()

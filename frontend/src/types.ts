@@ -66,10 +66,15 @@ export interface StorageDashboardData {
   degraded_widgets?: string[];
 }
 
-export interface SlotStatePoint {
-  period_start: string;
-  state: string; // PENDING | RUNNING
-  slots: number;
+// One slot-timeline bucket. avg_* spread the bucket's slot-ms over its full
+// length (idle seconds count as zero); peak_* are the busiest single second
+// inside the bucket.
+export interface SlotBucket {
+  bucket_start: string;
+  avg_running: number;
+  avg_pending: number;
+  peak_total: number; // RUNNING + PENDING
+  peak_pending: number;
 }
 
 export interface TopSlotJob {
@@ -102,7 +107,8 @@ export interface ReservationPoint {
 }
 
 export interface ComputeDashboardData {
-  slot_timeline: SlotStatePoint[] | null;
+  slot_timeline: SlotBucket[] | null;
+  slot_bucket_seconds: number; // width of each slot_timeline bucket
   top_jobs: TopSlotJob[] | null;
   slot_usage: SlotUsage[] | null;
   queue_stats: QueueStats | null;

@@ -1,19 +1,15 @@
 import { useState, useEffect } from 'react';
 import ReactECharts from 'echarts-for-react';
 import { Activity, TrendingUp, Cpu, Hourglass, Timer, Layers } from 'lucide-react';
-import type { QueryFilters, ComputeDashboardData, SlotStatePoint } from '../types';
+import type { QueryFilters, ComputeDashboardData } from '../types';
 import { fetchComputeDashboard } from '../api';
 import { MetricCard, EmptyState, ErrorBanner, DegradedNotice } from './shared';
 
-// Pivots (period, state) rows into aligned PENDING/RUNNING series.
-function pivotTimeline(points: SlotStatePoint[]) {
-  const periods = [...new Set(points.map(p => p.period_start))].sort();
-  const byKey = new Map(points.map(p => [`${p.period_start}|${p.state}`, p.slots]));
-  return {
-    periods,
-    running: periods.map(t => Number((byKey.get(`${t}|RUNNING`) || 0).toFixed(1))),
-    pending: periods.map(t => Number((byKey.get(`${t}|PENDING`) || 0).toFixed(1))),
-  };
+// Names the server-chosen bucket width, e.g. 600 -> "10-min", 7200 -> "2-hour".
+function fmtBucket(secs: number): string {
+  if (secs >= 3600 && secs % 3600 === 0) return `${secs / 3600}-hour`;
+  if (secs >= 60 && secs % 60 === 0) return `${secs / 60}-min`;
+  return `${secs}-s`;
 }
 
 function fmtMs(ms: number): string {
@@ -47,10 +43,15 @@ export default function ComputeDashboard({ filters }: { filters: QueryFilters })
   const qs = data.queue_stats;
   const reservations = data.reservations || [];
 
-  const { periods, running, pending } = pivotTimeline(timeline);
-  const totals = periods.map((_, i) => running[i] + pending[i]);
-  const peakConcurrent = totals.length > 0 ? Math.max(...totals) : 0;
-  const peakPending = pending.length > 0 ? Math.max(...pending) : 0;
+  // Areas are bucket averages. The dashed line and the peak KPIs use the
+  // busiest single second of each bucket, so averaging doesn't hide spikes.
+  const bucket = fmtBucket(data.slot_bucket_seconds);
+  const periods = timeline.map(p => p.bucket_start);
+  const running = timeline.map(p => Number(p.avg_running.toFixed(1)));
+  const pending = timeline.map(p => Number(p.avg_pending.toFixed(1)));
+  const peaks = timeline.map(p => Number(p.peak_total.toFixed(1)));
+  const peakConcurrent = timeline.reduce((m, p) => Math.max(m, p.peak_total), 0);
+  const peakPending = timeline.reduce((m, p) => Math.max(m, p.peak_pending), 0);
 
   const fmtTick = (t: string) => {
     const d = new Date(t);
@@ -71,7 +72,7 @@ export default function ComputeDashboard({ filters }: { filters: QueryFilters })
 
   const stackedOption = {
     backgroundColor: 'transparent',
-    tooltip: tooltipStyle,
+    tooltip: { ...tooltipStyle, valueFormatter: (v: number) => `${v} slots` },
     legend: { top: 0, textStyle: { color: '#71717a', fontSize: 11 }, itemWidth: 10, itemHeight: 10 },
     grid: { left: 48, right: 24, bottom: 32, top: 32 },
     xAxis: {
@@ -87,18 +88,24 @@ export default function ComputeDashboard({ filters }: { filters: QueryFilters })
     },
     series: [
       {
-        name: 'Running', type: 'line', stack: 'slots', smooth: true, showSymbol: false,
+        name: `Running (${bucket} avg)`, type: 'line', stack: 'slots', smooth: true, showSymbol: false,
         data: running,
         lineStyle: { color: '#38bdf8', width: 2 },
         areaStyle: { color: 'rgba(56,189,248,0.25)' },
         itemStyle: { color: '#38bdf8' },
       },
       {
-        name: 'Pending', type: 'line', stack: 'slots', smooth: true, showSymbol: false,
+        name: `Pending (${bucket} avg)`, type: 'line', stack: 'slots', smooth: true, showSymbol: false,
         data: pending,
         lineStyle: { color: '#fb7185', width: 2 },
         areaStyle: { color: 'rgba(251,113,133,0.3)' },
         itemStyle: { color: '#fb7185' },
+      },
+      {
+        name: 'Busiest second', type: 'line', showSymbol: false,
+        data: peaks,
+        lineStyle: { color: '#fbbf24', width: 1, type: 'dashed' },
+        itemStyle: { color: '#fbbf24' },
       },
     ],
     dataZoom: [{ type: 'inside', start: 0, end: 100 }],
@@ -141,7 +148,7 @@ export default function ComputeDashboard({ filters }: { filters: QueryFilters })
     <div className="space-y-6">
       <DegradedNotice widgets={data.degraded_widgets} />
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <MetricCard label="Peak Concurrent" value={peakConcurrent.toFixed(0)} icon={<TrendingUp size={18} />} detail="Max running + pending slots" accentColor="#38bdf8" />
+        <MetricCard label="Peak Concurrent" value={peakConcurrent.toFixed(0)} icon={<TrendingUp size={18} />} detail="Busiest single second, running + pending slots" accentColor="#38bdf8" />
         <MetricCard label="Peak Pending" value={peakPending.toFixed(0)} icon={<Hourglass size={18} />} detail="Sustained pending = slot starvation" accentColor="#fb7185" />
         <MetricCard label="Jobs in Window" value={qs ? qs.job_count.toLocaleString() : '---'} icon={<Activity size={18} />} detail="Completed jobs analyzed" accentColor="#4ade80" />
       </div>
@@ -157,7 +164,7 @@ export default function ComputeDashboard({ filters }: { filters: QueryFilters })
       {/* Widget 2.1: Pending vs Running stacked concurrency */}
       <div className="rounded-2xl border border-zinc-800/50 p-6" style={{ background: '#111114' }}>
         <h3 className="text-sm font-semibold text-white mb-1">Concurrency: Running vs Pending</h3>
-        <p className="text-xs text-zinc-500 mb-4">Stacked slot-seconds from JOBS_TIMELINE — a growing red band means jobs are queueing for slots</p>
+        <p className="text-xs text-zinc-500 mb-4">Average slots per {bucket} bucket from JOBS_TIMELINE, stacked (slot-ms ÷ bucket length, through the last complete bucket); dashed line = busiest single second in each bucket — a growing red band means jobs are queueing for slots</p>
         {periods.length > 0 ? (
           <div className="h-[340px]">
             <ReactECharts option={stackedOption} style={{ height: '100%' }} />

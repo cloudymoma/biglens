@@ -60,6 +60,57 @@ func TestTimelineWhereSubset(t *testing.T) {
 	}
 }
 
+// JOBS_TIMELINE_BY_PROJECT is partitioned by job_creation_time, so without a
+// bound on that column every slot query scans the view's whole 180-day
+// retention. The bound sits a margin before the window so jobs created
+// earlier but still pending or running inside it are kept, while period_start
+// stays the exact window filter, snapped to whole buckets so that no bucket
+// average is diluted by a partial bucket. The bucket width follows the time
+// range and keeps each range under ~1,500 points.
+func TestTimelineWherePrunesPartitionsAndBuckets(t *testing.T) {
+	const end = "TIMESTAMP_SECONDS(DIV(UNIX_SECONDS(CURRENT_TIMESTAMP()), @bucket_secs) * @bucket_secs)"
+	tests := []struct {
+		timeRange  string
+		interval   string
+		windowSecs int64
+		bucketSecs int64
+	}{
+		{"1d", "1 DAY", 86400, 60},
+		{"7d", "7 DAY", 7 * 86400, 600},
+		{"30d", "30 DAY", 30 * 86400, 3600},
+		{"90d", "90 DAY", 90 * 86400, 7200},
+		{"bogus", "7 DAY", 7 * 86400, 600}, // falls back to 7d like TimeInterval
+	}
+	for _, tt := range tests {
+		t.Run(tt.timeRange, func(t *testing.T) {
+			where, params := QueryFilters{TimeRange: tt.timeRange}.TimelineWhere("period_start")
+			start := "TIMESTAMP_SUB(" + end + ", INTERVAL " + tt.interval + ")"
+			for _, want := range []string{
+				"period_start >= " + start,
+				"period_start < " + end,
+				"job_creation_time >= TIMESTAMP_SUB(" + start + ", INTERVAL 24 HOUR)",
+			} {
+				if !strings.Contains(where, want) {
+					t.Errorf("TimelineWhere() = %q, missing %q", where, want)
+				}
+			}
+
+			var got int64
+			for _, p := range params {
+				if p.Name == "bucket_secs" {
+					got, _ = p.Value.(int64)
+				}
+			}
+			if got != tt.bucketSecs {
+				t.Fatalf("bucket_secs = %d, want %d", got, tt.bucketSecs)
+			}
+			if points := tt.windowSecs / got; points > 1500 {
+				t.Errorf("%s window yields %d buckets, want <= 1500", tt.timeRange, points)
+			}
+		})
+	}
+}
+
 func TestParseFiltersNewParams(t *testing.T) {
 	r := httptest.NewRequest("GET",
 		"/x?job_type=LOAD&status=failed&cache_hit=miss&billing=ondemand&principal=human&group_by=dataset", nil)

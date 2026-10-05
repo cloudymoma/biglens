@@ -302,29 +302,51 @@ func (b *BQClient) GetSearchIndexes(ctx context.Context, filters QueryFilters) (
 
 // --- Widget 2.1: Concurrent Slot Usage by State (Time-Series) ---
 
-// SlotStatePoint carries one (period, state) slot reading; PENDING vs
-// RUNNING split reveals slot starvation (sustained PENDING).
-type SlotStatePoint struct {
-	PeriodStart string  `json:"period_start" bigquery:"period_start"`
-	State       string  `json:"state" bigquery:"state"`
-	Slots       float64 `json:"slots" bigquery:"slots"`
+// SlotBucket is one fixed-width bucket of the slot timeline, with RUNNING and
+// PENDING kept apart. The averages spread the bucket's slot-ms over its full
+// length, so idle seconds count as zero; the peaks are the busiest single
+// second inside the bucket (PeakTotal counts RUNNING + PENDING).
+type SlotBucket struct {
+	BucketStart string  `json:"bucket_start" bigquery:"bucket_start"`
+	AvgRunning  float64 `json:"avg_running" bigquery:"avg_running"`
+	AvgPending  float64 `json:"avg_pending" bigquery:"avg_pending"`
+	PeakTotal   float64 `json:"peak_total" bigquery:"peak_total"`
+	PeakPending float64 `json:"peak_pending" bigquery:"peak_pending"`
 }
 
-func (b *BQClient) GetConcurrentSlotsByState(ctx context.Context, filters QueryFilters) ([]SlotStatePoint, error) {
+// slotTimelineSQL folds every job's timeline rows into one row per second,
+// then groups those seconds into @bucket_secs buckets. where must come from
+// TimelineWhere, which binds @bucket_secs and keeps the window to whole
+// buckets, so dividing by the full bucket length is exact.
+func slotTimelineSQL(regionRef, where string) string {
+	return fmt.Sprintf(
+		`WITH per_second AS (
+			SELECT
+				period_start,
+				SUM(IF(state = 'RUNNING', IFNULL(period_slot_ms, 0), 0)) AS running_ms,
+				SUM(IF(state = 'PENDING', IFNULL(period_slot_ms, 0), 0)) AS pending_ms
+			FROM %s.INFORMATION_SCHEMA.JOBS_TIMELINE_BY_PROJECT
+			%s AND state IN ('PENDING', 'RUNNING')
+			GROUP BY period_start
+		)
+		SELECT
+			FORMAT_TIMESTAMP("%%Y-%%m-%%dT%%H:%%M:%%SZ", TIMESTAMP_SECONDS(DIV(UNIX_SECONDS(period_start), @bucket_secs) * @bucket_secs)) AS bucket_start,
+			SUM(running_ms) / (@bucket_secs * 1000) AS avg_running,
+			SUM(pending_ms) / (@bucket_secs * 1000) AS avg_pending,
+			MAX(running_ms + pending_ms) / 1000 AS peak_total,
+			MAX(pending_ms) / 1000 AS peak_pending
+		FROM per_second
+		GROUP BY bucket_start
+		ORDER BY bucket_start ASC`,
+		regionRef, where)
+}
+
+func (b *BQClient) GetConcurrentSlotsByState(ctx context.Context, filters QueryFilters) ([]SlotBucket, error) {
 	where, params := filters.TimelineWhere("period_start")
-	q := b.client.Query(fmt.Sprintf(
-		`SELECT
-			FORMAT_TIMESTAMP("%%Y-%%m-%%dT%%H:%%M:%%SZ", period_start) AS period_start,
-			state,
-			SUM(period_slot_ms) / 1000 AS slots
-		FROM %s.INFORMATION_SCHEMA.JOBS_TIMELINE_BY_PROJECT
-		%s AND state IN ('PENDING', 'RUNNING')
-		GROUP BY period_start, state
-		ORDER BY period_start ASC`,
-		b.regionRef(filters.Region), where))
+	q := b.client.Query(slotTimelineSQL(b.regionRef(filters.Region), where))
 	q.Parameters = params
 
-	return collectRows[SlotStatePoint](q, ctx)
+	return collectRows[SlotBucket](q, ctx)
 }
 
 // --- Widget 2.3: Queue Time & Duration KPIs ---

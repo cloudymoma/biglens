@@ -87,7 +87,7 @@ BigLens provides five dashboard views, each powered by `INFORMATION_SCHEMA` quer
 | Dashboard | Widgets |
 |---|---|
 | **Storage** | Logical vs. physical billing simulator, active/long-term donut chart, top 10 heaviest tables |
-| **Compute** | Concurrent slot usage area chart (JOBS_TIMELINE), top slot-consuming jobs |
+| **Compute** | Slot usage over time from JOBS_TIMELINE (average slots per bucket — 1 min for 24h, 10 min for 7d, 1 h for 30d, 2 h for 90d — plus the busiest single second in each bucket), top slot-consuming jobs |
 | **Cost** | On-demand cost extrapolation ($6.25/TiB), spend-by-user treemap |
 | **Insights** | Active BigQuery recommendations feed |
 | **IAM** | Per-principal job activity and inactive-principal detection (7/30/90-day windows) |
