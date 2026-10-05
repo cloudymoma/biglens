@@ -33,9 +33,10 @@ export default function StorageDashboard({ filters }: { filters: QueryFilters })
   const datasetStorage = data.dataset_storage || [];
   const coldTables = data.cold_tables || [];
 
-  // Tiered cost math over the per-dataset rows: active vs long-term rates,
-  // and time-travel + fail-safe billed at the active-physical rate.
-  const totals = datasetStorage.reduce((a, d) => ({
+  // Tiered cost math over the full-project rollup (or per-dataset fallback):
+  // active vs long-term rates, and time-travel + fail-safe billed at the
+  // active-physical rate.
+  const dsTotals = datasetStorage.reduce((a, d) => ({
     activeLogical: a.activeLogical + d.active_logical,
     longTermLogical: a.longTermLogical + d.long_term_logical,
     activePhysical: a.activePhysical + d.active_physical,
@@ -43,6 +44,17 @@ export default function StorageDashboard({ filters }: { filters: QueryFilters })
     timeTravel: a.timeTravel + d.time_travel,
     failSafe: a.failSafe + d.fail_safe,
   }), { activeLogical: 0, longTermLogical: 0, activePhysical: 0, longTermPhysical: 0, timeTravel: 0, failSafe: 0 });
+
+  const totals = billing && (billing.active_logical !== undefined || billing.active_physical !== undefined)
+    ? {
+        activeLogical: billing.active_logical ?? 0,
+        longTermLogical: billing.long_term_logical ?? 0,
+        activePhysical: billing.active_physical ?? 0,
+        longTermPhysical: billing.long_term_physical ?? 0,
+        timeTravel: billing.time_travel ?? 0,
+        failSafe: billing.fail_safe ?? 0,
+      }
+    : dsTotals;
 
   const logicalCost = logicalCostUSD(totals.activeLogical, totals.longTermLogical);
   const physicalCost = physicalCostUSD(totals.activePhysical, totals.longTermPhysical, totals.failSafe);
@@ -211,10 +223,11 @@ export default function StorageDashboard({ filters }: { filters: QueryFilters })
               <tbody>
                 {datasetStorage.map((d, i) => {
                   const logical = d.active_logical + d.long_term_logical;
-                  const physical = d.active_physical + d.long_term_physical;
+                  const physical = d.active_physical + d.long_term_physical + d.fail_safe;
+                  const physicalNoTT = Math.max(0, d.active_physical - d.time_travel) + d.long_term_physical;
                   const lCost = logicalCostUSD(d.active_logical, d.long_term_logical);
                   const pCost = physicalCostUSD(d.active_physical, d.long_term_physical, d.fail_safe);
-                  const ratio = physical > 0 ? logical / physical : 0;
+                  const ratio = physicalNoTT > 0 ? logical / physicalNoTT : 0;
                   const physicalWins = pCost < lCost;
                   return (
                     <tr key={i} className="border-b border-zinc-800/30 hover:bg-zinc-800/20 transition-colors">

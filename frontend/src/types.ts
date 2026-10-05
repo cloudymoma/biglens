@@ -16,6 +16,12 @@ export interface StorageStats {
   logical_bytes: number;
   physical_bytes: number;
   total_bytes: number;
+  active_logical?: number;
+  long_term_logical?: number;
+  active_physical?: number;
+  long_term_physical?: number;
+  time_travel?: number;
+  fail_safe?: number;
 }
 
 export interface StorageBreakdown {

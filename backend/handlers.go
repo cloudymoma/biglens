@@ -76,20 +76,13 @@ func (h *APIHandler) StorageDashboard(w http.ResponseWriter, r *http.Request) {
 	g, ctx := errgroup.WithContext(r.Context())
 
 	g.Go(func() error {
-		stats, err := h.bq.GetStorageStats(ctx, filters)
+		stats, bd, ds, err := h.bq.GetStorageOverview(ctx, filters)
 		if err != nil {
 			return err
 		}
 		data.Billing = stats
-		return nil
-	})
-
-	g.Go(func() error {
-		bd, err := h.bq.GetStorageBreakdown(ctx, filters)
-		if err != nil {
-			return err
-		}
 		data.Breakdown = bd
+		data.DatasetStorage = ds
 		return nil
 	})
 
@@ -118,15 +111,6 @@ func (h *APIHandler) StorageDashboard(w http.ResponseWriter, r *http.Request) {
 		}
 		h.cache.SetWithTTL(idxKey, indexes, time.Hour)
 		data.SearchIndexes = indexes
-		return nil
-	})
-
-	g.Go(func() error {
-		ds, err := h.bq.GetDatasetStorage(ctx, filters)
-		if err != nil {
-			return err
-		}
-		data.DatasetStorage = ds
 		return nil
 	})
 

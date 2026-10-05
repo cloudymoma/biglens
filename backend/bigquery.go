@@ -52,20 +52,124 @@ func (b *BQClient) regionRef(region string) string {
 // --- Widget 1.1: Logical vs. Physical Billing Simulator ---
 
 type StorageStats struct {
-	LogicalBytes  int64 `json:"logical_bytes" bigquery:"logical_bytes"`
-	PhysicalBytes int64 `json:"physical_bytes" bigquery:"physical_bytes"`
-	TotalBytes    int64 `json:"total_bytes" bigquery:"total_bytes"`
+	LogicalBytes     int64 `json:"logical_bytes" bigquery:"logical_bytes"`
+	PhysicalBytes    int64 `json:"physical_bytes" bigquery:"physical_bytes"`
+	TotalBytes       int64 `json:"total_bytes" bigquery:"total_bytes"`
+	ActiveLogical    int64 `json:"active_logical" bigquery:"active_logical"`
+	LongTermLogical  int64 `json:"long_term_logical" bigquery:"long_term_logical"`
+	ActivePhysical   int64 `json:"active_physical" bigquery:"active_physical"`
+	LongTermPhysical int64 `json:"long_term_physical" bigquery:"long_term_physical"`
+	TimeTravel       int64 `json:"time_travel" bigquery:"time_travel"`
+	FailSafe         int64 `json:"fail_safe" bigquery:"fail_safe"`
+}
+
+func storageBaseTableWhere(where string) string {
+	if where == "" {
+		return " WHERE table_type = 'BASE TABLE'"
+	}
+	return where + " AND table_type = 'BASE TABLE'"
+}
+
+type storageRollupRow struct {
+	Dataset          string `bigquery:"dataset"`
+	IsRollup         int64  `bigquery:"is_rollup"`
+	ActiveLogical    int64  `bigquery:"active_logical"`
+	LongTermLogical  int64  `bigquery:"long_term_logical"`
+	ActivePhysical   int64  `bigquery:"active_physical"`
+	LongTermPhysical int64  `bigquery:"long_term_physical"`
+	TimeTravel       int64  `bigquery:"time_travel"`
+	FailSafe         int64  `bigquery:"fail_safe"`
+}
+
+func storageOverviewSQL(regionRef, where string) string {
+	return fmt.Sprintf(
+		`SELECT
+			IFNULL(table_schema, '') AS dataset,
+			GROUPING(table_schema) AS is_rollup,
+			COALESCE(SUM(IF(NOT deleted, active_logical_bytes, 0)), 0) AS active_logical,
+			COALESCE(SUM(IF(NOT deleted, long_term_logical_bytes, 0)), 0) AS long_term_logical,
+			COALESCE(SUM(active_physical_bytes), 0) AS active_physical,
+			COALESCE(SUM(long_term_physical_bytes), 0) AS long_term_physical,
+			COALESCE(SUM(time_travel_physical_bytes), 0) AS time_travel,
+			COALESCE(SUM(fail_safe_physical_bytes), 0) AS fail_safe
+		FROM %s.INFORMATION_SCHEMA.TABLE_STORAGE_BY_PROJECT%s
+		GROUP BY ROLLUP(table_schema)
+		ORDER BY is_rollup DESC, (active_logical + long_term_logical) DESC
+		LIMIT 51`,
+		regionRef, storageBaseTableWhere(where))
+}
+
+func rollupStorageOverview(rows []storageRollupRow) (*StorageStats, *StorageBreakdown, []DatasetStorage) {
+	stats := &StorageStats{}
+	bd := &StorageBreakdown{}
+	datasets := make([]DatasetStorage, 0, len(rows))
+	for _, r := range rows {
+		if r.IsRollup == 1 {
+			logical := r.ActiveLogical + r.LongTermLogical
+			physical := r.ActivePhysical + r.LongTermPhysical + r.FailSafe
+			stats = &StorageStats{
+				LogicalBytes:     logical,
+				PhysicalBytes:    physical,
+				TotalBytes:       logical,
+				ActiveLogical:    r.ActiveLogical,
+				LongTermLogical:  r.LongTermLogical,
+				ActivePhysical:   r.ActivePhysical,
+				LongTermPhysical: r.LongTermPhysical,
+				TimeTravel:       r.TimeTravel,
+				FailSafe:         r.FailSafe,
+			}
+			bd = &StorageBreakdown{
+				ActiveBytes:   r.ActiveLogical,
+				LongTermBytes: r.LongTermLogical,
+			}
+			continue
+		}
+		if len(datasets) < 50 {
+			datasets = append(datasets, DatasetStorage{
+				Dataset:          r.Dataset,
+				ActiveLogical:    r.ActiveLogical,
+				LongTermLogical:  r.LongTermLogical,
+				ActivePhysical:   r.ActivePhysical,
+				LongTermPhysical: r.LongTermPhysical,
+				TimeTravel:       r.TimeTravel,
+				FailSafe:         r.FailSafe,
+			})
+		}
+	}
+	return stats, bd, datasets
+}
+
+// GetStorageOverview computes full-project StorageStats, StorageBreakdown, and
+// the top 50 DatasetStorage rows in a single GROUP BY ROLLUP query so that
+// top-level cost cards reflect all datasets (not just the top 50) and deleted
+// tables are excluded from logical bytes while retained for physical TT/FS.
+func (b *BQClient) GetStorageOverview(ctx context.Context, filters QueryFilters) (*StorageStats, *StorageBreakdown, []DatasetStorage, error) {
+	where, params := filters.StorageWhere()
+	q := b.client.Query(storageOverviewSQL(b.regionRef(filters.Region), where))
+	q.Parameters = params
+	rows, err := collectRows[storageRollupRow](q, ctx)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("storage overview query failed: %w", err)
+	}
+	stats, bd, ds := rollupStorageOverview(rows)
+	return stats, bd, ds, nil
 }
 
 func (b *BQClient) GetStorageStats(ctx context.Context, filters QueryFilters) (*StorageStats, error) {
 	where, params := filters.StorageWhere()
 	q := b.client.Query(fmt.Sprintf(
 		`SELECT
-			SUM(total_logical_bytes) AS logical_bytes,
-			SUM(total_physical_bytes) AS physical_bytes,
-			SUM(total_logical_bytes) AS total_bytes
+			COALESCE(SUM(IF(NOT deleted, active_logical_bytes + long_term_logical_bytes, 0)), 0) AS logical_bytes,
+			COALESCE(SUM(total_physical_bytes), 0) AS physical_bytes,
+			COALESCE(SUM(IF(NOT deleted, active_logical_bytes + long_term_logical_bytes, 0)), 0) AS total_bytes,
+			COALESCE(SUM(IF(NOT deleted, active_logical_bytes, 0)), 0) AS active_logical,
+			COALESCE(SUM(IF(NOT deleted, long_term_logical_bytes, 0)), 0) AS long_term_logical,
+			COALESCE(SUM(active_physical_bytes), 0) AS active_physical,
+			COALESCE(SUM(long_term_physical_bytes), 0) AS long_term_physical,
+			COALESCE(SUM(time_travel_physical_bytes), 0) AS time_travel,
+			COALESCE(SUM(fail_safe_physical_bytes), 0) AS fail_safe
 		FROM %s.INFORMATION_SCHEMA.TABLE_STORAGE_BY_PROJECT%s`,
-		b.regionRef(filters.Region), where))
+		b.regionRef(filters.Region), storageBaseTableWhere(where)))
 	q.Parameters = params
 
 	it, err := q.Read(ctx)
@@ -95,10 +199,10 @@ func (b *BQClient) GetStorageBreakdown(ctx context.Context, filters QueryFilters
 	where, params := filters.StorageWhere()
 	q := b.client.Query(fmt.Sprintf(
 		`SELECT
-			SUM(active_logical_bytes) AS active_bytes,
-			SUM(long_term_logical_bytes) AS long_term_bytes
+			COALESCE(SUM(IF(NOT deleted, active_logical_bytes, 0)), 0) AS active_bytes,
+			COALESCE(SUM(IF(NOT deleted, long_term_logical_bytes, 0)), 0) AS long_term_bytes
 		FROM %s.INFORMATION_SCHEMA.TABLE_STORAGE_BY_PROJECT%s`,
-		b.regionRef(filters.Region), where))
+		b.regionRef(filters.Region), storageBaseTableWhere(where)))
 	q.Parameters = params
 
 	it, err := q.Read(ctx)
@@ -164,17 +268,17 @@ func (b *BQClient) GetDatasetStorage(ctx context.Context, filters QueryFilters) 
 	q := b.client.Query(fmt.Sprintf(
 		`SELECT
 			table_schema AS dataset,
-			SUM(active_logical_bytes) AS active_logical,
-			SUM(long_term_logical_bytes) AS long_term_logical,
-			SUM(active_physical_bytes) AS active_physical,
-			SUM(long_term_physical_bytes) AS long_term_physical,
-			SUM(time_travel_physical_bytes) AS time_travel,
-			SUM(fail_safe_physical_bytes) AS fail_safe
+			COALESCE(SUM(IF(NOT deleted, active_logical_bytes, 0)), 0) AS active_logical,
+			COALESCE(SUM(IF(NOT deleted, long_term_logical_bytes, 0)), 0) AS long_term_logical,
+			COALESCE(SUM(active_physical_bytes), 0) AS active_physical,
+			COALESCE(SUM(long_term_physical_bytes), 0) AS long_term_physical,
+			COALESCE(SUM(time_travel_physical_bytes), 0) AS time_travel,
+			COALESCE(SUM(fail_safe_physical_bytes), 0) AS fail_safe
 		FROM %s.INFORMATION_SCHEMA.TABLE_STORAGE_BY_PROJECT%s
 		GROUP BY dataset
-		ORDER BY SUM(active_logical_bytes) + SUM(long_term_logical_bytes) DESC
+		ORDER BY active_logical + long_term_logical DESC
 		LIMIT 50`,
-		b.regionRef(filters.Region), where))
+		b.regionRef(filters.Region), storageBaseTableWhere(where)))
 	q.Parameters = params
 
 	return collectRows[DatasetStorage](q, ctx)

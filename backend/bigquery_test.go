@@ -80,3 +80,56 @@ func TestSearchIndexesSQLValidatesAndBatches(t *testing.T) {
 	}
 }
 
+func TestStorageOverviewSQLAndRollup(t *testing.T) {
+	where, _ := QueryFilters{Dataset: "ds1"}.StorageWhere()
+	sql := storageOverviewSQL("`p`.`region-us`", where)
+
+	for _, want := range []string{
+		"GROUPING(table_schema) AS is_rollup",
+		"SUM(IF(NOT deleted, active_logical_bytes, 0))",
+		"SUM(IF(NOT deleted, long_term_logical_bytes, 0))",
+		"SUM(active_physical_bytes)",
+		"table_type = 'BASE TABLE'",
+		"table_schema = @dataset",
+		"GROUP BY ROLLUP(table_schema)",
+		"ORDER BY is_rollup DESC",
+		"LIMIT 51",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("storageOverviewSQL missing %q in:\n%s", want, sql)
+		}
+	}
+
+	stats, bd, ds := rollupStorageOverview([]storageRollupRow{
+		{
+			IsRollup:         1,
+			ActiveLogical:    1000,
+			LongTermLogical:  500,
+			ActivePhysical:   300,
+			LongTermPhysical: 100,
+			TimeTravel:       50,
+			FailSafe:         20,
+		},
+		{
+			Dataset:          "ds1",
+			IsRollup:         0,
+			ActiveLogical:    600,
+			LongTermLogical:  400,
+			ActivePhysical:   200,
+			LongTermPhysical: 80,
+			TimeTravel:       30,
+			FailSafe:         10,
+		},
+	})
+	if stats.LogicalBytes != 1500 || stats.PhysicalBytes != 420 || stats.ActiveLogical != 1000 || stats.FailSafe != 20 {
+		t.Errorf("unexpected StorageStats: %+v", stats)
+	}
+	if bd.ActiveBytes != 1000 || bd.LongTermBytes != 500 {
+		t.Errorf("unexpected StorageBreakdown: %+v", bd)
+	}
+	if len(ds) != 1 || ds[0].Dataset != "ds1" || ds[0].ActiveLogical != 600 {
+		t.Errorf("unexpected DatasetStorage: %+v", ds)
+	}
+}
+
+
