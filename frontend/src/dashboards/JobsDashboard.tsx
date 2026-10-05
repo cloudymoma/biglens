@@ -3,7 +3,7 @@ import { Search, X, ListChecks } from 'lucide-react';
 import type { QueryFilters, JobsDashboardData, JobRow } from '../types';
 import { fetchJobsDashboard } from '../api';
 import { formatBytes, EmptyState, ErrorBanner } from './shared';
-import { ON_DEMAND_PER_TIB, TIB } from './pricing';
+import { getRegionPricing, TIB } from './pricing';
 
 const INSIGHT_LABELS: { key: keyof JobRow; label: string }[] = [
   { key: 'slot_contention', label: 'Slot Contention' },
@@ -24,6 +24,7 @@ export default function JobsDashboard({ filters }: { filters: QueryFilters }) {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<JobRow | null>(null);
+  const { onDemandPerTiB } = getRegionPricing(filters.region);
 
   useEffect(() => {
     let active = true;
@@ -114,7 +115,7 @@ export default function JobsDashboard({ filters }: { filters: QueryFilters }) {
                     <td className="py-2.5 px-3 text-right text-zinc-300 font-mono">{fmtMs(j.duration_ms)}</td>
                     <td className="py-2.5 px-3 text-right text-zinc-300 font-mono">{(j.slot_ms / 1000).toFixed(1)}s</td>
                     <td className="py-2.5 px-3 text-right text-zinc-300 font-mono">{formatBytes(j.bytes_billed)}</td>
-                    <td className="py-2.5 px-3 text-right text-amber-400 font-mono">${((j.bytes_billed / TIB) * ON_DEMAND_PER_TIB).toFixed(4)}</td>
+                    <td className="py-2.5 px-3 text-right text-amber-400 font-mono">${((j.bytes_billed / TIB) * onDemandPerTiB).toFixed(4)}</td>
                     <td className="py-2.5 px-3 text-zinc-400 font-mono">{j.cache_hit ? 'HIT' : '—'}</td>
                   </tr>
                 ))}

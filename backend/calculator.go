@@ -11,6 +11,7 @@ package main
 import (
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -20,6 +21,9 @@ const (
 	calcFreeTierGiB   = 10.0 // per storage SKU, per month
 	calcSlotIncrement = 50.0 // commitments, baselines and autoscaling all move in 50s
 	calcStandardMax   = 1600.0
+	calcMaxSlots      = 1_000_000.0
+	calcMaxWindows    = 24
+	calcMaxSweep      = 400
 	calcBuckets       = 96 // a day in 15-minute buckets
 	calcBucketHours   = 24.0 / calcBuckets
 )
@@ -61,6 +65,12 @@ type CalculatorPresets struct {
 var calcStorageRegions = []StorageRegionPreset{
 	{Region: "us-central1", Label: "Iowa (us-central1)", Rates: StorageRates{0.023, 0.016, 0.04, 0.02}},
 	{Region: "us", Label: "US (multi-region)", Rates: StorageRates{0.02, 0.01, 0.04, 0.02}},
+	{Region: "eu", Label: "EU (multi-region)", Rates: StorageRates{0.02, 0.01, 0.04, 0.02}},
+	{Region: "us-east4", Label: "N. Virginia (us-east4)", Rates: StorageRates{0.023, 0.016, 0.044, 0.022}},
+	{Region: "asia-northeast1", Label: "Tokyo (asia-northeast1)", Rates: StorageRates{0.023, 0.016, 0.052, 0.026}},
+	{Region: "europe-west2", Label: "London (europe-west2)", Rates: StorageRates{0.023, 0.016, 0.052, 0.026}},
+	{Region: "asia-southeast1", Label: "Singapore (asia-southeast1)", Rates: StorageRates{0.023, 0.016, 0.044, 0.022}},
+	{Region: "southamerica-east1", Label: "São Paulo (southamerica-east1)", Rates: StorageRates{0.023, 0.016, 0.06, 0.03}},
 }
 
 // Commit rates are resource-based commitments (dedicated slots billed 24x7).
@@ -305,8 +315,14 @@ func (r *SlotsCalcRequest) validate() error {
 	if err := nonNegative("slots", r.BaselineSlots, r.CommittedSlots); err != nil {
 		return err
 	}
+	if r.BaselineSlots > calcMaxSlots || r.CommittedSlots > calcMaxSlots {
+		return fmt.Errorf("slots cannot exceed %s", fmtSlots(calcMaxSlots))
+	}
 	if err := nonNegative("rates", r.PaygRate, r.CommitRate, r.DiscountPct); err != nil {
 		return err
+	}
+	if len(r.Windows) > calcMaxWindows {
+		return fmt.Errorf("too many peak windows (max %d)", calcMaxWindows)
 	}
 	for _, w := range r.Windows {
 		if _, err := timeToBucket(w.Start); err != nil {
@@ -318,6 +334,9 @@ func (r *SlotsCalcRequest) validate() error {
 		if err := nonNegative("window slots", w.Slots); err != nil {
 			return err
 		}
+		if w.Slots > calcMaxSlots {
+			return fmt.Errorf("window slots cannot exceed %s", fmtSlots(calcMaxSlots))
+		}
 	}
 	return nil
 }
@@ -326,7 +345,7 @@ func timeToBucket(hhmm string) (int, error) {
 	h, m, ok := strings.Cut(hhmm, ":")
 	hi, err1 := strconv.Atoi(h)
 	mi, err2 := strconv.Atoi(m)
-	if !ok || err1 != nil || err2 != nil || hi < 0 || hi > 24 || mi < 0 || mi > 59 {
+	if !ok || err1 != nil || err2 != nil || hi < 0 || hi > 24 || mi < 0 || mi > 59 || (hi == 24 && mi > 0) {
 		return 0, fmt.Errorf("invalid time %q, want HH:MM", hhmm)
 	}
 	return int(math.Round(float64(hi*60+mi)/(calcBucketHours*60))) % calcBuckets, nil
@@ -398,7 +417,7 @@ func slotsEstimate(req SlotsCalcRequest) SlotsEstimate {
 	est.Sweep = []SweepPoint{}
 	if len(ed.Commit) > 0 {
 		top := math.Max(roundUp50(est.PeakSlots), committed)
-		for c := 0.0; c <= top; c += calcSlotIncrement {
+		for _, c := range sweepCommitCandidates(top, baseline, committed, profile.Demand) {
 			p := SweepPoint{Committed: c, Monthly: costProfile(profile, baseline, c, ed.MaxSlots, rates.payg, rates.commit).Monthly.Total}
 			est.Sweep = append(est.Sweep, p)
 			if est.BestCommit == nil || p.Monthly < est.BestCommit.Monthly {
@@ -408,6 +427,39 @@ func slotsEstimate(req SlotsCalcRequest) SlotsEstimate {
 		}
 	}
 	return est
+}
+
+// sweepCommitCandidates returns sorted 50-slot multiples in [0, top] with at
+// most ~calcMaxSweep uniform steps plus exact demand/floor vertices so the
+// piecewise-linear optimum BestCommit is always evaluated exactly.
+func sweepCommitCandidates(top, baseline, committed float64, demand []float64) []float64 {
+	step := calcSlotIncrement
+	if top/step > calcMaxSweep {
+		step = roundUp50(top / calcMaxSweep)
+	}
+	seen := make(map[float64]struct{}, calcMaxSweep+len(demand)+4)
+	add := func(v float64) {
+		r := roundUp50(v)
+		if r >= 0 && r <= top {
+			seen[r] = struct{}{}
+		}
+	}
+	for c := 0.0; c <= top; c += step {
+		seen[c] = struct{}{}
+	}
+	add(0)
+	add(top)
+	add(baseline)
+	add(committed)
+	for _, d := range demand {
+		add(d)
+	}
+	out := make([]float64, 0, len(seen))
+	for c := range seen {
+		out = append(out, c)
+	}
+	sort.Float64s(out)
+	return out
 }
 
 func buildProfile(baseline float64, windows []PeakWindow) SlotProfile {
@@ -440,6 +492,7 @@ func buildProfile(baseline float64, windows []PeakWindow) SlotProfile {
 func costProfile(profile SlotProfile, baseline, committed, maxSlots, payg, commit float64) SlotsEstimate {
 	floor := math.Max(baseline, committed)
 	uncommitted := math.Max(0, baseline-committed)
+	profile.Billed = make([]float64, len(profile.Demand))
 	est := SlotsEstimate{Profile: profile, HourlyCost: make([]SlotCost, 24)}
 	sum := 0.0
 

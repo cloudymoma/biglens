@@ -141,7 +141,7 @@ func TestTimeToBucketAndWindowMask(t *testing.T) {
 			t.Errorf("timeToBucket(%q) = %d, %v; want %d", in, got, err, want)
 		}
 	}
-	for _, bad := range []string{"", "2:00pm", "25:00", "10:60", "1000"} {
+	for _, bad := range []string{"", "2:00pm", "25:00", "24:01", "24:59", "10:60", "1000"} {
 		if _, err := timeToBucket(bad); err == nil {
 			t.Errorf("timeToBucket(%q) accepted", bad)
 		}
@@ -255,10 +255,22 @@ func TestSlotsCommitmentSweepFindsCheapestLevel(t *testing.T) {
 	if est.Sweep[1].Committed != 50 {
 		t.Errorf("sweep step = %v, want 50", est.Sweep[1].Committed)
 	}
+	// Sweep must not overwrite est.Profile.Billed for the caller's commitment.
+	near(t, "off-peak billed preserved", est.Profile.Billed[0], 1000)
+	near(t, "peak billed preserved", est.Profile.Billed[8], 5000)
 	// The flat 1000 is used 24x7 so committing it is cheaper; the 90-minute
 	// burst is not worth a 24x7 commitment.
 	if est.BestCommit == nil || est.BestCommit.Committed != 1000 {
 		t.Errorf("best = %+v, want 1000", est.BestCommit)
+	}
+
+	// Large slot count uses adaptive step while still evaluating exact vertices.
+	big := slotsEstimate(slotsReq("enterprise", 12350, 0, PeakWindow{Start: "02:00", End: "03:00", Slots: 500000}))
+	if len(big.Sweep) > 500 {
+		t.Errorf("sweep len = %d, want bounded <= 500", len(big.Sweep))
+	}
+	if big.BestCommit == nil || big.BestCommit.Committed != 12350 {
+		t.Errorf("big best = %+v, want exact baseline vertex 12350", big.BestCommit)
 	}
 }
 
@@ -268,6 +280,19 @@ func TestSlotsRequestValidation(t *testing.T) {
 	}
 	if r := slotsReq("enterprise", -5, 0); r.validate() == nil {
 		t.Error("negative baseline accepted")
+	}
+	if r := slotsReq("enterprise", 1_000_050, 0); r.validate() == nil {
+		t.Error("excessive baseline slots accepted")
+	}
+	if r := slotsReq("enterprise", 0, 0, PeakWindow{Start: "01:00", End: "02:00", Slots: 2_000_000}); r.validate() == nil {
+		t.Error("excessive window slots accepted")
+	}
+	many := make([]PeakWindow, 25)
+	for i := range many {
+		many[i] = PeakWindow{Start: "01:00", End: "02:00", Slots: 100}
+	}
+	if r := slotsReq("enterprise", 0, 0, many...); r.validate() == nil {
+		t.Error("more than 24 windows accepted")
 	}
 	if r := slotsReq("enterprise", 0, 0, PeakWindow{Start: "9am", End: "10:00"}); r.validate() == nil {
 		t.Error("bad time accepted")

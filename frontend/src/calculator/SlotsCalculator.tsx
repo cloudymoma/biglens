@@ -184,7 +184,7 @@ export default function SlotsCalculator({ presets }: { presets: CalculatorPreset
             <NumField label="Commit rate" value={commitRate} onChange={setCommitRate} step={0.001} unit="$/slot-hr" disabled={!canCommit} />
             <NumField label="Discount" value={discount} onChange={setDiscount} unit="% off" step={1} />
           </div>
-          {!canCommit && <p className="text-[11px] text-zinc-600">{ed.label} edition has no commitments; everything bills pay-as-you-go.</p>}
+          {!canCommit && <p className="text-[11px] text-zinc-600">{ed.label} edition has no capacity (slot) commitments; everything here bills pay-as-you-go (spend-based CUDs are not modelled).</p>}
         </Card>
       </div>
 
@@ -218,7 +218,7 @@ export default function SlotsCalculator({ presets }: { presets: CalculatorPreset
                 {canCommit ? (
                   <div className="h-[220px]"><ReactECharts option={sweepOption} style={{ height: '100%' }} notMerge /></div>
                 ) : (
-                  <div className="h-[220px] flex items-center justify-center text-xs text-zinc-600">Switch to Enterprise or Enterprise Plus to compare commitments.</div>
+                  <div className="h-[220px] flex items-center justify-center text-xs text-zinc-600">Switch to Enterprise or Enterprise Plus to compare capacity commitments.</div>
                 )}
               </Card>
             </div>
@@ -227,8 +227,8 @@ export default function SlotsCalculator({ presets }: { presets: CalculatorPreset
               Peak windows add slots on top of the baseline; a window ending at or before its start wraps past midnight.
               Baselines, commitments and autoscaling all move in {step}-slot steps, so demand is rounded up before billing.
               Committed slots bill 24×7 for the whole term whether used or not; baseline above the commitment bills 24×7 at pay-as-you-go.
-              Standard edition autoscales only and is capped at 1,600 slots per reservation. Idle-slot sharing, the one-minute
-              autoscale minimum and on-demand queries are not modelled.
+              Standard edition autoscales only and is capped at 1,600 slots per reservation. Cross-reservation idle-slot sharing
+              (which does not change a single reservation's bill), the one-minute autoscale minimum, and on-demand queries are not modelled.
             </div>
           </>
         )}

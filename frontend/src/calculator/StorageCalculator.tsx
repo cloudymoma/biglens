@@ -144,7 +144,7 @@ export default function StorageCalculator({ presets }: { presets: CalculatorPres
 
             <div className="rounded-xl border border-zinc-800/40 px-4 py-3 text-xs text-zinc-500 leading-relaxed" style={{ background: '#111114' }}>
               Your data compresses <span className="text-zinc-300 font-mono">{est.data_compression_ratio.toFixed(2)}x</span>
-              {' '}({est.effective_compression_ratio.toFixed(2)}x once time travel and fail-safe are counted). At these rates physical billing
+              {' '}({est.effective_compression_ratio.toFixed(2)}x once fail-safe is counted; time travel is already included in active physical). At these rates physical billing
               wins above <span className="text-zinc-300 font-mono">{est.break_even_ratio.toFixed(2)}x</span>, the ratio of the blended physical
               to logical rate for your active/long-term mix. Billing model is set per dataset; estimates exclude query, streaming and egress charges.
             </div>

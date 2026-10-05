@@ -4,7 +4,7 @@ import { DollarSign, TrendingUp, Scale, GitCompareArrows } from 'lucide-react';
 import type { QueryFilters, CostDashboardData } from '../types';
 import { fetchCostDashboard } from '../api';
 import { formatBytes, MetricCard, EmptyState, ErrorBanner } from './shared';
-import { ON_DEMAND_PER_TIB, SLOT_HOUR_RATES, EDITION_LABELS, TIB, type Edition } from './pricing';
+import { getRegionPricing, EDITION_LABELS, TIB, type Edition } from './pricing';
 
 const GROUP_LABELS: Record<string, string> = {
   user: 'User', dataset: 'Dataset', table: 'Table', reservation: 'Reservation',
@@ -37,9 +37,10 @@ export default function CostDashboard({ filters }: { filters: QueryFilters }) {
   const spendBy = data.spend_by || [];
   const dailyCost = data.daily_cost || [];
 
-  const onDemandCost = (bytesBilled / TIB) * ON_DEMAND_PER_TIB;
+  const { onDemandPerTiB, slotHourRates } = getRegionPricing(filters.region);
+  const onDemandCost = (bytesBilled / TIB) * onDemandPerTiB;
   const slotHours = slotMs / 3_600_000;
-  const editionCost = slotHours * SLOT_HOUR_RATES[edition];
+  const editionCost = slotHours * slotHourRates[edition];
   const editionsCheaper = editionCost < onDemandCost;
   const gapPct = bytesProcessed > 0 ? ((bytesBilled - bytesProcessed) / bytesProcessed) * 100 : 0;
 
@@ -103,7 +104,7 @@ export default function CostDashboard({ filters }: { filters: QueryFilters }) {
       textStyle: { color: '#e4e4e7', fontSize: 12 },
       formatter: (params: any) => {
         const p = params[0];
-        const usd = (p.value / TIB) * ON_DEMAND_PER_TIB;
+        const usd = (p.value / TIB) * onDemandPerTiB;
         return `<div style="font-weight:600;color:#a1a1aa;font-size:11px;margin-bottom:4px">${p.name}</div>
                 <div style="color:#f4f4f5;font-size:13px">${formatBytes(p.value)} · ~$${usd.toFixed(2)}</div>`;
       },
@@ -155,7 +156,7 @@ export default function CostDashboard({ filters }: { filters: QueryFilters }) {
           label="Estimated Cost"
           value={`$${onDemandCost.toFixed(2)}`}
           icon={<DollarSign size={18} />}
-          detail={`On-demand @ $${ON_DEMAND_PER_TIB}/TiB (excl. scripts)`}
+          detail={`On-demand @ $${onDemandPerTiB}/TiB (excl. scripts)`}
           accentColor="#fbbf24"
         />
         <MetricCard
@@ -180,8 +181,8 @@ export default function CostDashboard({ filters }: { filters: QueryFilters }) {
             className="text-xs text-zinc-300 rounded-lg px-3 py-1.5 outline-none cursor-pointer border border-zinc-800/50"
             style={{ background: '#09090b' }}
           >
-            {(Object.keys(SLOT_HOUR_RATES) as Edition[]).map(ed => (
-              <option key={ed} value={ed}>{EDITION_LABELS[ed]} (${SLOT_HOUR_RATES[ed]}/slot-hr)</option>
+            {(Object.keys(slotHourRates) as Edition[]).map(ed => (
+              <option key={ed} value={ed}>{EDITION_LABELS[ed]} (${slotHourRates[ed]}/slot-hr)</option>
             ))}
           </select>
         </div>
@@ -190,12 +191,12 @@ export default function CostDashboard({ filters }: { filters: QueryFilters }) {
           <div className="p-4 rounded-xl border border-zinc-800/30" style={{ background: '#09090b' }}>
             <p className="text-[10px] text-zinc-600 uppercase font-semibold tracking-wider mb-1">On-demand</p>
             <p className="text-xl font-bold text-white font-mono">${onDemandCost.toFixed(2)}</p>
-            <p className="text-[11px] text-zinc-600 mt-1">{(bytesBilled / TIB).toFixed(3)} TiB × ${ON_DEMAND_PER_TIB}</p>
+            <p className="text-[11px] text-zinc-600 mt-1">{(bytesBilled / TIB).toFixed(3)} TiB × ${onDemandPerTiB}</p>
           </div>
           <div className="p-4 rounded-xl border border-zinc-800/30" style={{ background: '#09090b' }}>
             <p className="text-[10px] text-zinc-600 uppercase font-semibold tracking-wider mb-1">{EDITION_LABELS[edition]} (PAYG)</p>
             <p className="text-xl font-bold text-white font-mono">${editionCost.toFixed(2)}</p>
-            <p className="text-[11px] text-zinc-600 mt-1">{slotHours.toFixed(1)} slot-hrs × ${SLOT_HOUR_RATES[edition]}</p>
+            <p className="text-[11px] text-zinc-600 mt-1">{slotHours.toFixed(1)} slot-hrs × ${slotHourRates[edition]}</p>
           </div>
           <div className="p-4 rounded-xl border" style={{ background: '#09090b', borderColor: editionsCheaper ? '#4ade8030' : '#38bdf830' }}>
             <p className="text-[10px] text-zinc-600 uppercase font-semibold tracking-wider mb-1">Verdict</p>

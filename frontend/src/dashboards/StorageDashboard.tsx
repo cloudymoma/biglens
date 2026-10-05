@@ -4,7 +4,7 @@ import { Database, HardDrive, Box, Search, History, ShieldAlert, Snowflake } fro
 import type { QueryFilters, StorageDashboardData } from '../types';
 import { fetchStorageDashboard } from '../api';
 import { formatBytes, MetricCard, EmptyState, ErrorBanner, DegradedNotice } from './shared';
-import { logicalCostUSD, physicalCostUSD, STORAGE_RATES } from './pricing';
+import { logicalCostUSD, physicalCostUSD, getRegionPricing } from './pricing';
 
 export default function StorageDashboard({ filters }: { filters: QueryFilters }) {
   const [data, setData] = useState<StorageDashboardData | null>(null);
@@ -56,8 +56,9 @@ export default function StorageDashboard({ filters }: { filters: QueryFilters })
       }
     : dsTotals;
 
-  const logicalCost = logicalCostUSD(totals.activeLogical, totals.longTermLogical);
-  const physicalCost = physicalCostUSD(totals.activePhysical, totals.longTermPhysical, totals.failSafe);
+  const storageRates = getRegionPricing(filters.region).storageRates;
+  const logicalCost = logicalCostUSD(totals.activeLogical, totals.longTermLogical, filters.region);
+  const physicalCost = physicalCostUSD(totals.activePhysical, totals.longTermPhysical, totals.failSafe, filters.region);
   const savings = Math.abs(logicalCost - physicalCost);
   const cheaperModel = logicalCost <= physicalCost ? 'Logical' : 'Physical';
 
@@ -225,8 +226,8 @@ export default function StorageDashboard({ filters }: { filters: QueryFilters })
                   const logical = d.active_logical + d.long_term_logical;
                   const physical = d.active_physical + d.long_term_physical + d.fail_safe;
                   const physicalNoTT = Math.max(0, d.active_physical - d.time_travel) + d.long_term_physical;
-                  const lCost = logicalCostUSD(d.active_logical, d.long_term_logical);
-                  const pCost = physicalCostUSD(d.active_physical, d.long_term_physical, d.fail_safe);
+                  const lCost = logicalCostUSD(d.active_logical, d.long_term_logical, filters.region);
+                  const pCost = physicalCostUSD(d.active_physical, d.long_term_physical, d.fail_safe, filters.region);
                   const ratio = physicalNoTT > 0 ? logical / physicalNoTT : 0;
                   const physicalWins = pCost < lCost;
                   return (
@@ -281,7 +282,7 @@ export default function StorageDashboard({ filters }: { filters: QueryFilters })
               </thead>
               <tbody>
                 {coldTables.map((t, i) => {
-                  const rate = t.storage_tier === 'LONG_TERM' ? STORAGE_RATES.longTermLogical : STORAGE_RATES.activeLogical;
+                  const rate = t.storage_tier === 'LONG_TERM' ? storageRates.longTermLogical : storageRates.activeLogical;
                   const saved = (t.total_bytes / Math.pow(1024, 3)) * rate;
                   return (
                     <tr key={i} className="border-b border-zinc-800/30 hover:bg-zinc-800/20 transition-colors">
