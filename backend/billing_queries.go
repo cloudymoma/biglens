@@ -252,6 +252,9 @@ func (b *BQClient) GetBillingCreditRows(ctx context.Context, src string, params 
 }
 
 type BillingResourceRow struct {
+	// ID is the grouping key: GlobalName, or Name when the export row has
+	// no global name. Unique within one response.
+	ID         string  `json:"id" bigquery:"id"`
 	Name       string  `json:"name" bigquery:"name"`
 	GlobalName string  `json:"global_name" bigquery:"global_name"`
 	Service    string  `json:"service" bigquery:"service"`
@@ -259,29 +262,28 @@ type BillingResourceRow struct {
 	Net        float64 `json:"net" bigquery:"net"`
 }
 
-// GetBillingResources lists top-spending resources from the detailed
-// export. search ("" = none) matches resource name/global name, passed as
-// a parameter.
-func (b *BQClient) GetBillingResources(ctx context.Context, src, search string, params []bigquery.QueryParameter) ([]BillingResourceRow, error) {
-	where := "(resource.name IS NOT NULL OR resource.global_name IS NOT NULL)"
+// billingResourcesResult is the single row billingResourcesSQL returns.
+type billingResourcesResult struct {
+	Resources       []BillingResourceRow `bigquery:"resources"`
+	UnattributedNet float64              `bigquery:"unattributed_net"`
+	TotalNet        float64              `bigquery:"total_net"`
+}
+
+// GetBillingResources ranks resources in the detailed export by net cost
+// (see billingResourcesSQL). search ("" = none) matches resource name/global
+// name, passed as a parameter.
+func (b *BQClient) GetBillingResources(ctx context.Context, src, search string, params []bigquery.QueryParameter) (billingResourcesResult, error) {
 	if search != "" {
-		where += " AND (STRPOS(LOWER(IFNULL(resource.name,'')), LOWER(@resource_q)) > 0 OR STRPOS(LOWER(IFNULL(resource.global_name,'')), LOWER(@resource_q)) > 0)"
 		params = append(append([]bigquery.QueryParameter{}, params...),
 			bigquery.QueryParameter{Name: "resource_q", Value: search})
 	}
-	q := b.client.Query(fmt.Sprintf(`
-		SELECT
-			IFNULL(resource.name, '') AS name,
-			IFNULL(ANY_VALUE(resource.global_name), '') AS global_name,
-			ANY_VALUE(service.description) AS service,
-			IFNULL(ANY_VALUE(project.id), '') AS project,
-			%s AS net
-		FROM %s
-		WHERE %s
-		GROUP BY name ORDER BY net DESC LIMIT 50`,
-		billingNetExpr, src, where))
+	q := b.client.Query(billingResourcesSQL(src, search != ""))
 	q.Parameters = params
-	return collectRows[BillingResourceRow](q, ctx)
+	rows, err := collectRows[billingResourcesResult](q, ctx)
+	if err != nil || len(rows) == 0 {
+		return billingResourcesResult{}, err
+	}
+	return rows[0], nil
 }
 
 type BillingPriceRow struct {

@@ -592,6 +592,26 @@ func (h *APIHandler) BillingCredits(w http.ResponseWriter, r *http.Request) {
 type BillingResourcesData struct {
 	Available bool                 `json:"available"`
 	Resources []BillingResourceRow `json:"resources"`
+	// UnattributedNet is the window's net on export rows with neither a
+	// resource global name nor a name (never listed); TotalNet is the
+	// window's whole net. Neither is narrowed by the search box.
+	UnattributedNet float64 `json:"unattributed_net"`
+	TotalNet        float64 `json:"total_net"`
+}
+
+// billingResourcesFromResult shapes the single row of billingResourcesSQL
+// for the API; resources is [] rather than null when nothing is listed.
+func billingResourcesFromResult(res billingResourcesResult) BillingResourcesData {
+	data := BillingResourcesData{
+		Available:       true,
+		Resources:       res.Resources,
+		UnattributedNet: res.UnattributedNet,
+		TotalNet:        res.TotalNet,
+	}
+	if data.Resources == nil {
+		data.Resources = []BillingResourceRow{}
+	}
+	return data
 }
 
 func (h *APIHandler) BillingResources(w http.ResponseWriter, r *http.Request) {
@@ -612,22 +632,18 @@ func (h *APIHandler) BillingResources(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return nil, err
 		}
-		data := BillingResourcesData{Resources: []BillingResourceRow{}}
 		tables := f.resourceTables(info)
 		if len(tables) == 0 {
 			// No detailed export in this dataset: 200 + available:false so
 			// the tab can render its enable-the-export banner.
-			return &data, nil
+			return &BillingResourcesData{Resources: []BillingResourceRow{}}, nil
 		}
-		data.Available = true
 		src, params := billingSource(f.Project, f.Dataset, tables, f)
-		rows, err := h.bq.GetBillingResources(r.Context(), src, search, params)
+		res, err := h.bq.GetBillingResources(r.Context(), src, search, params)
 		if err != nil {
 			return nil, fmt.Errorf("billing resources: %w", err)
 		}
-		if rows != nil {
-			data.Resources = rows
-		}
+		data := billingResourcesFromResult(res)
 		h.cache.Set(key, &data)
 		return &data, nil
 	})

@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -62,5 +64,36 @@ func TestParseBillingFilter(t *testing.T) {
 				tt.check(t, f)
 			}
 		})
+	}
+}
+
+func TestBillingResourcesFromResult(t *testing.T) {
+	const bucketID = "//storage.googleapis.com/projects/_/buckets/dingopdf"
+	bucket := BillingResourceRow{ID: bucketID, Name: "dingopdf", GlobalName: bucketID,
+		Service: "Cloud Storage", Project: "p1", Net: 1.25}
+	got := billingResourcesFromResult(billingResourcesResult{
+		Resources: []BillingResourceRow{bucket}, UnattributedNet: 384.1, TotalNet: 437.81,
+	})
+	if !got.Available || len(got.Resources) != 1 || got.Resources[0] != bucket {
+		t.Errorf("resources = %+v, want available with the one bucket row", got)
+	}
+	if got.UnattributedNet != 384.1 || got.TotalNet != 437.81 {
+		t.Errorf("unattributed/total = %v/%v, want 384.1/437.81", got.UnattributedNet, got.TotalNet)
+	}
+	// The frontend keys rows by id (the grouping key).
+	if b, _ := json.Marshal(bucket); !strings.Contains(string(b), `"id":"`+bucketID+`"`) {
+		t.Errorf("row JSON %s missing id", b)
+	}
+
+	// No listed resources (a search without hits, or only unattributed rows)
+	// still reports the unattributed share, and lists [] rather than null.
+	b, err := json.Marshal(billingResourcesFromResult(billingResourcesResult{UnattributedNet: 12.5, TotalNet: 12.5}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"available":true`, `"resources":[]`, `"unattributed_net":12.5`, `"total_net":12.5`} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("JSON %s missing %s", b, want)
+		}
 	}
 }

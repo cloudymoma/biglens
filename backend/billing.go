@@ -124,10 +124,13 @@ type BillingFilter struct {
 
 // Money expressions. NUMERIC aggregation avoids FLOAT64 drift; credits use a
 // nested UNNEST subquery — a LEFT JOIN would duplicate cost rows.
+// billingNetSumExpr is the unrounded NUMERIC net, for queries that add group
+// nets up again before rounding.
 const (
 	billingGrossExpr   = "ROUND(CAST(SUM(CAST(cost AS NUMERIC)) AS FLOAT64), 2)"
 	billingCreditsExpr = "ROUND(CAST(SUM(IFNULL((SELECT SUM(CAST(c.amount AS NUMERIC)) FROM UNNEST(credits) c), 0)) AS FLOAT64), 2)"
-	billingNetExpr     = "ROUND(CAST(SUM(CAST(cost AS NUMERIC)) + SUM(IFNULL((SELECT SUM(CAST(c.amount AS NUMERIC)) FROM UNNEST(credits) c), 0)) AS FLOAT64), 2)"
+	billingNetSumExpr  = "SUM(CAST(cost AS NUMERIC)) + SUM(IFNULL((SELECT SUM(CAST(c.amount AS NUMERIC)) FROM UNNEST(credits) c), 0))"
+	billingNetExpr     = "ROUND(CAST(" + billingNetSumExpr + " AS FLOAT64), 2)"
 )
 
 // Group-by expressions for GetBillingGroups. Only these constants are ever
@@ -240,6 +243,47 @@ func billingLabelGroupSQL(src string) string {
 		LEFT JOIN UNNEST(t.labels) l ON l.key = @group_label_key
 		GROUP BY name ORDER BY net DESC LIMIT 50`,
 		billingGrossExpr, billingNetExpr, billingCreditsExpr, src)
+}
+
+// billingResourcesSQL ranks resources in the detailed export by net cost,
+// as a single row: the top 50 resources plus two window totals.
+//
+// A resource is keyed by resource.global_name — the export's unique
+// identifier — falling back to resource.name, which is user-chosen and not
+// unique. Both columns hold empty strings rather than NULL on many rows, so
+// an empty value counts as missing. Rows with neither are not listed, but
+// their net comes back as unattributed_net, next to the window's whole net
+// (total_net), so the UI can say how much the list leaves out. When search
+// is set, @resource_q matches a resource if it matches any of its rows; it
+// narrows the list, never the two totals.
+func billingResourcesSQL(src string, search bool) string {
+	matched := "TRUE"
+	if search {
+		matched = `LOGICAL_OR(STRPOS(LOWER(IFNULL(resource.name, '')), LOWER(@resource_q)) > 0
+					OR STRPOS(LOWER(IFNULL(resource.global_name, '')), LOWER(@resource_q)) > 0)`
+	}
+	return fmt.Sprintf(`
+		WITH by_resource AS (
+			SELECT
+				COALESCE(NULLIF(resource.global_name, ''), NULLIF(resource.name, '')) AS rid,
+				IFNULL(ANY_VALUE(NULLIF(resource.name, '')), '') AS name,
+				IFNULL(ANY_VALUE(NULLIF(resource.global_name, '')), '') AS global_name,
+				IFNULL(ANY_VALUE(service.description), '') AS service,
+				IFNULL(ANY_VALUE(project.id), '') AS project,
+				%s AS net,
+				%s AS matched
+			FROM %s
+			GROUP BY rid
+		)
+		SELECT
+			ARRAY_AGG(IF(rid IS NOT NULL AND matched,
+					STRUCT(rid AS id, name, global_name, service, project, ROUND(CAST(net AS FLOAT64), 2) AS net),
+					NULL)
+				IGNORE NULLS ORDER BY net DESC, rid LIMIT 50) AS resources,
+			ROUND(CAST(IFNULL(SUM(IF(rid IS NULL, net, 0)), 0) AS FLOAT64), 2) AS unattributed_net,
+			ROUND(CAST(IFNULL(SUM(net), 0) AS FLOAT64), 2) AS total_net
+		FROM by_resource`,
+		billingNetSumExpr, matched, src)
 }
 
 // rollupBillingProjection estimates end-of-month net spend: month-to-date

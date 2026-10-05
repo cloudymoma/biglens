@@ -1207,6 +1207,7 @@ export interface BillingCreditsData {
 }
 
 export interface BillingResourceRow {
+  id: string; // grouping key: global_name, or name when the export row has none
   name: string;
   global_name: string;
   service: string;
@@ -1217,6 +1218,10 @@ export interface BillingResourceRow {
 export interface BillingResourcesData {
   available: boolean;
   resources: BillingResourceRow[];
+  // Window net on rows with no resource name or global name (never listed),
+  // and the window's whole net; the search box narrows neither.
+  unattributed_net: number;
+  total_net: number;
 }
 
 export interface BillingPriceRow {

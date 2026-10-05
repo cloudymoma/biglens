@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -176,10 +178,12 @@ func TestBillingSourceUnionsTables(t *testing.T) {
 // Credits must be summed via nested subquery; LEFT JOIN UNNEST(credits)
 // double-counts cost rows (official docs gotcha).
 func TestBillingCostExprs(t *testing.T) {
-	if !strings.Contains(billingNetExpr, "(SELECT SUM(CAST(c.amount AS NUMERIC)) FROM UNNEST(credits) c)") {
-		t.Errorf("net expr must use nested credits subquery: %s", billingNetExpr)
+	for _, expr := range []string{billingNetExpr, billingNetSumExpr} {
+		if !strings.Contains(expr, "(SELECT SUM(CAST(c.amount AS NUMERIC)) FROM UNNEST(credits) c)") {
+			t.Errorf("net expr must use nested credits subquery: %s", expr)
+		}
 	}
-	for _, expr := range []string{billingGrossExpr, billingNetExpr, billingCreditsExpr} {
+	for _, expr := range []string{billingGrossExpr, billingNetExpr, billingNetSumExpr, billingCreditsExpr} {
 		if strings.Contains(expr, "LEFT JOIN") {
 			t.Errorf("cost exprs must never LEFT JOIN credits: %s", expr)
 		}
@@ -226,6 +230,91 @@ func TestBillingLabelGroupSQL(t *testing.T) {
 	}
 	if strings.Contains(sql, "LEFT JOIN UNNEST(credits)") {
 		t.Error("credits must stay a nested subquery even in label grouping")
+	}
+}
+
+var sqlWhereRe = regexp.MustCompile(`(?i)\bWHERE\b`)
+
+// The detailed export writes empty strings (not NULL) into resource.name and
+// resource.global_name on many rows, and names are not unique (a BigQuery
+// dataset and a GCS bucket can share one). Resources are keyed by
+// global_name — the export's unique identifier — falling back to name, with
+// empty values treated as missing.
+func TestBillingResourcesSQLKeysByGlobalName(t *testing.T) {
+	sql := billingResourcesSQL("(SELECT 1)", false)
+	for _, want := range []string{
+		"COALESCE(NULLIF(resource.global_name, ''), NULLIF(resource.name, '')) AS rid",
+		"GROUP BY rid",
+		"IFNULL(ANY_VALUE(NULLIF(resource.name, '')), '') AS name",
+		"rid AS id",
+		"LIMIT 50",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("resources SQL missing %q:\n%s", want, sql)
+		}
+	}
+	for _, bad := range []string{"GROUP BY name", "IS NOT NULL OR"} {
+		if strings.Contains(sql, bad) {
+			t.Errorf("resources SQL must not contain %q (merges unnamed and same-named resources):\n%s", bad, sql)
+		}
+	}
+}
+
+// Rows with no resource identity are never listed, but their net comes back
+// from the same scan so the UI can say how much the list leaves out.
+func TestBillingResourcesSQLReportsUnattributedNet(t *testing.T) {
+	sql := billingResourcesSQL("(SELECT 1)", false)
+	for _, want := range []string{
+		"SUM(IF(rid IS NULL, net, 0))", "AS unattributed_net", "AS total_net",
+		"IF(rid IS NOT NULL", // only identified resources are listed
+		// Same NUMERIC net (cost + nested credits) as every other tab.
+		"SUM(CAST(cost AS NUMERIC))", "(SELECT SUM(CAST(c.amount AS NUMERIC)) FROM UNNEST(credits) c)",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("resources SQL missing %q:\n%s", want, sql)
+		}
+	}
+	if strings.Contains(sql, "LEFT JOIN") {
+		t.Errorf("credits must stay a nested subquery:\n%s", sql)
+	}
+	if sqlWhereRe.MatchString(sql) {
+		t.Errorf("resources SQL must not filter rows before summing (unattributed rows would vanish):\n%s", sql)
+	}
+}
+
+func TestBillingResourcesSQLSearch(t *testing.T) {
+	if plain := billingResourcesSQL("(SELECT 1)", false); strings.Contains(plain, "@resource_q") {
+		t.Errorf("without a search the SQL must not reference the undeclared @resource_q:\n%s", plain)
+	}
+	sql := billingResourcesSQL("(SELECT 1)", true)
+	// A resource matches if any of its rows does; matching only narrows the
+	// list, the unattributed/total figures still cover the whole window.
+	for _, want := range []string{
+		"LOGICAL_OR(STRPOS(LOWER(IFNULL(resource.name, '')), LOWER(@resource_q)) > 0",
+		"STRPOS(LOWER(IFNULL(resource.global_name, '')), LOWER(@resource_q)) > 0",
+		"IF(rid IS NOT NULL AND matched",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("search SQL missing %q:\n%s", want, sql)
+		}
+	}
+	if sqlWhereRe.MatchString(sql) {
+		t.Errorf("search must not drop rows from the window totals:\n%s", sql)
+	}
+}
+
+// The BigQuery client leaves struct fields without a matching column at
+// their zero value, so every loaded field must be aliased in the SQL.
+func TestBillingResourcesSQLAliasesMatchStructs(t *testing.T) {
+	sql := billingResourcesSQL("(SELECT 1)", true)
+	for _, typ := range []reflect.Type{reflect.TypeFor[billingResourcesResult](), reflect.TypeFor[BillingResourceRow]()} {
+		for i := range typ.NumField() {
+			f := typ.Field(i)
+			col := f.Tag.Get("bigquery")
+			if !regexp.MustCompile(`\bAS ` + regexp.QuoteMeta(col) + `\b`).MatchString(sql) {
+				t.Errorf("%s.%s loads column %q, which the SQL never produces:\n%s", typ.Name(), f.Name, col, sql)
+			}
+		}
 	}
 }
 
