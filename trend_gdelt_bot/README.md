@@ -95,6 +95,9 @@ In the BigQuery Agent configuration, add the **`trends_gdelt_analytics` dataset*
 | **`dim_fips_iso_country`** | **Country Dimension:** FIPS 10-4 ↔ ISO 3166-1 country code lookup table. |
 | **`trend_gdelt_graph`** *(Property Graph - Preview)* | **Graph Pattern Matching:** Native property graph for cross-country term overlap and bilateral comparisons via ISO GQL / `GRAPH_TABLE` (requires Enterprise reservation). |
 
+> [!NOTE]
+> The Tier 1 Trends views — and therefore `vw_topic_news_trends_unified` and `trend_gdelt_graph` — are built from Google Trends' **international** tables, which **exclude the US** (`country_code = 'US'` returns no rows). US search-trend questions are answered from the Tier 2 `vw_raw_trends_us_*` views below.
+
 #### 🔹 Tier 2: Raw Drill-Down Proxy Views (On explicit request — deep history & fine granularity)
 
 | Proxy View | Public Source Table | Drill-Down Capability Unlocked |
@@ -123,15 +126,16 @@ Always follow this Two-Tier routing hierarchy and domain rules:
 1. ROUTING HIERARCHY — TIER 1 (CURATED, DEFAULT):
    Always prefer the Tier 1 curated views for standard analytics, recent trends (last 90 days; GKG themes last 30 days), and cross-dataset correlations:
    - For macro correlations (search trends + country news context): Query `trends_gdelt_analytics.vw_topic_news_trends_unified`.
-   - For breakout/surging terms & % growth (e.g. rising queries in Japan/US): Query `trends_gdelt_analytics.vw_search_trends_rising`.
+   - For breakout/surging terms & % growth (e.g. rising queries in Japan): Query `trends_gdelt_analytics.vw_search_trends_rising`.
    - For daily search rankings & regional spread: Query `trends_gdelt_analytics.vw_search_trends_daily`.
    - For specific news events, actor dyads, or article URLs: Query `trends_gdelt_analytics.vw_gdelt_news_events_daily`.
    - For news themes & media outlets (last 30 days ONLY): Query `trends_gdelt_analytics.vw_gdelt_gkg_themes_daily`.
    - For country code conversions: Use `trends_gdelt_analytics.dim_fips_iso_country`.
    - Cross-country term overlap, bilateral comparisons, or graph diffusion networks: Query `trends_gdelt_analytics.trend_gdelt_graph` using GRAPH_TABLE and GQL pattern matching — ONLY if the project has an Enterprise/Enterprise Plus reservation. On on-demand billing GRAPH_TABLE fails; answer the same questions with self-joins or GROUP BY on `trends_gdelt_analytics.vw_search_trends_daily` instead.
+   - US EXCEPTION: the Tier 1 Trends views (and therefore `vw_topic_news_trends_unified` and the graph) come from Google Trends' international tables, which EXCLUDE the US — `country_code = 'US'` returns no rows. Route every US search-trend question to `trends_gdelt_analytics.vw_raw_trends_us_dma` (top terms) or `trends_gdelt_analytics.vw_raw_trends_us_dma_rising` (breakouts), or to the hourly views for "right now" questions (rule 3), even without an explicit drill-down request.
 
 2. ROUTING HIERARCHY — TIER 2 (RAW DRILL-DOWN, ON EXPLICIT REQUEST ONLY):
-   Use the Tier 2 raw proxy views ONLY when the user explicitly asks for data outside the Tier 1 windows or granularity:
+   Use the Tier 2 raw proxy views ONLY when the user explicitly asks for data outside the Tier 1 windows or granularity (exception: US search-trend questions always use the US views — see rule 1):
    - Multi-year historical trend trajectories per term: Query `trends_gdelt_analytics.vw_raw_trends_international_history`.
    - Region-level breakdown of rising terms (rank and percent_gain are country-level values repeated on every region row; compare regions by their own search_score): Query `trends_gdelt_analytics.vw_raw_trends_international_rising_history`.
    - US metro / Designated Market Area (DMA) breakdowns: Query `trends_gdelt_analytics.vw_raw_trends_us_dma` (top terms) or `trends_gdelt_analytics.vw_raw_trends_us_dma_rising` (breakouts with percent_gain).
@@ -193,12 +197,28 @@ Copy the few-shot query examples from [`bigquery/06_golden_agent_queries.sql`](.
     AND country_avg_tone < -2.0 AND conflict_event_share_pct > 30.0
   ORDER BY conflict_event_share_pct DESC, search_rank ASC LIMIT 20;
   ```
-* **Historical Peak Breakouts:**
+* **US All-Time (5-Year) Peaks Last Week (Tier 2 — Tier 1 has no US rows):**
   ```sql
-  SELECT date, search_term, search_rank, search_score
-  FROM `trends_gdelt_analytics.vw_topic_news_trends_unified`
-  WHERE country_code = 'US' AND is_historical_peak = TRUE AND date >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)
-  ORDER BY date DESC, search_rank ASC;
+  WITH latest_snapshot AS (
+    SELECT snapshot_date, week, search_term, rank, search_score
+    FROM `trends_gdelt_analytics.vw_raw_trends_us_dma`
+    WHERE snapshot_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 3 DAY)
+    QUALIFY snapshot_date = MAX(snapshot_date) OVER ()
+  ),
+  last_complete_week AS (
+    SELECT week, search_term, rank, search_score
+    FROM latest_snapshot
+    WHERE DATE_ADD(week, INTERVAL 6 DAY) < snapshot_date
+    QUALIFY week = MAX(week) OVER ()
+  )
+  SELECT week AS week_start, search_term, ANY_VALUE(rank) AS national_rank,
+         COUNTIF(search_score = 100) AS dmas_at_peak,
+         COUNTIF(search_score IS NOT NULL) AS dmas_with_signal,
+         ROUND(100 * SAFE_DIVIDE(COUNTIF(search_score = 100), COUNTIF(search_score IS NOT NULL)), 1) AS pct_dmas_at_peak
+  FROM last_complete_week
+  GROUP BY week_start, search_term
+  HAVING dmas_at_peak > 0
+  ORDER BY dmas_at_peak DESC, national_rank;
   ```
 * **Tier 2 Drill-Down — 5-Year Trend Trajectory (pin the snapshot, scan the weeks):**
   ```sql
@@ -251,7 +271,7 @@ Copy the few-shot query examples from [`bigquery/06_golden_agent_queries.sql`](.
 Test the agent with these prompts directly in the BigQuery chat interface:
 
 1. *"What are the top 10 search terms in Great Britain in the latest snapshot?"*
-2. *"Which search terms reached their all-time peak popularity (score 100) in the United States over the last week?"*
+2. *"Which top US search terms hit their all-time (5-year) high last week, and in how many metro areas?"* (Tier 2 US DMA — the Tier 1 views exclude the US; expect `vw_raw_trends_us_dma`, counting metros with `search_score = 100` in the last complete week)
 3. *"Show me countries experiencing negative news sentiment (Tone < -2.0) with high conflict share, and what people are searching for in those countries."*
 4. *"Which search queries trended in 3 or more countries simultaneously over the past 7 days?"*
 5. *"Why does a term with rank #12 have a score of 100 while rank #1 has a score of 70?"*

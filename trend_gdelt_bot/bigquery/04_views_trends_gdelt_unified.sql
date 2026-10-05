@@ -6,7 +6,7 @@
 
 CREATE OR REPLACE VIEW `trends_gdelt_analytics.vw_topic_news_trends_unified`
 OPTIONS (
-  description = "Unified daily analytics mart correlating Google search trends with GDELT geopolitical news events and sentiment by country and date."
+  description = "Unified daily analytics mart correlating Google search trends with GDELT geopolitical news events and sentiment by country and date. Built on the international Trends views, which exclude the US; use vw_raw_trends_us_* for US questions."
 ) AS
 WITH daily_country_news_summary AS (
   -- country_code here is already ISO 3166 (mapped from GDELT's FIPS codes in

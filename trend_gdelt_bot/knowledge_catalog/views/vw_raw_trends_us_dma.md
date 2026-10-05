@@ -12,7 +12,7 @@ tags:
 
 # Definition
 
-Tier 2 proxy view over `bigquery-public-data.google_trends.top_terms`, exposing the US metro-level (Nielsen DMA) granularity that the international tables do not carry. Same weekly-history-per-snapshot layout as [vw_raw_trends_international_history](/views/vw_raw_trends_international_history): pin `snapshot_date = MAX(snapshot_date)`, and pin `week = MAX(week)` for current values. Deduplicate the repeated history rows with `COUNT(DISTINCT dma_name)` when counting metros. Use ONLY on explicit request for US DMA/metro breakdowns.
+Tier 2 proxy view over `bigquery-public-data.google_trends.top_terms`, exposing the US metro-level (Nielsen DMA) granularity that the international tables do not carry. Same weekly-history-per-snapshot layout as [vw_raw_trends_international_history](/views/vw_raw_trends_international_history): pin `snapshot_date = MAX(snapshot_date)`, and pin `week = MAX(week)` for current values. Deduplicate the repeated history rows with `COUNT(DISTINCT dma_name)` when counting metros. Use for US DMA/metro breakdowns and for any US search-trend question — the Tier 1 Trends views exclude the US.
 
 # Schema
 - `snapshot_date` (DATE) — Trends refresh date (partition key; always pin)

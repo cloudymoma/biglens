@@ -27,22 +27,54 @@ ORDER BY
 LIMIT 10;
 
 -- -----------------------------------------------------------------------------
--- Query 2: Breakout / All-Time Peak Terms (Score = 100) vs Everyday Volume (Rank)
+-- Query 2 (TIER 2 / US): Terms That Hit Their All-Time (5-Year) Peak in the US Last Week
 -- Intent: "Which search terms reached their all-time peak popularity in the US last week?"
+-- Note: Tier 1 (vw_search_trends_daily/_rising, vw_topic_news_trends_unified)
+-- is built from Google Trends' international tables, which do NOT include the
+-- US — country_code = 'US' there always returns 0 rows. US questions must use
+-- the vw_raw_trends_us_* views.
+-- Definition: the US tables carry no national score. search_score is
+-- normalized per DMA (metro) to the term's own peak in that DMA over the
+-- snapshot's ~5-year weekly history, so a term "peaked last week" in a metro
+-- when its score is 100 in the latest COMPLETE Sunday-Saturday week before
+-- the snapshot date. Each term is summarized by how many DMAs hit that peak,
+-- out of the DMAs with a reportable score (NULL = below Google's threshold).
+-- Limitations: only the latest snapshot's 25 national top terms carry
+-- history, so a term that peaked last week but has since left the top 25 is
+-- not visible (an empty result does not mean no US term peaked); "all-time"
+-- means the ~5-year window; the in-progress current week is skipped because
+-- a partial week is not comparable to full weeks (it inflates one-day spikes).
+-- week_start names the week evaluated: with the 1-2 day publishing lag it can
+-- be the week before the calendar's last week. The constant 3-day bound +
+-- QUALIFY pins the latest snapshot and keeps partition pruning.
 -- -----------------------------------------------------------------------------
+WITH latest_snapshot AS (
+  SELECT snapshot_date, week, search_term, rank, search_score
+  FROM `trends_gdelt_analytics.vw_raw_trends_us_dma`
+  WHERE snapshot_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 3 DAY)
+  QUALIFY snapshot_date = MAX(snapshot_date) OVER ()
+),
+last_complete_week AS (
+  SELECT week, search_term, rank, search_score
+  FROM latest_snapshot
+  WHERE DATE_ADD(week, INTERVAL 6 DAY) < snapshot_date  -- the week ended before the snapshot
+  QUALIFY week = MAX(week) OVER ()
+)
 SELECT
-  date,
+  week AS week_start,
   search_term,
-  search_rank,
-  search_score
+  ANY_VALUE(rank) AS national_rank,  -- rank in the latest daily US top 25
+  COUNTIF(search_score = 100) AS dmas_at_peak,
+  COUNTIF(search_score IS NOT NULL) AS dmas_with_signal,
+  ROUND(100 * SAFE_DIVIDE(COUNTIF(search_score = 100), COUNTIF(search_score IS NOT NULL)), 1) AS pct_dmas_at_peak
 FROM
-  `trends_gdelt_analytics.vw_topic_news_trends_unified`
-WHERE
-  country_code = 'US'
-  AND is_historical_peak = TRUE
-  AND date >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)
+  last_complete_week
+GROUP BY
+  week_start, search_term
+HAVING
+  dmas_at_peak > 0
 ORDER BY
-  date DESC, search_rank ASC;
+  dmas_at_peak DESC, national_rank;
 
 -- -----------------------------------------------------------------------------
 -- Query 3: Search Terms Trending During Negative Geopolitical News Events

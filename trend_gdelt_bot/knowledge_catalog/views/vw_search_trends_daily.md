@@ -1,7 +1,7 @@
 ---
 type: BigQuery View
 title: Daily Search Trends Semantic View
-description: Cleaned and standardized daily Google Trends top 25 search queries with country-aggregated scores and peak surge flags.
+description: Cleaned and standardized daily Google Trends top 25 search queries with country-aggregated scores and peak surge flags (international only — excludes the US).
 resource: bigquery:trends_gdelt_analytics.vw_search_trends_daily
 tags:
   - curated_view
@@ -11,6 +11,8 @@ tags:
 # Definition
 
 Aggregates [international_top_terms](/tables/international_top_terms) at the country and date level, **pinned to the latest trend week per snapshot** (each raw partition carries 5 years of weekly history). Standardizes scores across sub-national regions and tags terms currently at peak popularity.
+
+**Coverage:** international views exclude the US — `country_code = 'US'` returns no rows. Use the `vw_raw_trends_us_*` views (e.g. [vw_raw_trends_us_dma](/views/vw_raw_trends_us_dma)) for US questions.
 
 # Schema
 - `snapshot_date` (DATE) — Date of snapshot.

@@ -14,7 +14,7 @@
 -- normalization).
 CREATE OR REPLACE VIEW `trends_gdelt_analytics.vw_search_trends_daily`
 OPTIONS (
-  description = "Daily Top 25 search terms per country from Google Trends, pinned to the latest trend week per snapshot, with averaged regional scores and peak indicators."
+  description = "Daily Top 25 search terms per country from Google Trends, pinned to the latest trend week per snapshot, with averaged regional scores and peak indicators. International views exclude the US; use vw_raw_trends_us_* for US questions."
 ) AS
 WITH latest_week AS (
   SELECT *
@@ -48,7 +48,7 @@ GROUP BY
 ALTER VIEW `trends_gdelt_analytics.vw_search_trends_daily`
 ALTER COLUMN snapshot_date SET OPTIONS (description = "Date when the Trends snapshot was refreshed (partition key)."),
 ALTER COLUMN country_name SET OPTIONS (description = "Full English name of the country."),
-ALTER COLUMN country_code SET OPTIONS (description = "ISO 2-letter country code (e.g., 'US', 'GB', 'FR')."),
+ALTER COLUMN country_code SET OPTIONS (description = "ISO 2-letter country code (e.g., 'GB', 'JP', 'FR'). The US is not included; use vw_raw_trends_us_* for US questions."),
 ALTER COLUMN search_term SET OPTIONS (description = "The search query string that charted in top 25."),
 ALTER COLUMN rank SET OPTIONS (description = "Daily cross-sectional search popularity rank (1 = highest daily search volume, 25 = 25th highest)."),
 ALTER COLUMN search_score SET OPTIONS (description = "Relative search interest (0-100) for the latest trend week, normalized against the term's OWN historical peak share. 100 indicates peak volume."),
@@ -61,7 +61,7 @@ ALTER COLUMN active_regions_count SET OPTIONS (description = "Count of distinct 
 -- carry weekly history per refresh_date partition.
 CREATE OR REPLACE VIEW `trends_gdelt_analytics.vw_search_trends_rising`
 OPTIONS (
-  description = "Breakout and surging search terms with week-over-week percentage gain, pinned to the latest trend week per snapshot."
+  description = "Breakout and surging search terms with week-over-week percentage gain, pinned to the latest trend week per snapshot. International views exclude the US; use vw_raw_trends_us_* for US questions."
 ) AS
 WITH latest_week AS (
   SELECT *
@@ -93,7 +93,7 @@ GROUP BY
 ALTER VIEW `trends_gdelt_analytics.vw_search_trends_rising`
 ALTER COLUMN snapshot_date SET OPTIONS (description = "Date when the Trends snapshot was refreshed (partition key)."),
 ALTER COLUMN country_name SET OPTIONS (description = "Full English name of the country."),
-ALTER COLUMN country_code SET OPTIONS (description = "ISO 2-letter country code (e.g., 'US', 'GB', 'FR')."),
+ALTER COLUMN country_code SET OPTIONS (description = "ISO 2-letter country code (e.g., 'GB', 'JP', 'FR'). The US is not included; use vw_raw_trends_us_* for US questions."),
 ALTER COLUMN search_term SET OPTIONS (description = "The rising/breakout search query string."),
 ALTER COLUMN rank SET OPTIONS (description = "Rank of the term among the day's rising queries (1 = fastest riser)."),
 ALTER COLUMN search_score SET OPTIONS (description = "Relative search interest (0-100) for the latest trend week, normalized against the term's OWN historical peak share; 0 when volume is below reporting threshold."),

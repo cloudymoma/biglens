@@ -1,7 +1,7 @@
 ---
 type: BigQuery View
 title: Unified Topic & News Trends Mart
-description: Primary analytical mart joining daily Google search trends with GDELT geopolitical news context, tone, and conflict share by date and country.
+description: Primary analytical mart joining daily Google search trends with GDELT geopolitical news context, tone, and conflict share by date and country (international Trends only — excludes the US).
 resource: bigquery:trends_gdelt_analytics.vw_topic_news_trends_unified
 tags:
   - core_mart
@@ -12,6 +12,8 @@ tags:
 # Definition
 
 Joins [vw_search_trends_daily](/views/vw_search_trends_daily) with aggregated country news summaries from [vw_gdelt_news_events_daily](/views/vw_gdelt_news_events_daily) on ISO country code and date (GDELT's FIPS codes are already decoded to ISO in the events view via [dim_fips_iso_country](/tables/dim_fips_iso_country)). This is the default analytical view for the conversational AI agent.
+
+**Coverage:** the search side comes from Google Trends' international tables, and international views exclude the US — `country_code = 'US'` returns no rows (so US news context is not reachable here either; use [vw_gdelt_news_events_daily](/views/vw_gdelt_news_events_daily)). Use the `vw_raw_trends_us_*` views (e.g. [vw_raw_trends_us_dma](/views/vw_raw_trends_us_dma)) for US search questions.
 
 # Schema
 - `date` (DATE) — Snapshot calendar date.

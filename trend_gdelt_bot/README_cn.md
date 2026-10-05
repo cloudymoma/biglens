@@ -96,6 +96,9 @@ cd trend_gdelt_bot
 | **`dim_fips_iso_country`** | **国家维度：** FIPS 10-4 ↔ ISO 3166-1 国家代码对照表。 |
 | **`trend_gdelt_graph`**（属性图 - 预览） | **图模式匹配：** 原生属性图，用于跨国热词重叠、双边对比及扩散网络分析（ISO GQL / `GRAPH_TABLE`）。⚠️ **需要 BigQuery Enterprise（或 Enterprise Plus）版本预留** —— 按需计费下 `GRAPH_TABLE` 查询会被拒绝。 |
 
+> [!NOTE]
+> Tier 1 的 Trends 视图（以及基于它们的 `vw_topic_news_trends_unified` 和 `trend_gdelt_graph`）取自 Google Trends 的**国际**表，**不含美国**（`country_code = 'US'` 查不到任何行）。美国的搜索趋势问题请使用下方 Tier 2 的 `vw_raw_trends_us_*` 视图。
+
 #### 🔹 Tier 2：原始下钻代理视图（按明确请求使用 —— 深度历史与细粒度下钻）
 以下代理视图同样位于 `trends_gdelt_analytics` 中（由 `08_views_tier2_raw.sql` 部署），解锁 90 天精选窗口之外的深度下钻能力：
 
@@ -125,15 +128,16 @@ Always follow this Two-Tier routing hierarchy and domain rules:
 1. ROUTING HIERARCHY — TIER 1 (CURATED, DEFAULT):
    Always prefer the Tier 1 curated views for standard analytics, recent trends (last 90 days; GKG themes last 30 days), and cross-dataset correlations:
    - For macro correlations (search trends + country news context): Query `trends_gdelt_analytics.vw_topic_news_trends_unified`.
-   - For breakout/surging terms & % growth (e.g. rising queries in Japan/US): Query `trends_gdelt_analytics.vw_search_trends_rising`.
+   - For breakout/surging terms & % growth (e.g. rising queries in Japan): Query `trends_gdelt_analytics.vw_search_trends_rising`.
    - For daily search rankings & regional spread: Query `trends_gdelt_analytics.vw_search_trends_daily`.
    - For specific news events, actor dyads, or article URLs: Query `trends_gdelt_analytics.vw_gdelt_news_events_daily`.
    - For news themes & media outlets (last 30 days ONLY): Query `trends_gdelt_analytics.vw_gdelt_gkg_themes_daily`.
    - For country code conversions: Use `trends_gdelt_analytics.dim_fips_iso_country`.
    - Cross-country term overlap, bilateral comparisons, or graph diffusion networks: Query `trends_gdelt_analytics.trend_gdelt_graph` using GRAPH_TABLE and GQL pattern matching — ONLY if the project has an Enterprise/Enterprise Plus reservation. On on-demand billing GRAPH_TABLE fails; answer the same questions with self-joins or GROUP BY on `trends_gdelt_analytics.vw_search_trends_daily` instead.
+   - US EXCEPTION: the Tier 1 Trends views (and therefore `vw_topic_news_trends_unified` and the graph) come from Google Trends' international tables, which EXCLUDE the US — `country_code = 'US'` returns no rows. Route every US search-trend question to `trends_gdelt_analytics.vw_raw_trends_us_dma` (top terms) or `trends_gdelt_analytics.vw_raw_trends_us_dma_rising` (breakouts), or to the hourly views for "right now" questions (rule 3), even without an explicit drill-down request.
 
 2. ROUTING HIERARCHY — TIER 2 (RAW DRILL-DOWN, ON EXPLICIT REQUEST ONLY):
-   Use the Tier 2 raw proxy views ONLY when the user explicitly asks for data outside the Tier 1 windows or granularity:
+   Use the Tier 2 raw proxy views ONLY when the user explicitly asks for data outside the Tier 1 windows or granularity (exception: US search-trend questions always use the US views — see rule 1):
    - Multi-year historical trend trajectories per term: Query `trends_gdelt_analytics.vw_raw_trends_international_history`.
    - Region-level breakdown of rising terms (rank and percent_gain are country-level values repeated on every region row; compare regions by their own search_score): Query `trends_gdelt_analytics.vw_raw_trends_international_rising_history`.
    - US metro / Designated Market Area (DMA) breakdowns: Query `trends_gdelt_analytics.vw_raw_trends_us_dma` (top terms) or `trends_gdelt_analytics.vw_raw_trends_us_dma_rising` (breakouts with percent_gain).
@@ -176,7 +180,7 @@ Always follow this Two-Tier routing hierarchy and domain rules:
 
 其中的核心业务规则包括：
 
-* **双层路由：** 常规分析（近 90 天；GKG 主题近 30 天）一律走 Tier 1 精选视图；只有当用户明确要求更长历史、美国 DMA 都会区、地区级飙升明细或 GKG 人物/组织实体时，才下钻到 Tier 2 本地代理视图（`vw_raw_*`）。查询 GDELT 档案视图必须过滤 `partition_date`；查询 Trends 历史视图必须锁定最新 `snapshot_date` 再沿 `week` 展开曲线。
+* **双层路由：** 常规分析（近 90 天；GKG 主题近 30 天）一律走 Tier 1 精选视图；只有当用户明确要求更长历史、美国 DMA 都会区、地区级飙升明细或 GKG 人物/组织实体时，才下钻到 Tier 2 本地代理视图（`vw_raw_*`）。例外：Tier 1 的 Trends 视图取自国际表、不含美国，因此美国的搜索趋势问题即使没有要求下钻，也一律使用 `vw_raw_trends_us_dma` / `vw_raw_trends_us_dma_rising`（实时问题用小时级视图）。查询 GDELT 档案视图必须过滤 `partition_date`；查询 Trends 历史视图必须锁定最新 `snapshot_date` 再沿 `week` 展开曲线。
 * **实时例外：** 每日表滞后 1–2 天。美国"此刻/今天在搜什么"类问题应主动路由到小时级视图（`vw_raw_trends_us_hourly` / `vw_raw_trends_us_hourly_rising`，锁定 `snapshot_time = MAX(snapshot_time)`）；非美国的实时问题使用 Tier 1 最新快照并向用户说明滞后。
 * **国家代码防护：** GDELT 使用 FIPS 10-4，Trends 使用 ISO 3166-1（FIPS 的 `GB` 是加蓬、ISO 的 `GB` 是英国！），二者绝不能直接 JOIN，必须经 `dim_fips_iso_country` 转换。
 * **Rank 与 Score 的区别：** `search_rank`（1–25）是当日绝对搜索量的横向排名；`search_score`（0–100）是相对该词自身历史峰值的热度（100 = 创历史新高）。排名第 1 不代表分数 100。
@@ -203,12 +207,28 @@ Always follow this Two-Tier routing hierarchy and domain rules:
     AND country_avg_tone < -2.0 AND conflict_event_share_pct > 30.0
   ORDER BY conflict_event_share_pct DESC, search_rank ASC LIMIT 20;
   ```
-* **历史峰值爆发词：**
+* **美国上周创历史（5 年）峰值的词（Tier 2 —— Tier 1 不含美国）：**
   ```sql
-  SELECT date, search_term, search_rank, search_score
-  FROM `trends_gdelt_analytics.vw_topic_news_trends_unified`
-  WHERE country_code = 'US' AND is_historical_peak = TRUE AND date >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)
-  ORDER BY date DESC, search_rank ASC;
+  WITH latest_snapshot AS (
+    SELECT snapshot_date, week, search_term, rank, search_score
+    FROM `trends_gdelt_analytics.vw_raw_trends_us_dma`
+    WHERE snapshot_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 3 DAY)
+    QUALIFY snapshot_date = MAX(snapshot_date) OVER ()
+  ),
+  last_complete_week AS (
+    SELECT week, search_term, rank, search_score
+    FROM latest_snapshot
+    WHERE DATE_ADD(week, INTERVAL 6 DAY) < snapshot_date
+    QUALIFY week = MAX(week) OVER ()
+  )
+  SELECT week AS week_start, search_term, ANY_VALUE(rank) AS national_rank,
+         COUNTIF(search_score = 100) AS dmas_at_peak,
+         COUNTIF(search_score IS NOT NULL) AS dmas_with_signal,
+         ROUND(100 * SAFE_DIVIDE(COUNTIF(search_score = 100), COUNTIF(search_score IS NOT NULL)), 1) AS pct_dmas_at_peak
+  FROM last_complete_week
+  GROUP BY week_start, search_term
+  HAVING dmas_at_peak > 0
+  ORDER BY dmas_at_peak DESC, national_rank;
   ```
 * **Tier 2 下钻 —— 5 年趋势曲线（锁定快照、沿周展开）：**
   ```sql
@@ -261,7 +281,7 @@ Always follow this Two-Tier routing hierarchy and domain rules:
 在 BigQuery 对话界面中用以下提问测试智能体（中英文提问均可）：
 
 1. *"最新快照中英国排名前 10 的搜索词是什么？"*
-2. *"过去一周美国有哪些搜索词达到了历史峰值热度（分数 100）？"*
+2. *"美国的热搜词里，哪些在上周创下了历史（5 年）新高？分别在多少个都会区？"*（Tier 2 美国 DMA —— Tier 1 视图不含美国；期望使用 `vw_raw_trends_us_dma`，统计最近一个完整周 `search_score = 100` 的都会区数）
 3. *"哪些国家的新闻情绪明显负面（Tone < -2.0）且冲突占比高？这些国家的人们在搜索什么？"*
 4. *"过去 7 天有哪些搜索词同时在 3 个及以上国家上榜？"*
 5. *"为什么排名第 12 的词分数是 100，而排名第 1 的词分数只有 70？"*
