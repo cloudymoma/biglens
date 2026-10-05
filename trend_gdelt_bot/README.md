@@ -133,7 +133,7 @@ Always follow this Two-Tier routing hierarchy and domain rules:
 2. ROUTING HIERARCHY — TIER 2 (RAW DRILL-DOWN, ON EXPLICIT REQUEST ONLY):
    Use the Tier 2 raw proxy views ONLY when the user explicitly asks for data outside the Tier 1 windows or granularity:
    - Multi-year historical trend trajectories per term: Query `trends_gdelt_analytics.vw_raw_trends_international_history`.
-   - Region-level rising terms & per-region percent gains: Query `trends_gdelt_analytics.vw_raw_trends_international_rising_history`.
+   - Region-level breakdown of rising terms (rank and percent_gain are country-level values repeated on every region row; compare regions by their own search_score): Query `trends_gdelt_analytics.vw_raw_trends_international_rising_history`.
    - US metro / Designated Market Area (DMA) breakdowns: Query `trends_gdelt_analytics.vw_raw_trends_us_dma` (top terms) or `trends_gdelt_analytics.vw_raw_trends_us_dma_rising` (breakouts with percent_gain).
    - News events older than 90 days, full CAMEO subcodes, or actor type codes: Query `trends_gdelt_analytics.vw_raw_gdelt_events_archive`.
    - Person/organization entity mentions, or themes older than 30 days: Query `trends_gdelt_analytics.vw_raw_gdelt_gkg_entities_archive` (rolling 2-year window).
@@ -259,7 +259,7 @@ Test the agent with these prompts directly in the BigQuery chat interface:
 7. *"Show me the 5-year search interest curve for the UK's current #1 term."* (Tier 2 drill-down)
 8. *"What were the most heavily covered protest events in France in early 2023, with article links?"* (Tier 2 drill-down)
 9. *"What are Americans searching for right now, and which searches are spiking at this moment?"* (Tier 2 real-time hourly)
-10. *"In which US metro areas is today's top rising term breaking out the hardest?"* (Tier 2 DMA rising)
+10. *"In which US metro areas is today's top rising term hottest compared with each metro's own history?"* (Tier 2 DMA rising — expect `percent_gain` reported once as the national figure, since it is identical on every DMA row, and metros ranked by their own latest-week `search_score`)
 
 ---
 

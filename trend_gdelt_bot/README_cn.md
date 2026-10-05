@@ -135,7 +135,7 @@ Always follow this Two-Tier routing hierarchy and domain rules:
 2. ROUTING HIERARCHY — TIER 2 (RAW DRILL-DOWN, ON EXPLICIT REQUEST ONLY):
    Use the Tier 2 raw proxy views ONLY when the user explicitly asks for data outside the Tier 1 windows or granularity:
    - Multi-year historical trend trajectories per term: Query `trends_gdelt_analytics.vw_raw_trends_international_history`.
-   - Region-level rising terms & per-region percent gains: Query `trends_gdelt_analytics.vw_raw_trends_international_rising_history`.
+   - Region-level breakdown of rising terms (rank and percent_gain are country-level values repeated on every region row; compare regions by their own search_score): Query `trends_gdelt_analytics.vw_raw_trends_international_rising_history`.
    - US metro / Designated Market Area (DMA) breakdowns: Query `trends_gdelt_analytics.vw_raw_trends_us_dma` (top terms) or `trends_gdelt_analytics.vw_raw_trends_us_dma_rising` (breakouts with percent_gain).
    - News events older than 90 days, full CAMEO subcodes, or actor type codes: Query `trends_gdelt_analytics.vw_raw_gdelt_events_archive`.
    - Person/organization entity mentions, or themes older than 30 days: Query `trends_gdelt_analytics.vw_raw_gdelt_gkg_entities_archive` (rolling 2-year window).
@@ -269,7 +269,7 @@ Always follow this Two-Tier routing hierarchy and domain rules:
 7. *"展示英国当前排名第 1 的搜索词过去 5 年的热度曲线。"*（Tier 2 下钻）
 8. *"2023 年初法国报道量最高的抗议事件有哪些？附文章链接。"*（Tier 2 下钻）
 9. *"美国人此刻在搜什么？哪些搜索正在飙升？"*（Tier 2 实时小时级）
-10. *"今天排名第一的飙升词在哪些美国都会区爆发最猛？"*（Tier 2 DMA 飙升）
+10. *"今天排名第一的飙升词，在哪些美国都会区的热度相对当地历史水平最高？"*（Tier 2 DMA 飙升 —— `percent_gain` 是全国值、每个 DMA 行都相同，期望只作为全国涨幅出现一次，都会区按各自最新周的 `search_score` 排序）
 
 ---
 

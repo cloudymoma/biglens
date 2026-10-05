@@ -239,68 +239,133 @@ ORDER BY
 LIMIT 25;
 
 -- -----------------------------------------------------------------------------
--- Query 11 (TIER 2 / REAL-TIME): US Terms Breaking Out RIGHT NOW
+-- Query 11 (TIER 2 / REAL-TIME): US Terms Breaking Out RIGHT NOW, and Where
 -- Intent: "Which searches are spiking/breaking out in the US at this moment, and where?"
+-- Note: percent_gain and rank are NATIONAL values repeated on every DMA row,
+-- and every term has a row in all ~210 DMAs (NULL score = below Google's
+-- reporting threshold), so COUNT(DISTINCT dma_name) is ~210 for every term.
+-- "Where" comes from each DMA's own latest-week search_score: how many DMAs
+-- report a score, how many are at their local peak (100), and the hottest
+-- DMAs (ties broken by the week-over-week change of their score).
+-- Limitations: a DMA's score is relative to that DMA's own ~1-year peak for
+-- the term (how unusual local interest is, not search volume); the latest
+-- week is still in progress (it can hold a single day early in the week),
+-- which can push a one-day spike to 100 in most DMAs at once.
+-- The constant 2-day bound + QUALIFY pins the latest snapshot and keeps
+-- partition pruning; a filter like = (SELECT MAX(snapshot_time) ...) would
+-- scan all partitions.
 -- -----------------------------------------------------------------------------
 WITH latest_snapshot AS (
-  SELECT *
+  SELECT week, dma_name, search_term, rank, percent_gain, search_score
   FROM `trends_gdelt_analytics.vw_raw_trends_us_hourly_rising`
-  WHERE snapshot_time = (SELECT MAX(snapshot_time) FROM `trends_gdelt_analytics.vw_raw_trends_us_hourly_rising`)
+  WHERE snapshot_time >= DATETIME_SUB(CURRENT_DATETIME(), INTERVAL 2 DAY)
+  QUALIFY snapshot_time = MAX(snapshot_time) OVER ()
+),
+latest_week AS (
+  SELECT
+    dma_name, search_term, rank, percent_gain, search_score,
+    search_score - LAG(search_score) OVER (PARTITION BY search_term, dma_name ORDER BY week) AS dma_score_wow_change
+  FROM latest_snapshot
   QUALIFY week = MAX(week) OVER ()
 )
 SELECT
   search_term,
-  MAX(percent_gain) AS max_percent_gain,
-  COUNT(DISTINCT dma_name) AS rising_dma_count,
-  STRING_AGG(DISTINCT dma_name ORDER BY dma_name LIMIT 5) AS sample_dmas
+  ANY_VALUE(percent_gain) AS national_percent_gain,  -- same value on every DMA row
+  ANY_VALUE(rank) AS national_rank,
+  COUNTIF(search_score IS NOT NULL) AS dmas_with_signal,
+  COUNTIF(search_score = 100) AS dmas_at_local_peak,
+  ARRAY_AGG(
+    IF(search_score IS NOT NULL, STRUCT(dma_name, search_score, dma_score_wow_change), NULL)
+    IGNORE NULLS
+    -- ties: DMAs below threshold last week (NULL change) first, then the biggest rise
+    ORDER BY search_score DESC, dma_score_wow_change IS NULL DESC, dma_score_wow_change DESC, dma_name
+    LIMIT 5
+  ) AS hottest_dmas
 FROM
-  latest_snapshot
+  latest_week
 GROUP BY
   search_term
 ORDER BY
-  max_percent_gain DESC
+  national_percent_gain DESC, national_rank
 LIMIT 15;
 
 -- -----------------------------------------------------------------------------
--- Query 12 (TIER 2): Where a Term Is Rising — US Metro (DMA) Breakout Map
+-- Query 12 (TIER 2): Where Today's Top Rising Term Is Hottest — US Metros (DMA)
 -- Intent: "In which US metro areas is the top rising term breaking out the hardest?"
+-- Note: rank and percent_gain are NATIONAL values repeated unchanged on every
+-- DMA row (the table is a full term x ~210-DMA grid), so ORDER BY percent_gain
+-- only returns arbitrary metros. Report percent_gain once, as the national
+-- figure, and rank metros by their OWN latest-week search_score, with the
+-- week-over-week change of that score as a local "warming" proxy.
+-- Limitations: a DMA's score is relative to that DMA's own ~5-year peak for
+-- the term (how unusual local interest is, not search volume); NULL = below
+-- Google's reporting threshold (dropped, never treated as 0); the latest week
+-- is still in progress, and many metros can tie at 100 (their own peak),
+-- hence the tie-breakers.
+-- The constant 3-day bound (Trends publishes with a 1-2 day lag) + QUALIFY
+-- pins the latest snapshot and keeps partition pruning; a filter like
+-- = (SELECT MAX(snapshot_date) ...) would scan all partitions.
 -- -----------------------------------------------------------------------------
+WITH top_riser AS (
+  SELECT snapshot_date, week, dma_name, search_term, percent_gain, search_score
+  FROM `trends_gdelt_analytics.vw_raw_trends_us_dma_rising`
+  WHERE snapshot_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 3 DAY)
+    AND rank = 1  -- the national #1 rising term
+  QUALIFY snapshot_date = MAX(snapshot_date) OVER ()
+)
 SELECT
   search_term,
   dma_name,
-  percent_gain,
-  rank
+  percent_gain AS national_percent_gain,  -- same value on every DMA row
+  search_score AS dma_score_latest_week,
+  search_score - LAG(search_score) OVER (PARTITION BY search_term, dma_name ORDER BY week) AS dma_score_wow_change
 FROM
-  `trends_gdelt_analytics.vw_raw_trends_us_dma_rising`
-WHERE
-  snapshot_date = (SELECT MAX(snapshot_date) FROM `trends_gdelt_analytics.vw_raw_trends_us_dma_rising`)
-  AND rank = 1
+  top_riser
 QUALIFY
   week = MAX(week) OVER ()
+  AND search_score IS NOT NULL
 ORDER BY
-  percent_gain DESC
+  dma_score_latest_week DESC,
+  dma_score_wow_change DESC NULLS FIRST,  -- NULL = below threshold last week (newly emerged)
+  dma_name
 LIMIT 20;
 
 -- -----------------------------------------------------------------------------
--- Query 13 (TIER 2): Region-Level Rising Terms Inside a Country
+-- Query 13 (TIER 2): Where a Country's Top Breakout Query Is Hottest — Regions
 -- Intent: "Which regions of Japan are driving today's biggest breakout query?"
--- Note: Tier 1 vw_search_trends_rising aggregates regions away — this view
--- keeps the per-region percent_gain.
+-- Note: Tier 1 vw_search_trends_rising aggregates regions away; this view
+-- keeps one row per region, but rank and percent_gain are COUNTRY-level
+-- values repeated on every region row, so they only identify the country's
+-- #1 rising term. Regions are compared by their own latest-week search_score
+-- and its week-over-week change. Same limitations and pruning pattern as
+-- Query 12: scores are relative to each region's own ~5-year peak (how
+-- unusual local interest is, not search volume, so the data cannot say which
+-- region contributes the most searches), NULL = below the reporting
+-- threshold, and the latest week is still in progress.
 -- -----------------------------------------------------------------------------
+WITH top_breakout AS (
+  SELECT snapshot_date, week, region_name, search_term, percent_gain, search_score
+  FROM `trends_gdelt_analytics.vw_raw_trends_international_rising_history`
+  WHERE snapshot_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 3 DAY)
+    AND country_code = 'JP'
+    AND rank = 1  -- the country's #1 rising term
+  QUALIFY snapshot_date = MAX(snapshot_date) OVER ()
+)
 SELECT
   search_term,
   region_name,
-  percent_gain,
-  search_score
+  percent_gain AS national_percent_gain,  -- same value on every region row
+  search_score AS region_score_latest_week,
+  search_score - LAG(search_score) OVER (PARTITION BY search_term, region_name ORDER BY week) AS region_score_wow_change
 FROM
-  `trends_gdelt_analytics.vw_raw_trends_international_rising_history`
-WHERE
-  snapshot_date = (SELECT MAX(snapshot_date) FROM `trends_gdelt_analytics.vw_raw_trends_international_rising_history`)
-  AND country_code = 'JP'
+  top_breakout
 QUALIFY
   week = MAX(week) OVER ()
+  AND search_score IS NOT NULL
 ORDER BY
-  percent_gain DESC
+  region_score_latest_week DESC,
+  region_score_wow_change DESC NULLS FIRST,  -- NULL = below threshold last week (newly emerged)
+  region_name
 LIMIT 20;
 
 -- Query 14 (graph traversal via GRAPH_TABLE) lives in 07_graph_golden_query.sql:
