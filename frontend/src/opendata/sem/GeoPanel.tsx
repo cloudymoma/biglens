@@ -25,30 +25,39 @@ interface GeoPanelProps {
   refreshDate: string;
   geo: string; // country code in global mode; unused for us (always national)
   term: string;
+  source?: string;
 }
 
-export default function GeoPanel({ market, refreshDate, geo, term }: GeoPanelProps) {
+export default function GeoPanel({ market, refreshDate, geo, term, source = '' }: GeoPanelProps) {
   const [rows, setRows] = useState<SemGeoRow[]>([]);
   const [week, setWeek] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!term || !refreshDate || (market === 'global' && !geo)) return;
+    if (!term || !refreshDate || (market === 'global' && (!geo || geo.length !== 2))) return;
+    let cancelled = false;
     setLoading(true);
     setError('');
-    fetchSemGeo(market, refreshDate, geo, term)
+    fetchSemGeo(market, refreshDate, geo, term, source)
       .then(d => {
+        if (cancelled) return;
         setRows(d.rows);
         setWeek(d.week);
       })
-      .catch(e => setError(e.response?.data || e.message))
-      .finally(() => setLoading(false));
-  }, [market, refreshDate, geo, term]);
+      .catch(e => {
+        if (!cancelled) setError(e.response?.data || e.message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [market, refreshDate, geo, term, source]);
 
   // Geos Trends reported a score for; rows arrive sorted by score with the
   // nulls last, so this keeps the strongest geos first.
   const scored = useMemo(() => rows.filter((r): r is ScoredGeoRow => r.score !== null), [rows]);
+  const risingRank = useMemo(() => rows.find(r => r.rising_rank > 0)?.rising_rank ?? 0, [rows]);
 
   const geoUnit = market === 'us' ? 'DMA' : 'Region';
   const geoNoun = market === 'us' ? 'DMA' : 'region';
@@ -58,6 +67,11 @@ export default function GeoPanel({ market, refreshDate, geo, term }: GeoPanelPro
     <div className="rounded-2xl border border-zinc-800/50 p-6" style={{ background: '#111114' }}>
       <h3 className="text-sm font-semibold text-white mb-1 flex items-center gap-2">
         <MapPin size={14} className="text-emerald-400" /> Geo Interest
+        {risingRank > 0 && (
+          <span className="text-[10px] font-mono font-normal px-1.5 py-0.5 rounded border border-amber-500/30 bg-amber-500/5 text-amber-400">
+            {market === 'us' ? 'National' : 'Country'} rising rank #{risingRank}
+          </span>
+        )}
       </h3>
       <p className="text-xs text-zinc-500 mb-4">
         Search interest in <span className="text-zinc-300">“{term}”</span> by {geoNoun}
@@ -91,7 +105,6 @@ export default function GeoPanel({ market, refreshDate, geo, term }: GeoPanelPro
                       Score
                     </span>
                   </th>
-                  <th className="py-2 pr-4 text-right">Rising Rank</th>
                 </tr>
               </thead>
               <tbody>
@@ -105,9 +118,6 @@ export default function GeoPanel({ market, refreshDate, geo, term }: GeoPanelPro
                           insufficient data
                         </span>
                       )}
-                    </td>
-                    <td className="py-1.5 pr-4 text-right font-mono text-zinc-500">
-                      {r.rising_rank > 0 ? `#${r.rising_rank}` : '—'}
                     </td>
                   </tr>
                 ))}

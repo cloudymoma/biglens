@@ -55,6 +55,7 @@ export default function SemDashboard() {
   // W2 follows the selected term (defaults to the top gainer); W6 opens only
   // on an explicit term click from W1/W4/W5.
   const [selectedTerm, setSelectedTerm] = useState('');
+  const [selectedSource, setSelectedSource] = useState<'rising' | 'top' | ''>('');
   const [drillOpen, setDrillOpen] = useState(false);
 
   // W3 market-level news context; the overlay toggle applies it to W1/W4.
@@ -65,12 +66,35 @@ export default function SemDashboard() {
 
   const gainThreshold = sliderToGain(velocity);
 
+  function deriveSource(row?: SemMatrixRow): 'rising' | 'top' | '' {
+    if (!row) return '';
+    if (row.rising_rank > 0 && row.volume_rank > 0) return '';
+    if (row.rising_rank > 0) return 'rising';
+    if (row.volume_rank > 0) return 'top';
+    return '';
+  }
+
+  function switchMarket(nextMarket: SemMarket) {
+    if (nextMarket === market) return;
+    setGeo('');
+    setRefreshDate('');
+    setMeta(null);
+    setMetaError('');
+    setRows([]);
+    setSelectedTerm('');
+    setSelectedSource('');
+    setDrillOpen(false);
+    setMarket(nextMarket);
+  }
+
   useEffect(() => {
+    let cancelled = false;
     setMeta(null);
     setMetaError('');
     setGeo('');
     fetchSemMeta(market)
       .then(m => {
+        if (cancelled) return;
         setMeta(m);
         setRefreshDate(m.latest_refresh_date);
         if (market === 'global') {
@@ -79,37 +103,63 @@ export default function SemDashboard() {
           setGeo(preferred || codes[0] || '');
         }
       })
-      .catch(e => setMetaError(e.response?.data || e.message));
+      .catch(e => {
+        if (!cancelled) setMetaError(e.response?.data || e.message);
+      });
+    return () => { cancelled = true; };
   }, [market]);
 
   useEffect(() => {
-    if (!refreshDate || (market === 'global' && !geo)) return;
+    if (!refreshDate || (market === 'global' && (!geo || geo.length !== 2))) return;
+    let cancelled = false;
     setLoading(true);
     setError('');
     setChecked({});
     fetchSemDashboard(market, refreshDate, geo)
       .then(d => {
+        if (cancelled) return;
         setRows(d.matrix);
-        setSelectedTerm(d.matrix[0]?.term ?? '');
+        const first = d.matrix[0];
+        setSelectedTerm(first?.term ?? '');
+        setSelectedSource(deriveSource(first));
         setDrillOpen(false);
       })
-      .catch(e => setError(e.response?.data || e.message))
-      .finally(() => setLoading(false));
+      .catch(e => {
+        if (!cancelled) setError(e.response?.data || e.message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
   }, [market, refreshDate, geo]);
 
-  function selectTerm(term: string) {
+  function selectTerm(term: string, sourceHint?: 'rising' | 'top' | '') {
     setSelectedTerm(term);
+    if (sourceHint !== undefined) {
+      setSelectedSource(sourceHint);
+    } else {
+      const matched = rows.find(r => r.term === term);
+      setSelectedSource(deriveSource(matched));
+    }
     setDrillOpen(true);
   }
 
   useEffect(() => {
-    if (market === 'global' && !geo) return;
+    if (market === 'global' && (!geo || geo.length !== 2)) return;
+    let cancelled = false;
     setSafetyLoading(true);
     setSafetyError('');
     fetchSemSafety(market, geo)
-      .then(d => setSafetyRows(d.rows))
-      .catch(e => setSafetyError(e.response?.data || e.message))
-      .finally(() => setSafetyLoading(false));
+      .then(d => {
+        if (!cancelled) setSafetyRows(d.rows);
+      })
+      .catch(e => {
+        if (!cancelled) setSafetyError(e.response?.data || e.message);
+      })
+      .finally(() => {
+        if (!cancelled) setSafetyLoading(false);
+      });
+    return () => { cancelled = true; };
   }, [market, geo]);
 
   const safetyStatus = useMemo(() => computeSafetyStatus(safetyRows), [safetyRows]);
@@ -163,7 +213,7 @@ export default function SemDashboard() {
             {(['us', 'global'] as SemMarket[]).map(m => (
               <button
                 key={m}
-                onClick={() => setMarket(m)}
+                onClick={() => switchMarket(m)}
                 className={`px-3 py-2 text-xs cursor-pointer transition-colors ${
                   market === m ? 'text-cyan-400 bg-cyan-500/10' : 'text-zinc-500 hover:text-zinc-300'
                 }`}
@@ -223,8 +273,8 @@ export default function SemDashboard() {
           Brand-safety overlay
         </label>
 
-        <p className="text-[10px] text-zinc-600 ml-auto self-center max-w-[240px] leading-relaxed">
-          Rising searches joined against the top-25 chart of the same snapshot. Unranked + high velocity = bid before CPCs catch up.
+        <p className="text-[10px] text-zinc-600 ml-auto self-center max-w-[260px] leading-relaxed">
+          Rising-25 searches joined against the top-25 chart of the same snapshot (most breakouts are not yet in the top 25). Unranked + high velocity = bid before CPCs catch up.
         </p>
       </div>
 
@@ -238,7 +288,7 @@ export default function SemDashboard() {
             <MetricCard label="Top Breakout" value={topGainer ? `+${topGainer.percent_gain.toLocaleString()}%` : '—'}
               icon={<Flame size={18} />} detail={topGainer?.term || 'No rising terms'} accentColor="#fbbf24" />
             <MetricCard label="Arbitrage Keywords" value={String(unrankedCount)} icon={<Zap size={18} />}
-              detail="Rising but not yet in the top 25" accentColor="#38bdf8" />
+              detail="Rising-25 terms not yet in the top-25 chart" accentColor="#38bdf8" />
             <MetricCard label="Rising Terms" value={String(filtered.length)} icon={<Megaphone size={18} />}
               detail={`In ${geoLabel}`} accentColor="#34d399" />
             <MetricCard label="Snapshot" value={refreshDate} icon={<CalendarDays size={18} />}
@@ -251,7 +301,8 @@ export default function SemDashboard() {
               <h3 className="text-sm font-semibold text-white mb-1">Breakout Keyword Matrix</h3>
               <p className="text-xs text-zinc-500 mb-4">
                 Momentum (week-over-week gain, log scale) vs mainstream volume rank in {geoLabel}.
-                Left = not charting yet · bubble size = search score · amber = arbitrage zone.
+                {market === 'us' && geo && ' Note: in US DMA mode, velocity and volume rank reflect the national chart while score and active DMAs reflect the selected metro.'}{' '}
+                Left = not in top 25 yet (most rising-25 breakouts sit here) · bubble size = search score · amber = arbitrage zone.
                 Click a bubble to drill down.
               </p>
               {filtered.length > 0 ? (
@@ -262,7 +313,7 @@ export default function SemDashboard() {
                     notMerge
                     onEvents={{
                       click: (params: { data?: MatrixDatum }) => {
-                        if (params.data?.row) selectTerm(params.data.row.term);
+                        if (params.data?.row) selectTerm(params.data.row.term, deriveSource(params.data.row));
                       },
                     }}
                   />
@@ -273,7 +324,7 @@ export default function SemDashboard() {
             </div>
 
             {selectedTerm ? (
-              <GeoPanel market={market} refreshDate={refreshDate} geo={geo} term={selectedTerm} />
+              <GeoPanel market={market} refreshDate={refreshDate} geo={geo} term={selectedTerm} source={selectedSource} />
             ) : (
               <div className="rounded-2xl border border-zinc-800/50 p-6" style={{ background: '#111114' }}>
                 <EmptyState text="Select a term to see its geo interest" />
@@ -288,6 +339,7 @@ export default function SemDashboard() {
               refreshDate={refreshDate}
               geo={geo}
               term={selectedTerm}
+              source={selectedSource}
               onClose={() => setDrillOpen(false)}
             />
           )}
@@ -346,7 +398,7 @@ export default function SemDashboard() {
                       <th className="py-2 pr-4 text-right">Volume Rank</th>
                       <th className="py-2 pr-4 text-right">Score</th>
                       <th className="py-2 pr-4 text-right">
-                        <span className="inline-flex items-center gap-1"><MapPin size={9} />{market === 'us' ? 'DMAs' : 'Regions'}</span>
+                        <span className="inline-flex items-center gap-1"><MapPin size={9} />{market === 'us' ? 'Active DMAs' : 'Active Regions'}</span>
                       </th>
                     </tr>
                   </thead>
@@ -364,7 +416,7 @@ export default function SemDashboard() {
                         </td>
                         <td className="py-1.5 pr-4">
                           <button
-                            onClick={() => selectTerm(r.term)}
+                            onClick={() => selectTerm(r.term, deriveSource(r))}
                             className="text-zinc-300 hover:text-cyan-400 transition-colors cursor-pointer text-left"
                             title="Drill down"
                           >
@@ -380,7 +432,11 @@ export default function SemDashboard() {
                           )}
                         </td>
                         <td className="py-1.5 pr-4 text-right font-mono text-zinc-500">
-                          {r.score > 0 ? r.score : <span className="text-violet-400 text-[10px]">new</span>}
+                          {r.score > 0 ? r.score : (
+                            <span className="text-zinc-600 text-[10px]" title="No measurable sub-region score reported in the latest complete week">
+                              low vol
+                            </span>
+                          )}
                         </td>
                         <td className="py-1.5 pr-4 text-right font-mono text-zinc-500">{r.geo_spread}</td>
                       </tr>
@@ -395,7 +451,7 @@ export default function SemDashboard() {
           </div>
 
           {/* W5: US real-time hourly pulse */}
-          {market === 'us' && <PulsePanel onSelectTerm={selectTerm} />}
+          {market === 'us' && <PulsePanel onSelectTerm={term => selectTerm(term, '')} />}
         </>
       )}
     </div>
@@ -428,8 +484,8 @@ function matrixOption(rows: SemMatrixRow[], overlayLevel: SafetyLevel | null) {
     return `<div style="font-weight:600;color:#f4f4f5;font-size:12px;margin-bottom:4px">${r.term}</div>
       <div style="color:#fbbf24">+${r.percent_gain.toLocaleString()}% week-over-week</div>
       <div style="color:#a1a1aa">Volume rank: ${r.volume_rank > 0 ? `#${r.volume_rank}` : 'not in top 25'}</div>
-      <div style="color:#a1a1aa">Score: ${r.score > 0 ? `${r.score}/100` : 'too new to score'}</div>
-      <div style="color:#a1a1aa">Rising in ${r.geo_spread} geo${r.geo_spread === 1 ? '' : 's'}</div>`;
+      <div style="color:#a1a1aa">Score: ${r.score > 0 ? `${r.score}/100` : 'no measurable score this week'}</div>
+      <div style="color:#a1a1aa">Active in ${r.geo_spread} geo${r.geo_spread === 1 ? '' : 's'}</div>`;
   };
 
   return {

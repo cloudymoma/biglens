@@ -4,6 +4,7 @@ package main
 // /api/opendata/sem/{meta,dashboard,geo,pulse,term}.
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -26,7 +27,8 @@ type SemMeta struct {
 }
 
 // SemMeta serves partition dates plus the geo list for the selected market so
-// the frontend can populate its filters in one call.
+// the frontend can populate its filters in one call, sharing the underlying
+// per-market meta cache with TrendsMetaHandler.
 func (h *APIHandler) SemMeta(w http.ResponseWriter, r *http.Request) {
 	market, err := parseSemMarket(r)
 	if err != nil {
@@ -40,47 +42,28 @@ func (h *APIHandler) SemMeta(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var dates []string
-	if market == semMarketUS {
-		dates, err = h.bq.GetSemUSRefreshDates(r.Context())
-	} else {
-		dates, err = h.bq.GetTrendsRefreshDates(r.Context())
-	}
-	if err != nil {
-		writeError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
 	data := &SemMeta{RefreshDates: []string{}, Countries: []TrendsCountry{}, DMAs: []SemDMA{}}
-	if len(dates) == 0 {
-		writeJSON(w, data)
-		return
-	}
-
-	latest, err := civil.ParseDate(dates[0])
-	if err != nil {
-		writeError(w, fmt.Sprintf("unexpected refresh_date %q: %v", dates[0], err), http.StatusInternalServerError)
-		return
-	}
-	data.LatestRefreshDate = dates[0]
-	data.RefreshDates = dates
-
 	if market == semMarketUS {
-		dmas, err := h.bq.GetSemDMAs(r.Context(), latest)
+		us, err := h.getTrendsUSMeta(r.Context())
 		if err != nil {
 			writeError(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		data.DMAs = dmas
+		data.LatestRefreshDate = us.LatestRefreshDate
+		data.RefreshDates = us.RefreshDates
+		data.DMAs = us.DMAs
 	} else {
-		countries, err := h.bq.GetTrendsCountries(r.Context(), latest)
+		gl, err := h.getTrendsGlobalMeta(r.Context())
 		if err != nil {
 			writeError(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		data.Countries = countries
+		data.LatestRefreshDate = gl.LatestRefreshDate
+		data.RefreshDates = gl.RefreshDates
+		data.Countries = gl.Countries
 	}
 
-	h.cache.Set(key, data)
+	h.cache.SetWithTTL(key, data, trendsMetaTTL)
 	writeJSON(w, data)
 }
 
@@ -102,10 +85,13 @@ func (h *APIHandler) SemDashboard(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	geo := r.URL.Query().Get("geo")
-	if market == semMarketGlobal && geo == "" {
-		writeError(w, "geo (country code) is required for the global market", http.StatusBadRequest)
-		return
+	geo := strings.TrimSpace(r.URL.Query().Get("geo"))
+	if market == semMarketGlobal {
+		geo = strings.ToUpper(geo)
+		if geo == "" {
+			writeError(w, "geo (country code) is required for the global market", http.StatusBadRequest)
+			return
+		}
 	}
 
 	key := fmt.Sprintf("opendata:sem_dashboard:%s:%s:%s", market, refreshDate, geo)
@@ -114,23 +100,33 @@ func (h *APIHandler) SemDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var matrix []SemMatrixRow
-	if market == semMarketUS {
-		matrix, err = h.bq.GetSemMatrixUS(r.Context(), refreshDate, geo)
-	} else {
-		matrix, err = h.bq.GetSemMatrixGlobal(r.Context(), refreshDate, geo)
-	}
+	v, err, _ := trendsFlight.Do(key, func() (any, error) {
+		if cached, ok := h.cache.Get(key); ok {
+			return cached, nil
+		}
+		qctx := context.WithoutCancel(r.Context())
+		var matrix []SemMatrixRow
+		var err error
+		if market == semMarketUS {
+			matrix, err = h.bq.GetSemMatrixUS(qctx, refreshDate, geo)
+		} else {
+			matrix, err = h.bq.GetSemMatrixGlobal(qctx, refreshDate, geo)
+		}
+		if err != nil {
+			return nil, err
+		}
+		if matrix == nil {
+			matrix = []SemMatrixRow{}
+		}
+		data := &SemDashboardData{Matrix: matrix}
+		h.cache.SetWithTTL(key, data, trendsSnapshotTTL)
+		return data, nil
+	})
 	if err != nil {
 		writeError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if matrix == nil {
-		matrix = []SemMatrixRow{}
-	}
-
-	data := &SemDashboardData{Matrix: matrix}
-	h.cache.Set(key, data)
-	writeJSON(w, data)
+	writeJSON(w, v)
 }
 
 type SemGeoData struct {
@@ -147,36 +143,51 @@ func (h *APIHandler) SemGeo(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	source := parseSemTermSource(r)
 
-	key := fmt.Sprintf("opendata:sem_geo:%s:%s:%s:%s", market, refreshDate, geo, strings.ToLower(term))
+	// US geo breakdown is always across all 210 DMAs, so omit geo from the US cache key.
+	geoKey := ""
+	if market == semMarketGlobal {
+		geoKey = strings.ToUpper(geo)
+	}
+	key := fmt.Sprintf("opendata:sem_geo:%s:%s:%s:%s:%s", market, refreshDate, geoKey, source, strings.ToLower(term))
 	if cached, ok := h.cache.Get(key); ok {
 		writeJSON(w, cached)
 		return
 	}
 
-	var rows []SemGeoRow
-	var err error
-	if market == semMarketUS {
-		rows, err = h.bq.GetSemGeoUS(r.Context(), refreshDate, term)
-	} else {
-		rows, err = h.bq.GetSemGeoGlobal(r.Context(), refreshDate, geo, term)
-	}
+	v, err, _ := trendsFlight.Do(key, func() (any, error) {
+		if cached, ok := h.cache.Get(key); ok {
+			return cached, nil
+		}
+		qctx := context.WithoutCancel(r.Context())
+		var rows []SemGeoRow
+		var err error
+		if market == semMarketUS {
+			rows, err = h.bq.GetSemGeoUSSourced(qctx, refreshDate, term, source)
+		} else {
+			rows, err = h.bq.GetSemGeoGlobalSourced(qctx, refreshDate, geoKey, term, source)
+		}
+		if err != nil {
+			return nil, err
+		}
+		if rows == nil {
+			rows = []SemGeoRow{}
+		}
+		data := &SemGeoData{Rows: rows}
+		if len(rows) > 0 {
+			data.Week = rows[0].Week
+		}
+		h.cache.SetWithTTL(key, data, trendsSnapshotTTL)
+		return data, nil
+	})
 	if err != nil {
 		// The raw error can name projects, tables and SQL: log it, don't echo it.
 		slog.Error("sem geo query failed", "market", market, "refresh_date", refreshDate, "error", err)
 		writeError(w, "failed to load geo interest", http.StatusInternalServerError)
 		return
 	}
-	if rows == nil {
-		rows = []SemGeoRow{}
-	}
-
-	data := &SemGeoData{Rows: rows}
-	if len(rows) > 0 {
-		data.Week = rows[0].Week
-	}
-	h.cache.Set(key, data)
-	writeJSON(w, data)
+	writeJSON(w, v)
 }
 
 type SemPulseData struct {
@@ -192,20 +203,28 @@ func (h *APIHandler) SemPulse(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := h.bq.GetSemPulse(r.Context())
+	v, err, _ := trendsFlight.Do(key, func() (any, error) {
+		if cached, ok := h.cache.Get(key); ok {
+			return cached, nil
+		}
+		rows, err := h.bq.GetSemPulse(context.WithoutCancel(r.Context()))
+		if err != nil {
+			return nil, err
+		}
+		data := &SemPulseData{Rows: rows}
+		if len(rows) > 0 {
+			data.SnapshotTime = rows[0].SnapshotTime
+		} else {
+			data.Rows = []SemPulseRow{}
+		}
+		h.cache.SetWithTTL(key, data, trendsMetaTTL)
+		return data, nil
+	})
 	if err != nil {
 		writeError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	data := &SemPulseData{Rows: rows}
-	if len(rows) > 0 {
-		data.SnapshotTime = rows[0].SnapshotTime
-	} else {
-		data.Rows = []SemPulseRow{}
-	}
-
-	h.cache.Set(key, data)
-	writeJSON(w, data)
+	writeJSON(w, v)
 }
 
 type SemTermData struct {
@@ -218,31 +237,57 @@ func (h *APIHandler) SemTerm(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	source := parseSemTermSource(r)
 
-	key := fmt.Sprintf("opendata:sem_term:%s:%s:%s:%s", market, refreshDate, geo, strings.ToLower(term))
+	// US term history is national (averages all DMAs), so omit geo from the US cache key.
+	geoKey := ""
+	if market == semMarketGlobal {
+		geoKey = strings.ToUpper(geo)
+	}
+	key := fmt.Sprintf("opendata:sem_term:%s:%s:%s:%s:%s", market, refreshDate, geoKey, source, strings.ToLower(term))
 	if cached, ok := h.cache.Get(key); ok {
 		writeJSON(w, cached)
 		return
 	}
 
-	var history []SemHistoryPoint
-	var err error
-	if market == semMarketUS {
-		history, err = h.bq.GetSemTermHistoryUS(r.Context(), refreshDate, term)
-	} else {
-		history, err = h.bq.GetSemTermHistoryGlobal(r.Context(), refreshDate, geo, term)
-	}
+	v, err, _ := trendsFlight.Do(key, func() (any, error) {
+		if cached, ok := h.cache.Get(key); ok {
+			return cached, nil
+		}
+		qctx := context.WithoutCancel(r.Context())
+		var history []SemHistoryPoint
+		var err error
+		if market == semMarketUS {
+			history, err = h.bq.GetSemTermHistoryUSSourced(qctx, refreshDate, term, source)
+		} else {
+			history, err = h.bq.GetSemTermHistoryGlobalSourced(qctx, refreshDate, geoKey, term, source)
+		}
+		if err != nil {
+			return nil, err
+		}
+		if history == nil {
+			history = []SemHistoryPoint{}
+		}
+		data := &SemTermData{History: history}
+		h.cache.SetWithTTL(key, data, trendsSnapshotTTL)
+		return data, nil
+	})
 	if err != nil {
 		writeError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if history == nil {
-		history = []SemHistoryPoint{}
-	}
+	writeJSON(w, v)
+}
 
-	data := &SemTermData{History: history}
-	h.cache.Set(key, data)
-	writeJSON(w, data)
+func parseSemTermSource(r *http.Request) string {
+	switch strings.ToLower(strings.TrimSpace(r.URL.Query().Get("source"))) {
+	case "rising":
+		return "rising"
+	case "top":
+		return "top"
+	default:
+		return ""
+	}
 }
 
 // semSafetyDays is the news-context window; 14 daily partitions ≈ 42 MB.
@@ -252,10 +297,9 @@ type SemSafetyData struct {
 	Rows []SemSafetyRow `json:"rows"`
 }
 
-// SemSafety serves the market's 14-day news tone + conflict share (W3).
-// GDELT tone is country-grained: the US market is always US-national, the
-// global market uses the selected country. The window always ends today
-// (news context, unlike the snapshot-pinned trends widgets).
+// SemSafety serves the market's 14-day news tone + conflict share (W3) over
+// the latest 14 complete UTC days (ending yesterday UTC so an in-progress
+// partial day does not skew the 3-day tone or daily bars).
 func (h *APIHandler) SemSafety(w http.ResponseWriter, r *http.Request) {
 	market, err := parseSemMarket(r)
 	if err != nil {
@@ -264,7 +308,7 @@ func (h *APIHandler) SemSafety(w http.ResponseWriter, r *http.Request) {
 	}
 	iso := "US"
 	if market == semMarketGlobal {
-		iso = r.URL.Query().Get("geo")
+		iso = strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("geo")))
 		if iso == "" {
 			writeError(w, "geo (country code) is required for the global market", http.StatusBadRequest)
 			return
@@ -276,7 +320,7 @@ func (h *APIHandler) SemSafety(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	end := civil.DateOf(time.Now().UTC())
+	end := civil.DateOf(time.Now().UTC()).AddDays(-1)
 	start := end.AddDays(-(semSafetyDays - 1))
 
 	key := fmt.Sprintf("opendata:sem_safety:%s:%s", actor, end)
@@ -285,18 +329,26 @@ func (h *APIHandler) SemSafety(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := h.bq.GetSemSafetyDaily(r.Context(), start, end, actor)
+	v, err, _ := trendsFlight.Do(key, func() (any, error) {
+		if cached, ok := h.cache.Get(key); ok {
+			return cached, nil
+		}
+		rows, err := h.bq.GetSemSafetyDaily(context.WithoutCancel(r.Context()), start, end, actor)
+		if err != nil {
+			return nil, err
+		}
+		if rows == nil {
+			rows = []SemSafetyRow{}
+		}
+		data := &SemSafetyData{Rows: rows}
+		h.cache.SetWithTTL(key, data, trendsMetaTTL)
+		return data, nil
+	})
 	if err != nil {
 		writeError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if rows == nil {
-		rows = []SemSafetyRow{}
-	}
-
-	data := &SemSafetyData{Rows: rows}
-	h.cache.Set(key, data)
-	writeJSON(w, data)
+	writeJSON(w, v)
 }
 
 // parseSemTermSelection validates the shared (market, refresh_date, geo, term)

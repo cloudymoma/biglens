@@ -16,18 +16,35 @@ export interface SafetyStatus {
   level: SafetyLevel;
   tone: number; // event-weighted 3-day average
   conflictShare: number;
+  baselineTone: number; // event-weighted 14-day baseline
+  baselineConflictShare: number;
 }
 
-// Thresholds from the design (unified-view semantics): red when the 3-day
-// tone < −2 or conflict share > 30%, amber when tone < −1.
+// Thresholds combine absolute guardrails with the country's 14-day baseline so
+// structurally negative news baselines don't stay permanently red unless recent
+// coverage worsens or exceeds severe absolute levels.
 export function computeSafetyStatus(rows: SemSafetyRow[]): SafetyStatus | null {
   const last = rows.slice(-3);
   const n = last.reduce((s, r) => s + r.event_count, 0);
   if (n === 0) return null;
   const tone = last.reduce((s, r) => s + r.avg_tone * r.event_count, 0) / n;
   const conflictShare = last.reduce((s, r) => s + r.conflict_share * r.event_count, 0) / n;
-  const level: SafetyLevel = tone < -2 || conflictShare > 0.3 ? 'red' : tone < -1 ? 'amber' : 'green';
-  return { level, tone, conflictShare };
+
+  const baseN = rows.reduce((s, r) => s + r.event_count, 0) || n;
+  const baselineTone = rows.reduce((s, r) => s + r.avg_tone * r.event_count, 0) / baseN;
+  const baselineConflictShare = rows.reduce((s, r) => s + r.conflict_share * r.event_count, 0) / baseN;
+
+  const toneDelta = tone - baselineTone;
+  const conflictDelta = conflictShare - baselineConflictShare;
+
+  const isRed =
+    tone < -3.5 ||
+    conflictShare > 0.35 ||
+    ((tone < -2 || conflictShare > 0.3) && (toneDelta <= -0.3 || conflictDelta >= 0.03));
+  const isAmber =
+    !isRed && (tone < -2 || conflictShare > 0.3 || (tone < -1 && toneDelta <= -0.15));
+  const level: SafetyLevel = isRed ? 'red' : isAmber ? 'amber' : 'green';
+  return { level, tone, conflictShare, baselineTone, baselineConflictShare };
 }
 
 const BANNER_STYLES: Record<SafetyLevel, string> = {
@@ -39,13 +56,16 @@ const BANNER_STYLES: Record<SafetyLevel, string> = {
 function bannerText(status: SafetyStatus): string {
   const tone = status.tone.toFixed(1);
   const conflict = `${Math.round(status.conflictShare * 100)}%`;
+  const baseTone = status.baselineTone.toFixed(1);
+  const baseConflict = `${Math.round(status.baselineConflictShare * 100)}%`;
+  const baseNote = `14d baseline ${baseTone} / ${baseConflict}`;
   switch (status.level) {
     case 'green':
-      return `🟢 Calm news cycle (3-day tone ${tone}, conflict share ${conflict}) — no market-level brand-safety objection to trend bidding.`;
+      return `🟢 Calm news cycle (3-day tone ${tone}, conflict share ${conflict}; ${baseNote}) — no market-level brand-safety objection to trend bidding.`;
     case 'amber':
-      return `🟡 Mildly negative news tone (${tone}) — review broad match before bidding on news-adjacent terms.`;
+      return `🟡 Mildly negative news tone (${tone}, conflict ${conflict}; ${baseNote}) — review broad match before bidding on news-adjacent terms.`;
     case 'red':
-      return `🔴 Negative news cycle (tone ${tone}, conflict share ${conflict}) — review broad match, consider pausing brand-adjacent trend bids, add negatives in the table.`;
+      return `🔴 Negative news cycle (tone ${tone}, conflict share ${conflict}; ${baseNote}) — review broad match, consider pausing brand-adjacent trend bids, add negatives in the table.`;
   }
 }
 

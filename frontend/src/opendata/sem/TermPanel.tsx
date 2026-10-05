@@ -19,23 +19,32 @@ interface TermPanelProps {
   refreshDate: string;
   geo: string;
   term: string;
+  source?: string;
   onClose: () => void;
 }
 
-export default function TermPanel({ market, refreshDate, geo, term, onClose }: TermPanelProps) {
+export default function TermPanel({ market, refreshDate, geo, term, source = '', onClose }: TermPanelProps) {
   const [history, setHistory] = useState<SemHistoryPoint[]>([]);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!term || !refreshDate || (market === 'global' && !geo)) return;
+    if (!term || !refreshDate || (market === 'global' && (!geo || geo.length !== 2))) return;
+    let cancelled = false;
     setLoading(true);
     setError('');
-    fetchSemTerm(market, refreshDate, geo, term)
-      .then(d => setHistory(d.history))
-      .catch(e => setError(e.response?.data || e.message))
-      .finally(() => setLoading(false));
-  }, [market, refreshDate, geo, term]);
+    fetchSemTerm(market, refreshDate, geo, term, source)
+      .then(d => {
+        if (!cancelled) setHistory(d.history);
+      })
+      .catch(e => {
+        if (!cancelled) setError(e.response?.data || e.message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [market, refreshDate, geo, term, source]);
 
   return (
     <div className="rounded-2xl border border-zinc-800/50 p-6" style={{ background: '#111114' }}>
@@ -65,7 +74,7 @@ export default function TermPanel({ market, refreshDate, geo, term, onClose }: T
           <ReactECharts option={termOption(history)} style={{ height: '100%' }} notMerge />
         </div>
       ) : (
-        <EmptyState text="No weekly history in this snapshot yet — the term is brand new (often the strongest arbitrage signal)" />
+        <EmptyState text="No weekly history in this daily snapshot yet — either an intraday Pulse breakout that hasn't reached the daily tables (lags 1–2 days) or a term with no prior scored weeks" />
       ))}
 
       <NewsCycleContext />

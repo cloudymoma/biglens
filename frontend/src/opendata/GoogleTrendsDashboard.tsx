@@ -58,25 +58,38 @@ export default function GoogleTrendsDashboard() {
   const geoDma = market === 'us' ? dma : '';
 
   useEffect(() => {
+    let cancelled = false;
     fetchTrendsMeta()
       .then(m => {
+        if (cancelled) return;
         setMeta(m);
         setRefreshDate(m.us_latest_refresh_date); // market starts as 'us'
         const codes = m.countries.map(c => c.code);
         const preferred = ['GB', 'JP'].find(c => codes.includes(c));
         setCountryCode(preferred || codes[0] || '');
       })
-      .catch(e => setMetaError(e.response?.data || e.message));
+      .catch(e => {
+        if (!cancelled) setMetaError(e.response?.data || e.message);
+      });
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
     if (!refreshDate || (market === 'global' && !countryCode)) return;
+    let cancelled = false;
     setLoading(true);
     setError('');
     fetchTrendsDashboard(refreshDate, geoCode, geoDma)
-      .then(setData)
-      .catch(e => setError(e.response?.data || e.message))
-      .finally(() => setLoading(false));
+      .then(d => {
+        if (!cancelled) setData(d);
+      })
+      .catch(e => {
+        if (!cancelled) setError(e.response?.data || e.message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [market, refreshDate, countryCode, dma]);
 
@@ -91,12 +104,20 @@ export default function GoogleTrendsDashboard() {
   useEffect(() => {
     if (!refreshDate || (!focusTerm && selectedTerms.length === 0)) return;
     if (market === 'global' && !countryCode) return;
+    let cancelled = false;
     setTermLoading(true);
     setTermError('');
     fetchTrendsTerm(refreshDate, geoCode, focusTerm, selectedTerms, geoDma)
-      .then(setTermData)
-      .catch(e => setTermError(e.response?.data || e.message))
-      .finally(() => setTermLoading(false));
+      .then(d => {
+        if (!cancelled) setTermData(d);
+      })
+      .catch(e => {
+        if (!cancelled) setTermError(e.response?.data || e.message);
+      })
+      .finally(() => {
+        if (!cancelled) setTermLoading(false);
+      });
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [market, refreshDate, countryCode, dma, focusTerm, selectedTerms]);
 
@@ -125,7 +146,7 @@ export default function GoogleTrendsDashboard() {
   if (metaError) return <ErrorBanner message={metaError} />;
   if (!meta) return <LoadingPulse />;
 
-  const marketDates = (m: SemMarket) => (m === 'us' ? meta.us_refresh_dates : meta.refresh_dates);
+  const marketDates = (m: SemMarket) => (m === 'us' ? meta.us_latest_refresh_date ? meta.us_refresh_dates : [] : meta.refresh_dates);
 
   // Keep the chosen snapshot when the other market has it, else jump to
   // that market's latest.
@@ -189,7 +210,7 @@ export default function GoogleTrendsDashboard() {
           onSelect={selectTerm}
         />
         <p className="text-[10px] text-zinc-600 ml-auto self-center max-w-[220px] leading-relaxed">
-          Click any term to map it across countries and add it to the 5-year comparison (up to {MAX_COMPARE_TERMS}).
+          Click any top or rising term to inspect its geo spread and add it to the 5-year comparison (up to {MAX_COMPARE_TERMS}).
         </p>
       </div>
 
@@ -201,12 +222,12 @@ export default function GoogleTrendsDashboard() {
           {/* Summary metrics */}
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <MetricCard label="Top Term" value={topTerms[0]?.term || '—'} icon={<Trophy size={18} />}
-              detail={`Rank #1 in ${geoLabel}`} accentColor="#38bdf8" />
+              detail={market === 'us' && dma ? `US Rank #1 · score in ${dma}` : `Rank #1 in ${geoLabel}`} accentColor="#38bdf8" />
             <MetricCard label="Hottest Riser" value={hottest ? `+${hottest.percent_gain.toLocaleString()}%` : '—'}
               icon={<Flame size={18} />} detail={hottest?.term || 'No rising terms'} accentColor="#fbbf24" />
             <MetricCard label={market === 'us' ? 'Metros Tracked' : 'Countries Tracked'}
               value={String(market === 'us' ? meta.dmas.length : meta.countries.length)} icon={<Globe2 size={18} />}
-              detail="In this snapshot" accentColor="#34d399" />
+              detail="In latest snapshot" accentColor="#34d399" />
             <MetricCard label="Snapshot" value={refreshDate} icon={<CalendarDays size={18} />}
               detail="Daily refresh, 5y weekly history" accentColor="#a78bfa" />
           </div>
@@ -215,7 +236,11 @@ export default function GoogleTrendsDashboard() {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <div className="rounded-2xl border border-zinc-800/50 p-6 flex flex-col" style={{ background: '#111114' }}>
               <h3 className="text-sm font-semibold text-white mb-1">Top Terms Leaderboard</h3>
-              <p className="text-xs text-zinc-500 mb-4">Top 25 search terms in {geoLabel}</p>
+              <p className="text-xs text-zinc-500 mb-4">
+                {market === 'us' && dma
+                  ? `National top 25 search terms · score shown for ${dma}`
+                  : `Top 25 search terms in ${geoLabel} (latest complete week)`}
+              </p>
               {topTerms.length > 0 ? (
                 // The absolutely-positioned scroller contributes no intrinsic
                 // height, so the card tracks its grid sibling (the term cloud)
@@ -294,7 +319,11 @@ export default function GoogleTrendsDashboard() {
 
             <div className="rounded-2xl border border-zinc-800/50 p-6 flex flex-col" style={{ background: '#111114' }}>
               <h3 className="text-sm font-semibold text-white mb-1">Rising Terms Breakdown</h3>
-              <p className="text-xs text-zinc-500 mb-4">Growth and current score in {geoLabel}</p>
+              <p className="text-xs text-zinc-500 mb-4">
+                {market === 'us' && dma
+                  ? `National rising terms & growth · local score in ${dma}`
+                  : `Growth and latest complete-week score in ${geoLabel}`}
+              </p>
               {risingTerms.length > 0 ? (
                 <div className="relative flex-1 min-h-[300px]">
                   <div className="absolute inset-0 overflow-y-auto pr-2 space-y-1">
@@ -336,8 +365,8 @@ export default function GoogleTrendsDashboard() {
         </h3>
         <p className="text-xs text-zinc-500 mb-4">
           {market === 'us'
-            ? 'Score across the Nielsen DMAs where the term charts or rises'
-            : 'Latest score wherever the term charts in the top 25'}
+            ? 'Each DMA vs. its own 5-year peak (= 100, not comparable across DMAs)'
+            : 'Each country vs. its own 5-year peak (= 100, averaged across regions — not comparable across countries)'}
         </p>
         {termError && <ErrorBanner message={termError} />}
         {!termError && (termLoading ? (
@@ -348,7 +377,7 @@ export default function GoogleTrendsDashboard() {
           </div>
         ) : (
           <EmptyState text={focusTerm
-            ? `"${focusTerm}" is not ${market === 'us' ? 'charting in any US metro' : "in any country's top 25"} this week`
+            ? `"${focusTerm}" is not ${market === 'us' ? 'charting or rising in the daily US snapshot' : "in any country's daily top/rising snapshot"} this week`
             : 'Select a term above'} />
         ))}
       </div>
@@ -395,7 +424,7 @@ export default function GoogleTrendsDashboard() {
             <ReactECharts option={historyOption(termData!.history, termColors)} style={{ height: '100%' }} notMerge />
           </div>
         ) : (
-          <EmptyState text="Click terms in the tables above to chart their 5-year history" />
+          <EmptyState text="Click terms in the tables above to chart their 5-year history (intraday Pulse terms may not appear in the daily snapshot yet)" />
         )}
       </div>
 
@@ -466,7 +495,7 @@ function geoBarOption(geo: { country_code: string; country_name: string; score: 
       formatter: (params: ChartDatum[]) => {
         const p = params[0];
         return `<div style="font-weight:600;color:#a1a1aa;font-size:11px;margin-bottom:4px">${p.name}</div>
-                <div style="color:#f4f4f5;font-size:13px;font-weight:600">score ${p.value} / 100</div>`;
+                <div style="color:#f4f4f5;font-size:13px;font-weight:600">score ${p.value} / 100 (vs. own 5y peak)</div>`;
       },
     },
     grid: { left: 40, right: 16, bottom: 64, top: 16 },
@@ -664,7 +693,7 @@ function TermSearchBox({ topTerms, risingTerms, onSelect }: {
 
   const matches = query
     ? candidates.filter(([t]) => t.toLowerCase().includes(query.toLowerCase())).slice(0, 8)
-    : [];
+    : candidates.slice(0, 8);
 
   function submit(term: string) {
     onSelect(term);
@@ -682,7 +711,7 @@ function TermSearchBox({ topTerms, risingTerms, onSelect }: {
 
   return (
     <div ref={ref} className="relative">
-      <label className="text-[10px] font-mono text-zinc-600 uppercase block mb-1 px-0.5">Search Term</label>
+      <label className="text-[10px] font-mono text-zinc-600 uppercase block mb-1 px-0.5">Filter Snapshot Terms</label>
       <div className="relative">
         <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-600 pointer-events-none" />
         <input
@@ -690,13 +719,13 @@ function TermSearchBox({ topTerms, risingTerms, onSelect }: {
           onChange={e => { setQuery(e.target.value); setOpen(true); }}
           onFocus={() => setOpen(true)}
           onKeyDown={e => {
-            if (e.key === 'Enter' && query.trim()) {
-              submit(matches.length > 0 ? matches[0][0] : query.trim());
+            if (e.key === 'Enter' && matches.length > 0) {
+              submit(matches[0][0]);
             } else if (e.key === 'Escape') {
               setOpen(false);
             }
           }}
-          placeholder="Search a term, press Enter..."
+          placeholder="Filter today's top & rising terms..."
           className="text-xs text-zinc-300 rounded-lg pl-7 pr-3 py-2 outline-none border border-zinc-800/50 transition-colors focus:border-cyan-500/30 placeholder:text-zinc-700"
           style={{ background: '#09090b', minWidth: 210 }}
         />
@@ -719,20 +748,8 @@ function TermSearchBox({ topTerms, risingTerms, onSelect }: {
               </span>
             </button>
           ))}
-          {/* Free search: any term can be mapped/charted, not just today's list */}
-          <button
-            onClick={() => submit(query.trim())}
-            className={`w-full flex items-center gap-2 text-left px-3 py-1.5 text-xs cursor-pointer text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200 transition-colors ${
-              matches.length > 0 ? 'border-t border-zinc-800/60' : ''
-            }`}
-          >
-            <Search size={10} className="shrink-0 text-zinc-600" />
-            <span className="truncate">
-              Search "<span className="text-zinc-200">{query.trim()}</span>" everywhere
-            </span>
-          </button>
           {matches.length === 0 && (
-            <p className="px-3 pb-2 text-[10px] text-zinc-600">Not in today's top or rising charts — Enter searches it anyway</p>
+            <p className="px-3 py-2 text-[10px] text-zinc-600">No matching term in this snapshot's top 25 or rising 25</p>
           )}
         </div>
       )}

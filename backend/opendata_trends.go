@@ -19,8 +19,9 @@ import (
 )
 
 const (
-	trendsTopTable    = "`bigquery-public-data.google_trends.international_top_terms`"
-	trendsRisingTable = "`bigquery-public-data.google_trends.international_top_rising_terms`"
+	trendsTopTable        = "`bigquery-public-data.google_trends.international_top_terms`"
+	trendsRisingTable     = "`bigquery-public-data.google_trends.international_top_rising_terms`"
+	trendsPartitionsTable = "`bigquery-public-data.google_trends.INFORMATION_SCHEMA.PARTITIONS`"
 )
 
 // --- Meta: available partitions and countries ---
@@ -30,15 +31,20 @@ type TrendsCountry struct {
 	Code string `json:"code" bigquery:"code"`
 }
 
-// GetTrendsRefreshDates returns recent partition dates, newest first. The
-// lookback bound keeps the scan pruned to a handful of partitions.
-func (b *BQClient) GetTrendsRefreshDates(ctx context.Context) ([]string, error) {
+// getTrendsTablePartitionDates lists recent non-empty partition dates for a
+// google_trends table via INFORMATION_SCHEMA.PARTITIONS (~10 MB metadata scan
+// instead of scanning ~2 GB of refresh_date column values across 45 partitions).
+func (b *BQClient) getTrendsTablePartitionDates(ctx context.Context, tableName string) ([]string, error) {
 	q := b.client.Query(`
-		SELECT FORMAT_DATE('%Y-%m-%d', refresh_date) AS d
-		FROM ` + trendsTopTable + `
-		WHERE refresh_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 45 DAY)
-		GROUP BY d
+		SELECT FORMAT_DATE('%Y-%m-%d', SAFE.PARSE_DATE('%Y%m%d', partition_id)) AS d
+		FROM ` + trendsPartitionsTable + `
+		WHERE table_name = @table_name
+		  AND total_rows > 0
+		  AND SAFE.PARSE_DATE('%Y%m%d', partition_id) >= DATE_SUB(CURRENT_DATE(), INTERVAL 45 DAY)
 		ORDER BY d DESC`)
+	q.Parameters = []bigquery.QueryParameter{
+		{Name: "table_name", Value: tableName},
+	}
 
 	type dateRow struct {
 		D string `bigquery:"d"`
@@ -49,9 +55,16 @@ func (b *BQClient) GetTrendsRefreshDates(ctx context.Context) ([]string, error) 
 	}
 	dates := make([]string, 0, len(rows))
 	for _, r := range rows {
-		dates = append(dates, r.D)
+		if r.D != "" {
+			dates = append(dates, r.D)
+		}
 	}
 	return dates, nil
+}
+
+// GetTrendsRefreshDates returns recent international partition dates, newest first.
+func (b *BQClient) GetTrendsRefreshDates(ctx context.Context) ([]string, error) {
+	return b.getTrendsTablePartitionDates(ctx, "international_top_terms")
 }
 
 func (b *BQClient) GetTrendsCountries(ctx context.Context, refreshDate civil.Date) ([]TrendsCountry, error) {
@@ -76,13 +89,13 @@ type TrendsTopTerm struct {
 }
 
 func (b *BQClient) GetTrendsTopTerms(ctx context.Context, refreshDate civil.Date, countryCode string) ([]TrendsTopTerm, error) {
-	// Rows are region-grained; average up to country level.
+	// Rows are region-grained; average up to country level, counting NULL region scores as 0.
 	q := b.client.Query(`
-		SELECT term, rank, CAST(COALESCE(AVG(score), 0) AS INT64) AS score
+		SELECT term, rank, CAST(ROUND(COALESCE(AVG(IFNULL(score, 0)), 0)) AS INT64) AS score
 		FROM ` + trendsTopTable + `
 		WHERE refresh_date = @refresh_date
 		  AND country_code = @country_code
-		  AND week = (SELECT MAX(week) FROM ` + trendsTopTable + ` WHERE refresh_date = @refresh_date)
+		  AND week = ` + semLatestCompleteWeek(trendsTopTable) + `
 		GROUP BY term, rank
 		ORDER BY rank ASC
 		LIMIT 25`)
@@ -107,12 +120,12 @@ func (b *BQClient) GetTrendsRisingTerms(ctx context.Context, refreshDate civil.D
 		SELECT
 			term,
 			rank,
-			CAST(COALESCE(AVG(percent_gain), 0) AS INT64) AS percent_gain,
-			CAST(COALESCE(AVG(score), 0) AS INT64) AS score
+			CAST(COALESCE(ANY_VALUE(percent_gain), 0) AS INT64) AS percent_gain,
+			CAST(ROUND(COALESCE(AVG(IFNULL(score, 0)), 0)) AS INT64) AS score
 		FROM ` + trendsRisingTable + `
 		WHERE refresh_date = @refresh_date
 		  AND country_code = @country_code
-		  AND week = (SELECT MAX(week) FROM ` + trendsRisingTable + ` WHERE refresh_date = @refresh_date)
+		  AND week = ` + semLatestCompleteWeek(trendsRisingTable) + `
 		GROUP BY term, rank
 		ORDER BY percent_gain DESC
 		LIMIT 25`)
@@ -123,7 +136,7 @@ func (b *BQClient) GetTrendsRisingTerms(ctx context.Context, refreshDate civil.D
 	return collectRows[TrendsRisingTerm](q, ctx)
 }
 
-// --- Widget 3.2: One term's latest score across countries ---
+// --- Widget 3.2: One term's latest complete-week score across countries ---
 
 type TrendsGeoPoint struct {
 	CountryCode string `json:"country_code" bigquery:"country_code"`
@@ -134,17 +147,38 @@ type TrendsGeoPoint struct {
 
 func (b *BQClient) GetTrendsGeo(ctx context.Context, refreshDate civil.Date, term string) ([]TrendsGeoPoint, error) {
 	q := b.client.Query(`
+		WITH charting AS (
+			SELECT
+				country_code,
+				country_name,
+				CAST(ROUND(COALESCE(AVG(IFNULL(score, 0)), 0)) AS INT64) AS score,
+				MIN(rank) AS rank
+			FROM ` + trendsTopTable + `
+			WHERE refresh_date = @refresh_date
+			  AND LOWER(term) = LOWER(@term)
+			  AND week = ` + semLatestCompleteWeek(trendsTopTable) + `
+			GROUP BY country_code, country_name
+		),
+		rising AS (
+			SELECT
+				country_code,
+				country_name,
+				CAST(ROUND(COALESCE(AVG(IFNULL(score, 0)), 0)) AS INT64) AS score,
+				MIN(rank) AS rank
+			FROM ` + trendsRisingTable + `
+			WHERE refresh_date = @refresh_date
+			  AND LOWER(term) = LOWER(@term)
+			  AND week = ` + semLatestCompleteWeek(trendsRisingTable) + `
+			GROUP BY country_code, country_name
+		)
 		SELECT
-			country_code,
-			country_name,
-			CAST(COALESCE(AVG(score), 0) AS INT64) AS score,
-			MIN(rank) AS rank
-		FROM ` + trendsTopTable + `
-		WHERE refresh_date = @refresh_date
-		  AND LOWER(term) = LOWER(@term)
-		  AND week = (SELECT MAX(week) FROM ` + trendsTopTable + ` WHERE refresh_date = @refresh_date)
-		GROUP BY country_code, country_name
-		ORDER BY score DESC`)
+			COALESCE(c.country_code, r.country_code) AS country_code,
+			COALESCE(c.country_name, r.country_name) AS country_name,
+			GREATEST(COALESCE(c.score, 0), COALESCE(r.score, 0)) AS score,
+			COALESCE(c.rank, r.rank, 0) AS rank
+		FROM charting c
+		FULL OUTER JOIN rising r ON c.country_code = r.country_code
+		ORDER BY score DESC, rank ASC`)
 	q.Parameters = []bigquery.QueryParameter{
 		{Name: "refresh_date", Value: refreshDate},
 		{Name: "term", Value: term},
@@ -162,14 +196,28 @@ type TrendsHistoryPoint struct {
 
 func (b *BQClient) GetTrendsHistory(ctx context.Context, refreshDate civil.Date, countryCode string, terms []string) ([]TrendsHistoryPoint, error) {
 	q := b.client.Query(`
+		WITH combined AS (
+			SELECT term, week, CAST(ROUND(COALESCE(AVG(IFNULL(score, 0)), 0)) AS INT64) AS score
+			FROM ` + trendsTopTable + `
+			WHERE refresh_date = @refresh_date
+			  AND country_code = @country_code
+			  AND DATE_ADD(week, INTERVAL 7 DAY) <= @refresh_date
+			  AND LOWER(term) IN UNNEST(@terms)
+			GROUP BY term, week
+			UNION ALL
+			SELECT term, week, CAST(ROUND(COALESCE(AVG(IFNULL(score, 0)), 0)) AS INT64) AS score
+			FROM ` + trendsRisingTable + `
+			WHERE refresh_date = @refresh_date
+			  AND country_code = @country_code
+			  AND DATE_ADD(week, INTERVAL 7 DAY) <= @refresh_date
+			  AND LOWER(term) IN UNNEST(@terms)
+			GROUP BY term, week
+		)
 		SELECT
 			term,
 			FORMAT_DATE('%Y-%m-%d', week) AS week,
-			CAST(COALESCE(AVG(score), 0) AS INT64) AS score
-		FROM ` + trendsTopTable + `
-		WHERE refresh_date = @refresh_date
-		  AND country_code = @country_code
-		  AND LOWER(term) IN UNNEST(@terms)
+			MAX(score) AS score
+		FROM combined
 		GROUP BY term, week
 		ORDER BY week ASC`)
 	q.Parameters = []bigquery.QueryParameter{
@@ -184,18 +232,16 @@ func (b *BQClient) GetTrendsHistory(ctx context.Context, refreshDate civil.Date,
 //
 // The US is absent from the international tables; it lives in the DMA-grained
 // `top_terms` / `top_rising_terms` tables (constants in opendata_sem.go).
-// Both carry one national rank per term replicated across all 210 DMAs
-// (verified live 2026-08-18: 25 terms, 1 distinct rank each), so the query
-// shapes mirror the international ones with scores averaged across DMAs.
-// Empty dma aggregates nationally; a DMA name narrows to that metro (term
-// presence and scores vary per DMA even though ranks are national).
+// Both carry one national rank and percent_gain per term replicated across all
+// 210 DMAs; empty dma aggregates scores nationally (with NULL DMA scores
+// counted as 0), while a DMA name narrows scores to that metro.
 
 func (b *BQClient) GetTrendsTopTermsUS(ctx context.Context, refreshDate civil.Date, dma string) ([]TrendsTopTerm, error) {
 	q := b.client.Query(`
-		SELECT term, rank, CAST(COALESCE(AVG(score), 0) AS INT64) AS score
+		SELECT term, rank, CAST(ROUND(COALESCE(AVG(IFNULL(score, 0)), 0)) AS INT64) AS score
 		FROM ` + semUSTopTable + `
 		WHERE refresh_date = @refresh_date
-		  AND week = (SELECT MAX(week) FROM ` + semUSTopTable + ` WHERE refresh_date = @refresh_date)
+		  AND week = ` + semLatestCompleteWeek(semUSTopTable) + `
 		  AND (@dma = '' OR dma_name = @dma)
 		GROUP BY term, rank
 		ORDER BY rank ASC
@@ -212,11 +258,11 @@ func (b *BQClient) GetTrendsRisingTermsUS(ctx context.Context, refreshDate civil
 		SELECT
 			term,
 			rank,
-			CAST(COALESCE(AVG(percent_gain), 0) AS INT64) AS percent_gain,
-			CAST(COALESCE(AVG(score), 0) AS INT64) AS score
+			CAST(COALESCE(ANY_VALUE(percent_gain), 0) AS INT64) AS percent_gain,
+			CAST(ROUND(COALESCE(AVG(IFNULL(score, 0)), 0)) AS INT64) AS score
 		FROM ` + semUSRisingTable + `
 		WHERE refresh_date = @refresh_date
-		  AND week = (SELECT MAX(week) FROM ` + semUSRisingTable + ` WHERE refresh_date = @refresh_date)
+		  AND week = ` + semLatestCompleteWeek(semUSRisingTable) + `
 		  AND (@dma = '' OR dma_name = @dma)
 		GROUP BY term, rank
 		ORDER BY percent_gain DESC
@@ -229,27 +275,24 @@ func (b *BQClient) GetTrendsRisingTermsUS(ctx context.Context, refreshDate civil
 }
 
 // GetTrendsGeoUS is the US view of GetTrendsGeo: the term's score in each DMA
-// where it charts or rises (top-25 ∪ rising), DMA names in country_name. It
-// deliberately stays separate from the SEM W2 query (GetSemGeoUS), which
-// reads the latest complete week and keeps NULL scores: this chart, like the
-// rest of the Trends dashboard, shows the snapshot's latest week with missing
-// scores as 0.
+// where it charts or rises (top-25 ∪ rising) in the latest complete week, DMA
+// names in country_name, with missing DMA scores as 0.
 func (b *BQClient) GetTrendsGeoUS(ctx context.Context, refreshDate civil.Date, term string) ([]TrendsGeoPoint, error) {
 	q := b.client.Query(`
 		WITH charting AS (
-			SELECT dma_name AS geo, CAST(COALESCE(AVG(score), 0) AS INT64) AS score
+			SELECT dma_name AS geo, CAST(ROUND(COALESCE(AVG(IFNULL(score, 0)), 0)) AS INT64) AS score
 			FROM ` + semUSTopTable + `
 			WHERE refresh_date = @refresh_date
-			  AND week = (SELECT MAX(week) FROM ` + semUSTopTable + ` WHERE refresh_date = @refresh_date)
+			  AND week = ` + semLatestCompleteWeek(semUSTopTable) + `
 			  AND LOWER(term) = LOWER(@term)
 			GROUP BY geo
 		),
 		rising AS (
-			SELECT dma_name AS geo, CAST(COALESCE(AVG(score), 0) AS INT64) AS score,
+			SELECT dma_name AS geo, CAST(ROUND(COALESCE(AVG(IFNULL(score, 0)), 0)) AS INT64) AS score,
 				MIN(rank) AS rising_rank, CAST(COALESCE(MAX(percent_gain), 0) AS INT64) AS percent_gain
 			FROM ` + semUSRisingTable + `
 			WHERE refresh_date = @refresh_date
-			  AND week = (SELECT MAX(week) FROM ` + semUSRisingTable + ` WHERE refresh_date = @refresh_date)
+			  AND week = ` + semLatestCompleteWeek(semUSRisingTable) + `
 			  AND LOWER(term) = LOWER(@term)
 			GROUP BY geo
 		)
@@ -283,14 +326,28 @@ func (b *BQClient) GetTrendsGeoUS(ctx context.Context, refreshDate civil.Date, t
 
 func (b *BQClient) GetTrendsHistoryUS(ctx context.Context, refreshDate civil.Date, dma string, terms []string) ([]TrendsHistoryPoint, error) {
 	q := b.client.Query(`
+		WITH combined AS (
+			SELECT term, week, CAST(ROUND(COALESCE(AVG(IFNULL(score, 0)), 0)) AS INT64) AS score
+			FROM ` + semUSTopTable + `
+			WHERE refresh_date = @refresh_date
+			  AND (@dma = '' OR dma_name = @dma)
+			  AND DATE_ADD(week, INTERVAL 7 DAY) <= @refresh_date
+			  AND LOWER(term) IN UNNEST(@terms)
+			GROUP BY term, week
+			UNION ALL
+			SELECT term, week, CAST(ROUND(COALESCE(AVG(IFNULL(score, 0)), 0)) AS INT64) AS score
+			FROM ` + semUSRisingTable + `
+			WHERE refresh_date = @refresh_date
+			  AND (@dma = '' OR dma_name = @dma)
+			  AND DATE_ADD(week, INTERVAL 7 DAY) <= @refresh_date
+			  AND LOWER(term) IN UNNEST(@terms)
+			GROUP BY term, week
+		)
 		SELECT
 			term,
 			FORMAT_DATE('%Y-%m-%d', week) AS week,
-			CAST(COALESCE(AVG(score), 0) AS INT64) AS score
-		FROM ` + semUSTopTable + `
-		WHERE refresh_date = @refresh_date
-		  AND (@dma = '' OR dma_name = @dma)
-		  AND LOWER(term) IN UNNEST(@terms)
+			MAX(score) AS score
+		FROM combined
 		GROUP BY term, week
 		ORDER BY week ASC`)
 	q.Parameters = []bigquery.QueryParameter{

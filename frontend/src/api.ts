@@ -276,9 +276,11 @@ export async function fetchSemGeo(
   refreshDate: string,
   geo: string,
   term: string,
+  source = '',
 ): Promise<SemGeoData> {
   const params: Record<string, string> = { market, refresh_date: refreshDate, term };
   if (geo) params.geo = geo;
+  if (source) params.source = source;
   const { data } = await axios.get('/api/opendata/sem/geo', { params });
   return data;
 }
@@ -293,9 +295,11 @@ export async function fetchSemTerm(
   refreshDate: string,
   geo: string,
   term: string,
+  source = '',
 ): Promise<SemTermData> {
   const params: Record<string, string> = { market, refresh_date: refreshDate, term };
   if (geo) params.geo = geo;
+  if (source) params.source = source;
   const { data } = await axios.get('/api/opendata/sem/term', { params });
   return data;
 }

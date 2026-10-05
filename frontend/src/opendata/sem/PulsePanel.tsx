@@ -67,7 +67,14 @@ export default function PulsePanel({ onSelectTerm }: PulsePanelProps) {
 
 function WowBadge({ row }: { row: SemPulseRow }) {
   if (row.prev_week_score === 0) {
-    return <span className="text-[10px] font-mono text-violet-400 shrink-0">new</span>;
+    return (
+      <span
+        className="text-[10px] font-mono text-violet-400 shrink-0"
+        title="No measurable search interest last week (prev_week_score = 0)"
+      >
+        new
+      </span>
+    );
   }
   const delta = row.score - row.prev_week_score;
   if (delta > 0) return <span className="text-[10px] font-mono text-emerald-400 shrink-0">▲ +{delta} wow</span>;

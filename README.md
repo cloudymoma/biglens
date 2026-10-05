@@ -159,43 +159,46 @@ dashboards.
 ### Google Trends
 
 The first dashboard, powered by `bigquery-public-data.google_trends`
-(`international_top_terms` / `international_top_rising_terms`):
+(`international_top_terms` / `international_top_rising_terms` for Global mode,
+plus `top_terms` / `top_rising_terms` for US Metro DMA mode):
 
 | Widget | Description |
 |---|---|
-| **Top Terms Leaderboard** | Top 25 terms per country with inline score bars |
+| **Top Terms Leaderboard** | Top 25 terms per country (or US DMA) with inline score bars |
 | **Term Cloud** | Tag cloud sized by score, top-5 ranks highlighted |
 | **Surging Terms** | Top 10 rising queries by `percent_gain`, plus a breakdown table |
-| **Cross-Country Interest** | A term's latest score wherever it charts in the top 25 |
-| **Interest Over Time** | 5-year weekly history, compare up to 5 terms, drag to zoom |
+| **Cross-Country / US Metro Interest** | A term's latest complete-week score across countries or US DMAs (unioned across top and rising tables) |
+| **Interest Over Time** | 5-year weekly history (complete weeks only), compare up to 5 terms, drag to zoom |
 
-Filters: country, snapshot date (`refresh_date` partition), and a term search
-over the day's charts. Clicking any term focuses the geographic view and adds
-it to the comparison chart.
+Filters: market mode (**Global** country or **US Metro** DMA), snapshot date
+(`refresh_date` partition discovered via `INFORMATION_SCHEMA.PARTITIONS`), and
+a term search over the day's top/rising charts. Clicking any term focuses the
+geographic view and adds it to the comparison chart.
 
 #### Reading the numbers
 
 The dashboard surfaces three metrics straight from the dataset — they measure
 different things, so they don't move together:
 
-- **Rank (1–25)** — the term's position in the country's daily top chart,
-  ordered by raw search volume for that snapshot. This is what sorts the
-  leaderboard.
-- **Score (0–100)** — Google's *relative* search-interest index for the latest
-  week: each term is normalized against its own all-time peak, where 100 means
-  "this week is (or ties) the term's peak popularity". The dataset reports it
-  per region, so BigLens averages it across all of a country's regions and
-  rounds to an integer (`CAST(COALESCE(AVG(score), 0) AS INT64)`; a NULL score
-  counts as 0). The inline bar next to each leaderboard row visualizes this
-  value.
+- **Rank (1–25)** — the term's position in the country's (or US national)
+  daily top chart, ordered by raw search volume for that snapshot. This is what
+  sorts the leaderboard.
+- **Score (0–100)** — Google's *relative* search-interest index for the
+  snapshot's latest complete week (`DATE_ADD(week, INTERVAL 7 DAY) <=
+  refresh_date`): each term is normalized against its own 5-year peak in that
+  sub-region/DMA (`100` = peak week). Because the dataset reports `score` per
+  sub-region/DMA and omits low-volume regions as `NULL`, BigLens averages across
+  all sub-regions/DMAs with `NULL` treated as `0` and rounds to the nearest
+  integer (`CAST(ROUND(COALESCE(AVG(IFNULL(score, 0)), 0)) AS INT64)`). The
+  inline bar next to each leaderboard row visualizes this value.
 - **Gain (%)** — for rising terms only: the week-over-week percentage increase
   in search volume (`percent_gain`). A brand-new breakout query can show gains
   of several thousand percent.
 
 Because rank reflects *absolute daily volume* while score reflects *interest
-relative to the term's own history*, a #14 term can score 100 (it just hit its
-all-time high) while the #1 term scores lower (huge volume, but past its peak
-week). The leaderboard therefore intentionally sorts by rank, not score.
+relative to the term's own 5-year history*, a #14 term can score 100 (it just
+hit its 5-year high) while the #1 term scores lower (huge volume, but past its
+peak week). The leaderboard therefore intentionally sorts by rank, not score.
 
 ### GDELT News Pulse
 
@@ -417,34 +420,36 @@ where the columns *disagree* (high gain, no rank):
   **UNRANKED** means it is not charting anywhere in the selected geo's top 25
   — that is the buy signal, not missing data: demand is accelerating but has
   not reached the mainstream volume that drives auction competition.
-- **Score (0–100)** — Google's relative interest index, normalized against
-  the term's own all-time peak (bubble size in the matrix). A **new** badge
-  means the rising table has no normalized score yet — the term is too new,
-  which is often the strongest play of all.
-- **Geo spread** — in how many DMAs/regions the term is rising: distinguishes
-  a national breakout (bid broadly) from a local phenomenon (bid with geo
-  targeting).
+- **Score (0–100)** — Google's relative interest index for the snapshot's
+  latest complete week, normalized against the term's own 5-year peak (bubble
+  size in the matrix) and averaged across all sub-regions/DMAs with `NULL`
+  treated as `0`. A **low vol** badge means no sub-region reported a positive
+  score in that week.
+- **Geo spread (Active DMAs / Regions)** — in how many DMAs/regions the term
+  has a non-null `score` in the latest complete week: distinguishes a broad
+  breakout (bid broadly) from a local phenomenon (bid with geo targeting).
 - **Geo Interest score** — the term's score in each DMA/region for the
   snapshot's latest *complete* week (the US tables also carry the week that
   starts on the snapshot day, where most DMAs have no score yet, so it is
   skipped). Every geo is indexed to its own 5-year peak (100 = the term's
   local high), so a score says how close the term is to its peak *there*, not
   how much demand the geo has: scores are not comparable across geos and no
-  bid adjustment is suggested. The panel names the week and how many geos
-  have data; geos with no reported score show as *insufficient data*, are
-  listed last and are left out of the chart.
+  bid adjustment is suggested. The panel names the week, how many geos have
+  data, and the national/country rising rank badge; geos with no reported score
+  show as *insufficient data*, are listed last and are left out of the chart.
 - **Safety banner** — event-weighted 3-day average of GDELT news tone and
-  conflict share for the market: 🟢 tone ≥ −1 · 🟡 −2…−1 · 🔴 tone < −2 or
-  conflict share > 30%. The signal is country-grained (US-national in DMA
-  mode), so with the overlay on, *every* matrix bubble is tinted and the
+  conflict share for the market compared against both absolute thresholds and
+  the country's 14-day baseline. The signal is country-grained (US-national in
+  DMA mode), so with the overlay on, *every* matrix bubble is tinted and the
   table header carries one chip — it is market context, not per-keyword
   sentiment. On red: review broad match, consider pausing brand-adjacent
   trend bids, and use the checkboxes to build the negatives export.
-- **Pulse Δ badge (wow)** — the current *partial* week's score vs last week,
-  computed from the hourly snapshot's own weekly history (▲ accelerating,
-  ▼ fading, **new** = no prior week). Consecutive hourly snapshots carry
-  fully disjoint top-25 sets, so there is deliberately no
-  "rank vs 6 hours ago" — that comparison does not exist in the data.
+- **Pulse Δ badge (wow)** — the current *partial* week's score vs last week
+  (averaged across all 210 DMAs with `NULL` treated as `0`), computed from the
+  hourly snapshot's own weekly history (▲ accelerating, ▼ fading, **new** = no
+  measurable interest last week, i.e. `prev_week_score = 0`). Consecutive
+  hourly snapshots carry fully disjoint top-25 sets, so there is deliberately
+  no "rank vs 6 hours ago" — that comparison does not exist in the data.
 - **CSV exports** — Google Ads Editor import format. Keywords CSV ships every
   visible row with Campaign `SEM-Trends-{date}`, Ad group = the selected geo,
   match type Phrase, and Max CPC left blank (that decision stays yours);
