@@ -23,7 +23,7 @@ export default function SecurityPosture({ region, timeRange }: Props) {
       .catch(e => { if (active) setError(e.response?.data || e.message); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [region, timeRange]);
+  }, [region]);
 
   if (loading) return <LoadingPulse />;
   if (error) return <ErrorBanner message={error} />;
@@ -40,6 +40,8 @@ export default function SecurityPosture({ region, timeRange }: Props) {
   const sensitiveColumns = data.sensitive_columns || [];
   const tagBypassers = data.tag_bypassers || [];
   const untaggedSensitive = sensitiveColumns.filter(c => !c.tagged);
+  const untaggedCount = data.untagged_sensitive_total ?? untaggedSensitive.length;
+  const grantsFailed = data.grants_datasets_failed ?? 0;
   const cmekDatasets = datasetPosture.filter(d => d.cmek).length;
   const cmekPct = datasetPosture.length > 0 ? ((cmekDatasets / datasetPosture.length) * 100).toFixed(0) : '0';
   const noExpiration = datasetPosture.filter(d => d.default_exp_days === 0).length;
@@ -69,6 +71,18 @@ export default function SecurityPosture({ region, timeRange }: Props) {
               </div>
             </div>
           ))}
+        </div>
+      ) : grantsFailed > 0 ? (
+        <div
+          className="rounded-2xl border border-amber-500/30 p-4"
+          style={{ background: 'rgba(251, 191, 36, 0.05)' }}
+        >
+          <div className="flex items-start gap-3">
+            <AlertTriangle size={18} className="text-amber-400 shrink-0 mt-0.5" />
+            <p className="text-sm text-amber-400">
+              Dataset ACLs could not be read for {grantsFailed} of {data.datasets_scanned} scanned datasets — public/domain exposure check is incomplete.
+            </p>
+          </div>
         </div>
       ) : (
         <div
@@ -134,7 +148,7 @@ export default function SecurityPosture({ region, timeRange }: Props) {
       {/* Section 4: Principal inventory */}
       <div className="rounded-2xl border border-zinc-800/50 p-6" style={{ background: '#111114' }}>
         <h3 className="text-sm font-semibold text-white mb-1">Principal Inventory</h3>
-        <p className="text-xs text-zinc-500 mb-4">Users and service accounts with dataset-level grants</p>
+        <p className="text-xs text-zinc-500 mb-4">Principals (users, service accounts, groups, domains) with dataset-level grants</p>
 
         {principals.length > 0 ? (
           <div className="overflow-x-auto">
@@ -178,9 +192,9 @@ export default function SecurityPosture({ region, timeRange }: Props) {
 
       {/* Section 5: Granted but never used */}
       <div className="rounded-2xl border border-zinc-800/50 p-6" style={{ background: '#111114' }}>
-        <h3 className="text-sm font-semibold text-white mb-1">Granted but Never Used</h3>
+        <h3 className="text-sm font-semibold text-white mb-1">Granted but Never Used (90d)</h3>
         <p className="text-xs text-zinc-500 mb-4">
-          Users & service accounts with grants but zero jobs in the selected window — least-privilege cleanup candidates. Group grants excluded (membership not expandable).
+          Users &amp; service accounts with dataset or project grants but zero BigQuery jobs in this project/region over the last 90 days — least-privilege cleanup candidates. Group grants excluded (membership not expandable).
         </p>
 
         {unusedGrants.length > 0 ? (
@@ -226,21 +240,21 @@ export default function SecurityPosture({ region, timeRange }: Props) {
       {/* Section 6: Dataset protection */}
       <div className="rounded-2xl border border-zinc-800/50 p-6" style={{ background: '#111114' }}>
         <h3 className="text-sm font-semibold text-white mb-1">Dataset Protection</h3>
-        <p className="text-xs text-zinc-500 mb-4">CMEK encryption and default table expiration</p>
+        <p className="text-xs text-zinc-500 mb-4">Default CMEK key and default table expiration on datasets</p>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
           <MetricCard
             label="% CMEK Datasets"
             value={`${cmekPct}%`}
             icon={<Lock size={18} />}
-            detail={`${cmekDatasets} of ${datasetPosture.length} encrypted`}
+            detail={`${cmekDatasets} of ${datasetPosture.length} with default CMEK key (new tables)`}
             accentColor="#4ade80"
           />
           <MetricCard
             label="No Default Expiration"
             value={noExpiration.toString()}
             icon={<AlertTriangle size={18} />}
-            detail="Tables persist indefinitely"
+            detail="No dataset-level default table expiration"
             accentColor="#fbbf24"
           />
           <MetricCard
@@ -304,10 +318,10 @@ export default function SecurityPosture({ region, timeRange }: Props) {
           <div>
             <MetricCard
               label="Untagged Sensitive Columns"
-              value={untaggedSensitive.length.toString()}
+              value={untaggedCount.toString()}
               icon={<Tag size={18} />}
               detail="Columns needing policy tags"
-              accentColor={untaggedSensitive.length > 0 ? '#fb7185' : '#4ade80'}
+              accentColor={untaggedCount > 0 ? '#fb7185' : '#4ade80'}
             />
 
             {sensitiveColumns.length > 0 ? (
@@ -351,8 +365,8 @@ export default function SecurityPosture({ region, timeRange }: Props) {
           </div>
 
           <div>
-            <h4 className="text-sm font-semibold text-white mb-3">Who Can Bypass Policy Tags</h4>
-            <p className="text-xs text-zinc-500 mb-3">Fine-grained readers (datacatalog.categoryFineGrainedGet)</p>
+            <h4 className="text-sm font-semibold text-white mb-3">Fine-Grained Readers (project-level grants only)</h4>
+            <p className="text-xs text-zinc-500 mb-3">Holders of roles/datacatalog.categoryFineGrainedReader (datacatalog.categories.fineGrainedGet)</p>
             {tagBypassers.length > 0 ? (
               <div className="space-y-2">
                 {tagBypassers.map((bypasser, i) => (
@@ -441,6 +455,10 @@ export default function SecurityPosture({ region, timeRange }: Props) {
             <h3 className="text-sm font-semibold text-white mb-2">Visibility Limits</h3>
             <p className="text-xs text-zinc-500 mb-3">What this posture scan does NOT cover:</p>
             <ul className="text-xs text-zinc-500 space-y-1.5">
+              <li className="flex items-start gap-2">
+                <span className="text-zinc-700 shrink-0">•</span>
+                <span>Table/view-level IAM policies (only dataset-level ACLs are scanned)</span>
+              </li>
               <li className="flex items-start gap-2">
                 <span className="text-zinc-700 shrink-0">•</span>
                 <span>Inherited folder/org IAM (requires higher-level access)</span>

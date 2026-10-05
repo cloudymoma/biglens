@@ -598,111 +598,129 @@ func splitTrimmed(s, sep string) []string {
 // --- Dashboard 5b: Access Posture (IAM & Security tab) ---
 
 type SecurityDashboardData struct {
-	PublicFlags      []PublicFlag      `json:"public_flags"`
-	Principals       []PrincipalGrant  `json:"principals"`
-	UnusedGrants     []PrincipalGrant  `json:"unused_grants"`
-	ProjectBindings  []ProjectBinding  `json:"project_bindings"`
-	TagBypassers     []string          `json:"tag_bypassers"`
-	ProjectIAMError  string            `json:"project_iam_error"`
-	DatasetPosture   []DatasetPosture  `json:"dataset_posture"`
-	RLSPolicies      []RLSPolicy       `json:"rls_policies"`
-	RLSScan          RLSScan           `json:"rls_scan"`
-	SensitiveColumns []SensitiveColumn `json:"sensitive_columns"`
-	DatasetsScanned  int               `json:"datasets_scanned"`
-	DatasetsTotal    int               `json:"datasets_total"`
-	DegradedWidgets  []string          `json:"degraded_widgets,omitempty"`
+	PublicFlags            []PublicFlag      `json:"public_flags"`
+	Principals             []PrincipalGrant  `json:"principals"`
+	UnusedGrants           []PrincipalGrant  `json:"unused_grants"`
+	ProjectBindings        []ProjectBinding  `json:"project_bindings"`
+	TagBypassers           []string          `json:"tag_bypassers"`
+	ProjectIAMError        string            `json:"project_iam_error"`
+	DatasetPosture         []DatasetPosture  `json:"dataset_posture"`
+	RLSPolicies            []RLSPolicy       `json:"rls_policies"`
+	RLSScan                RLSScan           `json:"rls_scan"`
+	SensitiveColumns       []SensitiveColumn `json:"sensitive_columns"`
+	UntaggedSensitiveTotal int64             `json:"untagged_sensitive_total"`
+	DatasetsScanned        int               `json:"datasets_scanned"`
+	DatasetsTotal          int               `json:"datasets_total"`
+	GrantsDatasetsFailed   int               `json:"grants_datasets_failed,omitempty"`
+	DegradedWidgets        []string          `json:"degraded_widgets,omitempty"`
 }
 
 func (h *APIHandler) SecurityDashboard(w http.ResponseWriter, r *http.Request) {
 	filters := ParseFilters(r)
-	key := filters.CacheKey("security_dashboard")
+	key := "security_dashboard:" + filters.Region
 
 	if cached, ok := h.cache.Get(key); ok {
 		writeJSON(w, cached)
 		return
 	}
 
-	var data SecurityDashboardData
-	var mu sync.Mutex
-	addDegraded := func(name string) {
-		mu.Lock()
-		data.DegradedWidgets = append(data.DegradedWidgets, name)
-		mu.Unlock()
-	}
-	g, ctx := errgroup.WithContext(r.Context())
-
-	g.Go(func() error {
-		// Grants fan-out; unused-grants join needs the activity set too.
-		datasets, total, err := h.bq.GetDatasetNames(ctx, filters.Region)
-		if err != nil {
-			return err
+	v, err, _ := h.sf.Do(key, func() (any, error) {
+		if cached, ok := h.cache.Get(key); ok {
+			return cached, nil
 		}
-		data.DatasetsScanned = len(datasets)
-		data.DatasetsTotal = total
 
-		// Row access policies come from the REST API, not query jobs, so
-		// they are listed alongside the grants fan-out.
+		var data SecurityDashboardData
+		var mu sync.Mutex
+		addDegraded := func(name string) {
+			mu.Lock()
+			data.DegradedWidgets = append(data.DegradedWidgets, name)
+			mu.Unlock()
+		}
+		g, ctx := errgroup.WithContext(r.Context())
+
+		var activePrincipals map[string]bool
+
 		g.Go(func() error {
-			h.fillRLS(ctx, filters.Region, datasets, &data, addDegraded)
+			dp, err := h.bq.GetDatasetPosture(ctx, filters.Region)
+			if err != nil {
+				return err
+			}
+			data.DatasetPosture = dp
+			datasets, total := datasetNamesFromPosture(dp)
+			data.DatasetsScanned = len(datasets)
+			data.DatasetsTotal = total
+
+			g.Go(func() error {
+				h.fillRLS(ctx, filters.Region, datasets, &data, addDegraded)
+				return nil
+			})
+
+			grants, failed := h.bq.GetObjectGrants(ctx, filters.Region, datasets)
+			data.PublicFlags = publicFlags(grants)
+			data.Principals = buildPrincipalGrants(grants)
+			if failed > 0 {
+				data.GrantsDatasetsFailed = failed
+				addDegraded("object_grants")
+			}
 			return nil
 		})
 
-		grants := h.bq.GetObjectGrants(ctx, filters.Region, datasets)
-		data.PublicFlags = publicFlags(grants)
-		data.Principals = buildPrincipalGrants(grants)
-
-		active, err := h.bq.GetActivePrincipals(ctx, filters.Region, filters.TimeRange)
-		if err != nil {
-			slog.Warn("unused grants widget degraded", "error", err)
-			addDegraded("unused_grants")
+		g.Go(func() error {
+			active, err := h.bq.GetActivePrincipals(ctx, filters.Region, "90d")
+			if err != nil {
+				slog.Warn("unused grants widget degraded", "error", err)
+				addDegraded("unused_grants")
+				return nil
+			}
+			activePrincipals = active
 			return nil
-		}
-		data.UnusedGrants = computeUnusedGrants(data.Principals, active)
-		return nil
-	})
+		})
 
-	g.Go(func() error {
-		// Needs resourcemanager.projects.getIamPolicy; degrade with a hint.
-		bindings, bypassers, err := h.bq.GetProjectBindings(ctx)
-		if err != nil {
-			slog.Warn("project IAM widget degraded", "error", err)
-			addDegraded("project_iam")
-			data.ProjectIAMError = "Project-level bindings unavailable — grant the service account roles/browser (or resourcemanager.projects.getIamPolicy)."
+		g.Go(func() error {
+			// Needs resourcemanager.projects.getIamPolicy; degrade with a hint.
+			bindings, bypassers, err := h.bq.GetProjectBindings(ctx)
+			if err != nil {
+				slog.Warn("project IAM widget degraded", "error", err)
+				addDegraded("project_iam")
+				data.ProjectIAMError = "Project-level bindings unavailable — grant the service account roles/browser (or resourcemanager.projects.getIamPolicy)."
+				return nil
+			}
+			data.ProjectBindings = bindings
+			data.TagBypassers = bypassers
 			return nil
-		}
-		data.ProjectBindings = bindings
-		data.TagBypassers = bypassers
-		return nil
-	})
+		})
 
-	g.Go(func() error {
-		dp, err := h.bq.GetDatasetPosture(ctx, filters.Region)
-		if err != nil {
-			return err
-		}
-		data.DatasetPosture = dp
-		return nil
-	})
-
-	g.Go(func() error {
-		// COLUMN_FIELD_PATHS region support varies; degrade to empty.
-		sc, err := h.bq.GetSensitiveColumns(ctx, filters.Region)
-		if err != nil {
-			slog.Warn("sensitive columns widget degraded", "error", err)
-			addDegraded("sensitive_columns")
+		g.Go(func() error {
+			// COLUMN_FIELD_PATHS region support varies; degrade to empty.
+			sc, untaggedTotal, err := h.bq.GetSensitiveColumns(ctx, filters.Region)
+			if err != nil {
+				slog.Warn("sensitive columns widget degraded", "error", err)
+				addDegraded("sensitive_columns")
+				return nil
+			}
+			data.SensitiveColumns = sc
+			data.UntaggedSensitiveTotal = untaggedTotal
 			return nil
-		}
-		data.SensitiveColumns = sc
-		return nil
-	})
+		})
 
-	if err := g.Wait(); err != nil {
+		if err := g.Wait(); err != nil {
+			return nil, err
+		}
+
+		if activePrincipals != nil {
+			merged := mergeProjectPrincipals(data.Principals, data.ProjectBindings)
+			data.UnusedGrants = computeUnusedGrants(merged, activePrincipals)
+		}
+
+		h.cache.Set(key, &data)
+		return &data, nil
+	})
+	if err != nil {
 		writeError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	h.cache.Set(key, &data)
-	writeJSON(w, &data)
+	writeJSON(w, v)
 }
 
 // --- Regions ---

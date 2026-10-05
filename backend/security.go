@@ -23,6 +23,8 @@ const (
 	KindServiceAccount GranteeKind = "serviceAccount"
 	KindGroup          GranteeKind = "group"
 	KindDomain         GranteeKind = "domain"
+	KindProjectRole    GranteeKind = "projectRole"
+	KindDeleted        GranteeKind = "deleted"
 	KindSpecial        GranteeKind = "special"
 	KindPublic         GranteeKind = "public"
 )
@@ -42,12 +44,13 @@ type PrincipalGrant struct {
 }
 
 func classifyGrantee(g string) (GranteeKind, string) {
-	if g == "allUsers" || g == "allAuthenticatedUsers" {
-		return KindPublic, g
+	trimmed := strings.TrimPrefix(g, "iamMember:")
+	if trimmed == "allUsers" || trimmed == "allAuthenticatedUsers" {
+		return KindPublic, trimmed
 	}
-	prefix, rest, found := strings.Cut(g, ":")
+	prefix, rest, found := strings.Cut(trimmed, ":")
 	if !found {
-		return KindSpecial, g
+		return KindSpecial, trimmed
 	}
 	switch prefix {
 	case "user":
@@ -58,14 +61,26 @@ func classifyGrantee(g string) (GranteeKind, string) {
 		return KindGroup, rest
 	case "domain":
 		return KindDomain, rest
+	case "projectOwner", "projectEditor", "projectViewer":
+		return KindProjectRole, trimmed
+	case "deleted":
+		return KindDeleted, trimmed
 	case "specialGroup":
-		return KindSpecial, rest
+		switch rest {
+		case "allUsers", "allAuthenticatedUsers":
+			return KindPublic, rest
+		case "projectOwners", "projectWriters", "projectReaders":
+			return KindProjectRole, rest
+		default:
+			return KindSpecial, rest
+		}
 	default:
 		return KindSpecial, rest
 	}
 }
 
 func isWriteRole(role string) bool {
+	role = canonicalRoleName(role)
 	switch role {
 	case "WRITER", "OWNER":
 		return true
@@ -78,11 +93,19 @@ func isWriteRole(role string) bool {
 	return role == "roles/owner" || role == "roles/editor"
 }
 
+func canonicalRoleName(role string) string {
+	if idx := strings.Index(role, "_withcond_"); idx >= 0 {
+		return role[:idx]
+	}
+	return role
+}
+
 // filterProjectBindings keeps only BigQuery / Knowledge Catalog relevant
 // roles; everything else in the project policy never reaches the frontend.
 func filterProjectBindings(bindings map[string][]string) []ProjectBinding {
-	var out []ProjectBinding
-	for role, members := range bindings {
+	merged := map[string]map[string]bool{}
+	for rawRole, members := range bindings {
+		role := canonicalRoleName(rawRole)
 		basic := role == "roles/owner" || role == "roles/editor" || role == "roles/viewer"
 		if !basic &&
 			!strings.HasPrefix(role, "roles/bigquery.") &&
@@ -90,9 +113,80 @@ func filterProjectBindings(bindings map[string][]string) []ProjectBinding {
 			!strings.HasPrefix(role, "roles/datacatalog.") {
 			continue
 		}
-		out = append(out, ProjectBinding{Role: role, Basic: basic, Members: members})
+		if merged[role] == nil {
+			merged[role] = map[string]bool{}
+		}
+		for _, m := range members {
+			merged[role][m] = true
+		}
+	}
+	var out []ProjectBinding
+	for role, mset := range merged {
+		basic := role == "roles/owner" || role == "roles/editor" || role == "roles/viewer"
+		out = append(out, ProjectBinding{Role: role, Basic: basic, Members: sortedKeys(mset)})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Role < out[j].Role })
+	return out
+}
+
+// mergeProjectPrincipals combines dataset-level principal grants with
+// project-level user/serviceAccount BigQuery/Catalog role bindings so
+// project-level role holders are also evaluated for unused grants.
+func mergeProjectPrincipals(datasetPrincipals []PrincipalGrant, projectBindings []ProjectBinding) []PrincipalGrant {
+	type agg struct {
+		display  string
+		kind     GranteeKind
+		datasets map[string]bool
+		roles    map[string]bool
+		write    bool
+	}
+	byKey := map[string]*agg{}
+	ensure := func(principal string, kind GranteeKind) *agg {
+		key := strings.ToLower(principal)
+		a, ok := byKey[key]
+		if !ok {
+			a = &agg{display: principal, kind: kind, datasets: map[string]bool{}, roles: map[string]bool{}}
+			byKey[key] = a
+		}
+		return a
+	}
+	for _, p := range datasetPrincipals {
+		a := ensure(p.Principal, p.Kind)
+		for _, ds := range p.Datasets {
+			a.datasets[ds] = true
+		}
+		for _, r := range p.Roles {
+			a.roles[r] = true
+		}
+		if p.WriteCapable {
+			a.write = true
+		}
+	}
+	for _, pb := range projectBindings {
+		for _, m := range pb.Members {
+			kind, id := classifyGrantee(m)
+			if kind != KindUser && kind != KindServiceAccount {
+				continue
+			}
+			a := ensure(id, kind)
+			a.datasets["(project)"] = true
+			a.roles[pb.Role] = true
+			if isWriteRole(pb.Role) {
+				a.write = true
+			}
+		}
+	}
+	out := make([]PrincipalGrant, 0, len(byKey))
+	for _, a := range byKey {
+		out = append(out, PrincipalGrant{
+			Principal:    a.display,
+			Kind:         a.kind,
+			Datasets:     sortedKeys(a.datasets),
+			Roles:        sortedKeys(a.roles),
+			WriteCapable: a.write,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Principal < out[j].Principal })
 	return out
 }
 
@@ -104,7 +198,7 @@ func computeUnusedGrants(principals []PrincipalGrant, active map[string]bool) []
 		if p.Kind != KindUser && p.Kind != KindServiceAccount {
 			continue
 		}
-		if !active[p.Principal] {
+		if !active[p.Principal] && !active[strings.ToLower(p.Principal)] {
 			out = append(out, p)
 		}
 	}
@@ -112,6 +206,19 @@ func computeUnusedGrants(principals []PrincipalGrant, active map[string]bool) []
 }
 
 const maxPostureDatasets = 50
+
+func datasetNamesFromPosture(posture []DatasetPosture) ([]string, int) {
+	total := len(posture)
+	limit := total
+	if limit > maxPostureDatasets {
+		limit = maxPostureDatasets
+	}
+	names := make([]string, 0, limit)
+	for i := 0; i < limit; i++ {
+		names = append(names, posture[i].Dataset)
+	}
+	return names, total
+}
 
 func (b *BQClient) GetDatasetNames(ctx context.Context, region string) ([]string, int, error) {
 	q := b.client.Query(fmt.Sprintf(
@@ -143,14 +250,66 @@ type ObjectGrant struct {
 	Grantee    string `json:"grantee" bigquery:"grantee"`
 }
 
-// GetObjectGrants fans out one metadata query per dataset with bounded
-// concurrency. Individual dataset failures are logged and skipped so one
-// permission gap cannot blank the whole posture view. Row access policies
-// are read separately through the REST API (security_rls.go).
-func (b *BQClient) GetObjectGrants(ctx context.Context, region string, datasets []string) []ObjectGrant {
+func extractGrantsFromDatasetMetadata(ds string, md *bigquery.DatasetMetadata) []ObjectGrant {
+	if md == nil {
+		return nil
+	}
+	var out []ObjectGrant
+	for _, ae := range md.Access {
+		if ae == nil || ae.Role == "" {
+			continue
+		}
+		role := string(ae.Role)
+		switch ae.Role {
+		case bigquery.OwnerRole:
+			role = "roles/bigquery.dataOwner"
+		case bigquery.WriterRole:
+			role = "roles/bigquery.dataEditor"
+		case bigquery.ReaderRole:
+			role = "roles/bigquery.dataViewer"
+		}
+		var grantee string
+		switch ae.EntityType {
+		case bigquery.UserEmailEntity:
+			if strings.HasSuffix(strings.ToLower(ae.Entity), ".gserviceaccount.com") {
+				grantee = "serviceAccount:" + ae.Entity
+			} else {
+				grantee = "user:" + ae.Entity
+			}
+		case bigquery.GroupEmailEntity:
+			grantee = "group:" + ae.Entity
+		case bigquery.DomainEntity:
+			grantee = "domain:" + ae.Entity
+		case bigquery.SpecialGroupEntity:
+			if ae.Entity == "allAuthenticatedUsers" || ae.Entity == "allUsers" {
+				grantee = ae.Entity
+			} else {
+				grantee = "specialGroup:" + ae.Entity
+			}
+		case bigquery.IAMMemberEntity:
+			grantee = ae.Entity
+		default:
+			continue
+		}
+		out = append(out, ObjectGrant{
+			Dataset:    ds,
+			ObjectType: "SCHEMA",
+			Role:       role,
+			Grantee:    grantee,
+		})
+	}
+	return out
+}
+
+// GetObjectGrants reads dataset ACLs via the free Dataset.Metadata REST API
+// (datasets.get) with bounded concurrency, falling back to OBJECT_PRIVILEGES
+// if needed, and returns both the collected grants and the number of datasets
+// whose ACLs could not be evaluated.
+func (b *BQClient) GetObjectGrants(ctx context.Context, region string, datasets []string) ([]ObjectGrant, int) {
 	var (
 		mu     sync.Mutex
 		grants []ObjectGrant
+		failed int
 		wg     sync.WaitGroup
 		sem    = make(chan struct{}, 8)
 	)
@@ -163,6 +322,17 @@ func (b *BQClient) GetObjectGrants(ctx context.Context, region string, datasets 
 
 			if !datasetNameRe.MatchString(ds) {
 				slog.Warn("invalid dataset name skipped", "dataset", ds)
+				mu.Lock()
+				failed++
+				mu.Unlock()
+				return
+			}
+
+			if md, err := b.client.Dataset(ds).Metadata(ctx); err == nil {
+				g := extractGrantsFromDatasetMetadata(ds, md)
+				mu.Lock()
+				grants = append(grants, g...)
+				mu.Unlock()
 				return
 			}
 
@@ -174,6 +344,10 @@ func (b *BQClient) GetObjectGrants(ctx context.Context, region string, datasets 
 			g, err := collectRows[ObjectGrant](gq, ctx)
 			if err != nil {
 				slog.Warn("object privileges skipped", "dataset", ds, "error", err)
+				mu.Lock()
+				failed++
+				mu.Unlock()
+				return
 			}
 
 			mu.Lock()
@@ -182,7 +356,7 @@ func (b *BQClient) GetObjectGrants(ctx context.Context, region string, datasets 
 		}(ds)
 	}
 	wg.Wait()
-	return grants
+	return grants, failed
 }
 
 type PublicFlag struct {
@@ -194,7 +368,8 @@ type PublicFlag struct {
 }
 
 // publicFlags surfaces grants that widen access beyond named principals:
-// public internet, whole domains, and legacy special groups.
+// public internet, whole domains, and legacy special groups (excluding
+// standard project-role convenience groups projectOwners/Writers/Readers).
 func publicFlags(grants []ObjectGrant) []PublicFlag {
 	var out []PublicFlag
 	for _, g := range grants {
@@ -216,8 +391,8 @@ func buildPrincipalGrants(grants []ObjectGrant) []PrincipalGrant {
 	byID := map[string]*agg{}
 	for _, g := range grants {
 		kind, id := classifyGrantee(g.Grantee)
-		if kind == KindPublic || kind == KindSpecial {
-			continue // covered by publicFlags
+		if kind == KindPublic || kind == KindSpecial || kind == KindProjectRole || kind == KindDeleted {
+			continue
 		}
 		a, ok := byID[id]
 		if !ok {
@@ -251,7 +426,8 @@ func sortedKeys(m map[string]bool) []string {
 	return out
 }
 
-// GetProjectBindings reads the project IAM policy once and whitelists
+// GetProjectBindings reads the project IAM policy once (requesting v3 so
+// conditional bindings keep their canonical role names) and whitelists
 // BigQuery/Catalog roles. Second return: holders of
 // roles/datacatalog.categoryFineGrainedReader (can read policy-tagged columns).
 func (b *BQClient) GetProjectBindings(ctx context.Context) ([]ProjectBinding, []string, error) {
@@ -262,6 +438,7 @@ func (b *BQClient) GetProjectBindings(ctx context.Context) ([]ProjectBinding, []
 	defer c.Close()
 	policy, err := c.GetIamPolicy(ctx, &iampb.GetIamPolicyRequest{
 		Resource: "projects/" + b.config.BigQuery.ProjectID,
+		Options:  &iampb.GetPolicyOptions{RequestedPolicyVersion: 3},
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("get project iam policy: %w", err)
@@ -302,31 +479,63 @@ func (b *BQClient) GetDatasetPosture(ctx context.Context, region string) ([]Data
 	return collectRows[DatasetPosture](q, ctx)
 }
 
-const sensitiveColRegex = `ssn|social_security|passport|tax_id|email|phone|address|dob|birth|salary|income|credit_card|iban|swift|password|secret|token|api_key|auth`
+const sensitiveColRegex = `(^|[._])(ssn|social_security|passport|tax_id|e?mail|phone|dob|birth_?date|salary|income|credit_card|iban|swift|password|secret|api_key|auth_token|access_token)($|[._])`
 
 type SensitiveColumn struct {
-	Dataset string `json:"dataset" bigquery:"table_schema"`
-	Table   string `json:"table" bigquery:"table_name"`
-	Column  string `json:"column" bigquery:"field_path"`
-	Tagged  bool   `json:"tagged" bigquery:"tagged"`
+	Dataset       string `json:"dataset" bigquery:"table_schema"`
+	Table         string `json:"table" bigquery:"table_name"`
+	Column        string `json:"column" bigquery:"field_path"`
+	Tagged        bool   `json:"tagged" bigquery:"tagged"`
+	UntaggedTotal int64  `json:"-" bigquery:"untagged_total"`
 }
 
-func (b *BQClient) GetSensitiveColumns(ctx context.Context, region string) ([]SensitiveColumn, error) {
-	q := b.client.Query(fmt.Sprintf(
-		`SELECT table_schema, table_name, field_path,
-			ARRAY_LENGTH(IFNULL(policy_tags, [])) > 0 AS tagged
-		FROM %s.INFORMATION_SCHEMA.COLUMN_FIELD_PATHS
-		WHERE NOT STARTS_WITH(table_schema, '_')
-			AND REGEXP_CONTAINS(LOWER(field_path), @pattern)
-		ORDER BY tagged, table_schema, table_name LIMIT 200`, b.regionRef(region)))
+func sensitiveColumnsSQL(regionRef string) string {
+	return fmt.Sprintf(
+		`SELECT
+			table_schema,
+			table_name,
+			field_path,
+			tagged,
+			COUNTIF(NOT tagged) OVER () AS untagged_total
+		FROM (
+			SELECT
+				c.table_schema,
+				c.table_name,
+				c.field_path,
+				ARRAY_LENGTH(IFNULL(c.policy_tags, [])) > 0 AS tagged
+			FROM %s.INFORMATION_SCHEMA.COLUMN_FIELD_PATHS c
+			JOIN %s.INFORMATION_SCHEMA.TABLES t
+				USING (table_catalog, table_schema, table_name)
+			WHERE t.table_type IN ('BASE TABLE', 'CLONE', 'SNAPSHOT')
+				AND NOT STARTS_WITH(c.table_schema, '_')
+				AND c.data_type NOT LIKE 'STRUCT%%'
+				AND REGEXP_CONTAINS(LOWER(c.field_path), @pattern)
+		)
+		ORDER BY tagged, table_schema, table_name
+		LIMIT 200`, regionRef, regionRef)
+}
+
+func (b *BQClient) GetSensitiveColumns(ctx context.Context, region string) ([]SensitiveColumn, int64, error) {
+	q := b.client.Query(sensitiveColumnsSQL(b.regionRef(region)))
 	q.Parameters = []bigquery.QueryParameter{{Name: "pattern", Value: sensitiveColRegex}}
-	return collectRows[SensitiveColumn](q, ctx)
+	rows, err := collectRows[SensitiveColumn](q, ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+	var untaggedTotal int64
+	if len(rows) > 0 {
+		untaggedTotal = rows[0].UntaggedTotal
+	}
+	return rows, untaggedTotal, nil
 }
 
 func (b *BQClient) GetActivePrincipals(ctx context.Context, region, timeRange string) (map[string]bool, error) {
 	q := b.client.Query(fmt.Sprintf(
-		`SELECT DISTINCT IFNULL(user_email, '') AS user_email FROM %s.INFORMATION_SCHEMA.JOBS_BY_PROJECT
-		 WHERE creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL %s)`,
+		`SELECT DISTINCT LOWER(user_email) AS user_email
+		 FROM %s.INFORMATION_SCHEMA.JOBS_BY_PROJECT
+		 WHERE creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL %s)
+		   AND user_email IS NOT NULL
+		   AND IFNULL(statement_type, '') != 'SCRIPT'`,
 		b.regionRef(region), timeRangeToInterval(timeRange)))
 	type row struct {
 		UserEmail string `bigquery:"user_email"`
@@ -337,7 +546,9 @@ func (b *BQClient) GetActivePrincipals(ctx context.Context, region, timeRange st
 	}
 	active := make(map[string]bool, len(rows))
 	for _, r := range rows {
-		active[r.UserEmail] = true
+		if r.UserEmail != "" {
+			active[strings.ToLower(r.UserEmail)] = true
+		}
 	}
 	return active, nil
 }

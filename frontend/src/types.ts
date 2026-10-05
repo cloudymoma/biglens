@@ -247,7 +247,7 @@ export interface InactiveEmail {
   total_calls: number;
 }
 
-export type GranteeKind = 'user' | 'serviceAccount' | 'group' | 'domain' | 'special' | 'public';
+export type GranteeKind = 'user' | 'serviceAccount' | 'group' | 'domain' | 'projectRole' | 'deleted' | 'special' | 'public';
 
 export interface PublicFlag {
   dataset: string;
@@ -316,8 +316,10 @@ export interface SecurityDashboardData {
   rls_policies: RLSPolicy[] | null;
   rls_scan?: RLSScan | null;
   sensitive_columns: SensitiveColumn[] | null;
+  untagged_sensitive_total?: number;
   datasets_scanned: number;
   datasets_total: number;
+  grants_datasets_failed?: number;
   degraded_widgets?: string[];
 }
 

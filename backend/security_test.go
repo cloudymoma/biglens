@@ -2,6 +2,7 @@ package main
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -15,16 +16,35 @@ func TestClassifyGrantee(t *testing.T) {
 		{"serviceAccount:sa@p.iam.gserviceaccount.com", KindServiceAccount, "sa@p.iam.gserviceaccount.com"},
 		{"group:analysts@example.com", KindGroup, "analysts@example.com"},
 		{"domain:example.com", KindDomain, "example.com"},
-		{"specialGroup:projectReaders", KindSpecial, "projectReaders"},
+		{"projectOwner:mycompany", KindProjectRole, "projectOwner:mycompany"},
+		{"projectEditor:mycompany", KindProjectRole, "projectEditor:mycompany"},
+		{"projectViewer:mycompany", KindProjectRole, "projectViewer:mycompany"},
+		{"specialGroup:projectReaders", KindProjectRole, "projectReaders"},
+		{"specialGroup:allAuthenticatedUsers", KindPublic, "allAuthenticatedUsers"},
 		{"allUsers", KindPublic, "allUsers"},
 		{"allAuthenticatedUsers", KindPublic, "allAuthenticatedUsers"},
-		{"iamMember:deleted:user:x", KindSpecial, "deleted:user:x"},
+		{"iamMember:deleted:user:x", KindDeleted, "deleted:user:x"},
 	}
 	for _, tt := range tests {
 		kind, id := classifyGrantee(tt.in)
 		if kind != tt.kind || id != tt.id {
 			t.Errorf("classifyGrantee(%q) = %v,%q want %v,%q", tt.in, kind, id, tt.kind, tt.id)
 		}
+	}
+}
+
+func TestPublicFlagsExcludesDefaultProjectRoles(t *testing.T) {
+	grants := []ObjectGrant{
+		{Dataset: "ds1", ObjectType: "SCHEMA", Role: "roles/bigquery.dataOwner", Grantee: "projectOwner:my-proj"},
+		{Dataset: "ds1", ObjectType: "SCHEMA", Role: "roles/bigquery.dataEditor", Grantee: "projectEditor:my-proj"},
+		{Dataset: "ds1", ObjectType: "SCHEMA", Role: "roles/bigquery.dataViewer", Grantee: "projectViewer:my-proj"},
+		{Dataset: "ds1", ObjectType: "SCHEMA", Role: "roles/bigquery.dataViewer", Grantee: "specialGroup:projectReaders"},
+		{Dataset: "ds1", ObjectType: "SCHEMA", Role: "roles/bigquery.dataViewer", Grantee: "allAuthenticatedUsers"},
+		{Dataset: "ds1", ObjectType: "SCHEMA", Role: "roles/bigquery.dataViewer", Grantee: "domain:example.com"},
+	}
+	flags := publicFlags(grants)
+	if len(flags) != 2 {
+		t.Fatalf("publicFlags = %+v, want 2 flags (allAuthenticatedUsers and domain:example.com)", flags)
 	}
 }
 
@@ -37,6 +57,7 @@ func TestIsWriteRole(t *testing.T) {
 		{"roles/bigquery.dataEditor", true},
 		{"roles/bigquery.dataOwner", true},
 		{"roles/bigquery.admin", true},
+		{"roles/owner_withcond_abc123", true},
 		{"WRITER", true},
 		{"OWNER", true},
 		{"READER", false},
@@ -54,7 +75,7 @@ func TestFilterProjectBindings(t *testing.T) {
 		"roles/dataplex.catalogViewer":                {"group:g@x.com"},
 		"roles/datacatalog.categoryFineGrainedReader": {"user:b@x.com"},
 		"roles/compute.admin":                         {"user:evil@x.com"},
-		"roles/owner":                                 {"user:c@x.com"},
+		"roles/owner_withcond_deadbeef":               {"user:c@x.com"},
 	}
 	out := filterProjectBindings(in)
 	roles := map[string]ProjectBinding{}
@@ -79,19 +100,37 @@ func TestFilterProjectBindings(t *testing.T) {
 
 func TestComputeUnusedGrants(t *testing.T) {
 	principals := []PrincipalGrant{
-		{Principal: "used@x.com", Kind: KindUser},
-		{Principal: "idle@x.com", Kind: KindUser},
-		{Principal: "sa@p.iam.gserviceaccount.com", Kind: KindServiceAccount},
-		{Principal: "analysts@x.com", Kind: KindGroup},
+		{Principal: "Used@x.com", Kind: KindUser, Datasets: []string{"ds1"}, Roles: []string{"roles/bigquery.dataViewer"}},
+		{Principal: "idle@x.com", Kind: KindUser, Datasets: []string{"ds1"}, Roles: []string{"roles/bigquery.dataViewer"}},
+		{Principal: "sa@p.iam.gserviceaccount.com", Kind: KindServiceAccount, Datasets: []string{"ds1"}, Roles: []string{"roles/bigquery.dataEditor"}, WriteCapable: true},
+		{Principal: "analysts@x.com", Kind: KindGroup, Datasets: []string{"ds1"}},
 	}
+	bindings := []ProjectBinding{
+		{Role: "roles/bigquery.admin", Members: []string{"user:proj_idle@x.com"}},
+	}
+	merged := mergeProjectPrincipals(principals, bindings)
 	active := map[string]bool{"used@x.com": true}
-	got := computeUnusedGrants(principals, active)
+	got := computeUnusedGrants(merged, active)
 	var names []string
 	for _, p := range got {
 		names = append(names, p.Principal)
 	}
-	want := []string{"idle@x.com", "sa@p.iam.gserviceaccount.com"}
+	want := []string{"idle@x.com", "proj_idle@x.com", "sa@p.iam.gserviceaccount.com"}
 	if !reflect.DeepEqual(names, want) {
-		t.Errorf("unused = %v want %v (groups excluded, active excluded)", names, want)
+		t.Errorf("unused = %v want %v (groups excluded, active excluded case-insensitively, project role holders included)", names, want)
 	}
 }
+
+func TestSensitiveColumnsSQL(t *testing.T) {
+	sql := sensitiveColumnsSQL("`p`.`region-us`")
+	for _, want := range []string{
+		"COUNTIF(NOT tagged) OVER () AS untagged_total",
+		"WHERE t.table_type IN ('BASE TABLE', 'CLONE', 'SNAPSHOT')",
+		"AND c.data_type NOT LIKE 'STRUCT%'",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("sensitiveColumnsSQL missing %q in:\n%s", want, sql)
+		}
+	}
+}
+
