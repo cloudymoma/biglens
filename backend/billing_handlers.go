@@ -52,7 +52,7 @@ func parseBillingFilter(r *http.Request, cfg *Config) (BillingFilter, error) {
 		return f, err
 	}
 
-	f.End = civil.DateOf(time.Now().UTC())
+	f.End = billingToday()
 	f.Start = f.End.AddDays(-30)
 	if s := q.Get("start"); s != "" {
 		if f.Start, err = civil.ParseDate(s); err != nil {
@@ -64,6 +64,11 @@ func parseBillingFilter(r *http.Request, cfg *Config) (BillingFilter, error) {
 			return f, fmt.Errorf("invalid end date %q: %w", s, err)
 		}
 	}
+	// On the 1st of the month, an MTD preset produces start == end == today;
+	// advance end by 1 day so the half-open [start, end) window covers today.
+	if f.Start == f.End {
+		f.End = f.Start.AddDays(1)
+	}
 	if !f.Start.Before(f.End) {
 		return f, fmt.Errorf("start must be before end")
 	}
@@ -73,6 +78,14 @@ func parseBillingFilter(r *http.Request, cfg *Config) (BillingFilter, error) {
 			return f, fmt.Errorf("invoice_month must be YYYYMM, got %q", m)
 		}
 		f.InvoiceMonth = m
+	} else {
+		minDate := civil.Date{Year: 2017, Month: time.January, Day: 1}
+		if f.Start.Before(minDate) {
+			return f, fmt.Errorf("start date must be 2017-01-01 or later, got %s", f.Start)
+		}
+		if days := f.End.DaysSince(f.Start); days > 400 {
+			return f, fmt.Errorf("date window cannot exceed 400 days (got %d days)", days)
+		}
 	}
 
 	f.Accounts = billingCSV(r, "accounts")
@@ -89,6 +102,12 @@ func parseBillingFilter(r *http.Request, cfg *Config) (BillingFilter, error) {
 }
 
 var billingFlight singleflight.Group
+
+// billingFlightCtx detaches from the first caller's request cancellation so an
+// aborted browser tab does not fail other concurrent waiters or skip caching.
+func billingFlightCtx(r *http.Request) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(r.Context()), 2*time.Minute)
+}
 
 type BillingDatasetInfo struct {
 	Dataset         string   `json:"dataset"`
@@ -119,14 +138,19 @@ func (h *APIHandler) billingTables(ctx context.Context, datasetFQN string) (Bill
 		return BillingTableInfo{}, err
 	}
 	info := classifyBillingTables(names)
-	for _, table := range info.Standard {
-		cur, err := h.bq.GetBillingCurrency(ctx, project, dataset, table)
+	accounts := make([]string, 0, len(info.Standard))
+	for acct := range info.Standard {
+		accounts = append(accounts, acct)
+	}
+	slices.Sort(accounts)
+	for _, acct := range accounts {
+		cur, err := h.bq.GetBillingCurrency(ctx, project, dataset, info.Standard[acct])
 		if err == nil && cur != "" {
 			info.Currency = cur
+			break
 		}
-		break // one table is enough; currency is per billing account file
 	}
-	h.cache.Set(key, info)
+	h.cache.SetWithTTL(key, info, 6*time.Hour)
 	return info, nil
 }
 
@@ -250,12 +274,18 @@ func (h *APIHandler) BillingMeta(w http.ResponseWriter, r *http.Request) {
 	}
 
 	v, err, _ := billingFlight.Do(key, func() (any, error) {
-		info, err := h.billingTables(r.Context(), f.DatasetFQN)
+		fctx, cancel := billingFlightCtx(r)
+		defer cancel()
+
+		info, err := h.billingTables(fctx, f.DatasetFQN)
 		if err != nil {
 			return nil, err
 		}
 		mf := billingMetaFilter(f)
-		src, params := billingSource(f.Project, f.Dataset, mf.standardTables(info), mf)
+		tables := mf.standardTables(info)
+		dimSrc, dimParams := billingMetaPartitionSource(f.Project, f.Dataset, tables, mf.Start, mf.End)
+		labelStart := mf.End.AddDays(-90)
+		labelSrc, labelParams := billingMetaPartitionSource(f.Project, f.Dataset, tables, labelStart, mf.End)
 
 		data := BillingMeta{
 			Dataset:       billingDatasetInfo(info, f.DatasetFQN),
@@ -264,29 +294,25 @@ func (h *APIHandler) BillingMeta(w http.ResponseWriter, r *http.Request) {
 			LabelKeys:     []string{},
 			InvoiceMonths: []string{},
 		}
-		g, ctx := errgroup.WithContext(r.Context())
+		g, ctx := errgroup.WithContext(fctx)
 		g.Go(func() error {
-			rows, err := h.bq.GetBillingProjects(ctx, src, params)
+			projs, svcs, ims, err := h.bq.GetBillingMetaDimensions(ctx, dimSrc, dimParams)
 			if err != nil {
-				return fmt.Errorf("billing projects: %w", err)
+				return fmt.Errorf("billing meta dimensions: %w", err)
 			}
-			if rows != nil {
-				data.Projects = rows
+			if projs != nil {
+				data.Projects = projs
+			}
+			if svcs != nil {
+				data.Services = svcs
+			}
+			if ims != nil {
+				data.InvoiceMonths = ims
 			}
 			return nil
 		})
 		g.Go(func() error {
-			rows, err := h.bq.GetBillingServices(ctx, src, params)
-			if err != nil {
-				return fmt.Errorf("billing services: %w", err)
-			}
-			if rows != nil {
-				data.Services = rows
-			}
-			return nil
-		})
-		g.Go(func() error {
-			rows, err := h.bq.GetBillingLabelKeys(ctx, src, params)
+			rows, err := h.bq.GetBillingLabelKeys(ctx, labelSrc, labelParams)
 			if err != nil {
 				return fmt.Errorf("billing label keys: %w", err)
 			}
@@ -295,20 +321,10 @@ func (h *APIHandler) BillingMeta(w http.ResponseWriter, r *http.Request) {
 			}
 			return nil
 		})
-		g.Go(func() error {
-			rows, err := h.bq.GetBillingInvoiceMonths(ctx, src, params)
-			if err != nil {
-				return fmt.Errorf("billing invoice months: %w", err)
-			}
-			if rows != nil {
-				data.InvoiceMonths = rows
-			}
-			return nil
-		})
 		if err := g.Wait(); err != nil {
 			return nil, err
 		}
-		h.cache.Set(key, &data)
+		h.cache.SetWithTTL(key, &data, 6*time.Hour)
 		return &data, nil
 	})
 	if err != nil {
@@ -354,61 +370,52 @@ func (h *APIHandler) BillingOverview(w http.ResponseWriter, r *http.Request) {
 	}
 
 	v, err, _ := billingFlight.Do(key, func() (any, error) {
-		src, params, err := h.billingStandardSource(r.Context(), f)
+		fctx, cancel := billingFlightCtx(r)
+		defer cancel()
+
+		src, params, err := h.billingStandardSource(fctx, f)
 		if err != nil {
 			return nil, err
 		}
+		kpis, daily, svcs, projs, err := h.bq.GetBillingOverviewRollup(fctx, src, params)
+		if err != nil {
+			return nil, fmt.Errorf("billing overview rollup: %w", err)
+		}
+		top50Svcs := svcs
+		if len(top50Svcs) > 50 {
+			top50Svcs = slices.Clone(top50Svcs[:50])
+		}
+		h.cache.Set(f.cacheKey("svc_groups"), top50Svcs)
+
+		topServices := svcs
+		if len(topServices) > 5 {
+			var otherGross, otherNet, otherCredits float64
+			for _, s := range topServices[5:] {
+				otherGross += s.Gross
+				otherNet += s.Net
+				otherCredits += s.Credits
+			}
+			topServices = append(slices.Clone(topServices[:5]), BillingGroupRow{
+				Name:    "Other",
+				Gross:   otherGross,
+				Net:     otherNet,
+				Credits: otherCredits,
+			})
+		}
+		topProjects := projs
+		if len(topProjects) > 5 {
+			topProjects = slices.Clone(topProjects[:5])
+		}
 		data := BillingOverviewData{
-			Kpis:        []BillingKpiRow{},
-			Daily:       []BillingDailyRow{},
-			TopServices: []BillingGroupRow{},
-			TopProjects: []BillingGroupRow{},
+			Kpis:        kpis,
+			Daily:       daily,
+			TopServices: topServices,
+			TopProjects: topProjects,
 		}
-		g, ctx := errgroup.WithContext(r.Context())
-		g.Go(func() error {
-			rows, err := h.bq.GetBillingKpis(ctx, src, params)
-			if err != nil {
-				return fmt.Errorf("billing kpis: %w", err)
-			}
-			if rows != nil {
-				data.Kpis = rows
-			}
-			return nil
-		})
-		g.Go(func() error {
-			rows, err := h.bq.GetBillingDaily(ctx, src, params)
-			if err != nil {
-				return fmt.Errorf("billing daily: %w", err)
-			}
-			if rows != nil {
-				data.Daily = rows
-			}
-			return nil
-		})
-		g.Go(func() error {
-			rows, err := h.bq.GetBillingGroups(ctx, src, billingGroupService, 5, params)
-			if err != nil {
-				return fmt.Errorf("billing top services: %w", err)
-			}
-			if rows != nil {
-				data.TopServices = rows
-			}
-			return nil
-		})
-		g.Go(func() error {
-			rows, err := h.bq.GetBillingGroups(ctx, src, billingGroupProject, 5, params)
-			if err != nil {
-				return fmt.Errorf("billing top projects: %w", err)
-			}
-			if rows != nil {
-				data.TopProjects = rows
-			}
-			return nil
-		})
-		if err := g.Wait(); err != nil {
-			return nil, err
+		today := billingToday()
+		if billingWindowCoversMTD(f, today) {
+			data.ProjectedMonthNet = rollupBillingProjection(data.Daily, today)
 		}
-		data.ProjectedMonthNet = rollupBillingProjection(data.Daily, civil.DateOf(time.Now().UTC()))
 		h.cache.Set(key, &data)
 		return &data, nil
 	})
@@ -439,21 +446,30 @@ func (h *APIHandler) BillingServices(w http.ResponseWriter, r *http.Request) {
 	}
 
 	v, err, _ := billingFlight.Do(key, func() (any, error) {
-		src, params, err := h.billingStandardSource(r.Context(), f)
+		fctx, cancel := billingFlightCtx(r)
+		defer cancel()
+
+		src, params, err := h.billingStandardSource(fctx, f)
 		if err != nil {
 			return nil, err
 		}
 		data := BillingServicesData{Services: []BillingGroupRow{}, Skus: []BillingSkuRow{}, Service: service}
 		if service == "" {
-			rows, err := h.bq.GetBillingGroups(r.Context(), src, billingGroupService, 50, params)
-			if err != nil {
-				return nil, fmt.Errorf("billing services: %w", err)
-			}
-			if rows != nil {
-				data.Services = rows
+			svcGroupKey := f.cacheKey("svc_groups")
+			if cachedSvcs, ok := h.cache.Get(svcGroupKey); ok {
+				data.Services = cachedSvcs.([]BillingGroupRow)
+			} else {
+				rows, err := h.bq.GetBillingGroups(fctx, src, billingGroupService, 50, params)
+				if err != nil {
+					return nil, fmt.Errorf("billing services: %w", err)
+				}
+				if rows != nil {
+					data.Services = rows
+				}
+				h.cache.Set(svcGroupKey, data.Services)
 			}
 		} else {
-			rows, err := h.bq.GetBillingSkus(r.Context(), src, service, params)
+			rows, err := h.bq.GetBillingSkus(fctx, src, service, params)
 			if err != nil {
 				return nil, fmt.Errorf("billing skus: %w", err)
 			}
@@ -491,13 +507,21 @@ func (h *APIHandler) BillingProjects(w http.ResponseWriter, r *http.Request) {
 	}
 
 	v, err, _ := billingFlight.Do(key, func() (any, error) {
-		src, params, err := h.billingStandardSource(r.Context(), f)
+		fctx, cancel := billingFlightCtx(r)
+		defer cancel()
+
+		src, params, err := h.billingStandardSource(fctx, f)
 		if err != nil {
 			return nil, err
 		}
 		data := BillingProjectsData{Projects: []BillingProjectRow{}, LabelGroups: []BillingGroupRow{}, GroupKey: groupLabel}
-		g, ctx := errgroup.WithContext(r.Context())
+		g, ctx := errgroup.WithContext(fctx)
 		g.Go(func() error {
+			projListKey := f.cacheKey("projects:list")
+			if cachedProjs, ok := h.cache.Get(projListKey); ok {
+				data.Projects = cachedProjs.([]BillingProjectRow)
+				return nil
+			}
 			rows, err := h.bq.GetBillingProjectRows(ctx, src, params)
 			if err != nil {
 				return fmt.Errorf("billing projects: %w", err)
@@ -505,6 +529,7 @@ func (h *APIHandler) BillingProjects(w http.ResponseWriter, r *http.Request) {
 			if rows != nil {
 				data.Projects = rows
 			}
+			h.cache.Set(projListKey, data.Projects)
 			return nil
 		})
 		if groupLabel != "" {
@@ -550,12 +575,15 @@ func (h *APIHandler) BillingCredits(w http.ResponseWriter, r *http.Request) {
 	}
 
 	v, err, _ := billingFlight.Do(key, func() (any, error) {
-		src, params, err := h.billingStandardSource(r.Context(), f)
+		fctx, cancel := billingFlightCtx(r)
+		defer cancel()
+
+		src, params, err := h.billingStandardSource(fctx, f)
 		if err != nil {
 			return nil, err
 		}
 		data := BillingCreditsData{Credits: []BillingCreditRow{}, ByService: []BillingGroupRow{}}
-		g, ctx := errgroup.WithContext(r.Context())
+		g, ctx := errgroup.WithContext(fctx)
 		g.Go(func() error {
 			rows, err := h.bq.GetBillingCreditRows(ctx, src, params)
 			if err != nil {
@@ -567,7 +595,7 @@ func (h *APIHandler) BillingCredits(w http.ResponseWriter, r *http.Request) {
 			return nil
 		})
 		g.Go(func() error {
-			rows, err := h.bq.GetBillingGroups(ctx, src, billingGroupService, 50, params)
+			rows, err := h.bq.GetBillingCreditsByService(ctx, src, params)
 			if err != nil {
 				return fmt.Errorf("billing credits by service: %w", err)
 			}
@@ -628,7 +656,10 @@ func (h *APIHandler) BillingResources(w http.ResponseWriter, r *http.Request) {
 	}
 
 	v, err, _ := billingFlight.Do(key, func() (any, error) {
-		info, err := h.billingTables(r.Context(), f.DatasetFQN)
+		fctx, cancel := billingFlightCtx(r)
+		defer cancel()
+
+		info, err := h.billingTables(fctx, f.DatasetFQN)
 		if err != nil {
 			return nil, err
 		}
@@ -639,7 +670,7 @@ func (h *APIHandler) BillingResources(w http.ResponseWriter, r *http.Request) {
 			return &BillingResourcesData{Resources: []BillingResourceRow{}}, nil
 		}
 		src, params := billingSource(f.Project, f.Dataset, tables, f)
-		res, err := h.bq.GetBillingResources(r.Context(), src, search, params)
+		res, err := h.bq.GetBillingResources(fctx, src, search, params)
 		if err != nil {
 			return nil, fmt.Errorf("billing resources: %w", err)
 		}
@@ -657,6 +688,7 @@ func (h *APIHandler) BillingResources(w http.ResponseWriter, r *http.Request) {
 type BillingPricingData struct {
 	Available bool              `json:"available"`
 	AsOf      string            `json:"as_of"`
+	Currency  string            `json:"currency,omitempty"`
 	Prices    []BillingPriceRow `json:"prices"`
 }
 
@@ -667,14 +699,18 @@ func (h *APIHandler) BillingPricing(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	search := r.URL.Query().Get("q")
-	key := f.cacheKey("pricing") + ":q=" + search
+	key := fmt.Sprintf("billing:pricing:%s:acct=%s:svc=%s:q=%s",
+		f.DatasetFQN, strings.Join(f.Accounts, ","), strings.Join(f.Services, ","), search)
 	if cached, ok := h.cache.Get(key); ok {
 		writeJSON(w, cached)
 		return
 	}
 
 	v, err, _ := billingFlight.Do(key, func() (any, error) {
-		info, err := h.billingTables(r.Context(), f.DatasetFQN)
+		fctx, cancel := billingFlightCtx(r)
+		defer cancel()
+
+		info, err := h.billingTables(fctx, f.DatasetFQN)
 		if err != nil {
 			return nil, err
 		}
@@ -683,11 +719,23 @@ func (h *APIHandler) BillingPricing(w http.ResponseWriter, r *http.Request) {
 			return &data, nil // 200 + available:false → frontend banner
 		}
 		data.Available = true
-		rows, asOf, err := h.bq.GetBillingPricing(r.Context(), f.Project, f.Dataset, f.Services, search)
+		var account string
+		if len(f.Accounts) > 0 {
+			account = f.Accounts[0]
+		} else if len(info.Standard) > 0 {
+			accounts := make([]string, 0, len(info.Standard))
+			for acct := range info.Standard {
+				accounts = append(accounts, acct)
+			}
+			slices.Sort(accounts)
+			account = accounts[0]
+		}
+		rows, asOf, currency, err := h.bq.GetBillingPricing(fctx, f.Project, f.Dataset, account, f.Services, search)
 		if err != nil {
 			return nil, fmt.Errorf("billing pricing: %w", err)
 		}
 		data.AsOf = asOf
+		data.Currency = currency
 		if rows != nil {
 			data.Prices = rows
 		}

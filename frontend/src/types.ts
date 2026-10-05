@@ -1260,6 +1260,7 @@ export interface BillingPriceRow {
   sku: string;
   service: string;
   pricing_unit: string;
+  currency?: string;
   list_price: number;
   contract_price: number | null;
   discount_pct: number | null;
@@ -1269,6 +1270,7 @@ export interface BillingPriceRow {
 export interface BillingPricingData {
   available: boolean;
   as_of: string;
+  currency?: string;
   prices: BillingPriceRow[];
 }
 

@@ -19,12 +19,22 @@ export default function CreditsTab({ filter, meta }: TabProps) {
   const paramsKey = JSON.stringify(billingParams(filter));
 
   useEffect(() => {
+    let cancelled = false;
     setLoading(true);
     setError('');
     fetchBillingCredits(filter)
-      .then(setData)
-      .catch(e => setError(e.response?.data || e.message))
-      .finally(() => setLoading(false));
+      .then(d => {
+        if (!cancelled) setData(d);
+      })
+      .catch(e => {
+        if (!cancelled) setError(e.response?.data || e.message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paramsKey]);
 
@@ -52,10 +62,10 @@ export default function CreditsTab({ filter, meta }: TabProps) {
           </table>
         )}
       </Panel>
-      <Panel title="Effective discount by service" note="discount % = −credits ÷ gross">
+      <Panel title="Credit offset by service" note="credit offset % = −credits ÷ gross (CUD, SUD, free tier, promotional credits)">
         {discounted.length === 0 ? <EmptyState text="No service received credits in this window." /> : (
           <table className="w-full text-sm">
-            <thead><tr><th className={th}>Service</th><th className={th}>Gross</th><th className={th}>Credits</th><th className={th}>Net</th><th className={th}>Discount</th></tr></thead>
+            <thead><tr><th className={th}>Service</th><th className={th}>Gross</th><th className={th}>Credits</th><th className={th}>Net</th><th className={th}>Credit offset</th></tr></thead>
             <tbody>
               {discounted.map(s => (
                 <tr key={s.name} className="border-t border-zinc-800/40">

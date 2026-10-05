@@ -25,17 +25,25 @@ const TABS = [
 
 type TabId = (typeof TABS)[number]['id'];
 
-function isoDaysAgo(days: number): string {
-  const d = new Date();
-  d.setUTCDate(d.getUTCDate() - days);
-  return d.toISOString().slice(0, 10);
+function pacificDateOffset(days: number): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Los_Angeles',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date());
+  const y = Number(parts.find(p => p.type === 'year')?.value ?? 1970);
+  const m = Number(parts.find(p => p.type === 'month')?.value ?? 1);
+  const d = Number(parts.find(p => p.type === 'day')?.value ?? 1);
+  const dt = new Date(Date.UTC(y, m - 1, d + days));
+  return dt.toISOString().slice(0, 10);
 }
 
 function defaultBillingFilter(dataset: string): BillingFilterState {
   return {
     dataset,
-    start: isoDaysAgo(30),
-    end: isoDaysAgo(0),
+    start: pacificDateOffset(-30),
+    end: pacificDateOffset(0),
     invoiceMonth: '',
     accounts: [],
     projects: [],
@@ -52,25 +60,39 @@ export default function BillingDashboard() {
   const [filter, setFilter] = useState<BillingFilterState | null>(null);
   const [meta, setMeta] = useState<BillingMeta | null>(null);
   const [active, setActive] = useState<TabId>('overview');
-  const [visited, setVisited] = useState<ReadonlySet<TabId>>(new Set<TabId>(['overview']));
 
   useEffect(() => {
+    let cancelled = false;
     fetchBillingConfig()
       .then(resp => {
+        if (cancelled) return;
         setDatasets(resp.datasets);
         const first = resp.datasets.find(d => !d.error);
         if (first) setFilter(defaultBillingFilter(first.dataset));
       })
-      .catch(e => setConfigError(e.response?.data || e.message));
+      .catch(e => {
+        if (!cancelled) setConfigError(e.response?.data || e.message);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const dataset = filter?.dataset ?? '';
   useEffect(() => {
     if (!dataset) return;
+    let cancelled = false;
     setMeta(null);
     fetchBillingMeta(dataset)
-      .then(setMeta)
-      .catch(e => setConfigError(e.response?.data || e.message));
+      .then(m => {
+        if (!cancelled) setMeta(m);
+      })
+      .catch(e => {
+        if (!cancelled) setConfigError(e.response?.data || e.message);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [dataset]);
 
   if (configError) return <ErrorBanner message={configError} />;
@@ -95,11 +117,6 @@ export default function BillingDashboard() {
     );
   }
   if (!filter || !meta) return <EmptyState text="Loading billing metadata…" />;
-
-  const select = (id: TabId) => {
-    setActive(id);
-    setVisited(prev => new Set(prev).add(id));
-  };
 
   const tabBody: Record<TabId, React.ReactNode> = {
     overview: <OverviewTab filter={filter} meta={meta} />,
@@ -135,7 +152,7 @@ export default function BillingDashboard() {
         {TABS.map(t => (
           <button
             key={t.id}
-            onClick={() => select(t.id)}
+            onClick={() => setActive(t.id)}
             className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
               active === t.id ? 'bg-zinc-800 text-white' : 'text-zinc-500 hover:text-zinc-300'
             }`}
@@ -144,11 +161,7 @@ export default function BillingDashboard() {
           </button>
         ))}
       </div>
-      {TABS.map(t =>
-        visited.has(t.id) ? (
-          <div key={t.id} className={active === t.id ? '' : 'hidden'}>{tabBody[t.id]}</div>
-        ) : null,
-      )}
+      <div>{tabBody[active]}</div>
     </div>
   );
 }

@@ -18,12 +18,22 @@ export default function OverviewTab({ filter, meta }: TabProps) {
   const paramsKey = JSON.stringify(billingParams(filter));
 
   useEffect(() => {
+    let cancelled = false;
     setLoading(true);
     setError('');
     fetchBillingOverview(filter)
-      .then(setData)
-      .catch(e => setError(e.response?.data || e.message))
-      .finally(() => setLoading(false));
+      .then(d => {
+        if (!cancelled) setData(d);
+      })
+      .catch(e => {
+        if (!cancelled) setError(e.response?.data || e.message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paramsKey]);
 
@@ -31,8 +41,8 @@ export default function OverviewTab({ filter, meta }: TabProps) {
   if (loading || !data) return <EmptyState text="Loading cost overview…" />;
   if (data.kpis.length === 0) return <EmptyState text="No billing rows in this window." />;
 
-  const cur = meta.dataset.currency || data.kpis[0].currency;
   const kpi = data.kpis[0];
+  const cur = kpi.currency || meta.dataset.currency;
   const multiCurrency = data.kpis.length > 1;
 
   const lineOption = {
@@ -79,7 +89,7 @@ export default function OverviewTab({ filter, meta }: TabProps) {
           label="Projected month (net)"
           value={data.projected_month_net === null ? '—' : fmtMoney(data.projected_month_net, cur)}
           icon={<TrendingUp size={16} />}
-          detail={data.projected_month_net === null ? 'window not in current month' : 'MTD + 7-day run-rate'}
+          detail={data.projected_month_net === null ? 'requires full MTD window' : 'MTD + 7-day run-rate'}
           accentColor="#f472b6"
         />
       </div>

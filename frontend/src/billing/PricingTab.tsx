@@ -18,16 +18,26 @@ export default function PricingTab({ filter, meta }: TabProps) {
   const [data, setData] = useState<BillingPricingData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  // Pricing ignores the time window; only dataset/services/search matter.
-  const paramsKey = filter.dataset + JSON.stringify(filter.services) + applied;
+  // Pricing ignores the time window; only dataset/accounts/services/search matter.
+  const paramsKey = filter.dataset + JSON.stringify(filter.accounts) + JSON.stringify(filter.services) + applied;
 
   useEffect(() => {
+    let cancelled = false;
     setLoading(true);
     setError('');
     fetchBillingPricing(filter, applied || undefined)
-      .then(setData)
-      .catch(e => setError(e.response?.data || e.message))
-      .finally(() => setLoading(false));
+      .then(d => {
+        if (!cancelled) setData(d);
+      })
+      .catch(e => {
+        if (!cancelled) setError(e.response?.data || e.message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paramsKey]);
 
@@ -43,9 +53,9 @@ export default function PricingTab({ filter, meta }: TabProps) {
     );
   }
 
-  const cur = meta.dataset.currency;
+  const cur = data.currency || meta.dataset.currency;
   return (
-    <Panel title="SKU pricing" note={`snapshot as of ${data.as_of || 'n/a'} · prices in ${cur} · first-tier rates`}>
+    <Panel title="SKU pricing" note={`snapshot as of ${data.as_of || 'n/a'} · prices in ${cur} · first non-zero tier rates`}>
       <div className="mb-3 flex gap-2">
         <input
           value={q}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net/http"
 	"reflect"
 	"regexp"
 	"strings"
@@ -107,8 +108,10 @@ func testFilter() BillingFilter {
 func TestBillingWhereUsageMode(t *testing.T) {
 	where, params := billingWhere(testFilter())
 	for _, want := range []string{
-		"_PARTITIONTIME >=", "_PARTITIONTIME <",
-		"usage_start_time >= TIMESTAMP(@start)", "usage_start_time < TIMESTAMP(@end)",
+		"_PARTITIONTIME >= TIMESTAMP(@start)",
+		"_PARTITIONTIME < TIMESTAMP(DATE_ADD(@end, INTERVAL 3 DAY))",
+		"usage_start_time >= TIMESTAMP(@start, 'America/Los_Angeles')",
+		"usage_start_time < TIMESTAMP(@end, 'America/Los_Angeles')",
 		"cost_type = 'regular'",
 	} {
 		if !strings.Contains(where, want) {
@@ -146,7 +149,6 @@ func TestBillingWhereOptionalFilters(t *testing.T) {
 	f.LabelKey, f.LabelValue = "env", "prod"
 	where, params := billingWhere(f)
 	for _, want := range []string{
-		"billing_account_id IN UNNEST(@accounts)",
 		"project.id IN UNNEST(@projects)",
 		"service.description IN UNNEST(@services)",
 		"EXISTS (SELECT 1 FROM UNNEST(labels) fl WHERE fl.key = @label_key AND fl.value = @label_value)",
@@ -155,8 +157,14 @@ func TestBillingWhereOptionalFilters(t *testing.T) {
 			t.Errorf("WHERE missing %q:\n%s", want, where)
 		}
 	}
-	if len(params) != 7 {
-		t.Errorf("got %d params, want 7 (start, end, accounts, projects, services, label_key, label_value)", len(params))
+	// Account selection is enforced by table selection (standardTables /
+	// resourceTables); filtering billing_account_id in SQL would drop reseller
+	// subaccount rows.
+	if strings.Contains(where, "billing_account_id") {
+		t.Errorf("WHERE must not filter billing_account_id in SQL:\n%s", where)
+	}
+	if len(params) != 6 {
+		t.Errorf("got %d params, want 6 (start, end, projects, services, label_key, label_value)", len(params))
 	}
 }
 
@@ -341,5 +349,45 @@ func TestRollupBillingProjection(t *testing.T) {
 	}
 	if p := rollupBillingProjection(nil, today); p != nil {
 		t.Error("projection for empty daily must be nil")
+	}
+
+	// Window coverage check: 7d window starting after the 1st of the month
+	// must not be treated as full MTD.
+	f := testFilter()
+	f.Start = civil.Date{Year: 2026, Month: 8, Day: 1}
+	f.End = today
+	if !billingWindowCoversMTD(f, today) {
+		t.Error("billingWindowCoversMTD = false for [monthStart, today), want true")
+	}
+	f.Start = civil.Date{Year: 2026, Month: 8, Day: 2}
+	if billingWindowCoversMTD(f, today) {
+		t.Error("billingWindowCoversMTD = true when start > monthStart, want false")
+	}
+}
+
+func TestParseBillingFilterBounds(t *testing.T) {
+	cfg := &Config{}
+	cfg.GCPBilling.Datasets = []string{"my-project.billing_ds"}
+
+	// Year before 2017 (e.g. partial typing "0202-09-05") must be rejected.
+	r1, _ := http.NewRequest("GET", "/api/gcp_billing/overview?dataset=my-project.billing_ds&start=0202-09-05&end=2026-10-05", nil)
+	if _, err := parseBillingFilter(r1, cfg); err == nil {
+		t.Error("expected error for start date before 2017-01-01, got nil")
+	}
+
+	// Window > 400 days must be rejected.
+	r2, _ := http.NewRequest("GET", "/api/gcp_billing/overview?dataset=my-project.billing_ds&start=2024-01-01&end=2026-10-05", nil)
+	if _, err := parseBillingFilter(r2, cfg); err == nil {
+		t.Error("expected error for window > 400 days, got nil")
+	}
+
+	// On the 1st of the month, start == end is advanced by 1 day instead of 400 error.
+	r3, _ := http.NewRequest("GET", "/api/gcp_billing/overview?dataset=my-project.billing_ds&start=2026-10-01&end=2026-10-01", nil)
+	f3, err := parseBillingFilter(r3, cfg)
+	if err != nil {
+		t.Fatalf("unexpected error for start==end on 1st of month: %v", err)
+	}
+	if f3.End != f3.Start.AddDays(1) {
+		t.Errorf("f3.End = %s, want %s", f3.End, f3.Start.AddDays(1))
 	}
 }

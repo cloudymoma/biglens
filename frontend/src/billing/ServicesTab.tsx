@@ -20,12 +20,22 @@ export default function ServicesTab({ filter, meta }: TabProps) {
   const paramsKey = JSON.stringify(billingParams(filter)) + service;
 
   useEffect(() => {
+    let cancelled = false;
     setLoading(true);
     setError('');
     fetchBillingServices(filter, service || undefined)
-      .then(setData)
-      .catch(e => setError(e.response?.data || e.message))
-      .finally(() => setLoading(false));
+      .then(d => {
+        if (!cancelled) setData(d);
+      })
+      .catch(e => {
+        if (!cancelled) setError(e.response?.data || e.message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paramsKey]);
 

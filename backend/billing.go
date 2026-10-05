@@ -6,6 +6,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"regexp"
 	"slices"
 	"strings"
@@ -14,6 +15,18 @@ import (
 	"cloud.google.com/go/bigquery"
 	"cloud.google.com/go/civil"
 )
+
+var billingPacificLoc = func() *time.Location {
+	loc, err := time.LoadLocation("America/Los_Angeles")
+	if err != nil {
+		return time.FixedZone("PST", -8*3600)
+	}
+	return loc
+}()
+
+func billingToday() civil.Date {
+	return civil.DateOf(time.Now().In(billingPacificLoc))
+}
 
 // billingProjectRe: GCP project ID, optionally domain-scoped
 // ("example.com:project"). Kept strict because the value is interpolated
@@ -141,8 +154,9 @@ const (
 )
 
 // billingWhere builds the WHERE clause + parameters for one export table.
-// Export tables are ingestion-time partitioned; _PARTITIONTIME is padded
-// ±2 days (35 days after month end in invoice mode) for late-arriving rows.
+// Export tables are ingestion-time partitioned (UTC export date >= usage date),
+// while Cloud Billing reports and invoices align day boundaries to
+// America/Los_Angeles.
 func billingWhere(f BillingFilter) (string, []bigquery.QueryParameter) {
 	var conds []string
 	var params []bigquery.QueryParameter
@@ -150,16 +164,16 @@ func billingWhere(f BillingFilter) (string, []bigquery.QueryParameter) {
 	if f.InvoiceMonth != "" {
 		conds = append(conds,
 			"invoice.month = @invoice_month",
-			"_PARTITIONTIME >= TIMESTAMP(DATE_SUB(PARSE_DATE('%Y%m', @invoice_month), INTERVAL 2 DAY))",
-			"_PARTITIONTIME < TIMESTAMP(DATE_ADD(LAST_DAY(PARSE_DATE('%Y%m', @invoice_month)), INTERVAL 35 DAY))",
+			"_PARTITIONTIME >= TIMESTAMP(PARSE_DATE('%Y%m', @invoice_month))",
+			"_PARTITIONTIME < TIMESTAMP(DATE_ADD(LAST_DAY(PARSE_DATE('%Y%m', @invoice_month)), INTERVAL 14 DAY))",
 		)
 		params = append(params, bigquery.QueryParameter{Name: "invoice_month", Value: f.InvoiceMonth})
 	} else {
 		conds = append(conds,
-			"_PARTITIONTIME >= TIMESTAMP(DATE_SUB(@start, INTERVAL 2 DAY))",
-			"_PARTITIONTIME < TIMESTAMP(DATE_ADD(@end, INTERVAL 2 DAY))",
-			"usage_start_time >= TIMESTAMP(@start)",
-			"usage_start_time < TIMESTAMP(@end)",
+			"_PARTITIONTIME >= TIMESTAMP(@start)",
+			"_PARTITIONTIME < TIMESTAMP(DATE_ADD(@end, INTERVAL 3 DAY))",
+			"usage_start_time >= TIMESTAMP(@start, 'America/Los_Angeles')",
+			"usage_start_time < TIMESTAMP(@end, 'America/Los_Angeles')",
 			"cost_type = 'regular'",
 		)
 		params = append(params,
@@ -168,10 +182,10 @@ func billingWhere(f BillingFilter) (string, []bigquery.QueryParameter) {
 		)
 	}
 
-	if len(f.Accounts) > 0 {
-		conds = append(conds, "billing_account_id IN UNNEST(@accounts)")
-		params = append(params, bigquery.QueryParameter{Name: "accounts", Value: f.Accounts})
-	}
+	// Note: account selection is already enforced via table selection
+	// (standardTables / resourceTables). Filtering billing_account_id in SQL
+	// is omitted because reseller parent export tables store the subaccount ID
+	// in billing_account_id and would drop subaccount usage rows.
 	if len(f.Projects) > 0 {
 		conds = append(conds, "project.id IN UNNEST(@projects)")
 		params = append(params, bigquery.QueryParameter{Name: "projects", Value: f.Projects})
@@ -192,10 +206,24 @@ func billingWhere(f BillingFilter) (string, []bigquery.QueryParameter) {
 
 // billingSource returns a parenthesized FROM-clause subquery unioning the
 // given export tables with all filters applied inside each branch (so
-// partition pruning still works), plus the query parameters. Table names
-// must come from INFORMATION_SCHEMA detection.
+// partition pruning still works), plus the query parameters.
 func billingSource(project, dataset string, tables []string, f BillingFilter) (string, []bigquery.QueryParameter) {
 	where, params := billingWhere(f)
+	parts := make([]string, len(tables))
+	for i, tbl := range tables {
+		parts[i] = fmt.Sprintf("SELECT * FROM `%s.%s.%s` WHERE %s", project, dataset, tbl, where)
+	}
+	return "(" + strings.Join(parts, "\n\t\tUNION ALL\n\t\t") + ")", params
+}
+
+// billingMetaPartitionSource builds a partition-only UNION ALL source over the
+// given tables for metadata discovery queries.
+func billingMetaPartitionSource(project, dataset string, tables []string, start, end civil.Date) (string, []bigquery.QueryParameter) {
+	where := "_PARTITIONTIME >= TIMESTAMP(@meta_start) AND _PARTITIONTIME < TIMESTAMP(@meta_end)"
+	params := []bigquery.QueryParameter{
+		{Name: "meta_start", Value: start},
+		{Name: "meta_end", Value: end},
+	}
 	parts := make([]string, len(tables))
 	for i, tbl := range tables {
 		parts[i] = fmt.Sprintf("SELECT * FROM `%s.%s.%s` WHERE %s", project, dataset, tbl, where)
@@ -286,39 +314,71 @@ func billingResourcesSQL(src string, search bool) string {
 		billingNetSumExpr, matched, src)
 }
 
+// billingWindowCoversMTD reports whether the filter window covers the entire
+// month-to-date range [monthStart, today) in usage mode. Projections are only
+// valid when all elapsed days of the current month are included in the window.
+func billingWindowCoversMTD(f BillingFilter, today civil.Date) bool {
+	if f.InvoiceMonth != "" {
+		return false
+	}
+	monthStart := civil.Date{Year: today.Year, Month: today.Month, Day: 1}
+	return !f.Start.After(monthStart) && !f.End.Before(today)
+}
+
 // rollupBillingProjection estimates end-of-month net spend: month-to-date
-// net + average net of the last (up to) 7 complete days in the current
-// month × remaining days. Returns nil when the daily series has no rows in
-// the current month (projection would be meaningless).
+// net + average net of the last (up to) 7 complete calendar days in the current
+// month × remaining days. Returns nil when the daily series has no complete
+// days in the current month (projection would be meaningless).
 func rollupBillingProjection(daily []BillingDailyRow, today civil.Date) *float64 {
-	monthPrefix := fmt.Sprintf("%04d-%02d-", today.Year, int(today.Month))
+	if today.Day <= 1 {
+		return nil
+	}
+	monthStart := civil.Date{Year: today.Year, Month: today.Month, Day: 1}
 	var mtd float64
-	var complete []float64
+	byDate := map[civil.Date]float64{}
 	for _, d := range daily {
-		if !strings.HasPrefix(d.Date, monthPrefix) {
+		dt, err := civil.ParseDate(d.Date)
+		if err != nil || dt.Year != today.Year || dt.Month != today.Month {
 			continue
 		}
 		mtd += d.Net
-		if d.Date < today.String() { // complete days only
-			complete = append(complete, d.Net)
+		if dt.Before(today) { // complete days only
+			byDate[dt] += d.Net
 		}
 	}
-	if len(complete) == 0 {
+	if len(byDate) == 0 {
 		return nil
 	}
-	if len(complete) > 7 {
-		complete = complete[len(complete)-7:]
+	runStart := today.AddDays(-7)
+	if runStart.Before(monthStart) {
+		runStart = monthStart
+	}
+	completeDays := today.DaysSince(runStart)
+	if completeDays <= 0 {
+		return nil
 	}
 	var sum float64
-	for _, v := range complete {
-		sum += v
+	hasRecent := false
+	for dt := runStart; dt.Before(today); dt = dt.AddDays(1) {
+		if v, ok := byDate[dt]; ok {
+			sum += v
+			hasRecent = true
+		}
 	}
-	rate := sum / float64(len(complete))
+	var rate float64
+	if hasRecent {
+		rate = sum / float64(completeDays)
+	} else {
+		for _, v := range byDate {
+			sum += v
+		}
+		rate = sum / float64(today.DaysSince(monthStart))
+	}
 	// civil.Date does not normalize day 0, so lean on time.Date for the
 	// last day of the current month.
 	daysInMonth := time.Date(today.Year, today.Month+1, 0, 0, 0, 0, 0, time.UTC).Day()
 	remaining := daysInMonth - today.Day + 1 // today itself is incomplete
 	p := mtd + rate*float64(remaining)
-	p = float64(int64(p*100)) / 100
+	p = math.Round(p*100) / 100
 	return &p
 }
