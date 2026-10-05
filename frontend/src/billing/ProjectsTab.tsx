@@ -50,15 +50,29 @@ export default function ProjectsTab({ filter, meta }: TabProps) {
           <table className="w-full text-sm">
             <thead><tr><th className={th}>Project</th><th className={th}>Gross</th><th className={th}>Credits</th><th className={th}>Net</th></tr></thead>
             <tbody>
-              {data.projects.map(p => (
-                <tr key={p.id} className="border-t border-zinc-800/40">
-                  <td className={td}>{p.name || p.id}<span className="ml-2 text-[10px] text-zinc-600">{p.id}</span></td>
-                  <td className={td}>{fmtMoney(p.gross, cur)}</td>
-                  <td className={td}>{fmtMoney(p.credits, cur)}</td>
-                  <td className={`${td} font-medium text-zinc-100`}>{fmtMoney(p.net, cur)}</td>
-                </tr>
-              ))}
+              {data.projects.map(p => {
+                const isOther = p.id === '(other)';
+                return (
+                  <tr key={p.id} className={`border-t border-zinc-800/40 ${isOther ? 'text-zinc-400 italic' : ''}`}>
+                    <td className={td}>
+                      {p.name || p.id}
+                      {!isOther && <span className="ml-2 text-[10px] text-zinc-600">{p.id}</span>}
+                    </td>
+                    <td className={td}>{fmtMoney(p.gross, cur)}</td>
+                    <td className={td}>{fmtMoney(p.credits, cur)}</td>
+                    <td className={`${td} font-medium text-zinc-100`}>{fmtMoney(p.net, cur)}</td>
+                  </tr>
+                );
+              })}
             </tbody>
+            <tfoot>
+              <tr className="border-t border-zinc-700/60 font-semibold text-zinc-200">
+                <td className={td}>Total</td>
+                <td className={td}>{fmtMoney(data.projects.reduce((sum, p) => sum + p.gross, 0), cur)}</td>
+                <td className={td}>{fmtMoney(data.projects.reduce((sum, p) => sum + p.credits, 0), cur)}</td>
+                <td className={`${td} text-white`}>{fmtMoney(data.projects.reduce((sum, p) => sum + p.net, 0), cur)}</td>
+              </tr>
+            </tfoot>
           </table>
         )}
       </Panel>

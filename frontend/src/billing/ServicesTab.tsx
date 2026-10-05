@@ -65,31 +65,58 @@ export default function ServicesTab({ filter, meta }: TabProps) {
           <table className="w-full text-sm">
             <thead><tr><th className={th}>Service</th><th className={th}>Gross</th><th className={th}>Credits</th><th className={th}>Net</th></tr></thead>
             <tbody>
-              {data.services.map(s => (
-                <tr key={s.name} className="border-t border-zinc-800/40 hover:bg-zinc-800/30 cursor-pointer" onClick={() => setService(s.name)}>
-                  <td className={td}>{s.name}</td>
-                  <td className={td}>{fmtMoney(s.gross, cur)}</td>
-                  <td className={td}>{fmtMoney(s.credits, cur)}</td>
-                  <td className={`${td} font-medium text-zinc-100`}>{fmtMoney(s.net, cur)}</td>
-                </tr>
-              ))}
+              {data.services.map(s => {
+                const isOther = s.name.startsWith('Other (');
+                return (
+                  <tr
+                    key={s.name}
+                    className={`border-t border-zinc-800/40 ${isOther ? 'text-zinc-400 italic' : 'hover:bg-zinc-800/30 cursor-pointer'}`}
+                    onClick={isOther ? undefined : () => setService(s.name)}
+                  >
+                    <td className={td}>{s.name}</td>
+                    <td className={td}>{fmtMoney(s.gross, cur)}</td>
+                    <td className={td}>{fmtMoney(s.credits, cur)}</td>
+                    <td className={`${td} font-medium text-zinc-100`}>{fmtMoney(s.net, cur)}</td>
+                  </tr>
+                );
+              })}
             </tbody>
+            <tfoot>
+              <tr className="border-t border-zinc-700/60 font-semibold text-zinc-200">
+                <td className={td}>Total</td>
+                <td className={td}>{fmtMoney(data.services.reduce((sum, s) => sum + s.gross, 0), cur)}</td>
+                <td className={td}>{fmtMoney(data.services.reduce((sum, s) => sum + s.credits, 0), cur)}</td>
+                <td className={`${td} text-white`}>{fmtMoney(data.services.reduce((sum, s) => sum + s.net, 0), cur)}</td>
+              </tr>
+            </tfoot>
           </table>
         )
       ) : data.skus.length === 0 ? <EmptyState text="No SKUs for this service in the window." /> : (
         <table className="w-full text-sm">
           <thead><tr><th className={th}>SKU</th><th className={th}>Usage</th><th className={th}>Unit</th><th className={th}>Eff. price</th><th className={th}>Net</th></tr></thead>
           <tbody>
-            {data.skus.map(s => (
-              <tr key={s.sku_id} className="border-t border-zinc-800/40">
-                <td className={td}>{s.sku}<span className="ml-2 text-[10px] text-zinc-600">{s.sku_id}</span></td>
-                <td className={td}>{s.usage.toLocaleString()}</td>
-                <td className={td}>{s.pricing_unit}</td>
-                <td className={td}>{s.effective_price === null ? '—' : s.effective_price.toPrecision(4)}</td>
-                <td className={`${td} font-medium text-zinc-100`}>{fmtMoney(s.net, cur)}</td>
-              </tr>
-            ))}
+            {data.skus.map(s => {
+              const isOther = s.sku_id === '(other)';
+              return (
+                <tr key={s.sku_id} className={`border-t border-zinc-800/40 ${isOther ? 'text-zinc-400 italic' : ''}`}>
+                  <td className={td}>
+                    {s.sku}
+                    {!isOther && <span className="ml-2 text-[10px] text-zinc-600">{s.sku_id}</span>}
+                  </td>
+                  <td className={td}>{isOther ? '—' : s.usage.toLocaleString()}</td>
+                  <td className={td}>{s.pricing_unit || (isOther ? '—' : '')}</td>
+                  <td className={td}>{s.effective_price === null ? '—' : s.effective_price.toPrecision(4)}</td>
+                  <td className={`${td} font-medium text-zinc-100`}>{fmtMoney(s.net, cur)}</td>
+                </tr>
+              );
+            })}
           </tbody>
+          <tfoot>
+            <tr className="border-t border-zinc-700/60 font-semibold text-zinc-200">
+              <td className={td} colSpan={4}>Total</td>
+              <td className={`${td} text-white`}>{fmtMoney(data.skus.reduce((sum, s) => sum + s.net, 0), cur)}</td>
+            </tr>
+          </tfoot>
         </table>
       )}
     </Panel>

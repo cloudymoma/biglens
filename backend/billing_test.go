@@ -391,3 +391,55 @@ func TestParseBillingFilterBounds(t *testing.T) {
 		t.Errorf("f3.End = %s, want %s", f3.End, f3.Start.AddDays(1))
 	}
 }
+
+func TestBillingServiceGroupingAndTailRollup(t *testing.T) {
+	overviewSQL := billingOverviewRollupSQL("(SELECT 1)")
+	for _, want := range []string{
+		"IFNULL(service.id, '(none)') AS svc_id",
+		"ANY_VALUE(svc_desc) AS svc_desc",
+		"COUNT(DISTINCT raw_svc_id) AS services",
+		"(svc_id)",
+	} {
+		if !strings.Contains(overviewSQL, want) {
+			t.Errorf("billingOverviewRollupSQL missing %q:\n%s", want, overviewSQL)
+		}
+	}
+
+	grpSQL := billingGroupsSQL("(SELECT 1)", billingGroupService, 50)
+	for _, want := range []string{
+		"IFNULL(service.id, '(none)') AS grp_id",
+		"IFNULL(ANY_VALUE(service.description), '(none)') AS name",
+		"WHERE rn <= 50",
+		"CONCAT('Other (', CAST(COUNT(*) AS STRING), ' more)') AS name",
+	} {
+		if !strings.Contains(grpSQL, want) {
+			t.Errorf("billingGroupsSQL missing %q:\n%s", want, grpSQL)
+		}
+	}
+
+	skuSQL := billingSkusSQL("(SELECT 1)")
+	for _, want := range []string{
+		"WHERE service.description = @sku_service OR service.id = @sku_service",
+		"CONCAT('Other (', CAST(COUNT(*) AS STRING), ' SKUs)') AS sku",
+	} {
+		if !strings.Contains(skuSQL, want) {
+			t.Errorf("billingSkusSQL missing %q:\n%s", want, skuSQL)
+		}
+	}
+
+	projSQL := billingProjectRowsSQL("(SELECT 1)")
+	if !strings.Contains(projSQL, "CONCAT('Other (', CAST(COUNT(*) AS STRING), ' projects)') AS name") {
+		t.Errorf("billingProjectRowsSQL missing Other rollup:\n%s", projSQL)
+	}
+
+	rows := []BillingGroupRow{
+		{Name: "A", Gross: 10, Net: 9, Credits: -1},
+		{Name: "B", Gross: 5, Net: 4, Credits: -1},
+		{Name: "C", Gross: 3, Net: 2, Credits: -1},
+	}
+	rolled := rollupBillingGroupRows(rows, 1, "Other (2 more)")
+	if len(rolled) != 2 || rolled[1].Name != "Other (2 more)" || rolled[1].Gross != 8 || rolled[1].Net != 6 || rolled[1].Credits != -2 {
+		t.Errorf("unexpected rollupBillingGroupRows result: %+v", rolled)
+	}
+}
+

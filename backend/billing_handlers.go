@@ -381,31 +381,11 @@ func (h *APIHandler) BillingOverview(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return nil, fmt.Errorf("billing overview rollup: %w", err)
 		}
-		top50Svcs := svcs
-		if len(top50Svcs) > 50 {
-			top50Svcs = slices.Clone(top50Svcs[:50])
-		}
+		top50Svcs := rollupBillingGroupRows(svcs, 50, fmt.Sprintf("Other (%d more)", max(0, len(svcs)-50)))
 		h.cache.Set(f.cacheKey("svc_groups"), top50Svcs)
 
-		topServices := svcs
-		if len(topServices) > 5 {
-			var otherGross, otherNet, otherCredits float64
-			for _, s := range topServices[5:] {
-				otherGross += s.Gross
-				otherNet += s.Net
-				otherCredits += s.Credits
-			}
-			topServices = append(slices.Clone(topServices[:5]), BillingGroupRow{
-				Name:    "Other",
-				Gross:   otherGross,
-				Net:     otherNet,
-				Credits: otherCredits,
-			})
-		}
-		topProjects := projs
-		if len(topProjects) > 5 {
-			topProjects = slices.Clone(topProjects[:5])
-		}
+		topServices := rollupBillingGroupRows(svcs, 5, "Other")
+		topProjects := rollupBillingGroupRows(projs, 5, "Other")
 		data := BillingOverviewData{
 			Kpis:        kpis,
 			Daily:       daily,

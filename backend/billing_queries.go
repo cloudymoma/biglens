@@ -237,32 +237,64 @@ type billingOverviewRollupRow struct {
 	Services int64   `bigquery:"services"`
 }
 
+func billingOverviewRollupSQL(src string) string {
+	return fmt.Sprintf(`
+		SELECT
+			IFNULL(currency, '') AS currency,
+			IFNULL(date_val, '') AS date,
+			IFNULL(svc_desc, '(none)') AS svc,
+			IFNULL(proj_id, '(none)') AS proj,
+			g_cur,
+			g_date,
+			g_svc,
+			g_proj,
+			gross,
+			net,
+			credits,
+			projects,
+			services
+		FROM (
+			SELECT
+				currency,
+				date_val,
+				ANY_VALUE(svc_desc) AS svc_desc,
+				proj_id,
+				GROUPING(currency) AS g_cur,
+				GROUPING(date_val) AS g_date,
+				GROUPING(svc_id) AS g_svc,
+				GROUPING(proj_id) AS g_proj,
+				%s AS gross,
+				%s AS net,
+				%s AS credits,
+				COUNT(DISTINCT raw_proj_id) AS projects,
+				COUNT(DISTINCT raw_svc_id) AS services
+			FROM (
+				SELECT
+					currency,
+					FORMAT_TIMESTAMP('%%Y-%%m-%%d', usage_start_time, 'America/Los_Angeles') AS date_val,
+					IFNULL(service.id, '(none)') AS svc_id,
+					service.id AS raw_svc_id,
+					service.description AS svc_desc,
+					IFNULL(project.id, '(none)') AS proj_id,
+					project.id AS raw_proj_id,
+					cost,
+					credits
+				FROM %s
+			)
+			GROUP BY GROUPING SETS (
+				(currency),
+				(date_val),
+				(svc_id),
+				(proj_id)
+			)
+		)`,
+		billingGrossExpr, billingNetExpr, billingCreditsExpr, src)
+}
+
 // GetBillingOverviewRollup computes KPIs, daily series, service breakdown, and
 // project breakdown in a single GROUPING SETS scan instead of 4 separate jobs.
 func (b *BQClient) GetBillingOverviewRollup(ctx context.Context, src string, params []bigquery.QueryParameter) ([]BillingKpiRow, []BillingDailyRow, []BillingGroupRow, []BillingGroupRow, error) {
-	q := b.newBillingQuery(fmt.Sprintf(`
-		SELECT
-			IFNULL(currency, '') AS currency,
-			IFNULL(FORMAT_TIMESTAMP('%%Y-%%m-%%d', usage_start_time, 'America/Los_Angeles'), '') AS date,
-			IFNULL(service.description, '(none)') AS svc,
-			IFNULL(project.id, '(none)') AS proj,
-			GROUPING(currency) AS g_cur,
-			GROUPING(FORMAT_TIMESTAMP('%%Y-%%m-%%d', usage_start_time, 'America/Los_Angeles')) AS g_date,
-			GROUPING(service.description) AS g_svc,
-			GROUPING(IFNULL(project.id, '(none)')) AS g_proj,
-			%s AS gross,
-			%s AS net,
-			%s AS credits,
-			COUNT(DISTINCT project.id) AS projects,
-			COUNT(DISTINCT service.description) AS services
-		FROM %s
-		GROUP BY GROUPING SETS (
-			(currency),
-			(FORMAT_TIMESTAMP('%%Y-%%m-%%d', usage_start_time, 'America/Los_Angeles')),
-			(service.description),
-			(IFNULL(project.id, '(none)'))
-		)`,
-		billingGrossExpr, billingNetExpr, billingCreditsExpr, src))
+	q := b.newBillingQuery(billingOverviewRollupSQL(src))
 	q.Parameters = params
 	rows, err := collectRows[billingOverviewRollupRow](q, ctx)
 	if err != nil {
@@ -330,7 +362,7 @@ func (b *BQClient) GetBillingKpis(ctx context.Context, src string, params []bigq
 			currency,
 			%s AS gross, %s AS net, %s AS credits,
 			COUNT(DISTINCT project.id) AS projects,
-			COUNT(DISTINCT service.description) AS services
+			COUNT(DISTINCT service.id) AS services
 		FROM %s GROUP BY currency ORDER BY currency`,
 		billingGrossExpr, billingNetExpr, billingCreditsExpr, src))
 	q.Parameters = params
@@ -347,13 +379,45 @@ func (b *BQClient) GetBillingDaily(ctx context.Context, src string, params []big
 	return collectRows[BillingDailyRow](q, ctx)
 }
 
+func billingGroupsSQL(src, groupExpr string, limit int) string {
+	nameExpr := groupExpr
+	if groupExpr == billingGroupService {
+		nameExpr = "IFNULL(ANY_VALUE(service.description), '(none)')"
+	}
+	return fmt.Sprintf(`
+		WITH all_groups AS (
+			SELECT
+				%s AS grp_id,
+				%s AS name,
+				%s AS gross,
+				%s AS net,
+				%s AS credits
+			FROM %s
+			GROUP BY grp_id
+		),
+		ranked AS (
+			SELECT
+				name, gross, net, credits,
+				ROW_NUMBER() OVER (ORDER BY net DESC, grp_id ASC) AS rn
+			FROM all_groups
+		)
+		SELECT name, gross, net, credits FROM ranked WHERE rn <= %d
+		UNION ALL
+		SELECT
+			CONCAT('Other (', CAST(COUNT(*) AS STRING), ' more)') AS name,
+			ROUND(SUM(gross), 2) AS gross,
+			ROUND(SUM(net), 2) AS net,
+			ROUND(SUM(credits), 2) AS credits
+		FROM ranked
+		WHERE rn > %d
+		HAVING COUNT(*) > 0`,
+		groupExpr, nameExpr, billingGrossExpr, billingNetExpr, billingCreditsExpr, src, limit, limit)
+}
+
 // GetBillingGroups aggregates cost by an expression from the fixed
 // billingGroup* whitelist (never caller-supplied strings).
 func (b *BQClient) GetBillingGroups(ctx context.Context, src, groupExpr string, limit int, params []bigquery.QueryParameter) ([]BillingGroupRow, error) {
-	q := b.newBillingQuery(fmt.Sprintf(`
-		SELECT %s AS name, %s AS gross, %s AS net, %s AS credits
-		FROM %s GROUP BY name ORDER BY net DESC LIMIT %d`,
-		groupExpr, billingGrossExpr, billingNetExpr, billingCreditsExpr, src, limit))
+	q := b.newBillingQuery(billingGroupsSQL(src, groupExpr, limit))
 	q.Parameters = params
 	return collectRows[BillingGroupRow](q, ctx)
 }
@@ -368,23 +432,48 @@ type BillingSkuRow struct {
 	EffectivePrice *float64 `json:"effective_price" bigquery:"effective_price"`
 }
 
+func billingSkusSQL(src string) string {
+	return fmt.Sprintf(`
+		WITH all_skus AS (
+			SELECT
+				IFNULL(sku.id, '(none)') AS sku_id,
+				IFNULL(ANY_VALUE(sku.description), '(none)') AS sku,
+				IFNULL(ANY_VALUE(usage.pricing_unit), '') AS pricing_unit,
+				ROUND(SUM(usage.amount_in_pricing_units), 2) AS usage,
+				%s AS gross, %s AS net,
+				SAFE_DIVIDE(CAST((%s) AS FLOAT64), SUM(usage.amount_in_pricing_units)) AS effective_price
+			FROM %s
+			WHERE service.description = @sku_service OR service.id = @sku_service
+			GROUP BY sku_id
+		),
+		ranked AS (
+			SELECT
+				sku_id, sku, pricing_unit, usage, gross, net, effective_price,
+				ROW_NUMBER() OVER (ORDER BY net DESC, sku_id ASC) AS rn
+			FROM all_skus
+		)
+		SELECT sku_id, sku, pricing_unit, usage, gross, net, effective_price FROM ranked WHERE rn <= 100
+		UNION ALL
+		SELECT
+			'(other)' AS sku_id,
+			CONCAT('Other (', CAST(COUNT(*) AS STRING), ' SKUs)') AS sku,
+			'' AS pricing_unit,
+			0.0 AS usage,
+			ROUND(SUM(gross), 2) AS gross,
+			ROUND(SUM(net), 2) AS net,
+			CAST(NULL AS FLOAT64) AS effective_price
+		FROM ranked
+		WHERE rn > 100
+		HAVING COUNT(*) > 0`,
+		billingGrossExpr, billingNetExpr, billingNetSumExpr, src)
+}
+
 // GetBillingSkus breaks one service down by SKU. The service value arrives
 // as a query parameter (@sku_service), never interpolated. Effective price
 // divides the unrounded NUMERIC net before converting to FLOAT64 so low-cost
 // SKUs are not distorted by cent-level rounding.
 func (b *BQClient) GetBillingSkus(ctx context.Context, src, service string, params []bigquery.QueryParameter) ([]BillingSkuRow, error) {
-	q := b.newBillingQuery(fmt.Sprintf(`
-		SELECT
-			sku.id AS sku_id,
-			ANY_VALUE(sku.description) AS sku,
-			IFNULL(ANY_VALUE(usage.pricing_unit), '') AS pricing_unit,
-			ROUND(SUM(usage.amount_in_pricing_units), 2) AS usage,
-			%s AS gross, %s AS net,
-			SAFE_DIVIDE(CAST((%s) AS FLOAT64), SUM(usage.amount_in_pricing_units)) AS effective_price
-		FROM %s
-		WHERE service.description = @sku_service
-		GROUP BY sku_id ORDER BY net DESC LIMIT 100`,
-		billingGrossExpr, billingNetExpr, billingNetSumExpr, src))
+	q := b.newBillingQuery(billingSkusSQL(src))
 	q.Parameters = append(append([]bigquery.QueryParameter{}, params...),
 		bigquery.QueryParameter{Name: "sku_service", Value: service})
 	return collectRows[BillingSkuRow](q, ctx)
@@ -398,14 +487,38 @@ type BillingProjectRow struct {
 	Credits float64 `json:"credits" bigquery:"credits"`
 }
 
-func (b *BQClient) GetBillingProjectRows(ctx context.Context, src string, params []bigquery.QueryParameter) ([]BillingProjectRow, error) {
-	q := b.newBillingQuery(fmt.Sprintf(`
+func billingProjectRowsSQL(src string) string {
+	return fmt.Sprintf(`
+		WITH all_projects AS (
+			SELECT
+				IFNULL(project.id, '(none)') AS id,
+				IFNULL(ANY_VALUE(project.name), '') AS name,
+				%s AS gross, %s AS net, %s AS credits
+			FROM %s
+			GROUP BY id
+		),
+		ranked AS (
+			SELECT
+				id, name, gross, net, credits,
+				ROW_NUMBER() OVER (ORDER BY net DESC, id ASC) AS rn
+			FROM all_projects
+		)
+		SELECT id, name, gross, net, credits FROM ranked WHERE rn <= 100
+		UNION ALL
 		SELECT
-			IFNULL(project.id, '(none)') AS id,
-			IFNULL(ANY_VALUE(project.name), '') AS name,
-			%s AS gross, %s AS net, %s AS credits
-		FROM %s GROUP BY id ORDER BY net DESC LIMIT 100`,
-		billingGrossExpr, billingNetExpr, billingCreditsExpr, src))
+			'(other)' AS id,
+			CONCAT('Other (', CAST(COUNT(*) AS STRING), ' projects)') AS name,
+			ROUND(SUM(gross), 2) AS gross,
+			ROUND(SUM(net), 2) AS net,
+			ROUND(SUM(credits), 2) AS credits
+		FROM ranked
+		WHERE rn > 100
+		HAVING COUNT(*) > 0`,
+		billingGrossExpr, billingNetExpr, billingCreditsExpr, src)
+}
+
+func (b *BQClient) GetBillingProjectRows(ctx context.Context, src string, params []bigquery.QueryParameter) ([]BillingProjectRow, error) {
+	q := b.newBillingQuery(billingProjectRowsSQL(src))
 	q.Parameters = params
 	return collectRows[BillingProjectRow](q, ctx)
 }
@@ -439,18 +552,41 @@ func (b *BQClient) GetBillingCreditRows(ctx context.Context, src string, params 
 	return collectRows[BillingCreditRow](q, ctx)
 }
 
+func billingCreditsByServiceSQL(src string) string {
+	return fmt.Sprintf(`
+		WITH all_svc AS (
+			SELECT
+				%s AS svc_id,
+				IFNULL(ANY_VALUE(service.description), '(none)') AS name,
+				%s AS gross, %s AS net, %s AS credits
+			FROM %s
+			GROUP BY svc_id
+			HAVING credits != 0
+		),
+		ranked AS (
+			SELECT
+				name, gross, net, credits,
+				ROW_NUMBER() OVER (ORDER BY credits ASC, svc_id ASC) AS rn
+			FROM all_svc
+		)
+		SELECT name, gross, net, credits FROM ranked WHERE rn <= 50
+		UNION ALL
+		SELECT
+			CONCAT('Other (', CAST(COUNT(*) AS STRING), ' more)') AS name,
+			ROUND(SUM(gross), 2) AS gross,
+			ROUND(SUM(net), 2) AS net,
+			ROUND(SUM(credits), 2) AS credits
+		FROM ranked
+		WHERE rn > 50
+		HAVING COUNT(*) > 0`,
+		billingGroupService, billingGrossExpr, billingNetExpr, billingCreditsExpr, src)
+}
+
 // GetBillingCreditsByService ranks services that received credits by credit
 // magnitude (credits are negative, so ORDER BY credits ASC puts the largest
 // credit recipients first even when their net spend is near zero).
 func (b *BQClient) GetBillingCreditsByService(ctx context.Context, src string, params []bigquery.QueryParameter) ([]BillingGroupRow, error) {
-	q := b.newBillingQuery(fmt.Sprintf(`
-		SELECT %s AS name, %s AS gross, %s AS net, %s AS credits
-		FROM %s
-		GROUP BY name
-		HAVING credits != 0
-		ORDER BY credits ASC
-		LIMIT 50`,
-		billingGroupService, billingGrossExpr, billingNetExpr, billingCreditsExpr, src))
+	q := b.newBillingQuery(billingCreditsByServiceSQL(src))
 	q.Parameters = params
 	return collectRows[BillingGroupRow](q, ctx)
 }

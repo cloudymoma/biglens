@@ -149,7 +149,7 @@ const (
 // Group-by expressions for GetBillingGroups. Only these constants are ever
 // passed; nothing caller-supplied reaches the SQL string.
 const (
-	billingGroupService = "service.description"
+	billingGroupService = "IFNULL(service.id, '(none)')"
 	billingGroupProject = "IFNULL(project.id, '(none)')"
 )
 
@@ -191,7 +191,7 @@ func billingWhere(f BillingFilter) (string, []bigquery.QueryParameter) {
 		params = append(params, bigquery.QueryParameter{Name: "projects", Value: f.Projects})
 	}
 	if len(f.Services) > 0 {
-		conds = append(conds, "service.description IN UNNEST(@services)")
+		conds = append(conds, "(service.description IN UNNEST(@services) OR service.id IN UNNEST(@services))")
 		params = append(params, bigquery.QueryParameter{Name: "services", Value: f.Services})
 	}
 	if f.LabelKey != "" {
@@ -382,3 +382,24 @@ func rollupBillingProjection(daily []BillingDailyRow, today civil.Date) *float64
 	p = math.Round(p*100) / 100
 	return &p
 }
+
+// rollupBillingGroupRows returns up to limit rows, rolling any excess rows into
+// a trailing otherLabel row so table totals still reconcile with window KPIs.
+func rollupBillingGroupRows(rows []BillingGroupRow, limit int, otherLabel string) []BillingGroupRow {
+	if len(rows) <= limit {
+		return slices.Clone(rows)
+	}
+	var otherGross, otherNet, otherCredits float64
+	for _, r := range rows[limit:] {
+		otherGross += r.Gross
+		otherNet += r.Net
+		otherCredits += r.Credits
+	}
+	return append(slices.Clone(rows[:limit]), BillingGroupRow{
+		Name:    otherLabel,
+		Gross:   math.Round(otherGross*100) / 100,
+		Net:     math.Round(otherNet*100) / 100,
+		Credits: math.Round(otherCredits*100) / 100,
+	})
+}
+
