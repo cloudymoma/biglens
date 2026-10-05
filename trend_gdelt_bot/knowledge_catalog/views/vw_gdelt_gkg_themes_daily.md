@@ -10,11 +10,12 @@ tags:
 
 # Definition
 
-Extracts primary themes and splits comma-separated tone vectors from [gkg_partitioned](/tables/gkg_partitioned). Raw `V2Themes` entries are `THEME_NAME,charOffset`; the view strips the character offset so `primary_theme` is a clean theme name. Retains a 30-day window (vs 90 days elsewhere) because GKG is by far the largest source table.
+Extracts substantive themes and splits comma-separated tone vectors from [gkg_partitioned](/tables/gkg_partitioned). Raw `V2Themes` entries are `THEME_NAME,charOffset`; the view strips character offsets, exposes the full deduplicated `themes` array (`ARRAY<STRING>`), and selects the first substantive theme (skipping generic `TAX_`, `WB_`, `EPU_`, `CRISISLEX_`, `UNGP_` prefixes when a specific theme exists) as `primary_theme`. Retains a 30-day window because GKG is the largest source table.
 
 # Schema
 - `report_date` (DATE)
-- `primary_theme` (STRING) — First listed theme, offset stripped ([gkg_theme](/dimensions/gkg_theme))
+- `primary_theme` (STRING) — First substantive theme with offset stripped ([gkg_theme](/dimensions/gkg_theme))
+- `themes` (ARRAY<STRING>) — All distinct GKG themes on the article with offsets stripped (`UNNEST(themes)` for complete thematic counts)
 - `media_source` (STRING) — News outlet domain
 - `sentiment_tone` (FLOAT64)
 - `polarity_score` (FLOAT64)

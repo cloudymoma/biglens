@@ -9,16 +9,14 @@
 -- ActionGeo_CountryCode is FIPS 10-4, NOT ISO 3166 (FIPS 'GB' = Gabon, ISO
 -- 'GB' = United Kingdom). It is exposed raw as fips_country_code and decoded
 -- to ISO via dim_fips_iso_country as country_code so downstream joins to
--- Google Trends (ISO) are correct. country_code is NULL for countries not in
--- the mapping (i.e. countries Google Trends does not cover).
+-- Google Trends (ISO) and ISO-based country filters work across all countries.
 CREATE OR REPLACE VIEW `trends_gdelt_analytics.vw_gdelt_news_events_daily`
 OPTIONS (
   description = "Daily global news events from GDELT 2.0 with decoded CAMEO categories, QuadClass grouping, sentiment tone, stability scores, and ISO country codes mapped from FIPS."
 ) AS
 SELECT
   e._PARTITIONDATE AS report_date,
-  -- ISO 3166-1 alpha-2 (joinable to Google Trends); NULL when the action
-  -- location's country is not covered by the Trends dataset.
+  -- ISO 3166-1 alpha-2 mapped from FIPS via dim_fips_iso_country.
   iso.iso_code AS country_code,
   e.ActionGeo_CountryCode AS fips_country_code,
   e.ActionGeo_FullName AS location_name,
@@ -82,7 +80,7 @@ WHERE
 -- Column Descriptions
 ALTER VIEW `trends_gdelt_analytics.vw_gdelt_news_events_daily`
 ALTER COLUMN report_date SET OPTIONS (description = "Ingestion partition date of the event (last 90 days). Always filter this column."),
-ALTER COLUMN country_code SET OPTIONS (description = "ISO 3166-1 alpha-2 country code of the action location, mapped from FIPS via dim_fips_iso_country; NULL for countries not covered by Google Trends."),
+ALTER COLUMN country_code SET OPTIONS (description = "ISO 3166-1 alpha-2 country code of the action location, mapped from FIPS via dim_fips_iso_country."),
 ALTER COLUMN fips_country_code SET OPTIONS (description = "Raw FIPS 10-4 country code (GDELT native). NEVER join directly to Trends ISO codes (FIPS 'GB' = Gabon, ISO 'GB' = United Kingdom)."),
 ALTER COLUMN location_name SET OPTIONS (description = "Full human-readable action location (city, region, country)."),
 ALTER COLUMN latitude SET OPTIONS (description = "Latitude of the action location centroid."),
@@ -97,22 +95,37 @@ ALTER COLUMN event_category SET OPTIONS (description = "Decoded English name of 
 ALTER COLUMN quad_class_id SET OPTIONS (description = "Primary event classification: 1=Verbal Cooperation, 2=Material Cooperation, 3=Verbal Conflict, 4=Material Conflict."),
 ALTER COLUMN quad_class_name SET OPTIONS (description = "Decoded QuadClass name."),
 ALTER COLUMN goldstein_scale SET OPTIONS (description = "Goldstein stability impact score (-10.0 extreme conflict/destabilizing to +10.0 high cooperation)."),
-ALTER COLUMN sentiment_tone SET OPTIONS (description = "Average tone of coverage (-100 to +100; real-world values typically -10 to +10; < -2 clearly negative, > +2 positive)."),
-ALTER COLUMN media_mentions_count SET OPTIONS (description = "Number of mentions of this event across all source documents (media-attention pulse)."),
-ALTER COLUMN distinct_sources_count SET OPTIONS (description = "Number of distinct information sources reporting the event."),
-ALTER COLUMN article_count SET OPTIONS (description = "Number of source articles containing the event."),
-ALTER COLUMN source_article_url SET OPTIONS (description = "URL of a representative news article reporting the event.");
+ALTER COLUMN sentiment_tone SET OPTIONS (description = "Average tone of coverage in the first 15-minute GDELT update window in which the event was first seen (-100 to +100; real-world values typically -10 to +10; < -2 clearly negative, > +2 positive)."),
+ALTER COLUMN media_mentions_count SET OPTIONS (description = "Number of mentions of this event within the first 15-minute GDELT update window in which the event was first seen (first-window media-attention pulse)."),
+ALTER COLUMN distinct_sources_count SET OPTIONS (description = "Number of distinct information sources reporting the event within the first 15-minute GDELT update window."),
+ALTER COLUMN article_count SET OPTIONS (description = "Number of source articles containing the event within the first 15-minute GDELT update window."),
+ALTER COLUMN source_article_url SET OPTIONS (description = "URL of the first/representative news article reporting the event.");
 
 -- View 2: Curated Daily GKG Themes and Sentiment
 CREATE OR REPLACE VIEW `trends_gdelt_analytics.vw_gdelt_gkg_themes_daily`
 OPTIONS (
-  description = "Daily news themes and sentiment aggregations from GDELT Global Knowledge Graph."
+  description = "Daily news themes and sentiment aggregations from GDELT Global Knowledge Graph (last 30 days)."
 ) AS
 SELECT
   _PARTITIONDATE AS report_date,
-  -- V2Themes entries are `THEME_NAME,charOffset`; strip the offset so the
-  -- theme name is clean (e.g. 'TAX_DISEASE', not 'TAX_DISEASE,1234').
-  SPLIT(SPLIT(V2Themes, ';')[SAFE_OFFSET(0)], ',')[SAFE_OFFSET(0)] AS primary_theme,
+  -- Pick the first substantive theme by skipping generic taxonomy/macro prefixes
+  -- (TAX_, WB_, EPU_, CRISISLEX_, UNGP_, SOC_, LEADER), falling back to the first entry.
+  COALESCE(
+    (
+      SELECT SPLIT(entry, ',')[SAFE_OFFSET(0)]
+      FROM UNNEST(SPLIT(V2Themes, ';')) AS entry WITH OFFSET pos
+      WHERE entry != ''
+        AND NOT REGEXP_CONTAINS(SPLIT(entry, ',')[SAFE_OFFSET(0)], r'^(TAX_|WB_|EPU_|CRISISLEX_|UNGP_|SOC_POINTSOFINTEREST|LEADER$)')
+      ORDER BY pos
+      LIMIT 1
+    ),
+    SPLIT(SPLIT(V2Themes, ';')[SAFE_OFFSET(0)], ',')[SAFE_OFFSET(0)]
+  ) AS primary_theme,
+  ARRAY(
+    SELECT DISTINCT SPLIT(entry, ',')[SAFE_OFFSET(0)]
+    FROM UNNEST(SPLIT(V2Themes, ';')) AS entry
+    WHERE entry != ''
+  ) AS themes,
   SourceCommonName AS media_source,
   DocumentIdentifier AS document_url,
   CAST(SPLIT(V2Tone, ',')[SAFE_OFFSET(0)] AS FLOAT64) AS sentiment_tone,
@@ -128,7 +141,8 @@ WHERE
 -- Column Descriptions
 ALTER VIEW `trends_gdelt_analytics.vw_gdelt_gkg_themes_daily`
 ALTER COLUMN report_date SET OPTIONS (description = "Ingestion partition date of the article (last 30 days only — GKG is the largest source table). Always filter this column."),
-ALTER COLUMN primary_theme SET OPTIONS (description = "First-listed GKG theme code of the article with character offset stripped (e.g. 'TAX_DISEASE', 'PROTEST')."),
+ALTER COLUMN primary_theme SET OPTIONS (description = "First substantive GKG theme code of the article with character offset stripped (skipping generic TAX_/WB_/EPU_/CRISISLEX_/UNGP_ taxonomy prefixes when a specific theme is present). For full multi-theme counting, UNNEST(themes)."),
+ALTER COLUMN themes SET OPTIONS (description = "All distinct GKG theme codes tagged on the article (character offsets stripped). Use UNNEST(themes) for complete thematic counts."),
 ALTER COLUMN media_source SET OPTIONS (description = "News outlet domain (e.g. 'bbc.co.uk')."),
 ALTER COLUMN document_url SET OPTIONS (description = "URL of the source article."),
 ALTER COLUMN sentiment_tone SET OPTIONS (description = "Overall document tone (-100 to +100; real-world values typically -10 to +10; < -2 clearly negative, > +2 positive)."),

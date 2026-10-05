@@ -11,7 +11,7 @@
 -- =============================================================================
 
 -- -----------------------------------------------------------------------------
--- Query 6: Graph Traversal - Cross-Country Search Diffusion (GQL GRAPH_TABLE)
+-- Query 14: Graph Traversal - Cross-Country Search Diffusion (GQL GRAPH_TABLE)
 -- Intent: "Which search terms charted in the top 10 in both the UK and France on the same day? Compare their ranks."
 -- Note: Uses the BigQuery Property Graph `trend_gdelt_graph` to perform
 -- relationship pattern matching without manual SQL self-joins.

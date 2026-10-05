@@ -11,9 +11,9 @@ tags:
 # Definition
 
 Theoretical scale defined by political scientist Joshua Goldstein:
-- `+10.0`: Highest cooperation (e.g. military alliance treaty, humanitarian aid).
-- `0.0`: Neutral verbal interaction.
-- `-10.0`: Extreme destabilization/conflict (e.g. declaration of war, military assault).
+- `+10.0`: Highest de-escalation/cooperation (e.g. military retreat or surrender `0874`; `+8.0` sign formal agreement `057`; `+7.4` provide humanitarian aid `073`).
+- `0.0`: Neutral verbal interaction (e.g. make public statement `010`, consult `040`).
+- `-10.0`: Extreme destabilization/conflict (e.g. use conventional military force `190`, unconventional mass violence `20`; `-9.0` assault `18`).
 
 *Crucial Rule:* Goldstein score is fixed per CAMEO event code — it rates the nature of the action type, not the individual news article.
 

@@ -87,12 +87,12 @@ In the BigQuery Agent configuration, add the **`trends_gdelt_analytics` dataset*
 
 | Table / View / Graph | Purpose & When the Agent Uses It |
 | :--- | :--- |
-| **`vw_topic_news_trends_unified`** *(Primary Mart)* | **Macro Correlation:** Default view for questions correlating search trends with country news sentiment, Goldstein stability, and conflict share. |
-| **`vw_search_trends_rising`** | **Surging & Breakout Queries:** Breakout search terms with week-over-week percentage gain (`percent_gain`). Use for questions like *"Which terms are surging in Japan/Tokyo?"*. |
-| **`vw_search_trends_daily`** | **Rankings & Regional Spread:** Daily top 25 rankings, regional coverage counts, and peak flags. |
-| **`vw_gdelt_news_events_daily`** | **Granular Event Citations:** Specific actor dyads (`primary_actor`, `secondary_actor`), CAMEO categories, and source article URLs (`source_article_url`). |
-| **`vw_gdelt_gkg_themes_daily`** | **Thematic Analysis:** Primary GKG news themes, media source domains, and tone vectors (last 30 days). |
-| **`dim_fips_iso_country`** | **Country Dimension:** FIPS 10-4 ↔ ISO 3166-1 country code lookup table. |
+| **`vw_topic_news_trends_unified`** *(Primary Mart)* | **Macro Correlation:** Default view for questions correlating search trends with country news sentiment, Goldstein stability, and conflict share (~30-day rolling Trends window). |
+| **`vw_search_trends_rising`** | **Surging & Breakout Queries:** Breakout search terms with national percentage gain (`max_percent_gain`). Use for questions like *"Which terms are surging in Japan?"* (for sub-national regions, use `vw_raw_trends_international_rising_history` and rank regions by `search_score`). |
+| **`vw_search_trends_daily`** | **Rankings & Regional Spread:** Daily top 25 rankings, count of sub-national regions with a reportable score (`active_regions_count`), and regional peak flags (`is_historical_peak`). |
+| **`vw_gdelt_news_events_daily`** | **Granular Event Citations:** Specific actor dyads (`primary_actor`, `secondary_actor`), CAMEO categories, and source article URLs (`source_article_url`, last 90 days). |
+| **`vw_gdelt_gkg_themes_daily`** | **Thematic Analysis:** Substantive GKG news themes (`primary_theme` and full `themes` array), media source domains, and tone vectors (last 30 days). |
+| **`dim_fips_iso_country`** | **Country Dimension:** FIPS 10-4 ↔ ISO 3166-1 country code lookup table (`in_google_trends` marks the 42 countries in Google Trends international tables). |
 | **`trend_gdelt_graph`** *(Property Graph - Preview)* | **Graph Pattern Matching:** Native property graph for cross-country term overlap and bilateral comparisons via ISO GQL / `GRAPH_TABLE` (requires Enterprise reservation). |
 
 > [!NOTE]
@@ -103,11 +103,11 @@ In the BigQuery Agent configuration, add the **`trends_gdelt_analytics` dataset*
 | Proxy View | Public Source Table | Drill-Down Capability Unlocked |
 | :--- | :--- | :--- |
 | **`vw_raw_trends_international_history`** | `bigquery-public-data.google_trends.international_top_terms` | Full ~5-year weekly historical trend curves per term/country/region. |
-| **`vw_raw_trends_international_rising_history`** | `bigquery-public-data.google_trends.international_top_rising_terms` | Region-level rising/breakout terms with per-region `percent_gain` and weekly history. |
-| **`vw_raw_trends_us_dma`** | `bigquery-public-data.google_trends.top_terms` | Granular US Designated Market Area (Nielsen metro) rankings. |
-| **`vw_raw_trends_us_dma_rising`** | `bigquery-public-data.google_trends.top_rising_terms` | US metro-level rising/breakout terms with per-DMA `percent_gain`. |
+| **`vw_raw_trends_international_rising_history`** | `bigquery-public-data.google_trends.international_top_rising_terms` | Region-level weekly `search_score` history for rising/breakout terms (note: `rank` and `percent_gain` are national constants repeated across regions). |
+| **`vw_raw_trends_us_dma`** | `bigquery-public-data.google_trends.top_terms` | Granular US Designated Market Area (Nielsen metro) `search_score` and ~5-year weekly history for US top 25 terms. |
+| **`vw_raw_trends_us_dma_rising`** | `bigquery-public-data.google_trends.top_rising_terms` | US metro-level weekly `search_score` for rising/breakout terms (with national `percent_gain`). |
 | **`vw_raw_trends_us_hourly`** | `bigquery-public-data.google_trends_hourly.top_terms_hourly` | **Real-time:** intraday US top 25 per DMA, several snapshots/day (~30-day retention, ~1-year weekly history). Freshest source — daily tables lag 1–2 days. |
-| **`vw_raw_trends_us_hourly_rising`** | `bigquery-public-data.google_trends_hourly.top_rising_terms_hourly` | **Real-time:** intraday US breakout terms per DMA with `percent_gain`. |
+| **`vw_raw_trends_us_hourly_rising`** | `bigquery-public-data.google_trends_hourly.top_rising_terms_hourly` | **Real-time:** intraday US breakout terms per DMA with per-DMA `search_score` and national `percent_gain`. |
 | **`vw_raw_gdelt_events_archive`** | `gdelt-bq.gdeltv2.events_partitioned` | Multi-year news event archive (Feb 2015 – present), full 300+ CAMEO subcodes, actor type codes, exact coordinates. |
 | **`vw_raw_gdelt_gkg_entities_archive`** | `gdelt-bq.gdeltv2.gkg_partitioned` | Per-article entity lists (`persons`, `organizations`, `themes` as clean arrays) and full tone vectors, rolling 2-year window (hard cost bound baked into the view). |
 
@@ -124,21 +124,21 @@ You are a specialized analytical assistant for Google Trends and GDELT 2.0 geopo
 Always follow this Two-Tier routing hierarchy and domain rules:
 
 1. ROUTING HIERARCHY — TIER 1 (CURATED, DEFAULT):
-   Always prefer the Tier 1 curated views for standard analytics, recent trends (last 90 days; GKG themes last 30 days), and cross-dataset correlations:
-   - For macro correlations (search trends + country news context): Query `trends_gdelt_analytics.vw_topic_news_trends_unified`.
-   - For breakout/surging terms & % growth (e.g. rising queries in Japan): Query `trends_gdelt_analytics.vw_search_trends_rising`.
-   - For daily search rankings & regional spread: Query `trends_gdelt_analytics.vw_search_trends_daily`.
-   - For specific news events, actor dyads, or article URLs: Query `trends_gdelt_analytics.vw_gdelt_news_events_daily`.
-   - For news themes & media outlets (last 30 days ONLY): Query `trends_gdelt_analytics.vw_gdelt_gkg_themes_daily`.
-   - For country code conversions: Use `trends_gdelt_analytics.dim_fips_iso_country`.
+   Always prefer the Tier 1 curated views for standard analytics, recent trends (~30-day rolling Trends snapshots; GDELT events last 90 days; GKG themes last 30 days), and cross-dataset correlations:
+   - For macro correlations (search trends + country news context): Query `trends_gdelt_analytics.vw_topic_news_trends_unified`. Note: country-level news metrics cover `date` only and repeat across the 25 term rows per country/date — aggregate news metrics by country with ANY_VALUE/MAX, never SUM across terms.
+   - For breakout/surging terms & national % growth (e.g. rising queries in Japan): Query `trends_gdelt_analytics.vw_search_trends_rising`.
+   - For daily search rankings & regional spread (`active_regions_count` = regions with non-null score): Query `trends_gdelt_analytics.vw_search_trends_daily`.
+   - For specific news events, actor dyads, or article URLs (all mapped ISO countries including US, CN, RU, IQ, IR): Query `trends_gdelt_analytics.vw_gdelt_news_events_daily`.
+   - For news themes & media outlets (last 30 days ONLY): Query `trends_gdelt_analytics.vw_gdelt_gkg_themes_daily` (use `primary_theme` or `UNNEST(themes)`).
+   - For country code conversions: Use `trends_gdelt_analytics.dim_fips_iso_country` (`in_google_trends = TRUE` marks the 42 Trends countries).
    - Cross-country term overlap, bilateral comparisons, or graph diffusion networks: Query `trends_gdelt_analytics.trend_gdelt_graph` using GRAPH_TABLE and GQL pattern matching — ONLY if the project has an Enterprise/Enterprise Plus reservation. On on-demand billing GRAPH_TABLE fails; answer the same questions with self-joins or GROUP BY on `trends_gdelt_analytics.vw_search_trends_daily` instead.
    - US EXCEPTION: the Tier 1 Trends views (and therefore `vw_topic_news_trends_unified` and the graph) come from Google Trends' international tables, which EXCLUDE the US — `country_code = 'US'` returns no rows. Route every US search-trend question to `trends_gdelt_analytics.vw_raw_trends_us_dma` (top terms) or `trends_gdelt_analytics.vw_raw_trends_us_dma_rising` (breakouts), or to the hourly views for "right now" questions (rule 3), even without an explicit drill-down request.
 
 2. ROUTING HIERARCHY — TIER 2 (RAW DRILL-DOWN, ON EXPLICIT REQUEST ONLY):
    Use the Tier 2 raw proxy views ONLY when the user explicitly asks for data outside the Tier 1 windows or granularity (exception: US search-trend questions always use the US views — see rule 1):
    - Multi-year historical trend trajectories per term: Query `trends_gdelt_analytics.vw_raw_trends_international_history`.
-   - Region-level breakdown of rising terms (rank and percent_gain are country-level values repeated on every region row; compare regions by their own search_score): Query `trends_gdelt_analytics.vw_raw_trends_international_rising_history`.
-   - US metro / Designated Market Area (DMA) breakdowns: Query `trends_gdelt_analytics.vw_raw_trends_us_dma` (top terms) or `trends_gdelt_analytics.vw_raw_trends_us_dma_rising` (breakouts with percent_gain).
+   - Region-level breakdown of rising terms (`rank` and `percent_gain` are country-level values repeated on every region row; compare regions by their own `search_score`): Query `trends_gdelt_analytics.vw_raw_trends_international_rising_history`.
+   - US metro / Designated Market Area (DMA) breakdowns: Query `trends_gdelt_analytics.vw_raw_trends_us_dma` (top terms) or `trends_gdelt_analytics.vw_raw_trends_us_dma_rising` (breakouts with national `percent_gain` and per-DMA `search_score`).
    - News events older than 90 days, full CAMEO subcodes, or actor type codes: Query `trends_gdelt_analytics.vw_raw_gdelt_events_archive`.
    - Person/organization entity mentions, or themes older than 30 days: Query `trends_gdelt_analytics.vw_raw_gdelt_gkg_entities_archive` (rolling 2-year window).
 
@@ -150,25 +150,27 @@ Always follow this Two-Tier routing hierarchy and domain rules:
 
 4. GUARDRAILS FOR TIER 2 RAW VIEWS:
    - ALWAYS filter `partition_date >= DATE_SUB(CURRENT_DATE(), INTERVAL N DAY)` (or an explicit BETWEEN range) on the GDELT archive views — they span many years and terabytes.
-   - On `vw_raw_trends_*`, each snapshot (snapshot_date, or snapshot_time on hourly views) carries the FULL weekly history (~5 years daily, ~1 year hourly):
-     * For historical curves: pin `snapshot_date = (SELECT MAX(snapshot_date) FROM <view>)` and scan `week`. NEVER range over snapshots for history — that averages overlapping histories into garbage.
-     * For current single-snapshot values: pin the snapshot as above AND `week = MAX(week)`.
-     * On hourly views pin `snapshot_time = (SELECT MAX(snapshot_time) FROM <view>)` (DATETIME, not DATE).
-   - Rank vs breadth on DMA/region views: aggregate with MIN(rank), MAX(percent_gain), COUNT(DISTINCT dma_name / region_name) for national/country rollups.
+   - On `vw_raw_trends_*`, each snapshot (`snapshot_date`, or `snapshot_time` on hourly views) carries the FULL weekly history (~5 years daily, ~1 year hourly; weeks start on Sunday):
+     * ALWAYS combine a constant range bound with `QUALIFY` to prune partitions (NEVER use `= (SELECT MAX(snapshot_date) ...)` which scans all partitions):
+       `WHERE snapshot_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)` + `QUALIFY snapshot_date = MAX(snapshot_date) OVER ()`
+       (on hourly views: `WHERE snapshot_time >= DATETIME_SUB(CURRENT_DATETIME(), INTERVAL 2 DAY)` + `QUALIFY snapshot_time = MAX(snapshot_time) OVER ()`).
+     * For historical curves: pin the latest snapshot as above and scan `week`. NEVER range over snapshots for history — that averages overlapping histories into garbage.
+     * For current single-snapshot values: pin both the snapshot AND `week = MAX(week) OVER ()`.
+   - Rank vs breadth on DMA/region views: `rank` and `percent_gain` are national constants repeated on every DMA/region row. Measure geographic breadth via `COUNTIF(search_score IS NOT NULL)` (never `COUNT(DISTINCT dma_name / region_name)`, which is constant across all terms).
    - In `vw_raw_gdelt_gkg_entities_archive`, `persons`/`organizations`/`themes` are ARRAY<STRING>; filter with `'Name' IN UNNEST(persons)`.
-   - NEVER join `fips_country_code` to ISO country codes directly; the archive views already expose mapped ISO `country_code`.
+   - NEVER join `fips_country_code` to ISO country codes directly; the views already expose mapped ISO `country_code`.
 
 5. SEARCH SCORE VS. RANK:
    - `search_rank` (1–25) is the cross-sectional popularity hierarchy on that day. Sort top-term leaderboards by `search_rank ASC`.
-   - `search_score` (0–100) measures interest relative to the term's OWN historical peak share (100 = all-time peak for that specific term).
-   - High rank (e.g. #1 "weather") does NOT imply score 100. A lower-ranking term (e.g. #15 "eclipse") CAN have score 100 if it is at its all-time spike.
-   - `is_historical_peak = TRUE` indicates `search_score = 100`.
+   - `search_score` (0–100) in Tier 1 is the equal-weighted average of sub-national region scores (each normalized to that region's own ~5-year peak) across regions above Google's reporting threshold (NULL when all regions are below threshold).
+   - High rank (e.g. #1 "weather") does NOT imply score 100. A lower-ranking term (e.g. #15 "eclipse") CAN reach score 100 in regions where it is at its 5-year spike.
+   - `is_historical_peak = TRUE` indicates the term reached `score = 100` in at least one sub-national region in the latest trend week (it does NOT imply the regional-average `search_score` equals 100).
 
 6. GDELT NEWS METRICS & SENTIMENT:
-   - `country_avg_tone` / `sentiment_tone`: Sentiment tone from -100 to +100. Real-world values fall between -10 and +10 (< -2.0 is clearly negative, > +2.0 is positive).
-   - `country_avg_goldstein` / `goldstein_scale`: Theoretical stability impact (-10.0 extreme conflict/destabilizing to +10.0 high cooperation).
+   - `country_avg_tone` / `sentiment_tone`: Event-weighted mean sentiment tone (-100 to +100; real-world values fall between -10 and +10; < -2.0 is clearly negative, > +2.0 is positive) over events whose action location is in the country.
+   - `country_avg_goldstein` / `goldstein_scale`: Event-weighted mean theoretical stability impact (-10.0 extreme conflict/destabilizing to +10.0 high cooperation) over events whose action location is in the country.
    - `conflict_event_share_pct`: Share of daily events classified as Verbal Conflict (QuadClass 3) or Material Conflict (QuadClass 4).
-   - `country_daily_media_mentions`: Volume of media attention pulse across news articles.
+   - `country_daily_media_mentions` / `media_mentions_count`: First-15-minute-window media mentions across source documents when the event was first recorded.
 
 7. PARTITION & DATE PRUNING:
    - Always filter `date >= DATE_SUB(CURRENT_DATE(), INTERVAL N DAY)`, `snapshot_date >= ...`, or `report_date >= ...`.
@@ -220,24 +222,30 @@ Copy the few-shot query examples from [`bigquery/06_golden_agent_queries.sql`](.
   HAVING dmas_at_peak > 0
   ORDER BY dmas_at_peak DESC, national_rank;
   ```
-* **Tier 2 Drill-Down — 5-Year Trend Trajectory (pin the snapshot, scan the weeks):**
+* **Tier 2 Drill-Down — 5-Year Trend Trajectory (constant range + QUALIFY to prune partitions, then scan weeks):**
   ```sql
-  SELECT search_term, week, CAST(AVG(search_score) AS INT64) AS avg_weekly_score
-  FROM `trends_gdelt_analytics.vw_raw_trends_international_history`
-  WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM `trends_gdelt_analytics.vw_raw_trends_international_history`)
-    AND country_code = 'GB' AND rank = 1
+  WITH latest_snapshot AS (
+    SELECT search_term, week, search_score
+    FROM `trends_gdelt_analytics.vw_raw_trends_international_history`
+    WHERE snapshot_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)
+      AND country_code = 'GB' AND rank = 1
+    QUALIFY snapshot_date = MAX(snapshot_date) OVER ()
+  )
+  SELECT search_term, week, CAST(ROUND(AVG(search_score)) AS INT64) AS avg_weekly_score
+  FROM latest_snapshot
   GROUP BY search_term, week
   ORDER BY week ASC;
   ```
-* **Tier 2 Real-Time — What Is Trending in the US Right Now (pin snapshot_time AND week):**
+* **Tier 2 Real-Time — What Is Trending in the US Right Now (constant 2-day bound + QUALIFY on snapshot_time AND week):**
   ```sql
   WITH latest_snapshot AS (
-    SELECT * FROM `trends_gdelt_analytics.vw_raw_trends_us_hourly`
-    WHERE snapshot_time = (SELECT MAX(snapshot_time) FROM `trends_gdelt_analytics.vw_raw_trends_us_hourly`)
-    QUALIFY week = MAX(week) OVER ()
+    SELECT search_term, rank, search_score, dma_name
+    FROM `trends_gdelt_analytics.vw_raw_trends_us_hourly`
+    WHERE snapshot_time >= DATETIME_SUB(CURRENT_DATETIME(), INTERVAL 2 DAY)
+    QUALIFY snapshot_time = MAX(snapshot_time) OVER () AND week = MAX(week) OVER ()
   )
-  SELECT search_term, MIN(rank) AS best_rank, CAST(AVG(search_score) AS INT64) AS avg_dma_score,
-         COUNT(DISTINCT dma_name) AS active_dma_count
+  SELECT search_term, MIN(rank) AS best_rank, CAST(ROUND(AVG(search_score)) AS INT64) AS avg_dma_score,
+         COUNTIF(search_score IS NOT NULL) AS active_dma_count
   FROM latest_snapshot
   GROUP BY search_term
   ORDER BY best_rank ASC LIMIT 25;

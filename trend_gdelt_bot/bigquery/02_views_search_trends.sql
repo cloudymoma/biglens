@@ -14,7 +14,7 @@
 -- normalization).
 CREATE OR REPLACE VIEW `trends_gdelt_analytics.vw_search_trends_daily`
 OPTIONS (
-  description = "Daily Top 25 search terms per country from Google Trends, pinned to the latest trend week per snapshot, with averaged regional scores and peak indicators. International views exclude the US; use vw_raw_trends_us_* for US questions."
+  description = "Daily Top 25 search terms per country from Google Trends (~30-day rolling snapshot retention), pinned to the latest trend week per snapshot, with averaged regional scores and regional peak indicators. International views exclude the US; use vw_raw_trends_us_* for US questions."
 ) AS
 WITH latest_week AS (
   SELECT *
@@ -31,11 +31,12 @@ SELECT
   country_code,
   term AS search_term,
   MIN(rank) AS rank,
-  -- Score averaged across DMA/regions for the country (0-100 normalized to term historical peak)
-  CAST(COALESCE(AVG(score), 0) AS INT64) AS search_score,
-  -- Flag whether this term is currently at its all-time peak popularity (score 100)
+  -- Equal-weighted mean across sub-national regions with a reportable score (NULL when all regions are below threshold)
+  CAST(ROUND(AVG(score)) AS INT64) AS search_score,
+  -- Flag whether this term is at its local historical peak (score 100) in at least one region
   LOGICAL_OR(score = 100) AS is_historical_peak,
-  COUNT(DISTINCT region_name) AS active_regions_count
+  -- Count of sub-national regions with a reportable score (score IS NOT NULL)
+  COUNTIF(score IS NOT NULL) AS active_regions_count
 FROM
   latest_week
 GROUP BY
@@ -46,14 +47,14 @@ GROUP BY
 
 -- Column Descriptions
 ALTER VIEW `trends_gdelt_analytics.vw_search_trends_daily`
-ALTER COLUMN snapshot_date SET OPTIONS (description = "Date when the Trends snapshot was refreshed (partition key)."),
+ALTER COLUMN snapshot_date SET OPTIONS (description = "Date when the Trends snapshot was refreshed (partition key; source retains ~30 days of daily snapshots, each carrying ~5 years of weekly history)."),
 ALTER COLUMN country_name SET OPTIONS (description = "Full English name of the country."),
 ALTER COLUMN country_code SET OPTIONS (description = "ISO 2-letter country code (e.g., 'GB', 'JP', 'FR'). The US is not included; use vw_raw_trends_us_* for US questions."),
 ALTER COLUMN search_term SET OPTIONS (description = "The search query string that charted in top 25."),
 ALTER COLUMN rank SET OPTIONS (description = "Daily cross-sectional search popularity rank (1 = highest daily search volume, 25 = 25th highest)."),
-ALTER COLUMN search_score SET OPTIONS (description = "Relative search interest (0-100) for the latest trend week, normalized against the term's OWN historical peak share. 100 indicates peak volume."),
-ALTER COLUMN is_historical_peak SET OPTIONS (description = "Boolean flag indicating whether the search term is at its peak search interest (100) in at least one region for the latest trend week."),
-ALTER COLUMN active_regions_count SET OPTIONS (description = "Count of distinct sub-national regions/DMAs reporting this term.");
+ALTER COLUMN search_score SET OPTIONS (description = "Equal-weighted mean of sub-national region scores (0-100, each normalized to that region's own ~5-year peak) for the latest trend week across regions above Google's reporting threshold; NULL when all regions are below threshold."),
+ALTER COLUMN is_historical_peak SET OPTIONS (description = "Boolean flag indicating whether the search term is at its local 5-year peak (score = 100) in at least one sub-national region for the latest trend week (does NOT imply the regional-average search_score is 100)."),
+ALTER COLUMN active_regions_count SET OPTIONS (description = "Count of sub-national regions with a non-null search score (above Google Trends privacy threshold) in the latest trend week.");
 
 -- View 2: Curated Daily Rising / Breakout Queries
 --
@@ -61,7 +62,7 @@ ALTER COLUMN active_regions_count SET OPTIONS (description = "Count of distinct 
 -- carry weekly history per refresh_date partition.
 CREATE OR REPLACE VIEW `trends_gdelt_analytics.vw_search_trends_rising`
 OPTIONS (
-  description = "Breakout and surging search terms with week-over-week percentage gain, pinned to the latest trend week per snapshot. International views exclude the US; use vw_raw_trends_us_* for US questions."
+  description = "Breakout and surging search terms with national percentage gain (~30-day rolling snapshot retention), pinned to the latest trend week per snapshot. International views exclude the US; use vw_raw_trends_us_* for US questions."
 ) AS
 WITH latest_week AS (
   SELECT *
@@ -78,7 +79,7 @@ SELECT
   country_code,
   term AS search_term,
   MIN(rank) AS rank,
-  CAST(COALESCE(AVG(score), 0) AS INT64) AS search_score,
+  CAST(ROUND(AVG(score)) AS INT64) AS search_score,
   MAX(percent_gain) AS max_percent_gain,
   AVG(percent_gain) AS avg_percent_gain
 FROM
@@ -91,11 +92,11 @@ GROUP BY
 
 -- Column Descriptions
 ALTER VIEW `trends_gdelt_analytics.vw_search_trends_rising`
-ALTER COLUMN snapshot_date SET OPTIONS (description = "Date when the Trends snapshot was refreshed (partition key)."),
+ALTER COLUMN snapshot_date SET OPTIONS (description = "Date when the Trends snapshot was refreshed (partition key; source retains ~30 days of daily snapshots)."),
 ALTER COLUMN country_name SET OPTIONS (description = "Full English name of the country."),
 ALTER COLUMN country_code SET OPTIONS (description = "ISO 2-letter country code (e.g., 'GB', 'JP', 'FR'). The US is not included; use vw_raw_trends_us_* for US questions."),
 ALTER COLUMN search_term SET OPTIONS (description = "The rising/breakout search query string."),
-ALTER COLUMN rank SET OPTIONS (description = "Rank of the term among the day's rising queries (1 = fastest riser)."),
-ALTER COLUMN search_score SET OPTIONS (description = "Relative search interest (0-100) for the latest trend week, normalized against the term's OWN historical peak share; 0 when volume is below reporting threshold."),
-ALTER COLUMN max_percent_gain SET OPTIONS (description = "Largest week-over-week percentage gain in search interest across the country's regions. Values in the thousands indicate breakout queries."),
-ALTER COLUMN avg_percent_gain SET OPTIONS (description = "Average week-over-week percentage gain in search interest across the country's regions.");
+ALTER COLUMN rank SET OPTIONS (description = "National rank of the term among the day's rising queries (1 = fastest riser)."),
+ALTER COLUMN search_score SET OPTIONS (description = "Equal-weighted mean of sub-national region scores (0-100) for the latest trend week across regions above the reporting threshold; NULL when all regions are below threshold."),
+ALTER COLUMN max_percent_gain SET OPTIONS (description = "National percentage gain reported by Google Trends for this rising term on snapshot_date (percent_gain is a country-level constant repeated across all region rows)."),
+ALTER COLUMN avg_percent_gain SET OPTIONS (description = "National percentage gain (identical to max_percent_gain because percent_gain is a country-level constant across regions; retained for schema compatibility).");

@@ -155,51 +155,66 @@ LIMIT 15;
 -- Query 6 (TIER 2): Multi-Year Weekly Trend Trajectory for a Term
 -- Intent: "Show the 5-year search interest curve for the UK's current #1 term."
 -- Note: Each snapshot_date carries the FULL ~5-year weekly history, so pin
--- snapshot_date = MAX(snapshot_date) and scan week. NEVER range over
--- snapshot_date for history — that averages overlapping histories.
+-- the latest snapshot via a constant range bound + QUALIFY (which prunes
+-- partitions, unlike `= (SELECT MAX(snapshot_date) ...)`) and scan week.
+-- NEVER range over snapshot_date for history — that averages overlapping
+-- histories.
 -- -----------------------------------------------------------------------------
+WITH latest_snapshot AS (
+  SELECT search_term, week, search_score
+  FROM `trends_gdelt_analytics.vw_raw_trends_international_history`
+  WHERE snapshot_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)
+    AND country_code = 'GB'
+    AND rank = 1
+  QUALIFY snapshot_date = MAX(snapshot_date) OVER ()
+)
 SELECT
   search_term,
   week,
-  CAST(AVG(search_score) AS INT64) AS avg_weekly_score
+  CAST(ROUND(AVG(search_score)) AS INT64) AS avg_weekly_score
 FROM
-  `trends_gdelt_analytics.vw_raw_trends_international_history`
-WHERE
-  snapshot_date = (SELECT MAX(snapshot_date) FROM `trends_gdelt_analytics.vw_raw_trends_international_history`)
-  AND country_code = 'GB'
-  AND rank = 1
+  latest_snapshot
 GROUP BY
   search_term, week
 ORDER BY
   week ASC;
 
 -- -----------------------------------------------------------------------------
--- Query 7 (TIER 2): US Metro-Level (DMA) Breakdown of Today's Top Terms
--- Intent: "Which search terms chart in the top 3 across the most US metro areas?"
--- Note: COUNT(DISTINCT dma_name) also collapses the repeated weekly-history
--- rows within the pinned snapshot.
+-- Query 7 (TIER 2): US Metro-Level (DMA) Breakdown of Today's Top 3 Terms
+-- Intent: "How broad is the metro-level search interest for today's top 3 US terms?"
+-- Note: `rank` is a national value repeated on all ~210 DMA rows, and every
+-- term has a row in every DMA (NULL score = below Google's threshold), so
+-- `COUNT(DISTINCT dma_name)` is always ~210. Measure metro breadth via
+-- `COUNTIF(search_score IS NOT NULL)` and `COUNTIF(search_score = 100)` in the
+-- latest trend week, using a constant date bound + QUALIFY for partition pruning.
 -- -----------------------------------------------------------------------------
+WITH latest_snapshot AS (
+  SELECT week, dma_name, search_term, rank, search_score
+  FROM `trends_gdelt_analytics.vw_raw_trends_us_dma`
+  WHERE snapshot_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)
+    AND rank <= 3
+  QUALIFY snapshot_date = MAX(snapshot_date) OVER ()
+    AND week = MAX(week) OVER ()
+)
 SELECT
   search_term,
-  COUNT(DISTINCT dma_name) AS dma_count,
-  MIN(rank) AS best_rank
+  MIN(rank) AS national_rank,
+  COUNTIF(search_score IS NOT NULL) AS dmas_with_signal,
+  COUNTIF(search_score = 100) AS dmas_at_peak,
+  CAST(ROUND(AVG(search_score)) AS INT64) AS avg_dma_score
 FROM
-  `trends_gdelt_analytics.vw_raw_trends_us_dma`
-WHERE
-  snapshot_date = (SELECT MAX(snapshot_date) FROM `trends_gdelt_analytics.vw_raw_trends_us_dma`)
-  AND rank <= 3
+  latest_snapshot
 GROUP BY
   search_term
 ORDER BY
-  dma_count DESC
-LIMIT 15;
+  national_rank ASC;
 
 -- -----------------------------------------------------------------------------
 -- Query 8 (TIER 2): Historical News Event Archive Lookup (beyond 90 days)
 -- Intent: "What were the most covered protest events in France in Q1 2023?"
 -- Note: partition_date filter is MANDATORY on the archive view — it prunes
--- a decade of partitions. is_root_event + QUALIFY deduplicate one-story-
--- many-events noise.
+-- a decade of partitions; event_date filters out retrospective mentions of
+-- older events. is_root_event + QUALIFY deduplicate one-story-many-events noise.
 -- -----------------------------------------------------------------------------
 SELECT
   event_date,
@@ -214,11 +229,12 @@ FROM
   `trends_gdelt_analytics.vw_raw_gdelt_events_archive`
 WHERE
   partition_date BETWEEN '2023-01-01' AND '2023-03-31'
+  AND event_date BETWEEN '2023-01-01' AND '2023-03-31'
   AND country_code = 'FR'
   AND cameo_root_code = '14' -- Protest
   AND is_root_event
 QUALIFY
-  ROW_NUMBER() OVER (PARTITION BY source_article_url ORDER BY media_mentions_count DESC) = 1
+  ROW_NUMBER() OVER (PARTITION BY source_article_url ORDER BY media_mentions_count DESC, global_event_id ASC) = 1
 ORDER BY
   media_mentions_count DESC
 LIMIT 15;
@@ -227,14 +243,14 @@ LIMIT 15;
 -- Query 9 (TIER 2): Entity-Level News Coverage from the GKG Archive
 -- Intent: "Show the most negative coverage mentioning Emmanuel Macron in the last 90 days."
 -- Note: persons/organizations/themes are clean arrays — filter with
--- IN UNNEST(...). The view is hard-bounded to a rolling 2-year window.
+-- IN UNNEST(...). Project only the columns needed so BigQuery skips scanning
+-- unused entity string columns. The view is hard-bounded to a rolling 2-year window.
 -- -----------------------------------------------------------------------------
 SELECT
   partition_date,
   media_source,
   document_url,
-  sentiment_tone,
-  organizations
+  sentiment_tone
 FROM
   `trends_gdelt_analytics.vw_raw_gdelt_gkg_entities_archive`
 WHERE
@@ -248,20 +264,22 @@ LIMIT 15;
 -- Query 10 (TIER 2 / REAL-TIME): What Is Trending in the US RIGHT NOW
 -- Intent: "What are Americans searching for right now / today?"
 -- Note: The hourly views are the FRESHEST source (several intraday snapshots
--- per day; the daily views lag 1-2 days). Pin BOTH snapshot_time and week,
--- then aggregate across DMAs for the national picture.
+-- per day; the daily views lag 1-2 days). Use a constant 2-day bound + QUALIFY
+-- to pin BOTH snapshot_time and week while pruning partitions, and count DMAs
+-- with a non-null score (`COUNTIF(search_score IS NOT NULL)`).
 -- -----------------------------------------------------------------------------
 WITH latest_snapshot AS (
-  SELECT *
+  SELECT search_term, rank, search_score, dma_name
   FROM `trends_gdelt_analytics.vw_raw_trends_us_hourly`
-  WHERE snapshot_time = (SELECT MAX(snapshot_time) FROM `trends_gdelt_analytics.vw_raw_trends_us_hourly`)
-  QUALIFY week = MAX(week) OVER ()
+  WHERE snapshot_time >= DATETIME_SUB(CURRENT_DATETIME(), INTERVAL 2 DAY)
+  QUALIFY snapshot_time = MAX(snapshot_time) OVER ()
+    AND week = MAX(week) OVER ()
 )
 SELECT
   search_term,
   MIN(rank) AS best_rank,
-  CAST(AVG(search_score) AS INT64) AS avg_dma_score,
-  COUNT(DISTINCT dma_name) AS active_dma_count
+  CAST(ROUND(AVG(search_score)) AS INT64) AS avg_dma_score,
+  COUNTIF(search_score IS NOT NULL) AS active_dma_count
 FROM
   latest_snapshot
 GROUP BY

@@ -6,13 +6,12 @@
 
 CREATE OR REPLACE VIEW `trends_gdelt_analytics.vw_topic_news_trends_unified`
 OPTIONS (
-  description = "Unified daily analytics mart correlating Google search trends with GDELT geopolitical news events and sentiment by country and date. Built on the international Trends views, which exclude the US; use vw_raw_trends_us_* for US questions."
+  description = "Unified daily analytics mart correlating Google search trends with GDELT geopolitical news events and sentiment by country and date (~30-day rolling Trends window). Note: country-level news metrics cover `date` only and repeat across the 25 search_term rows for each (date, country_code) — use ANY_VALUE/MAX when rolling up news metrics by country, never SUM across terms. Built on the international Trends views, which exclude the US; use vw_raw_trends_us_* for US search questions."
 ) AS
 WITH daily_country_news_summary AS (
   -- country_code here is already ISO 3166 (mapped from GDELT's FIPS codes in
   -- vw_gdelt_news_events_daily), so it joins 1:1 with the Google Trends ISO
-  -- country codes below. The IS NOT NULL filter keeps only countries covered
-  -- by both datasets.
+  -- country codes below.
   SELECT
     report_date,
     country_code,
@@ -22,10 +21,10 @@ WITH daily_country_news_summary AS (
     ROUND(AVG(goldstein_scale), 2) AS country_avg_goldstein,
     -- Conflict share: percentage of events in QuadClass 3 (Verbal Conflict) or 4 (Material Conflict)
     ROUND(100.0 * COUNTIF(quad_class_id IN (3, 4)) / NULLIF(COUNT(1), 0), 1) AS conflict_event_share_pct,
-    -- Top reported event category
-    APPROX_TOP_COUNT(event_category, 1)[SAFE_OFFSET(0)].value AS dominant_news_category,
-    -- Top reported actor
-    APPROX_TOP_COUNT(primary_actor, 1)[SAFE_OFFSET(0)].value AS dominant_actor
+    -- Top reported event category (ignoring NULLs)
+    (SELECT value FROM UNNEST(APPROX_TOP_COUNT(event_category, 2)) WHERE value IS NOT NULL LIMIT 1) AS dominant_news_category,
+    -- Top reported actor (ignoring NULLs so missing Actor1Name never masks the leading named actor)
+    (SELECT value FROM UNNEST(APPROX_TOP_COUNT(primary_actor, 2)) WHERE value IS NOT NULL LIMIT 1) AS dominant_actor
   FROM
     `trends_gdelt_analytics.vw_gdelt_news_events_daily`
   WHERE
@@ -60,17 +59,17 @@ ON
 
 -- Column Descriptions
 ALTER VIEW `trends_gdelt_analytics.vw_topic_news_trends_unified`
-ALTER COLUMN date SET OPTIONS (description = "Calendar date of the snapshot (YYYY-MM-DD)."),
+ALTER COLUMN date SET OPTIONS (description = "Calendar date of the Trends snapshot and GDELT ingestion partition (YYYY-MM-DD)."),
 ALTER COLUMN country_name SET OPTIONS (description = "Country display name."),
-ALTER COLUMN country_code SET OPTIONS (description = "2-letter ISO country code."),
+ALTER COLUMN country_code SET OPTIONS (description = "2-letter ISO country code (excludes 'US'; use vw_raw_trends_us_* for US search trends)."),
 ALTER COLUMN search_term SET OPTIONS (description = "Search query string appearing in Google Trends daily top 25."),
 ALTER COLUMN search_rank SET OPTIONS (description = "Daily rank by total search volume (1 = #1 searched query)."),
-ALTER COLUMN search_score SET OPTIONS (description = "Relative search interest score (0-100) normalized to the term's all-time historical peak."),
-ALTER COLUMN is_historical_peak SET OPTIONS (description = "True if search score equals 100 on this date."),
-ALTER COLUMN country_daily_news_events SET OPTIONS (description = "Total number of global news events recorded in GDELT for this country on this date."),
-ALTER COLUMN country_daily_media_mentions SET OPTIONS (description = "Total media mentions summed over event rows in this country (media-attention pulse; one article reporting several events contributes to each of them, so this is not a distinct article count)."),
-ALTER COLUMN country_avg_tone SET OPTIONS (description = "Average emotional tone of news coverage in this country on this date (-100 to +100; below -2 is negative, above +2 is positive)."),
-ALTER COLUMN country_avg_goldstein SET OPTIONS (description = "Average Goldstein stability impact score (-10 = extreme conflict, +10 = high cooperation)."),
-ALTER COLUMN conflict_event_share_pct SET OPTIONS (description = "Percentage of news events in this country classified as Verbal or Material Conflict (0-100%)."),
-ALTER COLUMN dominant_news_category SET OPTIONS (description = "The most frequently reported CAMEO event category in the country on this date."),
-ALTER COLUMN dominant_actor SET OPTIONS (description = "The most frequently reported primary actor in news coverage for this country on this date.");
+ALTER COLUMN search_score SET OPTIONS (description = "Equal-weighted mean of sub-national region scores (0-100) for the latest trend week (which starts on Sunday and may be a partial week early in the week), across regions above Google's reporting threshold."),
+ALTER COLUMN is_historical_peak SET OPTIONS (description = "True if the term reached score 100 in at least one sub-national region for the latest trend week (does NOT imply the regional-average search_score equals 100)."),
+ALTER COLUMN country_daily_news_events SET OPTIONS (description = "Total number of GDELT news events whose action location is in this country on `date` (country-level constant repeated on every term row for that country/date — aggregate with ANY_VALUE/MAX, never SUM across terms)."),
+ALTER COLUMN country_daily_media_mentions SET OPTIONS (description = "First-15-minute-window media mentions summed over event rows in this country on `date` (repeated on every term row for that country/date — aggregate with ANY_VALUE/MAX, never SUM across terms)."),
+ALTER COLUMN country_avg_tone SET OPTIONS (description = "Event-weighted mean sentiment tone over events whose action location is in this country on `date` (-100 to +100; below -2 is negative, above +2 is positive; repeated on every term row)."),
+ALTER COLUMN country_avg_goldstein SET OPTIONS (description = "Event-weighted mean Goldstein stability impact score over events whose action location is in this country on `date` (-10 = extreme conflict, +10 = high cooperation; repeated on every term row)."),
+ALTER COLUMN conflict_event_share_pct SET OPTIONS (description = "Percentage of news events in this country on `date` classified as Verbal or Material Conflict (QuadClass 3 or 4, 0-100%; repeated on every term row)."),
+ALTER COLUMN dominant_news_category SET OPTIONS (description = "Most frequently reported non-null CAMEO event category in the country on `date`."),
+ALTER COLUMN dominant_actor SET OPTIONS (description = "Most frequently reported non-null primary actor (Actor1Name) in news coverage for this country on `date`.");

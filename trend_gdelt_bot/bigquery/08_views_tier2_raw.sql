@@ -31,7 +31,7 @@
 -- overlapping 5-year histories into garbage.
 CREATE OR REPLACE VIEW `trends_gdelt_analytics.vw_raw_trends_international_history`
 OPTIONS (
-  description = "TIER 2 DRILL-DOWN: Unaggregated weekly search-interest history (~5 years) per term/country/region from Google Trends. Pin snapshot_date = MAX(snapshot_date) and scan week for historical curves; add week = MAX(week) for current values. Prefer vw_search_trends_daily for standard rankings."
+  description = "TIER 2 DRILL-DOWN: Unaggregated weekly search-interest history (~5 years) per term/country/region from Google Trends. Filter with a constant range (snapshot_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)) and pin QUALIFY snapshot_date = MAX(snapshot_date) OVER () to prune partitions; scan week for historical curves, or add week = MAX(week) OVER () for current values. Prefer vw_search_trends_daily for standard rankings."
 ) AS
 SELECT
   refresh_date AS snapshot_date,
@@ -47,24 +47,24 @@ FROM
   `bigquery-public-data.google_trends.international_top_terms`;
 
 ALTER VIEW `trends_gdelt_analytics.vw_raw_trends_international_history`
-ALTER COLUMN snapshot_date SET OPTIONS (description = "Trends snapshot refresh date (partition key — ALWAYS pin to MAX(snapshot_date) unless comparing snapshots; each snapshot repeats the full weekly history)."),
-ALTER COLUMN week SET OPTIONS (description = "Start date (Monday) of the trend week this score row belongs to. The time axis for historical curves (~261 weeks per snapshot)."),
+ALTER COLUMN snapshot_date SET OPTIONS (description = "Trends snapshot refresh date (partition key — filter with snapshot_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY) and pin QUALIFY snapshot_date = MAX(snapshot_date) OVER (); avoid `= (SELECT MAX(snapshot_date) ...)` which scans all partitions)."),
+ALTER COLUMN week SET OPTIONS (description = "Start date (Sunday) of the trend week this score row belongs to. The time axis for historical curves (~261 weeks per snapshot)."),
 ALTER COLUMN country_name SET OPTIONS (description = "Full English name of the country."),
 ALTER COLUMN country_code SET OPTIONS (description = "ISO 3166-1 alpha-2 country code (e.g. 'GB', 'JP'). Joinable to Tier 1 views."),
 ALTER COLUMN region_name SET OPTIONS (description = "Sub-national region name (state / province / prefecture)."),
 ALTER COLUMN region_code SET OPTIONS (description = "ISO 3166-2 sub-national region code (e.g. 'GB-ENG')."),
 ALTER COLUMN search_term SET OPTIONS (description = "Search query string that charted in the country's daily top 25."),
-ALTER COLUMN rank SET OPTIONS (description = "Daily cross-sectional popularity rank (1-25) of the term on snapshot_date; constant across the term's history rows within one snapshot."),
-ALTER COLUMN search_score SET OPTIONS (description = "Relative search interest (0-100) for this term in this region during this week, normalized to the term's own historical peak. NULL when volume is below reporting threshold.");
+ALTER COLUMN rank SET OPTIONS (description = "National daily cross-sectional popularity rank (1-25) of the term on snapshot_date, repeated across all region and week rows within the snapshot."),
+ALTER COLUMN search_score SET OPTIONS (description = "Relative search interest (0-100) for this term in this region during this week, normalized to the term's own ~5-year peak in that region. NULL when volume is below reporting threshold.");
 
 -- View 2: US Designated Market Area (DMA) Top Terms
 --
 -- US-only metro-level granularity (Nielsen DMAs) that the international
 -- tables do not carry. Same weekly-history-per-snapshot layout as View 1:
--- pin snapshot_date, and pin week for current values.
+-- pin snapshot_date with a constant range + QUALIFY, and pin week for current values.
 CREATE OR REPLACE VIEW `trends_gdelt_analytics.vw_raw_trends_us_dma`
 OPTIONS (
-  description = "TIER 2 DRILL-DOWN: Daily top 25 US search terms at Designated Market Area (Nielsen metro) granularity, with ~5-year weekly history per snapshot. Pin snapshot_date = MAX(snapshot_date); add week = MAX(week) for current values. US only — use vw_search_trends_daily for countries."
+  description = "TIER 2 DRILL-DOWN: Daily top 25 US search terms at Designated Market Area (Nielsen metro) granularity, with ~5-year weekly history per snapshot. Filter snapshot_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY) and pin QUALIFY snapshot_date = MAX(snapshot_date) OVER (); add week = MAX(week) OVER () for current values. US only — use vw_search_trends_daily for other countries."
 ) AS
 SELECT
   refresh_date AS snapshot_date,
@@ -78,22 +78,22 @@ FROM
   `bigquery-public-data.google_trends.top_terms`;
 
 ALTER VIEW `trends_gdelt_analytics.vw_raw_trends_us_dma`
-ALTER COLUMN snapshot_date SET OPTIONS (description = "Trends snapshot refresh date (partition key — ALWAYS pin to MAX(snapshot_date) unless comparing snapshots; each snapshot repeats the full weekly history)."),
-ALTER COLUMN week SET OPTIONS (description = "Start date (Monday) of the trend week this score row belongs to."),
+ALTER COLUMN snapshot_date SET OPTIONS (description = "Trends snapshot refresh date (partition key — filter with snapshot_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY) and pin QUALIFY snapshot_date = MAX(snapshot_date) OVER ())."),
+ALTER COLUMN week SET OPTIONS (description = "Start date (Sunday) of the trend week this score row belongs to."),
 ALTER COLUMN dma_name SET OPTIONS (description = "Nielsen Designated Market Area name, e.g. 'New York NY' or 'San Francisco-Oakland-San Jose CA'."),
 ALTER COLUMN dma_id SET OPTIONS (description = "Numeric Nielsen DMA identifier."),
 ALTER COLUMN search_term SET OPTIONS (description = "Search query string that charted in the US daily top 25."),
-ALTER COLUMN rank SET OPTIONS (description = "Daily cross-sectional popularity rank (1-25) of the term on snapshot_date."),
-ALTER COLUMN search_score SET OPTIONS (description = "Relative search interest (0-100) for this term in this DMA during this week, normalized to the term's own historical peak. NULL when volume is below reporting threshold.");
+ALTER COLUMN rank SET OPTIONS (description = "National US daily popularity rank (1-25) of the term on snapshot_date, repeated across all DMA rows — do NOT compare rank across DMAs; use search_score for metro differences."),
+ALTER COLUMN search_score SET OPTIONS (description = "Relative search interest (0-100) for this term in this DMA during this week, normalized to the term's own ~5-year peak in that DMA. NULL when volume is below reporting threshold.");
 
 -- View 3: Full Weekly History of International RISING Terms
 --
--- Region-level breakout detail the Tier 1 rising view aggregates away:
--- per-region percent_gain plus the weekly score history behind each rising
--- term. Same snapshot layout and pinning rules as View 1.
+-- Region-level breakout detail: keeps each sub-national region's weekly
+-- search_score history behind each rising term (note: rank and percent_gain
+-- are national constants repeated across all region rows).
 CREATE OR REPLACE VIEW `trends_gdelt_analytics.vw_raw_trends_international_rising_history`
 OPTIONS (
-  description = "TIER 2 DRILL-DOWN: Unaggregated rising/breakout search terms per country REGION with week-over-week percent_gain and ~5-year weekly score history. Pin snapshot_date = MAX(snapshot_date); add week = MAX(week) for current values. Prefer vw_search_trends_rising for country-level rising terms."
+  description = "TIER 2 DRILL-DOWN: Unaggregated rising/breakout search terms per country REGION with ~5-year weekly search_score history and national percent_gain. Filter snapshot_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY) and pin QUALIFY snapshot_date = MAX(snapshot_date) OVER (); add week = MAX(week) OVER () for current values. Prefer vw_search_trends_rising for country-level rising terms."
 ) AS
 SELECT
   refresh_date AS snapshot_date,
@@ -110,24 +110,24 @@ FROM
   `bigquery-public-data.google_trends.international_top_rising_terms`;
 
 ALTER VIEW `trends_gdelt_analytics.vw_raw_trends_international_rising_history`
-ALTER COLUMN snapshot_date SET OPTIONS (description = "Trends snapshot refresh date (partition key — ALWAYS pin to MAX(snapshot_date) unless comparing snapshots; each snapshot repeats the full weekly history)."),
-ALTER COLUMN week SET OPTIONS (description = "Start date (Monday) of the trend week this score row belongs to."),
+ALTER COLUMN snapshot_date SET OPTIONS (description = "Trends snapshot refresh date (partition key — filter with snapshot_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY) and pin QUALIFY snapshot_date = MAX(snapshot_date) OVER ())."),
+ALTER COLUMN week SET OPTIONS (description = "Start date (Sunday) of the trend week this score row belongs to."),
 ALTER COLUMN country_name SET OPTIONS (description = "Full English name of the country."),
 ALTER COLUMN country_code SET OPTIONS (description = "ISO 3166-1 alpha-2 country code (e.g. 'GB', 'JP'). Joinable to Tier 1 views."),
-ALTER COLUMN region_name SET OPTIONS (description = "Sub-national region name (state / province / prefecture) where the term is rising."),
+ALTER COLUMN region_name SET OPTIONS (description = "Sub-national region name (state / province / prefecture)."),
 ALTER COLUMN region_code SET OPTIONS (description = "ISO 3166-2 sub-national region code (e.g. 'GB-ENG')."),
 ALTER COLUMN search_term SET OPTIONS (description = "Rising/breakout search query string."),
-ALTER COLUMN rank SET OPTIONS (description = "Rank among the day's rising queries in this region (1 = fastest riser); constant across the term's history rows within one snapshot."),
-ALTER COLUMN search_score SET OPTIONS (description = "Relative search interest (0-100) for this term in this region during this week, normalized to the term's own historical peak. NULL when volume is below reporting threshold."),
-ALTER COLUMN percent_gain SET OPTIONS (description = "Week-over-week percentage gain in search interest for this region. Values in the thousands indicate breakout queries.");
+ALTER COLUMN rank SET OPTIONS (description = "National rank of the term among the country's rising queries on snapshot_date (1 = fastest riser), repeated on every region row — do NOT compare rank across regions; use search_score for regional differences."),
+ALTER COLUMN search_score SET OPTIONS (description = "Relative search interest (0-100) for this term in this region during this week, normalized to the term's own ~5-year peak in that region. NULL when volume is below reporting threshold."),
+ALTER COLUMN percent_gain SET OPTIONS (description = "National percentage gain of the term for this snapshot, repeated identically on every region row — do NOT compare or sort regions by percent_gain; use search_score for regional differences.");
 
 -- View 4: US DMA-Level RISING Terms
 --
--- US metro-level companion of View 3: which terms are breaking out in which
--- Nielsen DMA, with percent_gain. Same pinning rules as View 2.
+-- US metro-level companion of View 3: keeps each Nielsen DMA's weekly
+-- search_score history for national rising terms.
 CREATE OR REPLACE VIEW `trends_gdelt_analytics.vw_raw_trends_us_dma_rising`
 OPTIONS (
-  description = "TIER 2 DRILL-DOWN: Rising/breakout US search terms at Designated Market Area (Nielsen metro) granularity with week-over-week percent_gain and weekly history. Pin snapshot_date = MAX(snapshot_date); add week = MAX(week) for current values. US only."
+  description = "TIER 2 DRILL-DOWN: Rising/breakout US search terms at Designated Market Area (Nielsen metro) granularity with weekly search_score history and national percent_gain. Filter snapshot_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY) and pin QUALIFY snapshot_date = MAX(snapshot_date) OVER (); add week = MAX(week) OVER () for current values. US only."
 ) AS
 SELECT
   refresh_date AS snapshot_date,
@@ -142,14 +142,14 @@ FROM
   `bigquery-public-data.google_trends.top_rising_terms`;
 
 ALTER VIEW `trends_gdelt_analytics.vw_raw_trends_us_dma_rising`
-ALTER COLUMN snapshot_date SET OPTIONS (description = "Trends snapshot refresh date (partition key — ALWAYS pin to MAX(snapshot_date) unless comparing snapshots; each snapshot repeats the full weekly history)."),
-ALTER COLUMN week SET OPTIONS (description = "Start date (Monday) of the trend week this score row belongs to."),
+ALTER COLUMN snapshot_date SET OPTIONS (description = "Trends snapshot refresh date (partition key — filter with snapshot_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY) and pin QUALIFY snapshot_date = MAX(snapshot_date) OVER ())."),
+ALTER COLUMN week SET OPTIONS (description = "Start date (Sunday) of the trend week this score row belongs to."),
 ALTER COLUMN dma_name SET OPTIONS (description = "Nielsen Designated Market Area name, e.g. 'New York NY'."),
 ALTER COLUMN dma_id SET OPTIONS (description = "Numeric Nielsen DMA identifier."),
 ALTER COLUMN search_term SET OPTIONS (description = "Rising/breakout search query string."),
-ALTER COLUMN rank SET OPTIONS (description = "Rank among the day's rising queries in this DMA (1 = fastest riser)."),
-ALTER COLUMN search_score SET OPTIONS (description = "Relative search interest (0-100) for this term in this DMA during this week, normalized to the term's own historical peak. NULL when volume is below reporting threshold."),
-ALTER COLUMN percent_gain SET OPTIONS (description = "Week-over-week percentage gain in search interest for this DMA. Values in the thousands indicate breakout queries.");
+ALTER COLUMN rank SET OPTIONS (description = "National US rank among the day's rising queries (1 = fastest riser), repeated on every DMA row — do NOT compare rank across DMAs; use search_score for metro differences."),
+ALTER COLUMN search_score SET OPTIONS (description = "Relative search interest (0-100) for this term in this DMA during this week, normalized to the term's own ~5-year peak in that DMA. NULL when volume is below reporting threshold."),
+ALTER COLUMN percent_gain SET OPTIONS (description = "National US percentage gain of the term for this snapshot, repeated identically on every DMA row — do NOT compare or sort DMAs by percent_gain; use search_score for metro differences.");
 
 -- Views 5 & 6: INTRADAY Hourly US Trends (top & rising)
 --
@@ -159,11 +159,11 @@ ALTER COLUMN percent_gain SET OPTIONS (description = "Week-over-week percentage 
 -- (verified live 2026-08-17: 129 snapshots over 31 days; latest snapshot =
 -- 25 terms x 210 DMAs x 53 weeks). This is the FRESHEST source in the stack:
 -- the daily tables lag 1-2 days, so "what is trending right now / today in
--- the US" should route here. Pin snapshot_time = MAX(snapshot_time), and
--- week = MAX(week) for current values.
+-- the US" should route here. Filter with a constant 2-day DATETIME range and
+-- pin snapshot_time = MAX(snapshot_time) OVER () and week = MAX(week) OVER ().
 CREATE OR REPLACE VIEW `trends_gdelt_analytics.vw_raw_trends_us_hourly`
 OPTIONS (
-  description = "TIER 2 DRILL-DOWN / REAL-TIME: Intraday US top 25 search terms per Nielsen DMA, refreshed several times per day (~30-day snapshot retention, ~1-year weekly history per snapshot). FRESHEST trends source — use for 'right now / today' US questions; daily views lag 1-2 days. Pin snapshot_time = MAX(snapshot_time); add week = MAX(week) for current values. US only."
+  description = "TIER 2 DRILL-DOWN / REAL-TIME: Intraday US top 25 search terms per Nielsen DMA, refreshed several times per day (~30-day snapshot retention, ~1-year weekly history per snapshot). FRESHEST trends source — use for 'right now / today' US questions; daily views lag 1-2 days. Filter snapshot_time >= DATETIME_SUB(CURRENT_DATETIME(), INTERVAL 2 DAY) and pin QUALIFY snapshot_time = MAX(snapshot_time) OVER () AND week = MAX(week) OVER (). US only."
 ) AS
 SELECT
   refresh_time AS snapshot_time,
@@ -177,17 +177,17 @@ FROM
   `bigquery-public-data.google_trends_hourly.top_terms_hourly`;
 
 ALTER VIEW `trends_gdelt_analytics.vw_raw_trends_us_hourly`
-ALTER COLUMN snapshot_time SET OPTIONS (description = "Intraday snapshot timestamp (DATETIME, hour-partition key — ALWAYS pin to MAX(snapshot_time); each snapshot repeats the full ~1-year weekly history). Snapshots retained ~30 days."),
-ALTER COLUMN week SET OPTIONS (description = "Start date (Monday) of the trend week this score row belongs to (~53 weeks per snapshot)."),
+ALTER COLUMN snapshot_time SET OPTIONS (description = "Intraday snapshot timestamp (DATETIME, hour-partition key — filter with snapshot_time >= DATETIME_SUB(CURRENT_DATETIME(), INTERVAL 2 DAY) and pin QUALIFY snapshot_time = MAX(snapshot_time) OVER ()). Snapshots retained ~30 days."),
+ALTER COLUMN week SET OPTIONS (description = "Start date (Sunday) of the trend week this score row belongs to (~53 weeks per snapshot)."),
 ALTER COLUMN dma_name SET OPTIONS (description = "Nielsen Designated Market Area name, e.g. 'New York NY'."),
 ALTER COLUMN dma_id SET OPTIONS (description = "Numeric Nielsen DMA identifier."),
 ALTER COLUMN search_term SET OPTIONS (description = "Search query string in the US top 25 as of this intraday snapshot."),
-ALTER COLUMN rank SET OPTIONS (description = "Cross-sectional popularity rank (1-25) as of this intraday snapshot."),
-ALTER COLUMN search_score SET OPTIONS (description = "Relative search interest (0-100) for this term in this DMA during this week, normalized to the term's own historical peak. NULL when volume is below reporting threshold.");
+ALTER COLUMN rank SET OPTIONS (description = "National US popularity rank (1-25) as of this intraday snapshot, repeated on every DMA row."),
+ALTER COLUMN search_score SET OPTIONS (description = "Relative search interest (0-100) for this term in this DMA during this week, normalized to the term's own ~1-year peak in that DMA. NULL when volume is below reporting threshold.");
 
 CREATE OR REPLACE VIEW `trends_gdelt_analytics.vw_raw_trends_us_hourly_rising`
 OPTIONS (
-  description = "TIER 2 DRILL-DOWN / REAL-TIME: Intraday rising/breakout US search terms per Nielsen DMA with percent_gain, refreshed several times per day (~30-day snapshot retention). FRESHEST breakout signal — use for 'breaking out right now' US questions. Pin snapshot_time = MAX(snapshot_time); add week = MAX(week) for current values. US only."
+  description = "TIER 2 DRILL-DOWN / REAL-TIME: Intraday rising/breakout US search terms per Nielsen DMA with national percent_gain and per-DMA search_score, refreshed several times per day (~30-day snapshot retention). FRESHEST breakout signal — use for 'breaking out right now' US questions. Filter snapshot_time >= DATETIME_SUB(CURRENT_DATETIME(), INTERVAL 2 DAY) and pin QUALIFY snapshot_time = MAX(snapshot_time) OVER () AND week = MAX(week) OVER (). US only."
 ) AS
 SELECT
   refresh_time AS snapshot_time,
@@ -202,14 +202,14 @@ FROM
   `bigquery-public-data.google_trends_hourly.top_rising_terms_hourly`;
 
 ALTER VIEW `trends_gdelt_analytics.vw_raw_trends_us_hourly_rising`
-ALTER COLUMN snapshot_time SET OPTIONS (description = "Intraday snapshot timestamp (DATETIME, hour-partition key — ALWAYS pin to MAX(snapshot_time); each snapshot repeats the full ~1-year weekly history). Snapshots retained ~30 days."),
-ALTER COLUMN week SET OPTIONS (description = "Start date (Monday) of the trend week this score row belongs to."),
+ALTER COLUMN snapshot_time SET OPTIONS (description = "Intraday snapshot timestamp (DATETIME, hour-partition key — filter with snapshot_time >= DATETIME_SUB(CURRENT_DATETIME(), INTERVAL 2 DAY) and pin QUALIFY snapshot_time = MAX(snapshot_time) OVER ()). Snapshots retained ~30 days."),
+ALTER COLUMN week SET OPTIONS (description = "Start date (Sunday) of the trend week this score row belongs to."),
 ALTER COLUMN dma_name SET OPTIONS (description = "Nielsen Designated Market Area name."),
 ALTER COLUMN dma_id SET OPTIONS (description = "Numeric Nielsen DMA identifier."),
 ALTER COLUMN search_term SET OPTIONS (description = "Rising/breakout search query string as of this intraday snapshot."),
-ALTER COLUMN rank SET OPTIONS (description = "Rank among rising queries in this DMA (1 = fastest riser) as of this intraday snapshot."),
-ALTER COLUMN search_score SET OPTIONS (description = "Relative search interest (0-100) normalized to the term's own historical peak. NULL when volume is below reporting threshold."),
-ALTER COLUMN percent_gain SET OPTIONS (description = "Week-over-week percentage gain in search interest for this DMA. Values in the thousands indicate breakout queries.");
+ALTER COLUMN rank SET OPTIONS (description = "National US rank among rising queries (1 = fastest riser) as of this intraday snapshot, repeated on every DMA row — do NOT compare rank across DMAs."),
+ALTER COLUMN search_score SET OPTIONS (description = "Relative search interest (0-100) in this DMA during this week, normalized to the term's own ~1-year peak in that DMA. NULL when volume is below reporting threshold."),
+ALTER COLUMN percent_gain SET OPTIONS (description = "National US percentage gain of the term as of this intraday snapshot, repeated identically on every DMA row — do NOT compare or sort DMAs by percent_gain; use search_score for metro differences.");
 
 -- View 7: Multi-Year GDELT Events Archive (2015 - present)
 --
@@ -227,8 +227,7 @@ SELECT
   e._PARTITIONDATE AS partition_date,
   e.GLOBALEVENTID AS global_event_id,
   SAFE.PARSE_DATE('%Y%m%d', CAST(e.SQLDATE AS STRING)) AS event_date,
-  -- ISO 3166-1 alpha-2 (joinable to Google Trends); NULL when the action
-  -- location's country is not covered by the Trends dataset.
+  -- ISO 3166-1 alpha-2 mapped from FIPS via dim_fips_iso_country.
   iso.iso_code AS country_code,
   e.ActionGeo_CountryCode AS fips_country_code,
   e.ActionGeo_FullName AS location_name,
@@ -294,7 +293,7 @@ ALTER VIEW `trends_gdelt_analytics.vw_raw_gdelt_events_archive`
 ALTER COLUMN partition_date SET OPTIONS (description = "Ingestion partition date (from _PARTITIONDATE). ALWAYS filter this column to prune the multi-year archive (e.g. partition_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 180 DAY))."),
 ALTER COLUMN global_event_id SET OPTIONS (description = "GDELT globally unique event identifier."),
 ALTER COLUMN event_date SET OPTIONS (description = "Date the event occurred (parsed from SQLDATE); can precede partition_date when old events are re-reported."),
-ALTER COLUMN country_code SET OPTIONS (description = "ISO 3166-1 alpha-2 country code of the action location, mapped from FIPS via dim_fips_iso_country; NULL for countries not covered by Google Trends."),
+ALTER COLUMN country_code SET OPTIONS (description = "ISO 3166-1 alpha-2 country code of the action location, mapped from FIPS via dim_fips_iso_country."),
 ALTER COLUMN fips_country_code SET OPTIONS (description = "Raw FIPS 10-4 country code (GDELT native). NEVER join directly to Trends ISO codes (FIPS 'GB' = Gabon, ISO 'GB' = United Kingdom)."),
 ALTER COLUMN location_name SET OPTIONS (description = "Full human-readable action location (city, region, country)."),
 ALTER COLUMN admin1_code SET OPTIONS (description = "FIPS-based first-order administrative division code of the action location (e.g. 'USCA' = California, US)."),
@@ -306,7 +305,7 @@ ALTER COLUMN actor1_type_code SET OPTIONS (description = "CAMEO type/role code o
 ALTER COLUMN secondary_actor SET OPTIONS (description = "Name of Actor2 (recipient/target) as reported."),
 ALTER COLUMN actor2_country_code SET OPTIONS (description = "CAMEO 3-letter country affiliation code of Actor2."),
 ALTER COLUMN actor2_type_code SET OPTIONS (description = "CAMEO type/role code of Actor2."),
-ALTER COLUMN is_root_event SET OPTIONS (description = "TRUE if this event was the lead/root event of its source article (best row for deduplicating one-story-many-events)."),
+ALTER COLUMN is_root_event SET OPTIONS (description = "TRUE if the event appeared in the lead paragraph of the first article that reported it (importance proxy; an article can have several root events, so combine with QUALIFY ROW_NUMBER() OVER (PARTITION BY source_article_url ...) to deduplicate per URL)."),
 ALTER COLUMN cameo_event_code SET OPTIONS (description = "Full 3-4 digit CAMEO action code (300+ subcodes, '010'-'204'), e.g. '1411' = demonstrate for leadership change."),
 ALTER COLUMN cameo_base_code SET OPTIONS (description = "3-digit CAMEO base code (level 2 of the taxonomy)."),
 ALTER COLUMN cameo_root_code SET OPTIONS (description = "2-digit CAMEO root category code ('01'-'20')."),
@@ -314,11 +313,11 @@ ALTER COLUMN event_category SET OPTIONS (description = "Decoded English name of 
 ALTER COLUMN quad_class_id SET OPTIONS (description = "Primary event classification: 1=Verbal Cooperation, 2=Material Cooperation, 3=Verbal Conflict, 4=Material Conflict."),
 ALTER COLUMN quad_class_name SET OPTIONS (description = "Decoded QuadClass name."),
 ALTER COLUMN goldstein_scale SET OPTIONS (description = "Goldstein stability impact score (-10.0 extreme conflict/destabilizing to +10.0 high cooperation)."),
-ALTER COLUMN sentiment_tone SET OPTIONS (description = "Average tone of coverage (-100 to +100; real-world values typically -10 to +10; < -2 clearly negative, > +2 positive)."),
-ALTER COLUMN media_mentions_count SET OPTIONS (description = "Number of mentions of this event across all source documents (media-attention pulse)."),
-ALTER COLUMN distinct_sources_count SET OPTIONS (description = "Number of distinct information sources reporting the event."),
-ALTER COLUMN article_count SET OPTIONS (description = "Number of source articles containing the event."),
-ALTER COLUMN source_article_url SET OPTIONS (description = "URL of a representative news article reporting the event.");
+ALTER COLUMN sentiment_tone SET OPTIONS (description = "Average tone of coverage in the first 15-minute GDELT update window in which the event was first seen (-100 to +100; real-world values typically -10 to +10; < -2 clearly negative, > +2 positive)."),
+ALTER COLUMN media_mentions_count SET OPTIONS (description = "Number of mentions of this event within the first 15-minute GDELT update window in which the event was first seen (first-window media-attention pulse)."),
+ALTER COLUMN distinct_sources_count SET OPTIONS (description = "Number of distinct information sources reporting the event within the first 15-minute GDELT update window."),
+ALTER COLUMN article_count SET OPTIONS (description = "Number of source articles containing the event within the first 15-minute GDELT update window."),
+ALTER COLUMN source_article_url SET OPTIONS (description = "URL of the first/representative news article reporting the event.");
 
 -- View 8: GDELT GKG Entity Archive (rolling 2 years)
 --

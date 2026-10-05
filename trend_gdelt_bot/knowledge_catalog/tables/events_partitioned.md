@@ -19,8 +19,8 @@ tags:
 - `EventRootCode` (STRING) — Top-level CAMEO category ('01'–'20').
 - `QuadClass` (INT64) — 1: Verbal Cooperation, 2: Material Cooperation, 3: Verbal Conflict, 4: Material Conflict.
 - `GoldsteinScale` (FLOAT64) — Geopolitical stability impact score (-10 to +10).
-- `AvgTone` (FLOAT64) — Emotional sentiment tone (-100 to +100).
-- `NumMentions` (INT64) — Total media mentions.
+- `AvgTone` (FLOAT64) — Average emotional sentiment tone (-100 to +100) across documents mentioning the event within the first 15-minute update window in which it was logged.
+- `NumMentions` (INT64) — Total mentions of the event across documents within the first 15-minute update window in which it was logged.
 - `SOURCEURL` (STRING) — Web URL of citation article.
 
 # Relationships

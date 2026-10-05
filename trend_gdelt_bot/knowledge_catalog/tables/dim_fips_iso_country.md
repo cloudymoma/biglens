@@ -23,10 +23,11 @@ GDELT's `ActionGeo_CountryCode` uses **FIPS 10-4** codes while Google Trends' `c
 - `fips_code` (STRING) — FIPS 10-4 code as found in GDELT `ActionGeo_CountryCode`.
 - `iso_code` (STRING) — ISO 3166-1 alpha-2 code as found in Google Trends `country_code`.
 - `country_name` (STRING) — Common English country name.
+- `in_google_trends` (BOOL) — TRUE when the country is covered by Google Trends `international_top_terms` (42 countries).
 
 # Coverage
 
-Covers the 42 countries present in Google Trends `international_top_terms` (verified against live data 2026-08-16). GDELT events in other countries carry a NULL ISO `country_code` in the curated views.
+Covers the 42 countries present in Google Trends `international_top_terms` (`in_google_trends = TRUE`) plus major global sovereign states and territories (`US`, `CN`, `RU`, `IQ`, `IR`, etc.) so GDELT event queries by ISO `country_code` work across all countries.
 
 # Relationships
 - Parent: [trends_gdelt_analytics](/datasets/trends_gdelt_analytics)

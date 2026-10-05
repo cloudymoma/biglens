@@ -9,6 +9,6 @@ tags:
 
 # Definition
 
-GDELT tracks what the global news media is reporting. A single high-profile event covered by 5,000 media outlets will generate thousands of GDELT event rows.
+GDELT tracks what the global news media is reporting. In GDELT 2.0, `events_partitioned` logs one row per distinct coded `(Actor1, Actor2, EventCode, ActionGeo)` action when first extracted, while a single news article often yields multiple distinct coded event rows and `NumMentions` records how many documents mentioned that action within its first 15-minute update window (subsequent coverage across outlets is logged to the separate Mentions table).
 
-Therefore, higher event counts represent **media attention and virality**, which is the ideal signal for comparing against Google Search query spikes.
+Because major stories involve many actors, sub-actions, and follow-up reports, higher event and mention counts reflect **media attention and virality** rather than a 1:1 physical incident blotter — making them a strong signal for comparing against Google Search query spikes (deduplicate by `source_article_url` when listing individual stories).
