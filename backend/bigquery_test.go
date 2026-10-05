@@ -20,12 +20,14 @@ func TestSlotTimelineSQL(t *testing.T) {
 		"job_creation_time >= ",
 		"user_email = @user_email",
 		"AND state IN ('PENDING', 'RUNNING')",
+		"AND (statement_type IS NULL OR statement_type != 'SCRIPT')",
+		"COUNT(DISTINCT IF(state = 'PENDING', job_id, NULL)) AS pending_jobs",
 		"GROUP BY period_start",
 		"DIV(UNIX_SECONDS(period_start), @bucket_secs) * @bucket_secs",
 		"SUM(running_ms) / (@bucket_secs * 1000) AS avg_running",
-		"SUM(pending_ms) / (@bucket_secs * 1000) AS avg_pending",
-		"MAX(running_ms + pending_ms) / 1000 AS peak_total",
-		"MAX(pending_ms) / 1000 AS peak_pending",
+		"SUM(pending_jobs) / @bucket_secs AS avg_pending",
+		"MAX(running_ms) / 1000 AS peak_total",
+		"CAST(MAX(pending_jobs) AS FLOAT64) AS peak_pending",
 	} {
 		if !strings.Contains(sql, want) {
 			t.Errorf("missing %q in SQL:\n%s", want, sql)

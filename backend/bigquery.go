@@ -485,17 +485,18 @@ func slotTimelineSQL(regionRef, where string) string {
 			SELECT
 				period_start,
 				SUM(IF(state = 'RUNNING', IFNULL(period_slot_ms, 0), 0)) AS running_ms,
-				SUM(IF(state = 'PENDING', IFNULL(period_slot_ms, 0), 0)) AS pending_ms
+				COUNT(DISTINCT IF(state = 'PENDING', job_id, NULL)) AS pending_jobs
 			FROM %s.INFORMATION_SCHEMA.JOBS_TIMELINE_BY_PROJECT
 			%s AND state IN ('PENDING', 'RUNNING')
+				AND (statement_type IS NULL OR statement_type != 'SCRIPT')
 			GROUP BY period_start
 		)
 		SELECT
 			FORMAT_TIMESTAMP("%%Y-%%m-%%dT%%H:%%M:%%SZ", TIMESTAMP_SECONDS(DIV(UNIX_SECONDS(period_start), @bucket_secs) * @bucket_secs)) AS bucket_start,
 			SUM(running_ms) / (@bucket_secs * 1000) AS avg_running,
-			SUM(pending_ms) / (@bucket_secs * 1000) AS avg_pending,
-			MAX(running_ms + pending_ms) / 1000 AS peak_total,
-			MAX(pending_ms) / 1000 AS peak_pending
+			SUM(pending_jobs) / @bucket_secs AS avg_pending,
+			MAX(running_ms) / 1000 AS peak_total,
+			CAST(MAX(pending_jobs) AS FLOAT64) AS peak_pending
 		FROM per_second
 		GROUP BY bucket_start
 		ORDER BY bucket_start ASC`,
@@ -530,7 +531,8 @@ func (b *BQClient) GetQueueStats(ctx context.Context, filters QueryFilters) (*Qu
 			CAST(IFNULL(APPROX_QUANTILES(TIMESTAMP_DIFF(end_time, start_time, MILLISECOND), 100)[OFFSET(95)], 0) AS FLOAT64) AS p95_run_ms,
 			COUNT(*) AS job_count
 		FROM %s.INFORMATION_SCHEMA.JOBS_BY_PROJECT
-		%s AND start_time IS NOT NULL AND end_time IS NOT NULL`,
+		%s AND start_time IS NOT NULL AND end_time IS NOT NULL
+			AND (statement_type IS NULL OR statement_type != 'SCRIPT')`,
 		b.regionRef(filters.Region), where))
 	q.Parameters = params
 
@@ -647,7 +649,7 @@ func (b *BQClient) GetCostSummary(ctx context.Context, filters QueryFilters) (*C
 			IFNULL(SUM(total_bytes_processed), 0) AS bytes_processed,
 			IFNULL(SUM(total_slot_ms), 0) AS total_slot_ms
 		FROM %s.INFORMATION_SCHEMA.JOBS_BY_PROJECT
-		%s AND statement_type != 'SCRIPT'`,
+		%s AND (statement_type IS NULL OR statement_type != 'SCRIPT')`,
 		b.regionRef(filters.Region), where))
 	q.Parameters = params
 
@@ -692,7 +694,7 @@ func (b *BQClient) GetSpend(ctx context.Context, filters QueryFilters) ([]SpendE
 			`WITH jobs AS (
 				SELECT DISTINCT j.job_id, j.total_bytes_billed, %s AS name
 				FROM %s.INFORMATION_SCHEMA.JOBS_BY_PROJECT j, UNNEST(referenced_tables) rt
-				%s AND statement_type != 'SCRIPT' AND %s
+				%s AND (statement_type IS NULL OR statement_type != 'SCRIPT') AND %s
 			)
 			SELECT
 				name,
@@ -715,7 +717,7 @@ func (b *BQClient) GetSpend(ctx context.Context, filters QueryFilters) ([]SpendE
 			%s AS name,
 			IFNULL(SUM(total_bytes_billed), 0) AS total_bytes
 		FROM %s.INFORMATION_SCHEMA.JOBS_BY_PROJECT
-		%s AND statement_type != 'SCRIPT'
+		%s AND (statement_type IS NULL OR statement_type != 'SCRIPT')
 		GROUP BY name
 		ORDER BY total_bytes DESC
 		LIMIT 25`,
@@ -739,7 +741,7 @@ func (b *BQClient) GetDailyCost(ctx context.Context, filters QueryFilters) ([]Da
 			FORMAT_DATE("%%Y-%%m-%%d", DATE(creation_time)) AS day,
 			IFNULL(SUM(total_bytes_billed), 0) AS bytes_billed
 		FROM %s.INFORMATION_SCHEMA.JOBS_BY_PROJECT
-		%s AND statement_type != 'SCRIPT'
+		%s AND (statement_type IS NULL OR statement_type != 'SCRIPT')
 		GROUP BY day
 		ORDER BY day ASC`,
 		b.regionRef(filters.Region), where))

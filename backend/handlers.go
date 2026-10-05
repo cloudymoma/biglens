@@ -185,15 +185,6 @@ func (h *APIHandler) ComputeDashboard(w http.ResponseWriter, r *http.Request) {
 	})
 
 	g.Go(func() error {
-		usage, err := h.bq.GetSlotUsage(ctx, filters)
-		if err != nil {
-			return err
-		}
-		data.SlotUsage = usage
-		return nil
-	})
-
-	g.Go(func() error {
 		qs, err := h.bq.GetQueueStats(ctx, filters)
 		if err != nil {
 			return err

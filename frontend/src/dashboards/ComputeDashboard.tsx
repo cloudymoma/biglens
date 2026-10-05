@@ -148,8 +148,8 @@ export default function ComputeDashboard({ filters }: { filters: QueryFilters })
     <div className="space-y-6">
       <DegradedNotice widgets={data.degraded_widgets} />
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <MetricCard label="Peak Concurrent" value={peakConcurrent.toFixed(0)} icon={<TrendingUp size={18} />} detail="Busiest single second, running + pending slots" accentColor="#38bdf8" />
-        <MetricCard label="Peak Pending" value={peakPending.toFixed(0)} icon={<Hourglass size={18} />} detail="Sustained pending = slot starvation" accentColor="#fb7185" />
+        <MetricCard label="Peak Concurrent" value={peakConcurrent.toFixed(0)} icon={<TrendingUp size={18} />} detail="Busiest single second, running slots" accentColor="#38bdf8" />
+        <MetricCard label="Peak Pending" value={peakPending.toFixed(0)} icon={<Hourglass size={18} />} detail="Max queued jobs in a single second" accentColor="#fb7185" />
         <MetricCard label="Jobs in Window" value={qs ? qs.job_count.toLocaleString() : '---'} icon={<Activity size={18} />} detail="Completed jobs analyzed" accentColor="#4ade80" />
       </div>
 
