@@ -231,14 +231,64 @@ type SearchIndexInfo struct {
 	TotalStorageBytes  int64  `json:"total_storage_bytes" bigquery:"total_storage_bytes"`
 }
 
+const searchIndexBatchSize = 25
+
+// searchIndexesSQL builds a UNION ALL query over INFORMATION_SCHEMA.SEARCH_INDEXES
+// for the given datasets. Because BigQuery identifiers cannot be parameterized,
+// every dataset name is validated against datasetNameRe (`^[A-Za-z0-9_]+$`)
+// before interpolation.
+func searchIndexesSQL(project string, datasets []string, hasTableFilter bool) (string, error) {
+	if len(datasets) == 0 {
+		return "", fmt.Errorf("no datasets provided")
+	}
+	where := ""
+	if hasTableFilter {
+		where = " WHERE table_name = @table_name"
+	}
+	parts := make([]string, 0, len(datasets))
+	for _, ds := range datasets {
+		if !datasetNameRe.MatchString(ds) {
+			return "", fmt.Errorf("invalid dataset name %q", ds)
+		}
+		parts = append(parts, fmt.Sprintf(
+			`SELECT
+				index_schema,
+				table_name,
+				index_name,
+				index_status,
+				coverage_percentage,
+				total_logical_bytes,
+				total_storage_bytes
+			FROM `+"`"+`%s.%s.INFORMATION_SCHEMA.SEARCH_INDEXES`+"`"+`%s`,
+			project, ds, where))
+	}
+	return strings.Join(parts, "\nUNION ALL\n"), nil
+}
+
+func (b *BQClient) querySearchIndexesBatch(ctx context.Context, datasets []string, table string) ([]SearchIndexInfo, error) {
+	sqlStr, err := searchIndexesSQL(b.config.BigQuery.ProjectID, datasets, table != "")
+	if err != nil {
+		return nil, err
+	}
+	q := b.client.Query(sqlStr)
+	if table != "" {
+		q.Parameters = []bigquery.QueryParameter{{Name: "table_name", Value: table}}
+	}
+	return collectRows[SearchIndexInfo](q, ctx)
+}
+
 func (b *BQClient) GetSearchIndexes(ctx context.Context, filters QueryFilters) ([]SearchIndexInfo, error) {
 	var datasets []string
 	if filters.Dataset != "" {
+		if !datasetNameRe.MatchString(filters.Dataset) {
+			return nil, fmt.Errorf("invalid dataset name %q", filters.Dataset)
+		}
 		datasets = []string{filters.Dataset}
 	} else {
-		// Fetch datasets in the region
 		q := b.client.Query(fmt.Sprintf(
-			`SELECT schema_name FROM %s.INFORMATION_SCHEMA.SCHEMATA`,
+			`SELECT schema_name FROM %s.INFORMATION_SCHEMA.SCHEMATA
+			WHERE NOT STARTS_WITH(schema_name, '_')
+			ORDER BY schema_name`,
 			b.regionRef(filters.Region)))
 		rows, err := collectRows[struct {
 			SchemaName string `bigquery:"schema_name"`
@@ -247,7 +297,9 @@ func (b *BQClient) GetSearchIndexes(ctx context.Context, filters QueryFilters) (
 			return nil, fmt.Errorf("failed to fetch datasets for region %s: %w", filters.Region, err)
 		}
 		for _, row := range rows {
-			datasets = append(datasets, row.SchemaName)
+			if datasetNameRe.MatchString(row.SchemaName) {
+				datasets = append(datasets, row.SchemaName)
+			}
 		}
 	}
 
@@ -258,47 +310,42 @@ func (b *BQClient) GetSearchIndexes(ctx context.Context, filters QueryFilters) (
 	var results []SearchIndexInfo
 	var mu sync.Mutex
 	g, ctx := errgroup.WithContext(ctx)
-	// Limit concurrency to 10 to be gentle to BigQuery rate limits
-	sem := make(chan struct{}, 10)
+	sem := make(chan struct{}, 4)
 
-	for _, ds := range datasets {
-		ds := ds // capture loop variable
+	for start := 0; start < len(datasets); start += searchIndexBatchSize {
+		end := start + searchIndexBatchSize
+		if end > len(datasets) {
+			end = len(datasets)
+		}
+		batch := datasets[start:end]
 		g.Go(func() error {
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			queryStr := fmt.Sprintf(
-				`SELECT 
-					index_schema, 
-					table_name, 
-					index_name, 
-					index_status, 
-					coverage_percentage, 
-					total_logical_bytes, 
-					total_storage_bytes
-				FROM `+"`"+`%s.%s.INFORMATION_SCHEMA.SEARCH_INDEXES`+"`"+``,
-				b.config.BigQuery.ProjectID, ds,
-			)
-
-			var params []bigquery.QueryParameter
-			if filters.Table != "" {
-				queryStr += " WHERE table_name = @table_name"
-				params = append(params, bigquery.QueryParameter{Name: "table_name", Value: filters.Table})
-			}
-
-			q := b.client.Query(queryStr)
-			q.Parameters = params
-
-			rows, err := collectRows[SearchIndexInfo](q, ctx)
-			if err != nil {
-				// Warn and ignore (e.g. linked datasets or permission issues on specific datasets)
-				slog.Warn("skipping search indexes query for dataset due to error", "dataset", ds, "error", err)
+			rows, err := b.querySearchIndexesBatch(ctx, batch, filters.Table)
+			if err == nil {
+				mu.Lock()
+				results = append(results, rows...)
+				mu.Unlock()
 				return nil
 			}
-
-			mu.Lock()
-			results = append(results, rows...)
-			mu.Unlock()
+			if len(batch) == 1 {
+				slog.Warn("skipping search indexes query for dataset due to error", "dataset", batch[0], "error", err)
+				return nil
+			}
+			// A linked dataset or permission gap in the UNION ALL batch fails the
+			// combined query; fall back to per-dataset queries for this batch.
+			slog.Warn("search indexes batch failed, falling back to per-dataset queries", "batch_size", len(batch), "error", err)
+			for _, ds := range batch {
+				r, err := b.querySearchIndexesBatch(ctx, []string{ds}, filters.Table)
+				if err != nil {
+					slog.Warn("skipping search indexes query for dataset due to error", "dataset", ds, "error", err)
+					continue
+				}
+				mu.Lock()
+				results = append(results, r...)
+				mu.Unlock()
+			}
 			return nil
 		})
 	}

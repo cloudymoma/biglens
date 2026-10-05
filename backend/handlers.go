@@ -49,8 +49,16 @@ type StorageDashboardData struct {
 	DegradedWidgets []string          `json:"degraded_widgets,omitempty"`
 }
 
+func searchIndexesCacheKey(f QueryFilters) string {
+	return "storage_search_indexes:" + f.Region + ":" + f.Dataset + ":" + f.Table
+}
+
 func (h *APIHandler) StorageDashboard(w http.ResponseWriter, r *http.Request) {
 	filters := ParseFilters(r)
+	if filters.Dataset != "" && !datasetNameRe.MatchString(filters.Dataset) {
+		writeError(w, "invalid dataset name", http.StatusBadRequest)
+		return
+	}
 	key := filters.CacheKey("storage_dashboard")
 
 	if cached, ok := h.cache.Get(key); ok {
@@ -95,10 +103,20 @@ func (h *APIHandler) StorageDashboard(w http.ResponseWriter, r *http.Request) {
 	})
 
 	g.Go(func() error {
+		idxKey := searchIndexesCacheKey(filters)
+		if cached, ok := h.cache.Get(idxKey); ok {
+			if indexes, ok := cached.([]SearchIndexInfo); ok {
+				data.SearchIndexes = indexes
+				return nil
+			}
+		}
 		indexes, err := h.bq.GetSearchIndexes(ctx, filters)
 		if err != nil {
-			return err
+			slog.Warn("search indexes widget degraded", "error", err)
+			addDegraded("search_indexes")
+			return nil
 		}
+		h.cache.SetWithTTL(idxKey, indexes, time.Hour)
 		data.SearchIndexes = indexes
 		return nil
 	})

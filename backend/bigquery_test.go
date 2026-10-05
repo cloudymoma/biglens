@@ -54,3 +54,29 @@ func TestSlotTimelineSQL(t *testing.T) {
 		}
 	}
 }
+
+// searchIndexesSQL interpolates dataset identifiers into backtick-quoted
+// INFORMATION_SCHEMA paths, so every dataset name must match datasetNameRe
+// and multiple datasets must be combined via UNION ALL to avoid N+1 jobs.
+func TestSearchIndexesSQLValidatesAndBatches(t *testing.T) {
+	for _, bad := range []string{"", "ds`; DROP TABLE x; --", "a-b", "a.b", "../ds"} {
+		if _, err := searchIndexesSQL("proj", []string{bad}, false); err == nil {
+			t.Errorf("searchIndexesSQL accepted invalid dataset %q", bad)
+		}
+	}
+
+	sql, err := searchIndexesSQL("proj", []string{"ds_one", "ds_two"}, true)
+	if err != nil {
+		t.Fatalf("searchIndexesSQL valid datasets failed: %v", err)
+	}
+	for _, want := range []string{
+		"FROM `proj.ds_one.INFORMATION_SCHEMA.SEARCH_INDEXES` WHERE table_name = @table_name",
+		"UNION ALL",
+		"FROM `proj.ds_two.INFORMATION_SCHEMA.SEARCH_INDEXES` WHERE table_name = @table_name",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Errorf("searchIndexesSQL missing %q in:\n%s", want, sql)
+		}
+	}
+}
+

@@ -2,9 +2,12 @@ package main
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The 30/90-day buckets must be exact subsets of the >=7-day query result so
@@ -73,5 +76,23 @@ func TestDegradedWidgetsJSONMarshaling(t *testing.T) {
 	}
 	if !strings.Contains(string(b), `"degraded_widgets":["cold_tables"]`) {
 		t.Errorf("json output = %s, missing degraded_widgets", string(b))
+	}
+}
+
+func TestStorageDashboardRejectsInvalidDataset(t *testing.T) {
+	h := &APIHandler{cache: NewCache(time.Minute)}
+	req := httptest.NewRequest(http.MethodGet, "/api/dashboards/storage?dataset=foo%60bar", nil)
+	rec := httptest.NewRecorder()
+	h.StorageDashboard(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestSearchIndexesCacheKeyIgnoresTimeRangeAndUser(t *testing.T) {
+	k1 := searchIndexesCacheKey(QueryFilters{Region: "region-us", Dataset: "ds1", Table: "t1", TimeRange: "7d", UserEmail: "a@x.com"})
+	k2 := searchIndexesCacheKey(QueryFilters{Region: "region-us", Dataset: "ds1", Table: "t1", TimeRange: "90d", UserEmail: "b@x.com"})
+	if k1 != k2 {
+		t.Errorf("cache keys differ across time_range/user_email: %q vs %q", k1, k2)
 	}
 }
