@@ -192,18 +192,24 @@ type IAMSummary struct {
 	TotalCalls      int64 `json:"total_calls" bigquery:"total_calls"`
 }
 
-func (b *BQClient) GetIAMSummary(ctx context.Context, region, timeRange string) (*IAMSummary, error) {
-	interval := timeRangeToInterval(timeRange)
-
-	q := b.client.Query(fmt.Sprintf(
+// iamSummarySQL counts identities, not jobs: JOBS_BY_PROJECT has one row per
+// job, so the human and service-account cards use COUNT(DISTINCT ...) like
+// total_emails and add up to it. Any '.iam.gserviceaccount.com' address also
+// ends with '.gserviceaccount.com', so one suffix check covers both.
+func iamSummarySQL(regionRef, interval string) string {
+	return fmt.Sprintf(
 		`SELECT
 			COUNT(DISTINCT user_email) AS total_emails,
-			COUNTIF(ENDS_WITH(user_email, '.gserviceaccount.com') OR ENDS_WITH(user_email, '.iam.gserviceaccount.com')) AS service_accounts,
-			COUNTIF(NOT ENDS_WITH(user_email, '.gserviceaccount.com') AND NOT ENDS_WITH(user_email, '.iam.gserviceaccount.com')) AS human_users,
+			COUNT(DISTINCT IF(ENDS_WITH(user_email, '.gserviceaccount.com'), user_email, NULL)) AS service_accounts,
+			COUNT(DISTINCT IF(NOT ENDS_WITH(user_email, '.gserviceaccount.com'), user_email, NULL)) AS human_users,
 			COUNT(*) AS total_calls
 		FROM %s.INFORMATION_SCHEMA.JOBS_BY_PROJECT
 		WHERE creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL %s)`,
-		b.regionRef(region), interval))
+		regionRef, interval)
+}
+
+func (b *BQClient) GetIAMSummary(ctx context.Context, region, timeRange string) (*IAMSummary, error) {
+	q := b.client.Query(iamSummarySQL(b.regionRef(region), timeRangeToInterval(timeRange)))
 
 	it, err := q.Read(ctx)
 	if err != nil {
