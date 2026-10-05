@@ -16,7 +16,7 @@ A real-time BigQuery observability dashboard. BigLens queries BigQuery's `INFORM
 
 - **Go 1.22+**
 - **Node.js 20+** and npm
-- **Google Cloud credentials** with BigQuery metadata access (`roles/bigquery.resourceViewer`)
+- **Google Cloud credentials** with BigQuery metadata access (`roles/bigquery.resourceViewer`; row-level security checks in Security Posture also need `bigquery.tables.list` and `bigquery.rowAccessPolicies.list`, e.g. `roles/iam.securityReviewer`)
 
 ### 1. Configure
 

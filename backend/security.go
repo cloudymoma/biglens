@@ -143,26 +143,17 @@ type ObjectGrant struct {
 	Grantee    string `json:"grantee" bigquery:"grantee"`
 }
 
-type RLSPolicy struct {
-	Dataset   string `json:"dataset"`
-	Table     string `json:"table" bigquery:"table_name"`
-	Policy    string `json:"policy" bigquery:"row_access_policy_name"`
-	Predicate string `json:"predicate" bigquery:"filter_predicate"`
-	Modified  string `json:"modified" bigquery:"modified"`
-}
-
-// GetGrantsAndRLS fans out two metadata queries per dataset with bounded
+// GetObjectGrants fans out one metadata query per dataset with bounded
 // concurrency. Individual dataset failures are logged and skipped so one
-// permission gap cannot blank the whole posture view.
-func (b *BQClient) GetGrantsAndRLS(ctx context.Context, region string, datasets []string) ([]ObjectGrant, []RLSPolicy) {
+// permission gap cannot blank the whole posture view. Row access policies
+// are read separately through the REST API (security_rls.go).
+func (b *BQClient) GetObjectGrants(ctx context.Context, region string, datasets []string) []ObjectGrant {
 	var (
 		mu     sync.Mutex
 		grants []ObjectGrant
-		rls    []RLSPolicy
 		wg     sync.WaitGroup
 		sem    = make(chan struct{}, 8)
 	)
-	project := b.config.BigQuery.ProjectID
 	for _, ds := range datasets {
 		wg.Add(1)
 		go func(ds string) {
@@ -185,26 +176,13 @@ func (b *BQClient) GetGrantsAndRLS(ctx context.Context, region string, datasets 
 				slog.Warn("object privileges skipped", "dataset", ds, "error", err)
 			}
 
-			rq := b.client.Query(fmt.Sprintf(
-				"SELECT table_name, row_access_policy_name, filter_predicate, "+
-					"FORMAT_TIMESTAMP('%%Y-%%m-%%dT%%H:%%M:%%SZ', last_modified_time) AS modified "+
-					"FROM `%s.%s`.INFORMATION_SCHEMA.ROW_ACCESS_POLICIES", project, ds))
-			r, err := collectRows[RLSPolicy](rq, ctx)
-			if err != nil {
-				slog.Warn("row access policies skipped", "dataset", ds, "error", err)
-			}
-			for i := range r {
-				r[i].Dataset = ds
-			}
-
 			mu.Lock()
 			grants = append(grants, g...)
-			rls = append(rls, r...)
 			mu.Unlock()
 		}(ds)
 	}
 	wg.Wait()
-	return grants, rls
+	return grants
 }
 
 type PublicFlag struct {

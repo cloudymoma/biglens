@@ -16,7 +16,7 @@ BigQuery 实时可观测性仪表盘。BigLens 通过查询 BigQuery 的 `INFORM
 
 - **Go 1.22+**
 - **Node.js 20+** 及 npm
-- 具有 BigQuery 元数据访问权限的 **Google Cloud 凭证**（`roles/bigquery.resourceViewer`）
+- 具有 BigQuery 元数据访问权限的 **Google Cloud 凭证**（`roles/bigquery.resourceViewer`；安全态势中的行级访问策略检查还需 `bigquery.tables.list` 与 `bigquery.rowAccessPolicies.list`，例如 `roles/iam.securityReviewer`）
 
 ### 1. 配置
 

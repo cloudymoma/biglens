@@ -280,6 +280,18 @@ export interface RLSPolicy {
   modified: string;
 }
 
+// Coverage of the row access policy scan (RowAccessPolicies.List per table).
+// Only 'complete' lets an empty rls_policies list mean "no policies".
+export interface RLSScan {
+  status: 'complete' | 'partial' | 'not_evaluated';
+  tables_checked: number;
+  tables_total: number;
+  datasets_failed: number;
+  truncated: boolean;
+  timed_out: boolean;
+  max_tables: number;
+}
+
 export interface SensitiveColumn {
   dataset: string;
   table: string;
@@ -296,6 +308,7 @@ export interface SecurityDashboardData {
   project_iam_error: string;
   dataset_posture: DatasetPosture[] | null;
   rls_policies: RLSPolicy[] | null;
+  rls_scan?: RLSScan | null;
   sensitive_columns: SensitiveColumn[] | null;
   datasets_scanned: number;
   datasets_total: number;

@@ -9,6 +9,7 @@ import (
 
 	"cloud.google.com/go/bigquery"
 	"golang.org/x/sync/errgroup"
+	bqv2 "google.golang.org/api/bigquery/v2"
 	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
 )
@@ -16,6 +17,7 @@ import (
 type BQClient struct {
 	client *bigquery.Client
 	config *Config
+	rls    rlsAPI // row access policies have no INFORMATION_SCHEMA view
 }
 
 func NewBQClient(ctx context.Context, cfg *Config) (*BQClient, error) {
@@ -29,9 +31,17 @@ func NewBQClient(ctx context.Context, cfg *Config) (*BQClient, error) {
 		return nil, fmt.Errorf("failed to create bigquery client: %w", err)
 	}
 
+	// Same credentials and scope as the client above, which builds on this
+	// REST service too but does not expose it.
+	svc, err := bqv2.NewService(ctx, append([]option.ClientOption{option.WithScopes(bigquery.Scope)}, opts...)...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create bigquery REST service: %w", err)
+	}
+
 	return &BQClient{
 		client: client,
 		config: cfg,
+		rls:    bqRLSAPI{svc: svc, project: cfg.BigQuery.ProjectID},
 	}, nil
 }
 

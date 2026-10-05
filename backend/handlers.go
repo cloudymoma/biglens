@@ -580,6 +580,7 @@ type SecurityDashboardData struct {
 	ProjectIAMError  string            `json:"project_iam_error"`
 	DatasetPosture   []DatasetPosture  `json:"dataset_posture"`
 	RLSPolicies      []RLSPolicy       `json:"rls_policies"`
+	RLSScan          RLSScan           `json:"rls_scan"`
 	SensitiveColumns []SensitiveColumn `json:"sensitive_columns"`
 	DatasetsScanned  int               `json:"datasets_scanned"`
 	DatasetsTotal    int               `json:"datasets_total"`
@@ -612,10 +613,17 @@ func (h *APIHandler) SecurityDashboard(w http.ResponseWriter, r *http.Request) {
 		}
 		data.DatasetsScanned = len(datasets)
 		data.DatasetsTotal = total
-		grants, rls := h.bq.GetGrantsAndRLS(ctx, filters.Region, datasets)
+
+		// Row access policies come from the REST API, not query jobs, so
+		// they are listed alongside the grants fan-out.
+		g.Go(func() error {
+			h.fillRLS(ctx, filters.Region, datasets, &data, addDegraded)
+			return nil
+		})
+
+		grants := h.bq.GetObjectGrants(ctx, filters.Region, datasets)
 		data.PublicFlags = publicFlags(grants)
 		data.Principals = buildPrincipalGrants(grants)
-		data.RLSPolicies = rls
 
 		active, err := h.bq.GetActivePrincipals(ctx, filters.Region, filters.TimeRange)
 		if err != nil {

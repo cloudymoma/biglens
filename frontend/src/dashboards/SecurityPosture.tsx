@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { AlertTriangle, CheckCircle2, Users, Bot, Building2, Key, Lock, EyeOff, Database, Tag, Info } from 'lucide-react';
-import type { SecurityDashboardData } from '../types';
+import type { RLSScan, SecurityDashboardData } from '../types';
 import { fetchSecurityDashboard } from '../api';
 import { MetricCard, EmptyState, ErrorBanner, DegradedNotice } from './shared';
 
@@ -35,6 +35,8 @@ export default function SecurityPosture({ region, timeRange }: Props) {
   const projectBindings = data.project_bindings || [];
   const datasetPosture = data.dataset_posture || [];
   const rlsPolicies = data.rls_policies || [];
+  // Anything but a complete or partial scan is shown as not evaluated.
+  const rlsScan = data.rls_scan?.status === 'complete' || data.rls_scan?.status === 'partial' ? data.rls_scan : null;
   const sensitiveColumns = data.sensitive_columns || [];
   const tagBypassers = data.tag_bypassers || [];
   const untaggedSensitive = sensitiveColumns.filter(c => !c.tagged);
@@ -369,39 +371,62 @@ export default function SecurityPosture({ region, timeRange }: Props) {
       {/* Section 8: Row-level security */}
       <div className="rounded-2xl border border-zinc-800/50 p-6" style={{ background: '#111114' }}>
         <h3 className="text-sm font-semibold text-white mb-1">Row-Level Security</h3>
-        <p className="text-xs text-zinc-500 mb-4">Active row access policies</p>
+        <p className="text-xs text-zinc-500 mb-4">
+          Row access policies on tables, snapshots and BigLake tables, listed per table through the BigQuery API
+        </p>
 
-        {rlsPolicies.length > 0 ? (
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="text-zinc-500 border-b border-zinc-800/50">
-                  <th className="text-left py-2.5 px-3 font-medium">Table</th>
-                  <th className="text-left py-2.5 px-3 font-medium">Policy</th>
-                  <th className="text-left py-2.5 px-3 font-medium">Predicate</th>
-                  <th className="text-right py-2.5 px-3 font-medium">Modified</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rlsPolicies.map((rls, i) => (
-                  <tr key={i} className="border-b border-zinc-800/30 hover:bg-zinc-800/20 transition-colors">
-                    <td className="py-3 px-3 text-white font-mono max-w-[200px] truncate" title={`${rls.dataset}.${rls.table}`}>
-                      {rls.dataset}.{rls.table}
-                    </td>
-                    <td className="py-3 px-3 text-zinc-300 font-mono">{rls.policy}</td>
-                    <td className="py-3 px-3 text-zinc-400 font-mono max-w-[300px] truncate" title={rls.predicate}>
-                      {rls.predicate}
-                    </td>
-                    <td className="py-3 px-3 text-right text-zinc-500 font-mono">
-                      {formatRelativeTime(rls.modified)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+        {!rlsScan ? (
+          <RLSNotice title="Not evaluated">
+            No table&apos;s row access policies could be read, so this does not show that none exist. The service
+            account needs bigquery.tables.list and bigquery.rowAccessPolicies.list (for example via
+            roles/iam.securityReviewer); the error or timeout is logged on the server.
+          </RLSNotice>
         ) : (
-          <EmptyState text="No row access policies defined" />
+          <>
+            {rlsScan.status === 'partial' && (
+              <RLSNotice title="Partially evaluated">{rlsCoverage(rlsScan)}</RLSNotice>
+            )}
+            {rlsPolicies.length > 0 ? (
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="text-zinc-500 border-b border-zinc-800/50">
+                      <th className="text-left py-2.5 px-3 font-medium">Table</th>
+                      <th className="text-left py-2.5 px-3 font-medium">Policy</th>
+                      <th className="text-left py-2.5 px-3 font-medium">Predicate</th>
+                      <th className="text-right py-2.5 px-3 font-medium">Modified</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rlsPolicies.map((rls, i) => (
+                      <tr key={i} className="border-b border-zinc-800/30 hover:bg-zinc-800/20 transition-colors">
+                        <td className="py-3 px-3 text-white font-mono max-w-[200px] truncate" title={`${rls.dataset}.${rls.table}`}>
+                          {rls.dataset}.{rls.table}
+                        </td>
+                        <td className="py-3 px-3 text-zinc-300 font-mono">{rls.policy}</td>
+                        <td className="py-3 px-3 text-zinc-400 font-mono max-w-[300px] truncate" title={rls.predicate}>
+                          {rls.predicate}
+                        </td>
+                        <td className="py-3 px-3 text-right text-zinc-500 font-mono" title={rls.modified || undefined}>
+                          {formatRelativeTime(rls.modified)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <EmptyState
+                text={
+                  rlsScan.status === 'partial'
+                    ? `No row access policies on the ${rlsScan.tables_checked} tables checked`
+                    : rlsScan.tables_total === 0
+                      ? 'No tables that can carry row access policies in the scanned datasets'
+                      : `No row access policies defined (${rlsScan.tables_total} tables checked)`
+                }
+              />
+            )}
+          </>
         )}
       </div>
 
@@ -531,6 +556,41 @@ function MemberChip({ member }: { member: string }) {
       <span className="max-w-[180px] truncate">{member}</span>
     </span>
   );
+}
+
+// Amber box for a row access policy scan whose empty list is not a finding.
+function RLSNotice({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div
+      className="rounded-lg border border-amber-500/20 p-3 mb-4"
+      style={{ background: 'rgba(251, 191, 36, 0.05)' }}
+    >
+      <div className="flex items-start gap-2">
+        <Info size={14} className="text-amber-400 shrink-0 mt-0.5" />
+        <p className="text-xs text-amber-400">
+          <span className="font-semibold">{title}</span> — {children}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// Explains what a partial scan left out; built from counts only.
+function rlsCoverage(scan: RLSScan): string {
+  const parts = [`Checked ${scan.tables_checked} of ${scan.tables_total} tables.`];
+  if (scan.timed_out) {
+    parts.push('The scan timed out.');
+  } else if (scan.tables_checked < scan.tables_total) {
+    parts.push(`${scan.tables_total - scan.tables_checked} table(s) could not be read.`);
+  }
+  if (scan.datasets_failed > 0) {
+    parts.push(`${scan.datasets_failed} dataset(s) could not be listed.`);
+  }
+  if (scan.truncated) {
+    parts.push(`Stopped at the ${scan.max_tables}-table cap; further tables were not checked.`);
+  }
+  parts.push('Unchecked tables may still have row access policies.');
+  return parts.join(' ');
 }
 
 function formatRelativeTime(iso: string): string {
