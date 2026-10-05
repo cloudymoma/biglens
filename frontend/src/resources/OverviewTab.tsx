@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import ReactECharts from 'echarts-for-react';
 import { fetchResourcesOverview } from '../api';
 import type { ResOverviewData } from '../types';
@@ -8,12 +8,15 @@ import { Panel, CHART_TOOLTIP, AXIS_LABEL, th, td, type ResTabProps } from './sh
 export default function OverviewTab({ project, refreshKey }: ResTabProps) {
   const [data, setData] = useState<ResOverviewData | null>(null);
   const [error, setError] = useState('');
+  const seenRefresh = useRef(refreshKey);
 
   useEffect(() => {
+    const force = refreshKey !== seenRefresh.current;
+    seenRefresh.current = refreshKey;
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setData(null);
     setError('');
-    fetchResourcesOverview(project, refreshKey > 0)
+    fetchResourcesOverview(project, force)
       .then(setData)
       .catch(e => setError(e.response?.data || e.message));
   }, [project, refreshKey]);
@@ -54,6 +57,11 @@ export default function OverviewTab({ project, refreshKey }: ResTabProps) {
 
   return (
     <div className="space-y-4">
+      {data.partial_errors && Object.keys(data.partial_errors).length > 0 && (
+        <p className="text-[11px] text-amber-300">
+          Some sub-inventories could not be fetched ({Object.keys(data.partial_errors).join(', ')}); counts reflect available APIs.
+        </p>
+      )}
       <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
         {kpis.map(k => (
           <div key={k.label} className="bg-zinc-900/60 border border-zinc-800/60 rounded-xl p-3">

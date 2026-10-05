@@ -1314,6 +1314,7 @@ export interface ResOverviewData {
   by_location: ResNamedCount[];
   recent: ResAssetItem[];
   truncated: boolean;
+  partial_errors?: Record<string, string>;
 }
 
 export interface ResVMInstance {
@@ -1376,6 +1377,7 @@ export interface ResAddressInfo {
   region: string;
   address: string;
   type: string;
+  purpose?: string;
   status: string;
   users?: string[];
 }
@@ -1384,9 +1386,11 @@ export interface ResFirewallInfo {
   name: string;
   network: string;
   direction: string;
+  action?: string;
   priority: number;
   source_ranges?: string[];
   allowed?: string[];
+  denied?: string[];
   target_tags?: string[];
   disabled: boolean;
 }
@@ -1426,6 +1430,7 @@ export interface ResFinding {
 export interface ResInsightsData {
   fetched_at: string;
   findings: ResFinding[];
+  partial_errors?: Record<string, string>;
 }
 
 // ---- Pricing calculator (/api/calculator/*) ----

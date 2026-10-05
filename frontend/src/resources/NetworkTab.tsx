@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { fetchResourcesNetwork } from '../api';
 import type { ResNetworkData } from '../types';
 import { EmptyState, ErrorBanner } from '../dashboards/shared';
@@ -7,12 +7,15 @@ import { Panel, th, td, type ResTabProps } from './shared';
 export default function NetworkTab({ project, refreshKey }: ResTabProps) {
   const [data, setData] = useState<ResNetworkData | null>(null);
   const [error, setError] = useState('');
+  const seenRefresh = useRef(refreshKey);
 
   useEffect(() => {
+    const force = refreshKey !== seenRefresh.current;
+    seenRefresh.current = refreshKey;
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setData(null);
     setError('');
-    fetchResourcesNetwork(project, refreshKey > 0)
+    fetchResourcesNetwork(project, force)
       .then(setData)
       .catch(e => setError(e.response?.data || e.message));
   }, [project, refreshKey]);
@@ -21,7 +24,17 @@ export default function NetworkTab({ project, refreshKey }: ResTabProps) {
   if (!data) return <EmptyState text="Loading network inventory…" />;
 
   const isOpen = (f: ResNetworkData['firewalls'][number]) =>
-    !f.disabled && f.direction === 'INGRESS' && (f.source_ranges ?? []).includes('0.0.0.0/0');
+    !f.disabled &&
+    f.direction === 'INGRESS' &&
+    f.action !== 'DENY' &&
+    (f.allowed?.length ?? 0) > 0 &&
+    ((f.source_ranges ?? []).includes('0.0.0.0/0') || (f.source_ranges ?? []).includes('::/0'));
+
+  const isBillableUnusedAddress = (a: ResNetworkData['addresses'][number]) =>
+    a.status === 'RESERVED' &&
+    a.type !== 'INTERNAL' &&
+    a.purpose !== 'VPC_PEERING' &&
+    a.purpose !== 'PRIVATE_SERVICE_CONNECT';
 
   return (
     <div className="space-y-4">
@@ -50,7 +63,7 @@ export default function NetworkTab({ project, refreshKey }: ResTabProps) {
       </Panel>
       <Panel title={`Firewall rules (${data.firewalls.length})`} note="internet-open ingress rules highlighted">
         <table className="w-full text-sm">
-          <thead><tr><th className={th}>Name</th><th className={th}>Network</th><th className={th}>Direction</th><th className={th}>Sources</th><th className={th}>Allows</th><th className={th}>Target tags</th><th className={th}>State</th></tr></thead>
+          <thead><tr><th className={th}>Name</th><th className={th}>Network</th><th className={th}>Direction</th><th className={th}>Sources</th><th className={th}>Allows / Denies</th><th className={th}>Target tags</th><th className={th}>State</th></tr></thead>
           <tbody>
             {data.firewalls.map(f => (
               <tr key={f.name} className={`border-t border-zinc-800/40 ${isOpen(f) ? 'bg-rose-950/20' : ''}`}>
@@ -58,7 +71,13 @@ export default function NetworkTab({ project, refreshKey }: ResTabProps) {
                 <td className={td}>{f.network}</td>
                 <td className={td}>{f.direction}</td>
                 <td className={td}>{(f.source_ranges ?? []).join(', ')}</td>
-                <td className={td}>{(f.allowed ?? []).join(' ')}</td>
+                <td className={td}>
+                  {(f.allowed?.length ?? 0) > 0
+                    ? f.allowed!.join(' ')
+                    : (f.denied?.length ?? 0) > 0
+                      ? `DENY ${f.denied!.join(' ')}`
+                      : ''}
+                </td>
                 <td className={td}>{(f.target_tags ?? []).join(', ')}</td>
                 <td className={td}>{f.disabled ? 'disabled' : 'enabled'}</td>
               </tr>
@@ -77,7 +96,7 @@ export default function NetworkTab({ project, refreshKey }: ResTabProps) {
                   <td className={td}>{a.address}</td>
                   <td className={td}>{a.region}</td>
                   <td className={td}>{a.type}</td>
-                  <td className={`${td} ${a.status === 'RESERVED' ? 'text-amber-300' : ''}`}>{a.status}</td>
+                  <td className={`${td} ${isBillableUnusedAddress(a) ? 'text-amber-300' : ''}`}>{a.status}</td>
                 </tr>
               ))}
             </tbody>

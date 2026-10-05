@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import ReactECharts from 'echarts-for-react';
 import { fetchResourcesCompute } from '../api';
 import type { ResComputeData } from '../types';
@@ -8,12 +8,15 @@ import { Panel, CHART_TOOLTIP, AXIS_LABEL, th, td, WorkloadBadge, type ResTabPro
 export default function ComputeTab({ project, refreshKey }: ResTabProps) {
   const [data, setData] = useState<ResComputeData | null>(null);
   const [error, setError] = useState('');
+  const seenRefresh = useRef(refreshKey);
 
   useEffect(() => {
+    const force = refreshKey !== seenRefresh.current;
+    seenRefresh.current = refreshKey;
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setData(null);
     setError('');
-    fetchResourcesCompute(project, refreshKey > 0)
+    fetchResourcesCompute(project, force)
       .then(setData)
       .catch(e => setError(e.response?.data || e.message));
   }, [project, refreshKey]);

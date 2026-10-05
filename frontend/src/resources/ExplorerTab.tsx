@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Search } from 'lucide-react';
 import { fetchResourcesExplorer } from '../api';
 import type { ResExplorerData } from '../types';
@@ -11,12 +11,15 @@ export default function ExplorerTab({ project, refreshKey }: ResTabProps) {
   const [applied, setApplied] = useState({ query: '', assetType: '' });
   const [data, setData] = useState<ResExplorerData | null>(null);
   const [error, setError] = useState('');
+  const seenRefresh = useRef(refreshKey);
 
   useEffect(() => {
+    const force = refreshKey !== seenRefresh.current;
+    seenRefresh.current = refreshKey;
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setData(null);
     setError('');
-    fetchResourcesExplorer(project, applied.query, applied.assetType, refreshKey > 0)
+    fetchResourcesExplorer(project, applied.query, applied.assetType, force)
       .then(setData)
       .catch(e => setError(e.response?.data || e.message));
   }, [project, refreshKey, applied]);

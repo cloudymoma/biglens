@@ -19,6 +19,8 @@ import (
 	gcs "cloud.google.com/go/storage"
 	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
+	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -97,8 +99,12 @@ func scopeName(key string) string { return lastSegment(key) }
 
 func (c *ResClients) SearchAssets(ctx context.Context, project, query, assetType string) ([]AssetItem, bool, error) {
 	req := &assetpb.SearchAllResourcesRequest{
-		Scope: "projects/" + project,
-		Query: query,
+		Scope:    "projects/" + project,
+		Query:    query,
+		PageSize: 500,
+		ReadMask: &fieldmaskpb.FieldMask{
+			Paths: []string{"name", "asset_type", "display_name", "location", "state", "labels", "create_time", "update_time"},
+		},
 	}
 	if assetType != "" {
 		req.AssetTypes = []string{assetType}
@@ -215,7 +221,7 @@ func (c *ResClients) ListBuckets(ctx context.Context, project string) ([]BucketI
 
 // BucketBytes reads the latest daily point of storage/v2/total_bytes per
 // bucket per storage class. The metric is daily and can lag ~24h; a 48h
-// window guarantees at least one point for established buckets.
+// alignment window with ALIGN_NEXT_OLDER returns 1 point per (bucket, class).
 func (c *ResClients) BucketBytes(ctx context.Context, project string) (map[string]map[string]float64, error) {
 	now := time.Now().UTC()
 	it := c.metrics.ListTimeSeries(ctx, &monitoringpb.ListTimeSeriesRequest{
@@ -224,6 +230,12 @@ func (c *ResClients) BucketBytes(ctx context.Context, project string) (map[strin
 		Interval: &monitoringpb.TimeInterval{
 			StartTime: timestamppb.New(now.Add(-48 * time.Hour)),
 			EndTime:   timestamppb.New(now),
+		},
+		Aggregation: &monitoringpb.Aggregation{
+			AlignmentPeriod:    durationpb.New(48 * time.Hour),
+			PerSeriesAligner:   monitoringpb.Aggregation_ALIGN_NEXT_OLDER,
+			CrossSeriesReducer: monitoringpb.Aggregation_REDUCE_SUM,
+			GroupByFields:      []string{"resource.label.bucket_name", "metric.label.storage_class"},
 		},
 		View: monitoringpb.ListTimeSeriesRequest_FULL,
 	})
@@ -326,6 +338,7 @@ func addressInfo(a *computepb.Address, region string) AddressInfo {
 		Region:  region,
 		Address: a.GetAddress(),
 		Type:    a.GetAddressType(),
+		Purpose: a.GetPurpose(),
 		Status:  a.GetStatus(),
 		Users:   users,
 	}
@@ -350,13 +363,27 @@ func (c *ResClients) ListFirewalls(ctx context.Context, project string) ([]Firew
 			}
 			allowed = append(allowed, s)
 		}
+		denied := make([]string, 0, len(f.GetDenied()))
+		for _, d := range f.GetDenied() {
+			s := d.GetIPProtocol()
+			if len(d.GetPorts()) > 0 {
+				s += ":" + strings.Join(d.GetPorts(), ",")
+			}
+			denied = append(denied, s)
+		}
+		action := "ALLOW"
+		if len(denied) > 0 && len(allowed) == 0 {
+			action = "DENY"
+		}
 		out = append(out, FirewallInfo{
 			Name:         f.GetName(),
 			Network:      lastSegment(f.GetNetwork()),
 			Direction:    f.GetDirection(),
+			Action:       action,
 			Priority:     int(f.GetPriority()),
 			SourceRanges: f.GetSourceRanges(),
 			Allowed:      allowed,
+			Denied:       denied,
 			TargetTags:   f.GetTargetTags(),
 			Disabled:     f.GetDisabled(),
 		})

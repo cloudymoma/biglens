@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import ReactECharts from 'echarts-for-react';
 import { fetchResourcesStorage } from '../api';
 import type { ResStorageData } from '../types';
@@ -8,12 +8,15 @@ import { Panel, CHART_TOOLTIP, AXIS_LABEL, th, td, fmtBytes, type ResTabProps } 
 export default function StorageTab({ project, refreshKey }: ResTabProps) {
   const [data, setData] = useState<ResStorageData | null>(null);
   const [error, setError] = useState('');
+  const seenRefresh = useRef(refreshKey);
 
   useEffect(() => {
+    const force = refreshKey !== seenRefresh.current;
+    seenRefresh.current = refreshKey;
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setData(null);
     setError('');
-    fetchResourcesStorage(project, refreshKey > 0)
+    fetchResourcesStorage(project, force)
       .then(setData)
       .catch(e => setError(e.response?.data || e.message));
   }, [project, refreshKey]);
@@ -42,13 +45,13 @@ export default function StorageTab({ project, refreshKey }: ResTabProps) {
   return (
     <div className="space-y-4">
       {withBytes.length > 0 && (
-        <Panel title="Bytes by storage class" note="daily Monitoring metric — may lag up to 24 h">
+        <Panel title="Bytes by storage class" note="daily Monitoring metric (incl. noncurrent / soft-deleted) — may lag up to 24 h">
           <ReactECharts style={{ height: Math.max(220, withBytes.length * 28 + 80) }} option={stackOption} />
         </Panel>
       )}
       <Panel title={`Buckets (${data.buckets.length})`} note={`fetched ${data.fetched_at}`}>
         <table className="w-full text-sm">
-          <thead><tr><th className={th}>Name</th><th className={th}>Location</th><th className={th}>Default class</th><th className={th}>Size</th><th className={th}>Uniform access</th><th className={th}>Public access</th><th className={th}>Created</th></tr></thead>
+          <thead><tr><th className={th}>Name</th><th className={th}>Location</th><th className={th}>Default class</th><th className={th}>Stored size</th><th className={th}>Uniform access</th><th className={th}>Public access</th><th className={th}>Created</th></tr></thead>
           <tbody>
             {data.buckets.map(b => (
               <tr key={b.name} className="border-t border-zinc-800/40">

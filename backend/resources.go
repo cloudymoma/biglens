@@ -65,17 +65,20 @@ type AddressInfo struct {
 	Name    string   `json:"name"`
 	Region  string   `json:"region"` // "global" for global addresses
 	Address string   `json:"address"`
-	Type    string   `json:"type"`   // EXTERNAL | INTERNAL
-	Status  string   `json:"status"` // IN_USE | RESERVED
+	Type    string   `json:"type"`              // EXTERNAL | INTERNAL
+	Purpose string   `json:"purpose,omitempty"` // GCE_ENDPOINT, VPC_PEERING, PRIVATE_SERVICE_CONNECT, ...
+	Status  string   `json:"status"`            // IN_USE | RESERVED
 	Users   []string `json:"users,omitempty"`
 }
 type FirewallInfo struct {
 	Name         string   `json:"name"`
 	Network      string   `json:"network"`
 	Direction    string   `json:"direction"`
+	Action       string   `json:"action,omitempty"` // ALLOW | DENY
 	Priority     int      `json:"priority"`
 	SourceRanges []string `json:"source_ranges,omitempty"`
 	Allowed      []string `json:"allowed,omitempty"` // "tcp:22,80", "all"
+	Denied       []string `json:"denied,omitempty"`
 	TargetTags   []string `json:"target_tags,omitempty"`
 	Disabled     bool     `json:"disabled"`
 }
@@ -104,14 +107,17 @@ var machineMemPerVCPU = map[string]float64{
 	"standard": 4, "highmem": 8, "highcpu": 1, "megamem": 14, "ultramem": 24,
 }
 
-// fixedMachineShapes: shared-core and legacy types that don't follow the
-// family-variant-N pattern.
+// fixedMachineShapes: shared-core, memory-optimized, and legacy types that
+// don't follow a uniform family-variant per-vCPU ratio.
 var fixedMachineShapes = map[string]struct {
 	vcpus int
 	memGB float64
 }{
 	"e2-micro": {2, 1}, "e2-small": {2, 2}, "e2-medium": {2, 4},
 	"f1-micro": {1, 0.6}, "g1-small": {1, 1.7},
+	"m1-megamem-96":  {96, 1433.6},
+	"m1-ultramem-40": {40, 961}, "m1-ultramem-80": {80, 1922}, "m1-ultramem-160": {160, 3844},
+	"m2-ultramem-208": {208, 5888}, "m2-ultramem-416": {416, 11776}, "m2-megamem-416": {416, 5888},
 }
 
 // parseMachineType derives family/vCPU/memory from a machine-type short name.
@@ -123,13 +129,31 @@ func parseMachineType(mt string) (string, int, float64) {
 	}
 	parts := strings.Split(mt, "-")
 	family := parts[0]
-	if family == "custom" && len(parts) == 3 { // custom-VCPUS-MEMMB
+	// Legacy N1 custom: custom-VCPUS-MEMMB[-ext]
+	if family == "custom" && len(parts) >= 3 {
 		v, err1 := strconv.Atoi(parts[1])
 		mb, err2 := strconv.Atoi(parts[2])
 		if err1 == nil && err2 == nil {
 			return "custom", v, float64(mb) / 1024
 		}
 		return "custom", 0, 0
+	}
+	// Series-prefixed custom: <family>-custom-<vcpus|micro|small|medium>-<memMB>[-ext]
+	if len(parts) >= 4 && parts[1] == "custom" {
+		switch parts[2] {
+		case "micro", "small", "medium":
+			if mb, err := strconv.Atoi(parts[3]); err == nil {
+				return family, 2, float64(mb) / 1024
+			}
+			return family, 0, 0
+		default:
+			v, err1 := strconv.Atoi(parts[2])
+			mb, err2 := strconv.Atoi(parts[3])
+			if err1 == nil && err2 == nil {
+				return family, v, float64(mb) / 1024
+			}
+			return family, 0, 0
+		}
 	}
 	if len(parts) < 3 {
 		return family, 0, 0
@@ -138,15 +162,38 @@ func parseMachineType(mt string) (string, int, float64) {
 	if err != nil {
 		return family, 0, 0
 	}
-	per := machineMemPerVCPU[parts[1]]
-	if family == "n1" && parts[1] == "standard" {
-		per = 3.75
-	}
-	if family == "n1" && parts[1] == "highmem" {
-		per = 6.5
-	}
-	if family == "n1" && parts[1] == "highcpu" {
-		per = 0.9
+	variant := parts[1]
+	per := machineMemPerVCPU[variant]
+	switch family {
+	case "n1":
+		switch variant {
+		case "standard":
+			per = 3.75
+		case "highmem":
+			per = 6.5
+		case "highcpu":
+			per = 0.9
+		}
+	case "c2d", "c3", "c3d", "n4", "c4a":
+		if variant == "highcpu" {
+			per = 2
+		}
+	case "c4":
+		switch variant {
+		case "standard":
+			per = 3.75
+		case "highmem":
+			per = 7.75
+		case "highcpu":
+			per = 2
+		}
+	case "m3":
+		switch variant {
+		case "megamem":
+			per = 15.25
+		case "ultramem":
+			per = 30.5
+		}
 	}
 	return family, v, float64(v) * per
 }
@@ -177,13 +224,51 @@ type Finding struct {
 	Summary  string `json:"summary"`
 }
 
-// sensitiveFirewallPorts: ports whose exposure to 0.0.0.0/0 is high severity.
-var sensitiveFirewallPorts = []string{"22", "3389"}
+// sensitiveFirewallPorts: ports whose exposure to 0.0.0.0/0 or ::/0 is high severity.
+var sensitiveFirewallPorts = []int{22, 3389}
+
+func firewallPortSensitive(portSpec string) bool {
+	portSpec = strings.TrimSpace(portSpec)
+	if portSpec == "" {
+		return false
+	}
+	if loStr, hiStr, ok := strings.Cut(portSpec, "-"); ok {
+		lo, err1 := strconv.Atoi(strings.TrimSpace(loStr))
+		hi, err2 := strconv.Atoi(strings.TrimSpace(hiStr))
+		if err1 != nil || err2 != nil || lo > hi {
+			return false
+		}
+		for _, sp := range sensitiveFirewallPorts {
+			if sp >= lo && sp <= hi {
+				return true
+			}
+		}
+		return false
+	}
+	p, err := strconv.Atoi(portSpec)
+	if err != nil {
+		return false
+	}
+	return slices.Contains(sensitiveFirewallPorts, p)
+}
+
+func firewallOpenCIDR(ranges []string) string {
+	if slices.Contains(ranges, "0.0.0.0/0") {
+		return "0.0.0.0/0"
+	}
+	if slices.Contains(ranges, "::/0") {
+		return "::/0"
+	}
+	return ""
+}
 
 // firewallOpenSeverity returns "" when the rule is not internet-open ingress,
 // otherwise the severity. "all" protocols or a sensitive port → high.
 func firewallOpenSeverity(f FirewallInfo) string {
-	if f.Disabled || f.Direction != "INGRESS" || !slices.Contains(f.SourceRanges, "0.0.0.0/0") {
+	if f.Disabled || f.Direction != "INGRESS" || strings.EqualFold(f.Action, "DENY") || len(f.Allowed) == 0 {
+		return ""
+	}
+	if firewallOpenCIDR(f.SourceRanges) == "" {
 		return ""
 	}
 	for _, a := range f.Allowed {
@@ -195,7 +280,7 @@ func firewallOpenSeverity(f FirewallInfo) string {
 			return "high"
 		}
 		for _, p := range strings.Split(ports, ",") {
-			if slices.Contains(sensitiveFirewallPorts, strings.TrimSpace(p)) {
+			if firewallPortSensitive(p) {
 				return "high"
 			}
 		}
@@ -214,8 +299,9 @@ func buildFindings(vms []VMInstance, disks []DiskInfo, buckets []BucketInfo,
 
 	for _, f := range fws {
 		if sev := firewallOpenSeverity(f); sev != "" {
+			cidr := firewallOpenCIDR(f.SourceRanges)
 			add(sev, "open_firewall", f.Name, "global",
-				fmt.Sprintf("ingress from 0.0.0.0/0 allows %s — internet-exposed", strings.Join(f.Allowed, " ")))
+				fmt.Sprintf("ingress from %s allows %s — internet-exposed", cidr, strings.Join(f.Allowed, " ")))
 		}
 	}
 	for _, d := range disks {
@@ -225,15 +311,15 @@ func buildFindings(vms []VMInstance, disks []DiskInfo, buckets []BucketInfo,
 		}
 	}
 	for _, a := range addrs {
-		if a.Status == "RESERVED" {
+		if a.Status == "RESERVED" && a.Type != "INTERNAL" && a.Purpose != "VPC_PEERING" && a.Purpose != "PRIVATE_SERVICE_CONNECT" {
 			add("medium", "unused_address", a.Name, a.Region,
-				"reserved static IP not in use is billed hourly")
+				"reserved external static IP not in use is billed hourly")
 		}
 	}
 	for _, v := range vms {
-		if v.Status == "TERMINATED" {
+		if v.Status == "TERMINATED" || v.Status == "SUSPENDED" {
 			add("low", "stopped_vm", v.Name, v.Zone,
-				"stopped VM still incurs cost for attached disks and reserved IPs")
+				"stopped or suspended VM still incurs cost for attached disks and reserved IPs")
 		}
 	}
 	for _, b := range buckets {

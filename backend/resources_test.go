@@ -42,7 +42,16 @@ func TestParseMachineType(t *testing.T) {
 		{"f1-micro", "f1", 1, 0.6},
 		{"g1-small", "g1", 1, 1.7},
 		{"c3-standard-22", "c3", 22, 88},
+		{"c3-highcpu-4", "c3", 4, 8},
+		{"c4-standard-8", "c4", 8, 30},
+		{"c4-highmem-8", "c4", 8, 62},
+		{"m1-megamem-96", "m1", 96, 1433.6},
+		{"m2-ultramem-208", "m2", 208, 5888},
+		{"m3-ultramem-32", "m3", 32, 976},
 		{"custom-4-8192", "custom", 4, 8},
+		{"e2-custom-4-8192", "e2", 4, 8},
+		{"n2-custom-8-65536-ext", "n2", 8, 64},
+		{"e2-custom-small-2048", "e2", 2, 2},
 		{"weird-shape", "weird", 0, 0},
 	}
 	for _, c := range cases {
@@ -78,6 +87,7 @@ func TestBuildFindings(t *testing.T) {
 	vms := []VMInstance{
 		{Name: "vm-run", Zone: "us-central1-a", Status: "RUNNING"},
 		{Name: "vm-stop", Zone: "us-central1-a", Status: "TERMINATED"},
+		{Name: "vm-susp", Zone: "us-central1-a", Status: "SUSPENDED"},
 	}
 	disks := []DiskInfo{
 		{Name: "d-used", Zone: "us-central1-a", Users: []string{"vm-run"}},
@@ -91,10 +101,15 @@ func TestBuildFindings(t *testing.T) {
 	addrs := []AddressInfo{
 		{Name: "ip-used", Region: "us-central1", Status: "IN_USE"},
 		{Name: "ip-idle", Region: "us-central1", Status: "RESERVED"},
+		{Name: "ip-internal-idle", Region: "us-central1", Type: "INTERNAL", Status: "RESERVED"},
+		{Name: "ip-psa-range", Region: "global", Purpose: "VPC_PEERING", Status: "RESERVED"},
 	}
 	fws := []FirewallInfo{
 		{Name: "allow-ssh-world", Direction: "INGRESS", SourceRanges: []string{"0.0.0.0/0"}, Allowed: []string{"tcp:22"}},
+		{Name: "allow-range-world", Direction: "INGRESS", SourceRanges: []string{"0.0.0.0/0"}, Allowed: []string{"tcp:0-65535"}},
+		{Name: "allow-ipv6-ssh", Direction: "INGRESS", SourceRanges: []string{"::/0"}, Allowed: []string{"tcp:22"}},
 		{Name: "allow-http-world", Direction: "INGRESS", SourceRanges: []string{"0.0.0.0/0"}, Allowed: []string{"tcp:80"}},
+		{Name: "deny-all-world", Direction: "INGRESS", Action: "DENY", SourceRanges: []string{"0.0.0.0/0"}, Denied: []string{"all"}},
 		{Name: "allow-all-disabled", Direction: "INGRESS", SourceRanges: []string{"0.0.0.0/0"}, Allowed: []string{"all"}, Disabled: true},
 		{Name: "internal-only", Direction: "INGRESS", SourceRanges: []string{"10.0.0.0/8"}, Allowed: []string{"tcp:22"}},
 		{Name: "egress-open", Direction: "EGRESS", SourceRanges: []string{"0.0.0.0/0"}, Allowed: []string{"all"}},
@@ -110,10 +125,13 @@ func TestBuildFindings(t *testing.T) {
 		resource, severity, category string
 	}{
 		{"allow-ssh-world", "high", "open_firewall"},
+		{"allow-range-world", "high", "open_firewall"},
+		{"allow-ipv6-ssh", "high", "open_firewall"},
 		{"allow-http-world", "medium", "open_firewall"},
 		{"d-orphan", "medium", "unattached_disk"},
 		{"ip-idle", "medium", "unused_address"},
 		{"vm-stop", "low", "stopped_vm"},
+		{"vm-susp", "low", "stopped_vm"},
 		{"b-acl", "low", "non_uniform_bucket"},
 		{"default", "low", "default_network"},
 	}
@@ -137,8 +155,8 @@ func TestBuildFindings(t *testing.T) {
 	if got[0].Severity != "high" || got[len(got)-1].Severity != "low" {
 		t.Errorf("findings not ordered by severity: %+v", got)
 	}
-	// Disabled and egress and internal firewall rules must NOT be flagged.
-	for _, bad := range []string{"allow-all-disabled", "egress-open", "internal-only", "d-used", "ip-used", "vm-run", "b-uniform", "prod-vpc"} {
+	// Disabled, DENY, egress, internal firewall rules, internal/PSA IPs must NOT be flagged.
+	for _, bad := range []string{"deny-all-world", "allow-all-disabled", "egress-open", "internal-only", "d-used", "ip-used", "ip-internal-idle", "ip-psa-range", "vm-run", "b-uniform", "prod-vpc"} {
 		if _, ok := byResource[bad]; ok {
 			t.Errorf("%s should not be flagged", bad)
 		}
