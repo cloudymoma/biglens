@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"cloud.google.com/go/bigquery"
@@ -19,7 +20,8 @@ func (b *BQClient) SearchEmails(ctx context.Context, region, prefix string, limi
 	var params []bigquery.QueryParameter
 
 	whereParts = append(whereParts,
-		"creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 90 DAY)")
+		"creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 90 DAY)",
+		"user_email IS NOT NULL")
 
 	if prefix != "" {
 		whereParts = append(whereParts, "LOWER(user_email) LIKE CONCAT(LOWER(@prefix), '%')")
@@ -63,6 +65,29 @@ type UsageTimepoint struct {
 	CallCount int64  `json:"call_count" bigquery:"call_count"`
 }
 
+func usageTimelineSQL(regionRef, truncUnit, where string) string {
+	return fmt.Sprintf(
+		`SELECT bucket, IF(rk <= 10, email, '(others)') AS email, SUM(c) AS call_count
+		FROM (
+			SELECT bucket, email, c, DENSE_RANK() OVER (ORDER BY tot DESC, email) AS rk
+			FROM (
+				SELECT bucket, email, c, SUM(c) OVER (PARTITION BY email) AS tot
+				FROM (
+					SELECT
+						FORMAT_TIMESTAMP("%%Y-%%m-%%dT%%H:%%M:%%SZ", TIMESTAMP_TRUNC(creation_time, %s)) AS bucket,
+						user_email AS email,
+						COUNT(*) AS c
+					FROM %s.INFORMATION_SCHEMA.JOBS_BY_PROJECT
+					WHERE %s
+					GROUP BY bucket, email
+				)
+			)
+		)
+		GROUP BY bucket, email
+		ORDER BY bucket ASC`,
+		truncUnit, regionRef, where)
+}
+
 func (b *BQClient) GetUsageTimeline(ctx context.Context, region string, emails []string, timeRange string) ([]UsageTimepoint, error) {
 	interval, truncUnit := timeRangeToBucket(timeRange)
 
@@ -70,29 +95,22 @@ func (b *BQClient) GetUsageTimeline(ctx context.Context, region string, emails [
 	var params []bigquery.QueryParameter
 
 	clauses = append(clauses,
-		fmt.Sprintf("creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL %s)", interval))
+		fmt.Sprintf("creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL %s)", interval),
+		"user_email IS NOT NULL",
+		"IFNULL(statement_type, '') != 'SCRIPT'")
 
 	if len(emails) > 0 {
-		clauses = append(clauses, "user_email IN UNNEST(@emails)")
+		clauses = append(clauses, "LOWER(user_email) IN UNNEST(@emails)")
 		params = append(params, bigquery.QueryParameter{Name: "emails", Value: emails})
 	}
 
-	q := b.client.Query(fmt.Sprintf(
-		`SELECT
-			FORMAT_TIMESTAMP("%%Y-%%m-%%dT%%H:%%M:%%SZ", TIMESTAMP_TRUNC(creation_time, %s)) AS bucket,
-			user_email AS email,
-			COUNT(*) AS call_count
-		FROM %s.INFORMATION_SCHEMA.JOBS_BY_PROJECT
-		WHERE %s
-		GROUP BY bucket, email
-		ORDER BY bucket ASC`,
-		truncUnit, b.regionRef(region), strings.Join(clauses, " AND ")))
+	q := b.client.Query(usageTimelineSQL(b.regionRef(region), truncUnit, strings.Join(clauses, " AND ")))
 	q.Parameters = params
 
 	return collectRows[UsageTimepoint](q, ctx)
 }
 
-// --- Top frequent callers ---
+// --- Top frequent callers & IAM Summary ---
 
 type TopCaller struct {
 	Email       string  `json:"email" bigquery:"email"`
@@ -103,51 +121,190 @@ type TopCaller struct {
 	LastActive  string  `json:"last_active" bigquery:"last_active"`
 }
 
-func (b *BQClient) GetTopCallers(ctx context.Context, region string, emails []string, timeRange string, limit int) ([]TopCaller, error) {
-	if limit <= 0 || limit > 100 {
-		limit = 20
-	}
+type callerStatRow struct {
+	Email       string  `bigquery:"email"`
+	IsSA        bool    `bigquery:"is_sa"`
+	TotalCalls  int64   `bigquery:"total_calls"`
+	TotalSlotMs int64   `bigquery:"total_slot_ms"`
+	TotalBytes  int64   `bigquery:"total_bytes"`
+	AvgDuration float64 `bigquery:"avg_duration_sec"`
+	LastActive  string  `bigquery:"last_active"`
+}
 
-	interval := timeRangeToInterval(timeRange)
-	var clauses []string
-	var params []bigquery.QueryParameter
-
-	clauses = append(clauses,
-		fmt.Sprintf("creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL %s)", interval))
-
-	if len(emails) > 0 {
-		clauses = append(clauses, "user_email IN UNNEST(@emails)")
-		params = append(params, bigquery.QueryParameter{Name: "emails", Value: emails})
-	}
-
-	params = append(params, bigquery.QueryParameter{Name: "result_limit", Value: limit})
-
-	q := b.client.Query(fmt.Sprintf(
+func callerSummarySQL(regionRef, where string) string {
+	return fmt.Sprintf(
 		`SELECT
 			user_email AS email,
+			ENDS_WITH(user_email, '.gserviceaccount.com') AS is_sa,
 			COUNT(*) AS total_calls,
 			IFNULL(SUM(total_slot_ms), 0) AS total_slot_ms,
 			IFNULL(SUM(total_bytes_billed), 0) AS total_bytes,
-			AVG(TIMESTAMP_DIFF(end_time, start_time, SECOND)) AS avg_duration_sec,
+			IFNULL(AVG(TIMESTAMP_DIFF(end_time, start_time, MILLISECOND)) / 1000.0, 0.0) AS avg_duration_sec,
 			FORMAT_TIMESTAMP("%%Y-%%m-%%dT%%H:%%M:%%SZ", MAX(creation_time)) AS last_active
 		FROM %s.INFORMATION_SCHEMA.JOBS_BY_PROJECT
 		WHERE %s
 		GROUP BY email
-		ORDER BY total_calls DESC
-		LIMIT @result_limit`,
-		b.regionRef(region), strings.Join(clauses, " AND ")))
-	q.Parameters = params
-
-	return collectRows[TopCaller](q, ctx)
+		ORDER BY total_calls DESC`,
+		regionRef, where)
 }
 
-// --- Inactive emails ---
+func rollupIdentityStats(rows []callerStatRow, limit int) (*IAMSummary, []TopCaller) {
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	summary := &IAMSummary{TotalEmails: int64(len(rows))}
+	top := make([]TopCaller, 0, min(len(rows), limit))
+	for _, r := range rows {
+		if r.IsSA {
+			summary.ServiceAccounts++
+		} else {
+			summary.HumanUsers++
+		}
+		summary.TotalCalls += r.TotalCalls
+		if len(top) < limit {
+			top = append(top, TopCaller{
+				Email:       r.Email,
+				TotalCalls:  r.TotalCalls,
+				TotalSlotMs: r.TotalSlotMs,
+				TotalBytes:  r.TotalBytes,
+				AvgDuration: r.AvgDuration,
+				LastActive:  r.LastActive,
+			})
+		}
+	}
+	return summary, top
+}
+
+// GetIdentityStats computes both IAMSummary and TopCaller rows from a single
+// JOBS_BY_PROJECT scan over the selected window and optional identity filter.
+func (b *BQClient) GetIdentityStats(ctx context.Context, region string, emails []string, timeRange string, limit int) (*IAMSummary, []TopCaller, error) {
+	interval := timeRangeToInterval(timeRange)
+	clauses := []string{
+		fmt.Sprintf("creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL %s)", interval),
+		"user_email IS NOT NULL",
+		"IFNULL(statement_type, '') != 'SCRIPT'",
+	}
+	var params []bigquery.QueryParameter
+	if len(emails) > 0 {
+		clauses = append(clauses, "LOWER(user_email) IN UNNEST(@emails)")
+		params = append(params, bigquery.QueryParameter{Name: "emails", Value: emails})
+	}
+	q := b.client.Query(callerSummarySQL(b.regionRef(region), strings.Join(clauses, " AND ")))
+	q.Parameters = params
+
+	rows, err := collectRows[callerStatRow](q, ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("identity stats query failed: %w", err)
+	}
+	s, top := rollupIdentityStats(rows, limit)
+	return s, top, nil
+}
+
+func (b *BQClient) GetTopCallers(ctx context.Context, region string, emails []string, timeRange string, limit int) ([]TopCaller, error) {
+	_, top, err := b.GetIdentityStats(ctx, region, emails, timeRange, limit)
+	return top, err
+}
+
+// --- Inactive emails & New actors (180-day scan) ---
 
 type InactiveEmail struct {
 	Email      string `json:"email" bigquery:"email"`
 	LastActive string `json:"last_active" bigquery:"last_active"`
 	DaysIdle   int64  `json:"days_idle" bigquery:"days_idle"`
 	TotalCalls int64  `json:"total_calls" bigquery:"total_calls"`
+}
+
+type longWindowIAMRow struct {
+	Email        string `bigquery:"email"`
+	IsSA         bool   `bigquery:"is_sa"`
+	LastActive   string `bigquery:"last_active"`
+	DaysIdle     int64  `bigquery:"days_idle"`
+	TotalCalls   int64  `bigquery:"total_calls"`
+	FirstSeen90d string `bigquery:"first_seen_90d"`
+	Jobs90d      int64  `bigquery:"jobs_90d"`
+	IsNewActor   bool   `bigquery:"is_new_actor"`
+}
+
+func longWindowIAMSQL(regionRef string) string {
+	return fmt.Sprintf(
+		`SELECT
+			user_email AS email,
+			ENDS_WITH(user_email, '.gserviceaccount.com') AS is_sa,
+			FORMAT_TIMESTAMP("%%Y-%%m-%%dT%%H:%%M:%%SZ", MAX(creation_time)) AS last_active,
+			TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), MAX(creation_time), DAY) AS days_idle,
+			COUNT(*) AS total_calls,
+			IFNULL(FORMAT_TIMESTAMP("%%Y-%%m-%%dT%%H:%%M:%%SZ",
+				MIN(IF(creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 90 DAY), creation_time, NULL))), '') AS first_seen_90d,
+			COUNTIF(creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 90 DAY)) AS jobs_90d,
+			IFNULL(MIN(IF(creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 90 DAY), creation_time, NULL)) >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY), FALSE) AS is_new_actor
+		FROM %s.INFORMATION_SCHEMA.JOBS_BY_PROJECT
+		WHERE creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 180 DAY)
+			AND user_email IS NOT NULL
+			AND IFNULL(statement_type, '') != 'SCRIPT'
+		GROUP BY email
+		HAVING TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), MAX(creation_time), DAY) >= 7
+			OR MIN(IF(creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 90 DAY), creation_time, NULL)) >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)`,
+		regionRef)
+}
+
+func splitLongWindowIAM(rows []longWindowIAMRow, minIdleDays int64, filterEmails []string) ([]InactiveEmail, []NewActor) {
+	var emailSet map[string]bool
+	if len(filterEmails) > 0 {
+		emailSet = make(map[string]bool, len(filterEmails))
+		for _, e := range filterEmails {
+			emailSet[strings.ToLower(e)] = true
+		}
+	}
+	var inactive []InactiveEmail
+	var newActors []NewActor
+	for _, r := range rows {
+		if emailSet != nil && !emailSet[strings.ToLower(r.Email)] {
+			continue
+		}
+		if r.DaysIdle >= minIdleDays {
+			inactive = append(inactive, InactiveEmail{
+				Email:      r.Email,
+				LastActive: r.LastActive,
+				DaysIdle:   r.DaysIdle,
+				TotalCalls: r.TotalCalls,
+			})
+		}
+		if r.IsNewActor && r.FirstSeen90d != "" {
+			newActors = append(newActors, NewActor{
+				Email:     r.Email,
+				FirstSeen: r.FirstSeen90d,
+				Jobs:      r.Jobs90d,
+				IsSA:      r.IsSA,
+			})
+		}
+	}
+	sort.Slice(inactive, func(i, j int) bool {
+		if inactive[i].DaysIdle != inactive[j].DaysIdle {
+			return inactive[i].DaysIdle > inactive[j].DaysIdle
+		}
+		return inactive[i].Email < inactive[j].Email
+	})
+	sort.Slice(newActors, func(i, j int) bool {
+		if newActors[i].FirstSeen != newActors[j].FirstSeen {
+			return newActors[i].FirstSeen > newActors[j].FirstSeen
+		}
+		return newActors[i].Email < newActors[j].Email
+	})
+	if len(newActors) > 50 {
+		newActors = newActors[:50]
+	}
+	return inactive, newActors
+}
+
+// GetLongWindowIAM scans 180 days of JOBS_BY_PROJECT once and returns raw
+// identity rows for both the >=7d inactive buckets and the 90d new actors.
+func (b *BQClient) GetLongWindowIAM(ctx context.Context, region string) ([]longWindowIAMRow, error) {
+	q := b.client.Query(longWindowIAMSQL(b.regionRef(region)))
+	rows, err := collectRows[longWindowIAMRow](q, ctx)
+	if err != nil {
+		return nil, fmt.Errorf("long-window IAM query failed: %w", err)
+	}
+	return rows, nil
 }
 
 func (b *BQClient) GetInactiveEmails(ctx context.Context, region string, inactiveDays int) ([]InactiveEmail, error) {
@@ -167,6 +324,8 @@ func (b *BQClient) GetInactiveEmails(ctx context.Context, region string, inactiv
 				COUNT(*) AS total_calls
 			FROM %s.INFORMATION_SCHEMA.JOBS_BY_PROJECT
 			WHERE creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 180 DAY)
+				AND user_email IS NOT NULL
+				AND IFNULL(statement_type, '') != 'SCRIPT'
 			GROUP BY email
 		)
 		SELECT
@@ -204,7 +363,9 @@ func iamSummarySQL(regionRef, interval string) string {
 			COUNT(DISTINCT IF(NOT ENDS_WITH(user_email, '.gserviceaccount.com'), user_email, NULL)) AS human_users,
 			COUNT(*) AS total_calls
 		FROM %s.INFORMATION_SCHEMA.JOBS_BY_PROJECT
-		WHERE creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL %s)`,
+		WHERE creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL %s)
+			AND user_email IS NOT NULL
+			AND IFNULL(statement_type, '') != 'SCRIPT'`,
 		regionRef, interval)
 }
 
@@ -265,9 +426,11 @@ func (b *BQClient) GetNewActors(ctx context.Context, region string) ([]NewActor,
 		`SELECT user_email AS email,
 			FORMAT_TIMESTAMP("%%Y-%%m-%%dT%%H:%%M:%%SZ", MIN(creation_time)) AS first_seen,
 			COUNT(*) AS jobs,
-			LOGICAL_OR(ENDS_WITH(user_email, 'gserviceaccount.com')) AS is_sa
+			LOGICAL_OR(ENDS_WITH(user_email, '.gserviceaccount.com')) AS is_sa
 		FROM %s.INFORMATION_SCHEMA.JOBS_BY_PROJECT
 		WHERE creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 90 DAY)
+			AND user_email IS NOT NULL
+			AND IFNULL(statement_type, '') != 'SCRIPT'
 		GROUP BY email
 		HAVING MIN(creation_time) >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)
 		ORDER BY first_seen DESC LIMIT 50`, b.regionRef(region)))
@@ -287,40 +450,91 @@ type OffHoursUser struct {
 	Jobs  int64  `json:"jobs" bigquery:"jobs"`
 }
 
+type offHoursGroupingRow struct {
+	Dow          int64  `bigquery:"dow"`
+	Hr           int64  `bigquery:"hr"`
+	Email        string `bigquery:"email"`
+	IsCell       int64  `bigquery:"is_cell"`
+	Jobs         int64  `bigquery:"jobs"`
+	OffHoursJobs int64  `bigquery:"off_hours_jobs"`
+}
+
+func offHoursSQL(regionRef, where string) string {
+	return fmt.Sprintf(
+		`SELECT
+			IFNULL(dow, 0) AS dow,
+			IFNULL(hr, -1) AS hr,
+			IFNULL(email, '') AS email,
+			is_cell,
+			jobs,
+			off_hours_jobs
+		FROM (
+			SELECT
+				dow,
+				hr,
+				email,
+				GROUPING(email) AS is_cell,
+				COUNT(*) AS jobs,
+				COUNTIF(hr NOT BETWEEN 8 AND 19 OR dow IN (1, 7)) AS off_hours_jobs
+			FROM (
+				SELECT
+					EXTRACT(DAYOFWEEK FROM creation_time) AS dow,
+					EXTRACT(HOUR FROM creation_time) AS hr,
+					user_email AS email
+				FROM %s.INFORMATION_SCHEMA.JOBS_BY_PROJECT
+				WHERE %s
+			)
+			GROUP BY GROUPING SETS ((dow, hr), (email))
+		)`,
+		regionRef, where)
+}
+
+func splitOffHoursRows(rows []offHoursGroupingRow) ([]OffHoursCell, []OffHoursUser) {
+	var cells []OffHoursCell
+	var top []OffHoursUser
+	for _, r := range rows {
+		if r.IsCell == 1 {
+			cells = append(cells, OffHoursCell{Dow: r.Dow, Hr: r.Hr, Jobs: r.Jobs})
+			continue
+		}
+		if r.Email != "" && r.OffHoursJobs > 0 {
+			top = append(top, OffHoursUser{Email: r.Email, Jobs: r.OffHoursJobs})
+		}
+	}
+	sort.Slice(top, func(i, j int) bool {
+		if top[i].Jobs != top[j].Jobs {
+			return top[i].Jobs > top[j].Jobs
+		}
+		return top[i].Email < top[j].Email
+	})
+	if len(top) > 10 {
+		top = top[:10]
+	}
+	return cells, top
+}
+
 func (b *BQClient) GetOffHours(ctx context.Context, region string, emails []string, timeRange string) ([]OffHoursCell, []OffHoursUser, error) {
 	interval := timeRangeToInterval(timeRange)
 	var clauses []string
 	var params []bigquery.QueryParameter
 	clauses = append(clauses,
 		fmt.Sprintf("creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL %s)", interval),
-		"NOT ENDS_WITH(user_email, 'gserviceaccount.com')")
+		"user_email IS NOT NULL",
+		"NOT ENDS_WITH(user_email, '.gserviceaccount.com')",
+		"IFNULL(statement_type, '') != 'SCRIPT'")
 	if len(emails) > 0 {
-		clauses = append(clauses, "user_email IN UNNEST(@emails)")
+		clauses = append(clauses, "LOWER(user_email) IN UNNEST(@emails)")
 		params = append(params, bigquery.QueryParameter{Name: "emails", Value: emails})
 	}
 	where := strings.Join(clauses, " AND ")
 
-	hq := b.client.Query(fmt.Sprintf(
-		`SELECT EXTRACT(DAYOFWEEK FROM creation_time) AS dow,
-			EXTRACT(HOUR FROM creation_time) AS hr, COUNT(*) AS jobs
-		FROM %s.INFORMATION_SCHEMA.JOBS_BY_PROJECT
-		WHERE %s GROUP BY dow, hr`, b.regionRef(region), where))
-	hq.Parameters = params
-	cells, err := collectRows[OffHoursCell](hq, ctx)
+	q := b.client.Query(offHoursSQL(b.regionRef(region), where))
+	q.Parameters = params
+	rows, err := collectRows[offHoursGroupingRow](q, ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("off-hours heatmap query failed: %w", err)
+		return nil, nil, fmt.Errorf("off-hours query failed: %w", err)
 	}
-
-	tq := b.client.Query(fmt.Sprintf(
-		`SELECT user_email AS email, COUNT(*) AS jobs
-		FROM %s.INFORMATION_SCHEMA.JOBS_BY_PROJECT
-		WHERE %s AND EXTRACT(HOUR FROM creation_time) < 6
-		GROUP BY email ORDER BY jobs DESC LIMIT 10`, b.regionRef(region), where))
-	tq.Parameters = params
-	top, err := collectRows[OffHoursUser](tq, ctx)
-	if err != nil {
-		return nil, nil, fmt.Errorf("off-hours top query failed: %w", err)
-	}
+	cells, top := splitOffHoursRows(rows)
 	return cells, top, nil
 }
 
@@ -343,9 +557,10 @@ func (b *BQClient) GetExfilSignals(ctx context.Context, region string, emails []
 	}
 	clauses = append(clauses,
 		fmt.Sprintf("creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL %s)", interval),
+		"user_email IS NOT NULL",
 		"IFNULL(statement_type, '') != 'SCRIPT'")
 	if len(emails) > 0 {
-		clauses = append(clauses, "user_email IN UNNEST(@emails)")
+		clauses = append(clauses, "LOWER(user_email) IN UNNEST(@emails)")
 		params = append(params, bigquery.QueryParameter{Name: "emails", Value: emails})
 	}
 

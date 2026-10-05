@@ -22,6 +22,7 @@ export default function IAMDashboard({ region, timeRange }: Props) {
   const [view, setView] = useState<'activity' | 'posture'>('activity');
 
   useEffect(() => {
+    if (view !== 'activity') return;
     let active = true;
     setLoading(true);
     setError('');
@@ -30,7 +31,7 @@ export default function IAMDashboard({ region, timeRange }: Props) {
       .catch(e => { if (active) setError(e.response?.data || e.message); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [region, timeRange, selectedEmails]);
+  }, [region, timeRange, selectedEmails, view]);
 
   const handleAddEmail = (email: string) => {
     if (!selectedEmails.includes(email)) {
@@ -325,8 +326,10 @@ function UsageTimelineChart({ timeline }: { timeline: IAMDashboardData['timeline
   for (const e of emails) emailMap.set(e, new Map());
   for (const t of timeline) emailMap.get(t.email)!.set(t.bucket, t.call_count);
 
+  const isDailyBucket = buckets.every(b => b.endsWith('T00:00:00Z'));
+
   const series = emails.map((email, i) => ({
-    name: email.split('@')[0],
+    name: email,
     type: 'line' as const,
     smooth: true,
     showSymbol: false,
@@ -364,9 +367,10 @@ function UsageTimelineChart({ timeline }: { timeline: IAMDashboardData['timeline
       type: 'category' as const,
       data: buckets.map(b => {
         const d = new Date(b);
-        return buckets.length > 48
-          ? `${(d.getMonth()+1).toString().padStart(2,'0')}/${d.getDate().toString().padStart(2,'0')}`
-          : `${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}`;
+        const mmdd = `${(d.getUTCMonth()+1).toString().padStart(2,'0')}/${d.getUTCDate().toString().padStart(2,'0')}`;
+        return isDailyBucket
+          ? mmdd
+          : `${mmdd} ${d.getUTCHours().toString().padStart(2,'0')}:${d.getUTCMinutes().toString().padStart(2,'0')}`;
       }),
       axisLabel: {
         color: '#71717a', fontSize: 10, fontFamily: 'JetBrains Mono, monospace',
@@ -509,7 +513,7 @@ function InactiveSection({ inactive7, inactive30, inactive90 }: {
             <AlertTriangle size={15} className="text-amber-400" />
             <h3 className="text-sm font-semibold text-white">Inactive Identities</h3>
           </div>
-          <p className="text-xs text-zinc-500">Identities with no activity — candidates for review or deactivation</p>
+          <p className="text-xs text-zinc-500">Identities with no BigQuery jobs in this project/region for ≥N days (within the 180-day retention window)</p>
         </div>
 
         <div className="flex items-center rounded-lg border border-zinc-800/50 overflow-hidden" style={{ background: '#09090b' }}>
@@ -558,7 +562,7 @@ function InactiveSection({ inactive7, inactive30, inactive90 }: {
             </thead>
             <tbody>
               {currentTab.data.map(item => {
-                const isSA = item.email.includes('gserviceaccount.com');
+                const isSA = item.email.endsWith('.gserviceaccount.com');
                 const risk = item.days_idle >= 90 ? 'high' : item.days_idle >= 30 ? 'medium' : 'low';
                 return (
                   <tr key={item.email} className="border-b border-zinc-800/30 hover:bg-zinc-800/20 transition-colors">
@@ -750,7 +754,7 @@ function OffHoursHeatmap({ cells, top }: { cells: OffHoursCell[]; top: OffHoursU
         </div>
 
         <div>
-          <h4 className="text-xs font-semibold text-white mb-3">Top Off-Hours Principals (00:00–06:00 UTC)</h4>
+          <h4 className="text-xs font-semibold text-white mb-3">Top Off-Hours Principals (nights 20:00–08:00 &amp; weekends UTC)</h4>
           {top.length > 0 ? (
             <div className="space-y-2">
               {top.slice(0, 10).map((user, i) => (

@@ -96,3 +96,18 @@ func TestSearchIndexesCacheKeyIgnoresTimeRangeAndUser(t *testing.T) {
 		t.Errorf("cache keys differ across time_range/user_email: %q vs %q", k1, k2)
 	}
 }
+
+func TestParseEmailsNormalizesAndSorts(t *testing.T) {
+	r1 := httptest.NewRequest(http.MethodGet, "/api/iam?emails=Bob@Example.com,alice@example.com,bob@example.com", nil)
+	r2 := httptest.NewRequest(http.MethodGet, "/api/iam?emails=alice@example.com,bob@example.com", nil)
+	e1 := parseEmails(r1)
+	e2 := parseEmails(r2)
+	want := []string{"alice@example.com", "bob@example.com"}
+	if !reflect.DeepEqual(e1, want) || !reflect.DeepEqual(e2, want) {
+		t.Errorf("parseEmails = %v / %v, want %v", e1, e2, want)
+	}
+	if iamCacheKey("us", "7d", e1) != iamCacheKey("us", "7d", e2) {
+		t.Errorf("iamCacheKey differs for reordered/duplicate emails")
+	}
+}
+
