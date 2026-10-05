@@ -5,14 +5,15 @@ import { RadioTower, Flame, Snowflake, CloudRain, CloudSnow } from 'lucide-react
 import type { WeatherDashboardData, WeatherStation, WeatherDaily } from '../types';
 import { fetchWeatherMeta, fetchWeatherDashboard } from '../api';
 import { MetricCard, EmptyState, ErrorBanner } from '../dashboards/shared';
+import { fipsCountryName } from './gdelt/shared';
 
 // Mirrors the backend caps: 7-31 day trailing window, snapshots since 1900.
 const MIN_DATE = '1900-01-01';
 const WINDOWS = [7, 14, 30];
 
 // Reporting is provisional for the trailing days: GHCN stations backfill
-// over about a week, so the newest 1-3 days always undercount.
-const PROVISIONAL_DAYS = 3;
+// over about 4 days, so the newest days within that tail undercount.
+const PROVISIONAL_DAYS = 4;
 
 const CHART_TOOLTIP = {
   backgroundColor: 'rgba(17,17,20,0.95)',
@@ -66,22 +67,36 @@ export default function WeatherDashboard() {
   // settled coverage) is what loads first — the newest 1-2 days are nearly
   // empty while stations backfill.
   useEffect(() => {
-    fetchWeatherMeta()
+    const ac = new AbortController();
+    fetchWeatherMeta(ac.signal)
       .then(meta => {
-        setLatestDate(meta.latest_date);
-        setDate(meta.default_date);
+        if (!ac.signal.aborted) {
+          setLatestDate(meta.latest_date);
+          setDate(meta.default_date);
+        }
       })
-      .catch(e => setMetaError(e.response?.data || e.message));
+      .catch(e => {
+        if (!ac.signal.aborted) setMetaError(e.response?.data || e.message);
+      });
+    return () => ac.abort();
   }, []);
 
   useEffect(() => {
     if (!date) return;
+    const ac = new AbortController();
     setLoading(true);
     setError('');
-    fetchWeatherDashboard(date, days)
-      .then(setData)
-      .catch(e => setError(e.response?.data || e.message))
-      .finally(() => setLoading(false));
+    fetchWeatherDashboard(date, days, ac.signal)
+      .then(d => {
+        if (!ac.signal.aborted) setData(d);
+      })
+      .catch(e => {
+        if (!ac.signal.aborted) setError(e.response?.data || e.message);
+      })
+      .finally(() => {
+        if (!ac.signal.aborted) setLoading(false);
+      });
+    return () => ac.abort();
   }, [date, days]);
 
   const leaderboards = useMemo(() => {
@@ -96,10 +111,14 @@ export default function WeatherDashboard() {
     };
   }, [data]);
 
-  // Provisional shading only applies when the window ends near the bleeding
-  // edge of the dataset, where backfill is still filling days in.
-  const provisional = !!latestDate && !!date
-    && Date.parse(latestDate) - Date.parse(date) < PROVISIONAL_DAYS * 86400000;
+  // Provisional shading only covers days that fall within the active
+  // backfill tail (the last PROVISIONAL_DAYS up to latestDate).
+  const provisionalStart = useMemo(() => {
+    if (!latestDate || !data?.daily?.length) return null;
+    const cutoff = Date.parse(latestDate) - (PROVISIONAL_DAYS - 1) * 86400000;
+    const first = data.daily.find(d => Date.parse(d.date) >= cutoff);
+    return first ? first.date : null;
+  }, [latestDate, data]);
 
   return (
     <div className="space-y-6">
@@ -193,11 +212,11 @@ export default function WeatherDashboard() {
               <h3 className="text-sm font-semibold text-white mb-1">Temperature &amp; Precipitation Trend</h3>
               <p className="text-xs text-zinc-500 mb-2">
                 Mean across reporting stations (a network mean, not a global temperature)
-                {provisional && ' · shaded tail = provisional'}
+                {provisionalStart && ' · shaded tail = provisional'}
               </p>
               {data.daily.length > 0 ? (
                 <div className="h-[300px]">
-                  <ReactECharts option={trendOption(data.daily, provisional)} style={{ height: '100%' }} notMerge />
+                  <ReactECharts option={trendOption(data.daily, provisionalStart)} style={{ height: '100%' }} notMerge />
                 </div>
               ) : (
                 <EmptyState text="No daily data in this window" />
@@ -231,12 +250,21 @@ export default function WeatherDashboard() {
   );
 }
 
+function formatCountryState(cs: string): string {
+  const parts = cs.split(', ');
+  if (parts.length === 2) {
+    return `${parts[0]}, ${fipsCountryName(parts[1])}`;
+  }
+  return fipsCountryName(cs);
+}
+
 function extremeDetail(e: { station: string; country_state: string } | null): string {
-  return e ? `${e.station} · ${e.country_state}` : 'No reports';
+  return e ? `${e.station} · ${formatCountryState(e.country_state)}` : 'No reports';
 }
 
 function place(s: WeatherStation): string {
-  return s.state ? `${s.state}, ${s.country}` : s.country;
+  const country = fipsCountryName(s.country);
+  return s.state ? `${s.state}, ${country}` : country;
 }
 
 // --- Leaderboard ---
@@ -374,12 +402,12 @@ function prcpMapOption(stations: WeatherStation[]) {
   };
 }
 
-function trendOption(daily: WeatherDaily[], provisional: boolean) {
-  const markArea = provisional && daily.length > PROVISIONAL_DAYS
+function trendOption(daily: WeatherDaily[], provisionalStart: string | null) {
+  const markArea = provisionalStart && daily.length > 0
     ? {
         silent: true,
         itemStyle: { color: 'rgba(113,113,122,0.08)' },
-        data: [[{ xAxis: daily[daily.length - PROVISIONAL_DAYS].date.slice(5) }, { xAxis: daily[daily.length - 1].date.slice(5) }]],
+        data: [[{ xAxis: provisionalStart.slice(5) }, { xAxis: daily[daily.length - 1].date.slice(5) }]],
       }
     : undefined;
   return {

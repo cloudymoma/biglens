@@ -7,6 +7,7 @@ import { fetchGdeltIndustry } from '../../api';
 import { EmptyState, ErrorBanner } from '../../dashboards/shared';
 import {
   MAX_GKG_DAYS, CHART_TOOLTIP, AXIS_LABEL, SPLIT_LINE,
+  isTodayUTC, shortDateLabel,
   spanOf, toneColor, Section, SourceLink, LoadingPulse, RangeTooWide,
 } from './shared';
 
@@ -32,34 +33,57 @@ function ToneChip({ tone }: { tone: number }) {
   );
 }
 
-export default function IndustryTab({ startDate, endDate }: { startDate: string; endDate: string }) {
+export default function IndustryTab({
+  startDate,
+  endDate,
+  active = true,
+}: {
+  startDate: string;
+  endDate: string;
+  active?: boolean;
+}) {
   const [industry, setIndustry] = useState<GdeltIndustryKey>('finance');
   const [data, setData] = useState<GdeltIndustryData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [loadedKey, setLoadedKey] = useState('');
 
   const tooWide = spanOf(startDate, endDate) > MAX_GKG_DAYS;
+  const reqKey = `${startDate}:${endDate}:${industry}`;
 
   useEffect(() => {
-    if (tooWide) return;
+    if (!active || tooWide || loadedKey === reqKey) return;
+    const ac = new AbortController();
     setLoading(true);
     setError('');
-    fetchGdeltIndustry(startDate, endDate, industry)
-      .then(setData)
-      .catch(e => setError(e.response?.data || e.message))
-      .finally(() => setLoading(false));
-  }, [startDate, endDate, industry, tooWide]);
+    fetchGdeltIndustry(startDate, endDate, industry, ac.signal)
+      .then(d => {
+        if (!ac.signal.aborted) {
+          setData(d);
+          setLoadedKey(reqKey);
+        }
+      })
+      .catch(e => {
+        if (!ac.signal.aborted) setError(e.response?.data || e.message);
+      })
+      .finally(() => {
+        if (!ac.signal.aborted) setLoading(false);
+      });
+    return () => ac.abort();
+  }, [startDate, endDate, industry, tooWide, active, loadedKey, reqKey]);
 
   // KPIs derived from the daily series: total articles, article-weighted
-  // mean tone, and the most negative day in the window.
+  // mean tone, and the most negative settled day in the window.
   const kpis = useMemo(() => {
     const daily = data?.daily ?? [];
     let articles = 0;
     let toneSum = 0;
     let worst: GdeltIndustryDaily | null = null;
+    const hasSettled = daily.some(d => !isTodayUTC(d.ingest_date));
     for (const d of daily) {
       articles += d.article_count;
       toneSum += d.avg_tone * d.article_count;
+      if (hasSettled && isTodayUTC(d.ingest_date)) continue;
       if (!worst || d.avg_tone < worst.avg_tone) worst = d;
     }
     return { articles, avgTone: articles > 0 ? toneSum / articles : 0, worst };
@@ -109,7 +133,7 @@ export default function IndustryTab({ startDate, endDate }: { startDate: string;
           <p className="text-lg font-semibold text-white font-mono">
             {kpis.worst ? `${kpis.worst.ingest_date.slice(5)} (${kpis.worst.avg_tone.toFixed(1)})` : '—'}
           </p>
-          <p className="text-[10px] text-zinc-600">lowest daily average tone</p>
+          <p className="text-[10px] text-zinc-600">lowest settled daily average tone</p>
         </div>
       </div>
 
@@ -230,7 +254,7 @@ function dailyOption(daily: GdeltIndustryDaily[]) {
     grid: { left: 8, right: 8, bottom: 8, top: 30, containLabel: true },
     xAxis: {
       type: 'category',
-      data: daily.map(d => d.ingest_date.slice(5)),
+      data: daily.map(d => shortDateLabel(d.ingest_date)),
       axisLabel: { ...AXIS_LABEL, fontSize: 9 },
       axisLine: { show: false },
       axisTick: { show: false },
@@ -255,9 +279,13 @@ function dailyOption(daily: GdeltIndustryDaily[]) {
       {
         name: 'Articles',
         type: 'bar',
-        data: daily.map(d => d.article_count),
+        data: daily.map(d => ({
+          value: d.article_count,
+          itemStyle: isTodayUTC(d.ingest_date)
+            ? { color: '#0e7490', opacity: 0.4, borderColor: '#22d3ee', borderType: 'dashed', borderWidth: 1 }
+            : { color: '#0e7490', opacity: 0.85 },
+        })),
         barMaxWidth: 22,
-        itemStyle: { color: '#0e7490', opacity: 0.85 },
       },
       {
         name: 'Avg tone',

@@ -51,11 +51,11 @@ export default function GdeltDashboard() {
   }
 
   const tabBody: Record<TabId, React.ReactNode> = {
-    overview: <OverviewTab startDate={startDate} endDate={endDate} />,
-    country: <CountryTab startDate={startDate} endDate={endDate} />,
-    impact: <ImpactTab startDate={startDate} endDate={endDate} />,
-    stories: <StoriesTab startDate={startDate} endDate={endDate} />,
-    industry: <IndustryTab startDate={startDate} endDate={endDate} />,
+    overview: <OverviewTab startDate={startDate} endDate={endDate} active={active === 'overview'} />,
+    country: <CountryTab startDate={startDate} endDate={endDate} active={active === 'country'} />,
+    impact: <ImpactTab startDate={startDate} endDate={endDate} active={active === 'impact'} />,
+    stories: <StoriesTab startDate={startDate} endDate={endDate} active={active === 'stories'} />,
+    industry: <IndustryTab startDate={startDate} endDate={endDate} active={active === 'industry'} />,
   };
 
   return (

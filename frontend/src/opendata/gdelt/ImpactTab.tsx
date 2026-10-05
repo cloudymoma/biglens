@@ -5,6 +5,7 @@ import { fetchGdeltImpact } from '../../api';
 import { EmptyState, ErrorBanner } from '../../dashboards/shared';
 import {
   MAX_GKG_DAYS, CHART_TOOLTIP, AXIS_LABEL, SPLIT_LINE,
+  fipsCountryName, shortDateLabel,
   spanOf, Section, SourceLink, LoadingPulse, RangeTooWide,
 } from './shared';
 
@@ -21,22 +22,43 @@ const IMPACT_TYPES: { type: string; label: string; color: string }[] = [
 const impactMeta = (type: string) =>
   IMPACT_TYPES.find(t => t.type === type) ?? { type, label: type, color: '#71717a' };
 
-export default function ImpactTab({ startDate, endDate }: { startDate: string; endDate: string }) {
+export default function ImpactTab({
+  startDate,
+  endDate,
+  active = true,
+}: {
+  startDate: string;
+  endDate: string;
+  active?: boolean;
+}) {
   const [data, setData] = useState<GdeltImpactData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [loadedKey, setLoadedKey] = useState('');
 
   const tooWide = spanOf(startDate, endDate) > MAX_GKG_DAYS;
+  const rangeKey = `${startDate}:${endDate}`;
 
   useEffect(() => {
-    if (tooWide) return;
+    if (!active || tooWide || loadedKey === rangeKey) return;
+    const ac = new AbortController();
     setLoading(true);
     setError('');
-    fetchGdeltImpact(startDate, endDate)
-      .then(setData)
-      .catch(e => setError(e.response?.data || e.message))
-      .finally(() => setLoading(false));
-  }, [startDate, endDate, tooWide]);
+    fetchGdeltImpact(startDate, endDate, ac.signal)
+      .then(d => {
+        if (!ac.signal.aborted) {
+          setData(d);
+          setLoadedKey(rangeKey);
+        }
+      })
+      .catch(e => {
+        if (!ac.signal.aborted) setError(e.response?.data || e.message);
+      })
+      .finally(() => {
+        if (!ac.signal.aborted) setLoading(false);
+      });
+    return () => ac.abort();
+  }, [startDate, endDate, tooWide, active, loadedKey, rangeKey]);
 
   const totals = useMemo(() => {
     const sum: Record<string, number> = {};
@@ -74,7 +96,7 @@ export default function ImpactTab({ startDate, endDate }: { startDate: string; e
       </Section>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <Section title="Most Affected Countries" note="Articles reporting any impact figure, by country (FIPS code)">
+        <Section title="Most Affected Countries" note="Articles reporting any impact figure, by country (mapped from FIPS 10-4)">
           {data.countries.length > 0 ? (
             <div className="h-[440px]">
               <ReactECharts option={countriesOption(data.countries)} style={{ height: '100%' }} notMerge />
@@ -146,7 +168,7 @@ function dailyStackOption(daily: GdeltImpactDaily[]) {
     grid: { left: 8, right: 8, bottom: 8, top: 30, containLabel: true },
     xAxis: {
       type: 'category',
-      data: dates.map(d => d.slice(5)),
+      data: dates.map(d => shortDateLabel(d)),
       axisLabel: { ...AXIS_LABEL, fontSize: 9 },
       axisLine: { show: false },
       axisTick: { show: false },
@@ -173,7 +195,16 @@ function countriesOption(countries: GdeltImpactCountry[]) {
   const sorted = [...countries].sort((a, b) => a.article_count - b.article_count);
   return {
     backgroundColor: 'transparent',
-    tooltip: { trigger: 'axis', ...CHART_TOOLTIP },
+    tooltip: {
+      trigger: 'axis',
+      ...CHART_TOOLTIP,
+      formatter: (params: { name: string; value: number; dataIndex: number }[]) => {
+        const p = params[0];
+        const code = sorted[p.dataIndex]?.fips_country;
+        return `<div style="font-weight:600;color:#a1a1aa;font-size:11px;margin-bottom:4px">${p.name}${code ? ` (FIPS: ${code})` : ''}</div>
+                <div style="color:#f4f4f5;font-size:13px;font-weight:600">${Number(p.value).toLocaleString()} articles</div>`;
+      },
+    },
     grid: { left: 8, right: 56, bottom: 8, top: 8, containLabel: true },
     xAxis: {
       type: 'value',
@@ -182,7 +213,7 @@ function countriesOption(countries: GdeltImpactCountry[]) {
     },
     yAxis: {
       type: 'category',
-      data: sorted.map(c => c.fips_country),
+      data: sorted.map(c => fipsCountryName(c.fips_country)),
       axisLabel: { ...AXIS_LABEL, fontSize: 10 },
       axisLine: { show: false },
       axisTick: { show: false },

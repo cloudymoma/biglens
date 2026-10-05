@@ -1,13 +1,16 @@
 package main
 
 import (
+	"compress/gzip"
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/natefinch/lumberjack.v2"
@@ -109,7 +112,22 @@ func main() {
 		})
 	}
 
-	h := func(f http.HandlerFunc) http.Handler { return logMW(f) }
+	gzipMW := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+				next.ServeHTTP(w, r)
+				return
+			}
+			w.Header().Set("Content-Encoding", "gzip")
+			w.Header().Add("Vary", "Accept-Encoding")
+			w.Header().Del("Content-Length")
+			gz := gzip.NewWriter(w)
+			defer gz.Close()
+			next.ServeHTTP(&gzipResponseWriter{ResponseWriter: w, Writer: gz}, r)
+		})
+	}
+
+	h := func(f http.HandlerFunc) http.Handler { return logMW(gzipMW(f)) }
 
 	// Dashboard aggregate endpoints (errgroup concurrency + caching)
 	mux.Handle("/api/dashboard/storage", h(api.StorageDashboard))
@@ -235,3 +253,17 @@ func (w *statusWriter) WriteHeader(status int) {
 	w.status = status
 	w.ResponseWriter.WriteHeader(status)
 }
+
+type gzipResponseWriter struct {
+	http.ResponseWriter
+	Writer io.Writer
+}
+
+func (w *gzipResponseWriter) Write(b []byte) (int, error) {
+	return w.Writer.Write(b)
+}
+
+func (w *gzipResponseWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+

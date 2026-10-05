@@ -23,7 +23,15 @@ const (
 	gdeltEventsTable   = "`gdelt-bq.gdeltv2.events_partitioned`"
 	gdeltGkgTable      = "`gdelt-bq.gdeltv2.gkg_partitioned`"
 	gdeltMentionsTable = "`gdelt-bq.gdeltv2.eventmentions_partitioned`"
+
+	// Hard billing caps per query as defense in depth on top of partition pruning.
+	gdeltEventsMaxBytesBilled = 4 << 30  // 4 GiB
+	gdeltGkgMaxBytesBilled    = 16 << 30 // 16 GiB
 )
+
+// gdeltRegionCodes lists CAMEO 3-letter regional/multi-country actor codes so
+// country pickers and bilateral dyad boards only rank sovereign states/territories.
+const gdeltRegionCodes = `('AFR', 'EUR', 'ASA', 'MEA', 'NMR', 'LAM', 'WST', 'PGS', 'CRB', 'CAU', 'BLK', 'SCN', 'SEA', 'SAS', 'CAS', 'EAF', 'WAF', 'SAF', 'NAF', 'CAF')`
 
 func gdeltDateParams(start, end civil.Date) []bigquery.QueryParameter {
 	return []bigquery.QueryParameter{
@@ -59,6 +67,7 @@ func (b *BQClient) GetGdeltSummary(ctx context.Context, start, end civil.Date) (
 		WHERE _PARTITIONDATE BETWEEN @start_date AND @end_date
 		GROUP BY 1, 2, 3`)
 	q.Parameters = gdeltDateParams(start, end)
+	q.MaxBytesBilled = gdeltEventsMaxBytesBilled
 	return collectRows[GdeltSummaryRow](q, ctx)
 }
 
@@ -67,7 +76,7 @@ func (b *BQClient) GetGdeltSummary(ctx context.Context, start, end civil.Date) (
 type GdeltHotspot struct {
 	Latitude    float64 `json:"latitude" bigquery:"latitude"`
 	Longitude   float64 `json:"longitude" bigquery:"longitude"`
-	FipsCountry string  `json:"fips_country" bigquery:"fips_country"`
+	FipsCountry string  `json:"fips_country,omitempty" bigquery:"fips_country"`
 	EventCount  int64   `json:"event_count" bigquery:"event_count"`
 	AvgTone     float64 `json:"avg_tone" bigquery:"avg_tone"`
 }
@@ -82,12 +91,15 @@ func (b *BQClient) GetGdeltHotspots(ctx context.Context, start, end civil.Date) 
 			ROUND(COALESCE(AVG(AvgTone), 0), 2) AS avg_tone
 		FROM ` + gdeltEventsTable + `
 		WHERE _PARTITIONDATE BETWEEN @start_date AND @end_date
+			AND ActionGeo_Type IN (3, 4)
 			AND ActionGeo_Lat IS NOT NULL
 			AND ActionGeo_Long IS NOT NULL
+			AND NOT (ActionGeo_Lat = 0 AND ActionGeo_Long = 0)
 		GROUP BY 1, 2, 3
 		ORDER BY event_count DESC
 		LIMIT 500`)
 	q.Parameters = gdeltDateParams(start, end)
+	q.MaxBytesBilled = gdeltEventsMaxBytesBilled
 	return collectRows[GdeltHotspot](q, ctx)
 }
 
@@ -123,7 +135,96 @@ func (b *BQClient) GetGdeltConflictNews(ctx context.Context, start, end civil.Da
 		ORDER BY mention_count DESC
 		LIMIT 50`)
 	q.Parameters = gdeltDateParams(start, end)
+	q.MaxBytesBilled = gdeltEventsMaxBytesBilled
 	return collectRows[GdeltNews](q, ctx)
+}
+
+type gdeltEventsConsolidatedRow struct {
+	Summary      []GdeltSummaryRow `bigquery:"summary"`
+	Hotspots     []GdeltHotspot    `bigquery:"hotspots"`
+	ConflictNews []GdeltNews       `bigquery:"conflict_news"`
+}
+
+// GetGdeltEventsConsolidated scans events_partitioned once to produce summary
+// groups, city-level geo hotspots (ActionGeo_Type IN (3, 4)), and top-50
+// deduplicated conflict articles.
+func (b *BQClient) GetGdeltEventsConsolidated(ctx context.Context, start, end civil.Date) ([]GdeltSummaryRow, []GdeltHotspot, []GdeltNews, error) {
+	q := b.client.Query(`
+		WITH ev AS (
+			SELECT
+				_PARTITIONDATE AS d,
+				QuadClass,
+				EventRootCode,
+				GoldsteinScale,
+				AvgTone,
+				ActionGeo_Type,
+				ActionGeo_Lat,
+				ActionGeo_Long,
+				ActionGeo_CountryCode,
+				SOURCEURL,
+				NumMentions
+			FROM ` + gdeltEventsTable + `
+			WHERE _PARTITIONDATE BETWEEN @start_date AND @end_date
+		)
+		SELECT
+			ARRAY(
+				SELECT AS STRUCT
+					FORMAT_DATE('%Y-%m-%d', d) AS ingest_date,
+					QuadClass AS quad_class,
+					COALESCE(EventRootCode, 'UNK') AS event_root_code,
+					COUNT(1) AS event_count,
+					ROUND(COALESCE(AVG(GoldsteinScale), 0), 2) AS avg_goldstein,
+					ROUND(COALESCE(AVG(AvgTone), 0), 2) AS avg_tone
+				FROM ev
+				GROUP BY 1, 2, 3
+			) AS summary,
+			ARRAY(
+				SELECT AS STRUCT
+					ROUND(ActionGeo_Lat, 1) AS latitude,
+					ROUND(ActionGeo_Long, 1) AS longitude,
+					COALESCE(ANY_VALUE(ActionGeo_CountryCode), 'UNKNOWN') AS fips_country,
+					COUNT(1) AS event_count,
+					ROUND(COALESCE(AVG(AvgTone), 0), 2) AS avg_tone
+				FROM ev
+				WHERE ActionGeo_Type IN (3, 4)
+					AND ActionGeo_Lat IS NOT NULL
+					AND ActionGeo_Long IS NOT NULL
+					AND NOT (ActionGeo_Lat = 0 AND ActionGeo_Long = 0)
+				GROUP BY 1, 2
+				ORDER BY event_count DESC
+				LIMIT 500
+			) AS hotspots,
+			ARRAY(
+				SELECT AS STRUCT x.*
+				FROM (
+					SELECT ARRAY_AGG(
+						STRUCT(
+							FORMAT_DATE('%Y-%m-%d', d) AS ingest_date,
+							COALESCE(ActionGeo_CountryCode, 'UNKNOWN') AS fips_country,
+							COALESCE(EventRootCode, 'UNK') AS event_root_code,
+							ROUND(COALESCE(AvgTone, 0), 2) AS avg_tone,
+							SOURCEURL AS source_url,
+							NumMentions AS mention_count
+						)
+						ORDER BY NumMentions DESC LIMIT 1
+					)[OFFSET(0)] AS x
+					FROM ev
+					WHERE QuadClass IN (3, 4) AND SOURCEURL IS NOT NULL
+					GROUP BY SOURCEURL
+				)
+				ORDER BY x.mention_count DESC
+				LIMIT 50
+			) AS conflict_news`)
+	q.Parameters = gdeltDateParams(start, end)
+	q.MaxBytesBilled = gdeltEventsMaxBytesBilled
+	rows, err := collectRows[gdeltEventsConsolidatedRow](q, ctx)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if len(rows) == 0 {
+		return nil, nil, nil, nil
+	}
+	return rows[0].Summary, rows[0].Hotspots, rows[0].ConflictNews, nil
 }
 
 // --- /dyads: bilateral tension board + actor-country picker list ---
@@ -155,10 +256,13 @@ func (b *BQClient) GetGdeltDyads(ctx context.Context, start, end civil.Date) ([]
 			AND Actor1CountryCode IS NOT NULL
 			AND Actor2CountryCode IS NOT NULL
 			AND Actor1CountryCode != Actor2CountryCode
+			AND Actor1CountryCode NOT IN ` + gdeltRegionCodes + `
+			AND Actor2CountryCode NOT IN ` + gdeltRegionCodes + `
 		GROUP BY 1, 2
 		ORDER BY event_count DESC
 		LIMIT 30`)
 	q.Parameters = gdeltDateParams(start, end)
+	q.MaxBytesBilled = gdeltEventsMaxBytesBilled
 	return collectRows[GdeltDyadRow](q, ctx)
 }
 
@@ -170,14 +274,72 @@ type GdeltCountryCount struct {
 func (b *BQClient) GetGdeltActorCountries(ctx context.Context, start, end civil.Date) ([]GdeltCountryCount, error) {
 	q := b.client.Query(`
 		SELECT c AS country, COUNT(1) AS event_count
-		FROM ` + gdeltEventsTable + `, UNNEST([Actor1CountryCode, Actor2CountryCode]) AS c
+		FROM ` + gdeltEventsTable + `,
+			UNNEST(IF(Actor1CountryCode = Actor2CountryCode, [Actor1CountryCode], [Actor1CountryCode, Actor2CountryCode])) AS c
 		WHERE _PARTITIONDATE BETWEEN @start_date AND @end_date
 			AND c IS NOT NULL
+			AND c NOT IN ` + gdeltRegionCodes + `
 		GROUP BY 1
 		ORDER BY event_count DESC
 		LIMIT 60`)
 	q.Parameters = gdeltDateParams(start, end)
+	q.MaxBytesBilled = gdeltEventsMaxBytesBilled
 	return collectRows[GdeltCountryCount](q, ctx)
+}
+
+type gdeltDyadsConsolidatedRow struct {
+	Dyads     []GdeltDyadRow      `bigquery:"dyads"`
+	Countries []GdeltCountryCount `bigquery:"countries"`
+}
+
+// GetGdeltDyadsConsolidated scans events_partitioned once for both the
+// bilateral dyad table and the deduplicated actor-country selector list.
+func (b *BQClient) GetGdeltDyadsConsolidated(ctx context.Context, start, end civil.Date) ([]GdeltDyadRow, []GdeltCountryCount, error) {
+	q := b.client.Query(`
+		WITH ev AS (
+			SELECT Actor1CountryCode, Actor2CountryCode, GoldsteinScale, AvgTone
+			FROM ` + gdeltEventsTable + `
+			WHERE _PARTITIONDATE BETWEEN @start_date AND @end_date
+				AND (Actor1CountryCode IS NOT NULL OR Actor2CountryCode IS NOT NULL)
+		)
+		SELECT
+			ARRAY(
+				SELECT AS STRUCT
+					LEAST(Actor1CountryCode, Actor2CountryCode) AS country_a,
+					GREATEST(Actor1CountryCode, Actor2CountryCode) AS country_b,
+					COUNT(1) AS event_count,
+					ROUND(COALESCE(AVG(GoldsteinScale), 0), 2) AS avg_goldstein,
+					ROUND(COALESCE(AVG(AvgTone), 0), 2) AS avg_tone
+				FROM ev
+				WHERE Actor1CountryCode IS NOT NULL
+					AND Actor2CountryCode IS NOT NULL
+					AND Actor1CountryCode != Actor2CountryCode
+					AND Actor1CountryCode NOT IN ` + gdeltRegionCodes + `
+					AND Actor2CountryCode NOT IN ` + gdeltRegionCodes + `
+				GROUP BY 1, 2
+				ORDER BY event_count DESC
+				LIMIT 30
+			) AS dyads,
+			ARRAY(
+				SELECT AS STRUCT c AS country, COUNT(1) AS event_count
+				FROM ev,
+					UNNEST(IF(Actor1CountryCode = Actor2CountryCode, [Actor1CountryCode], [Actor1CountryCode, Actor2CountryCode])) AS c
+				WHERE c IS NOT NULL
+					AND c NOT IN ` + gdeltRegionCodes + `
+				GROUP BY 1
+				ORDER BY event_count DESC
+				LIMIT 60
+			) AS countries`)
+	q.Parameters = gdeltDateParams(start, end)
+	q.MaxBytesBilled = gdeltEventsMaxBytesBilled
+	rows, err := collectRows[gdeltDyadsConsolidatedRow](q, ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(rows) == 0 {
+		return nil, nil, nil
+	}
+	return rows[0].Dyads, rows[0].Countries, nil
 }
 
 // --- /country: drill-down on one actor country ---
@@ -209,6 +371,7 @@ func (b *BQClient) GetGdeltCountryDaily(ctx context.Context, start, end civil.Da
 		GROUP BY 1
 		ORDER BY 1`)
 	q.Parameters = gdeltCountryParams(start, end, country)
+	q.MaxBytesBilled = gdeltEventsMaxBytesBilled
 	return collectRows[GdeltCountryDaily](q, ctx)
 }
 
@@ -231,8 +394,9 @@ func (b *BQClient) GetGdeltCountryEventTypes(ctx context.Context, start, end civ
 			AND ` + gdeltInvolvesCountry + `
 		GROUP BY 1
 		ORDER BY event_count DESC
-		LIMIT 25`)
+		LIMIT 15`)
 	q.Parameters = gdeltCountryParams(start, end, country)
+	q.MaxBytesBilled = gdeltEventsMaxBytesBilled
 	return collectRows[GdeltCountryEventType](q, ctx)
 }
 
@@ -255,11 +419,14 @@ func (b *BQClient) GetGdeltCountryPartners(ctx context.Context, start, end civil
 			AND Actor1CountryCode IS NOT NULL
 			AND Actor2CountryCode IS NOT NULL
 			AND Actor1CountryCode != Actor2CountryCode
+			AND Actor1CountryCode NOT IN ` + gdeltRegionCodes + `
+			AND Actor2CountryCode NOT IN ` + gdeltRegionCodes + `
 			AND ` + gdeltInvolvesCountry + `
 		GROUP BY 1
 		ORDER BY event_count DESC
 		LIMIT 15`)
 	q.Parameters = gdeltCountryParams(start, end, country)
+	q.MaxBytesBilled = gdeltEventsMaxBytesBilled
 	return collectRows[GdeltPartnerRow](q, ctx)
 }
 
@@ -298,7 +465,110 @@ func (b *BQClient) GetGdeltCountryEvents(ctx context.Context, start, end civil.D
 		ORDER BY mention_count DESC
 		LIMIT 30`)
 	q.Parameters = gdeltCountryParams(start, end, country)
+	q.MaxBytesBilled = gdeltEventsMaxBytesBilled
 	return collectRows[GdeltCountryEvent](q, ctx)
+}
+
+type gdeltCountryConsolidatedRow struct {
+	Daily      []GdeltCountryDaily     `bigquery:"daily"`
+	EventTypes []GdeltCountryEventType `bigquery:"event_types"`
+	Partners   []GdeltPartnerRow       `bigquery:"partners"`
+	TopEvents  []GdeltCountryEvent     `bigquery:"top_events"`
+}
+
+// GetGdeltCountryConsolidated scans events_partitioned once for a single actor
+// country drill-down (daily trend, top 15 CAMEO codes, top 15 partners, and
+// top 30 deduplicated stories).
+func (b *BQClient) GetGdeltCountryConsolidated(ctx context.Context, start, end civil.Date, country string) ([]GdeltCountryDaily, []GdeltCountryEventType, []GdeltPartnerRow, []GdeltCountryEvent, error) {
+	q := b.client.Query(`
+		WITH ev AS (
+			SELECT
+				_PARTITIONDATE AS d,
+				Actor1CountryCode,
+				Actor2CountryCode,
+				Actor1Name,
+				Actor2Name,
+				EventCode,
+				GoldsteinScale,
+				AvgTone,
+				NumMentions,
+				NumSources,
+				SOURCEURL
+			FROM ` + gdeltEventsTable + `
+			WHERE _PARTITIONDATE BETWEEN @start_date AND @end_date
+				AND ` + gdeltInvolvesCountry + `
+		)
+		SELECT
+			ARRAY(
+				SELECT AS STRUCT
+					FORMAT_DATE('%Y-%m-%d', d) AS ingest_date,
+					COUNT(1) AS event_count,
+					ROUND(COALESCE(AVG(AvgTone), 0), 2) AS avg_tone,
+					ROUND(COALESCE(AVG(GoldsteinScale), 0), 2) AS avg_goldstein
+				FROM ev
+				GROUP BY 1
+				ORDER BY 1
+			) AS daily,
+			ARRAY(
+				SELECT AS STRUCT
+					COALESCE(EventCode, 'UNK') AS event_code,
+					COUNT(1) AS event_count,
+					ROUND(COALESCE(AVG(GoldsteinScale), 0), 2) AS avg_goldstein
+				FROM ev
+				GROUP BY 1
+				ORDER BY event_count DESC
+				LIMIT 15
+			) AS event_types,
+			ARRAY(
+				SELECT AS STRUCT
+					IF(Actor1CountryCode = @country, Actor2CountryCode, Actor1CountryCode) AS partner,
+					COUNT(1) AS event_count,
+					ROUND(COALESCE(AVG(GoldsteinScale), 0), 2) AS avg_goldstein,
+					ROUND(COALESCE(AVG(AvgTone), 0), 2) AS avg_tone
+				FROM ev
+				WHERE Actor1CountryCode IS NOT NULL
+					AND Actor2CountryCode IS NOT NULL
+					AND Actor1CountryCode != Actor2CountryCode
+					AND Actor1CountryCode NOT IN ` + gdeltRegionCodes + `
+					AND Actor2CountryCode NOT IN ` + gdeltRegionCodes + `
+				GROUP BY 1
+				ORDER BY event_count DESC
+				LIMIT 15
+			) AS partners,
+			ARRAY(
+				SELECT AS STRUCT x.*
+				FROM (
+					SELECT ARRAY_AGG(
+						STRUCT(
+							FORMAT_DATE('%Y-%m-%d', d) AS ingest_date,
+							COALESCE(Actor1Name, '') AS actor1,
+							COALESCE(Actor2Name, '') AS actor2,
+							COALESCE(EventCode, 'UNK') AS event_code,
+							ROUND(COALESCE(GoldsteinScale, 0), 1) AS goldstein,
+							ROUND(COALESCE(AvgTone, 0), 2) AS avg_tone,
+							NumMentions AS mention_count,
+							NumSources AS source_count,
+							SOURCEURL AS source_url
+						)
+						ORDER BY NumMentions DESC LIMIT 1
+					)[OFFSET(0)] AS x
+					FROM ev
+					WHERE SOURCEURL IS NOT NULL
+					GROUP BY SOURCEURL
+				)
+				ORDER BY x.mention_count DESC
+				LIMIT 30
+			) AS top_events`)
+	q.Parameters = gdeltCountryParams(start, end, country)
+	q.MaxBytesBilled = gdeltEventsMaxBytesBilled
+	rows, err := collectRows[gdeltCountryConsolidatedRow](q, ctx)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	if len(rows) == 0 {
+		return nil, nil, nil, nil, nil
+	}
+	return rows[0].Daily, rows[0].EventTypes, rows[0].Partners, rows[0].TopEvents, nil
 }
 
 // --- /stories: story spread from the mentions stream ---
@@ -317,11 +587,11 @@ type GdeltStoryRow struct {
 	SourceURL     string  `json:"source_url" bigquery:"source_url"`
 }
 
-// GetGdeltStories ranks events by how many DISTINCT outlets picked them up —
-// spread across independent sources beats raw mention count, which one wire
-// service can inflate. Confidence >= 40 drops GDELT's least certain
-// event-mention matches. MentionTimeDate is a yyyymmddhhmmss integer;
-// SAFE.PARSE_TIMESTAMP tolerates malformed stamps.
+// GetGdeltStories ranks events first reported within the window by how many
+// DISTINCT outlets picked them up — spread across independent sources beats
+// raw mention count, which one wire service can inflate. Filtering
+// EventTimeDate >= start_date in the mentions CTE ensures the top-200
+// candidates align with the events_partitioned window on the join.
 func (b *BQClient) GetGdeltStories(ctx context.Context, start, end civil.Date) ([]GdeltStoryRow, error) {
 	q := b.client.Query(`
 		WITH m AS (
@@ -336,6 +606,7 @@ func (b *BQClient) GetGdeltStories(ctx context.Context, start, end civil.Date) (
 			FROM ` + gdeltMentionsTable + `
 			WHERE _PARTITIONDATE BETWEEN @start_date AND @end_date
 				AND Confidence >= 40
+				AND EventTimeDate >= CAST(FORMAT_DATE('%Y%m%d', @start_date) AS INT64) * 1000000
 			GROUP BY 1
 			ORDER BY outlets DESC
 			LIMIT 200
@@ -361,6 +632,7 @@ func (b *BQClient) GetGdeltStories(ctx context.Context, start, end civil.Date) (
 		ORDER BY m.outlets DESC
 		LIMIT 25`)
 	q.Parameters = gdeltDateParams(start, end)
+	q.MaxBytesBilled = gdeltEventsMaxBytesBilled
 	return collectRows[GdeltStoryRow](q, ctx)
 }
 
@@ -399,12 +671,14 @@ func gdeltEntityQuery(column string, limit int) string {
 func (b *BQClient) GetGdeltThemes(ctx context.Context, start, end civil.Date) ([]GdeltNamedCount, error) {
 	q := b.client.Query(gdeltEntityQuery("V2Themes", 50))
 	q.Parameters = gdeltDateParams(start, end)
+	q.MaxBytesBilled = gdeltGkgMaxBytesBilled
 	return collectRows[GdeltNamedCount](q, ctx)
 }
 
 func (b *BQClient) GetGdeltPersons(ctx context.Context, start, end civil.Date) ([]GdeltNamedCount, error) {
 	q := b.client.Query(gdeltEntityQuery("V2Persons", 20))
 	q.Parameters = gdeltDateParams(start, end)
+	q.MaxBytesBilled = gdeltGkgMaxBytesBilled
 	return collectRows[GdeltNamedCount](q, ctx)
 }
 
@@ -448,6 +722,7 @@ func (b *BQClient) GetGdeltImpactDaily(ctx context.Context, start, end civil.Dat
 		GROUP BY 1, 2
 		ORDER BY 1, 2`)
 	q.Parameters = gdeltDateParams(start, end)
+	q.MaxBytesBilled = gdeltGkgMaxBytesBilled
 	return collectRows[GdeltImpactDaily](q, ctx)
 }
 
@@ -477,6 +752,7 @@ func (b *BQClient) GetGdeltImpactCountries(ctx context.Context, start, end civil
 		ORDER BY article_count DESC
 		LIMIT 20`)
 	q.Parameters = gdeltDateParams(start, end)
+	q.MaxBytesBilled = gdeltGkgMaxBytesBilled
 	return collectRows[GdeltImpactCountry](q, ctx)
 }
 
@@ -518,7 +794,97 @@ func (b *BQClient) GetGdeltImpactIncidents(ctx context.Context, start, end civil
 		ORDER BY article_count DESC
 		LIMIT 30`)
 	q.Parameters = gdeltDateParams(start, end)
+	q.MaxBytesBilled = gdeltGkgMaxBytesBilled
 	return collectRows[GdeltImpactIncident](q, ctx)
+}
+
+type gdeltImpactConsolidatedRow struct {
+	Daily     []GdeltImpactDaily    `bigquery:"daily"`
+	Countries []GdeltImpactCountry  `bigquery:"countries"`
+	Incidents []GdeltImpactIncident `bigquery:"incidents"`
+}
+
+// GetGdeltImpactConsolidated scans gkg_partitioned.V2Counts once to compute
+// daily impact counts, top-20 affected FIPS countries, and top-30 incidents.
+func (b *BQClient) GetGdeltImpactConsolidated(ctx context.Context, start, end civil.Date) ([]GdeltImpactDaily, []GdeltImpactCountry, []GdeltImpactIncident, error) {
+	q := b.client.Query(`
+		WITH docs AS (
+			SELECT
+				_PARTITIONDATE AS d,
+				DocumentIdentifier AS url,
+				V2Counts
+			FROM ` + gdeltGkgTable + `
+			WHERE _PARTITIONDATE BETWEEN @start_date AND @end_date
+				AND V2Counts IS NOT NULL
+		)
+		SELECT
+			ARRAY(
+				SELECT AS STRUCT
+					FORMAT_DATE('%Y-%m-%d', d) AS ingest_date,
+					t AS count_type,
+					COUNT(1) AS article_count
+				FROM (
+					SELECT d, ARRAY(
+						SELECT DISTINCT SPLIT(entry, '#')[SAFE_OFFSET(0)]
+						FROM UNNEST(SPLIT(V2Counts, ';')) AS entry
+						WHERE entry != ''
+					) AS types
+					FROM docs
+				), UNNEST(types) AS t
+				WHERE t IN ` + gdeltImpactTypes + `
+				GROUP BY 1, 2
+				ORDER BY 1, 2
+			) AS daily,
+			ARRAY(
+				SELECT AS STRUCT
+					c AS fips_country,
+					COUNT(1) AS article_count
+				FROM (
+					SELECT ARRAY(
+						SELECT DISTINCT SPLIT(entry, '#')[SAFE_OFFSET(5)]
+						FROM UNNEST(SPLIT(V2Counts, ';')) AS entry
+						WHERE entry != ''
+							AND SPLIT(entry, '#')[SAFE_OFFSET(0)] IN ` + gdeltImpactTypes + `
+					) AS countries
+					FROM docs
+				), UNNEST(countries) AS c
+				WHERE c IS NOT NULL AND c != ''
+				GROUP BY 1
+				ORDER BY article_count DESC
+				LIMIT 20
+			) AS countries,
+			ARRAY(
+				SELECT AS STRUCT
+					count_type,
+					num,
+					COALESCE(NULLIF(location, ''), 'Unknown location') AS location,
+					COUNT(DISTINCT url) AS article_count,
+					ANY_VALUE(url) AS sample_url
+				FROM (
+					SELECT
+						SPLIT(entry, '#')[SAFE_OFFSET(0)] AS count_type,
+						SAFE_CAST(SPLIT(entry, '#')[SAFE_OFFSET(1)] AS INT64) AS num,
+						SPLIT(entry, '#')[SAFE_OFFSET(4)] AS location,
+						url
+					FROM docs, UNNEST(SPLIT(V2Counts, ';')) AS entry
+					WHERE entry != ''
+				)
+				WHERE count_type IN ('KILL', 'WOUND', 'KIDNAP', 'DISPLACED')
+					AND num >= 1 AND num < 10000000
+				GROUP BY 1, 2, 3
+				ORDER BY article_count DESC
+				LIMIT 30
+			) AS incidents`)
+	q.Parameters = gdeltDateParams(start, end)
+	q.MaxBytesBilled = gdeltGkgMaxBytesBilled
+	rows, err := collectRows[gdeltImpactConsolidatedRow](q, ctx)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if len(rows) == 0 {
+		return nil, nil, nil, nil
+	}
+	return rows[0].Daily, rows[0].Countries, rows[0].Incidents, nil
 }
 
 // --- /gkg 3.2c: top media sources with average tone ---
@@ -543,7 +909,79 @@ func (b *BQClient) GetGdeltMediaSources(ctx context.Context, start, end civil.Da
 		ORDER BY article_count DESC
 		LIMIT 10`)
 	q.Parameters = gdeltDateParams(start, end)
+	q.MaxBytesBilled = gdeltGkgMaxBytesBilled
 	return collectRows[GdeltMediaSource](q, ctx)
+}
+
+type gdeltGkgConsolidatedRow struct {
+	Themes  []GdeltNamedCount  `bigquery:"themes"`
+	Persons []GdeltNamedCount  `bigquery:"persons"`
+	Sources []GdeltMediaSource `bigquery:"sources"`
+}
+
+// GetGdeltGkgConsolidated scans gkg_partitioned once to return top 50 themes,
+// top 20 persons, and top 10 media sources.
+func (b *BQClient) GetGdeltGkgConsolidated(ctx context.Context, start, end civil.Date) ([]GdeltNamedCount, []GdeltNamedCount, []GdeltMediaSource, error) {
+	q := b.client.Query(`
+		WITH docs AS (
+			SELECT V2Themes, V2Persons, SourceCommonName, V2Tone
+			FROM ` + gdeltGkgTable + `
+			WHERE _PARTITIONDATE BETWEEN @start_date AND @end_date
+		)
+		SELECT
+			ARRAY(
+				SELECT AS STRUCT entity AS name, COUNT(*) AS article_count
+				FROM (
+					SELECT ARRAY(
+						SELECT DISTINCT SPLIT(entry, ',')[SAFE_OFFSET(0)]
+						FROM UNNEST(SPLIT(V2Themes, ';')) AS entry
+						WHERE entry != ''
+					) AS entities
+					FROM docs
+					WHERE V2Themes IS NOT NULL
+				), UNNEST(entities) AS entity
+				WHERE LENGTH(entity) > 2
+				GROUP BY name
+				ORDER BY article_count DESC
+				LIMIT 50
+			) AS themes,
+			ARRAY(
+				SELECT AS STRUCT entity AS name, COUNT(*) AS article_count
+				FROM (
+					SELECT ARRAY(
+						SELECT DISTINCT SPLIT(entry, ',')[SAFE_OFFSET(0)]
+						FROM UNNEST(SPLIT(V2Persons, ';')) AS entry
+						WHERE entry != ''
+					) AS entities
+					FROM docs
+					WHERE V2Persons IS NOT NULL
+				), UNNEST(entities) AS entity
+				WHERE LENGTH(entity) > 2
+				GROUP BY name
+				ORDER BY article_count DESC
+				LIMIT 20
+			) AS persons,
+			ARRAY(
+				SELECT AS STRUCT
+					SourceCommonName AS media_source,
+					COUNT(1) AS article_count,
+					ROUND(COALESCE(AVG(SAFE_CAST(SPLIT(V2Tone, ',')[SAFE_OFFSET(0)] AS FLOAT64)), 0), 2) AS avg_tone
+				FROM docs
+				WHERE SourceCommonName IS NOT NULL
+				GROUP BY media_source
+				ORDER BY article_count DESC
+				LIMIT 10
+			) AS sources`)
+	q.Parameters = gdeltDateParams(start, end)
+	q.MaxBytesBilled = gdeltGkgMaxBytesBilled
+	rows, err := collectRows[gdeltGkgConsolidatedRow](q, ctx)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if len(rows) == 0 {
+		return nil, nil, nil, nil
+	}
+	return rows[0].Themes, rows[0].Persons, rows[0].Sources, nil
 }
 
 // --- /industry: theme-driven industry pulse ---
@@ -620,6 +1058,7 @@ func (b *BQClient) GetGdeltIndustryDaily(ctx context.Context, start, end civil.D
 		GROUP BY 1
 		ORDER BY 1`)
 	q.Parameters = gdeltIndustryParams(start, end, themeRe)
+	q.MaxBytesBilled = gdeltGkgMaxBytesBilled
 	return collectRows[GdeltIndustryDaily](q, ctx)
 }
 
@@ -656,6 +1095,7 @@ func (b *BQClient) GetGdeltIndustryOrgs(ctx context.Context, start, end civil.Da
 		ORDER BY article_count DESC
 		LIMIT 25`)
 	q.Parameters = gdeltIndustryParams(start, end, themeRe)
+	q.MaxBytesBilled = gdeltGkgMaxBytesBilled
 	return collectRows[GdeltIndustryOrg](q, ctx)
 }
 
@@ -677,6 +1117,7 @@ func (b *BQClient) GetGdeltIndustrySubtopics(ctx context.Context, start, end civ
 		ORDER BY article_count DESC
 		LIMIT 20`)
 	q.Parameters = gdeltIndustryParams(start, end, themeRe)
+	q.MaxBytesBilled = gdeltGkgMaxBytesBilled
 	return collectRows[GdeltNamedCount](q, ctx)
 }
 
@@ -694,6 +1135,7 @@ func (b *BQClient) GetGdeltIndustryOutlets(ctx context.Context, start, end civil
 		ORDER BY article_count DESC
 		LIMIT 15`)
 	q.Parameters = gdeltIndustryParams(start, end, themeRe)
+	q.MaxBytesBilled = gdeltGkgMaxBytesBilled
 	return collectRows[GdeltMediaSource](q, ctx)
 }
 
@@ -721,5 +1163,107 @@ func (b *BQClient) GetGdeltIndustryArticles(ctx context.Context, start, end civi
 		ORDER BY tone ASC
 		LIMIT 25`)
 	q.Parameters = gdeltIndustryParams(start, end, themeRe)
+	q.MaxBytesBilled = gdeltGkgMaxBytesBilled
 	return collectRows[GdeltIndustryArticle](q, ctx)
 }
+
+type gdeltIndustryConsolidatedRow struct {
+	Daily     []GdeltIndustryDaily   `bigquery:"daily"`
+	Orgs      []GdeltIndustryOrg     `bigquery:"orgs"`
+	Subtopics []GdeltNamedCount      `bigquery:"subtopics"`
+	Outlets   []GdeltMediaSource     `bigquery:"outlets"`
+	Articles  []GdeltIndustryArticle `bigquery:"articles"`
+}
+
+// GetGdeltIndustryConsolidated scans gkg_partitioned once for an industry
+// vertical, computing daily pulse, top 25 organizations, top 20 subtopics,
+// top 15 outlets, and 25 most-negative articles in a single job (~77% less
+// bytes scanned than 5 separate jobs).
+func (b *BQClient) GetGdeltIndustryConsolidated(ctx context.Context, start, end civil.Date, themeRe string) ([]GdeltIndustryDaily, []GdeltIndustryOrg, []GdeltNamedCount, []GdeltMediaSource, []GdeltIndustryArticle, error) {
+	q := b.client.Query(`
+		WITH docs AS (
+			SELECT
+				_PARTITIONDATE AS d,
+				DocumentIdentifier AS url,
+				SourceCommonName AS src,
+				SAFE_CAST(SPLIT(V2Tone, ',')[SAFE_OFFSET(0)] AS FLOAT64) AS tone,
+				V2Themes AS themes,
+				V2Organizations AS orgs
+			FROM ` + gdeltGkgTable + gdeltIndustryFilter + `
+		)
+		SELECT
+			ARRAY(
+				SELECT AS STRUCT
+					FORMAT_DATE('%Y-%m-%d', d) AS ingest_date,
+					COUNT(1) AS article_count,
+					ROUND(COALESCE(AVG(tone), 0), 2) AS avg_tone
+				FROM docs
+				GROUP BY d
+				ORDER BY d
+			) AS daily,
+			ARRAY(
+				SELECT AS STRUCT
+					org AS name,
+					COUNT(1) AS article_count,
+					ROUND(COALESCE(AVG(tone), 0), 2) AS avg_tone
+				FROM docs,
+					UNNEST(ARRAY(
+						SELECT DISTINCT SPLIT(o, ',')[SAFE_OFFSET(0)]
+						FROM UNNEST(SPLIT(orgs, ';')) AS o
+						WHERE o != ''
+					)) AS org
+				WHERE orgs IS NOT NULL AND LENGTH(org) > 2
+				GROUP BY org
+				ORDER BY article_count DESC
+				LIMIT 25
+			) AS orgs,
+			ARRAY(
+				SELECT AS STRUCT
+					th AS name,
+					COUNT(1) AS article_count
+				FROM docs,
+					UNNEST(ARRAY(
+						SELECT DISTINCT SPLIT(t, ',')[SAFE_OFFSET(0)]
+						FROM UNNEST(SPLIT(themes, ';')) AS t
+						WHERE t != '' AND REGEXP_CONTAINS(t, @theme_re)
+					)) AS th
+				GROUP BY th
+				ORDER BY article_count DESC
+				LIMIT 20
+			) AS subtopics,
+			ARRAY(
+				SELECT AS STRUCT
+					src AS media_source,
+					COUNT(1) AS article_count,
+					ROUND(COALESCE(AVG(tone), 0), 2) AS avg_tone
+				FROM docs
+				WHERE src IS NOT NULL
+				GROUP BY src
+				ORDER BY article_count DESC
+				LIMIT 15
+			) AS outlets,
+			ARRAY(
+				SELECT AS STRUCT
+					FORMAT_DATE('%Y-%m-%d', d) AS ingest_date,
+					url,
+					COALESCE(src, '') AS source,
+					ROUND(tone, 2) AS tone
+				FROM docs
+				WHERE url IS NOT NULL AND tone IS NOT NULL
+				QUALIFY ROW_NUMBER() OVER (PARTITION BY url ORDER BY d) = 1
+				ORDER BY tone ASC
+				LIMIT 25
+			) AS articles`)
+	q.Parameters = gdeltIndustryParams(start, end, themeRe)
+	q.MaxBytesBilled = gdeltGkgMaxBytesBilled
+	rows, err := collectRows[gdeltIndustryConsolidatedRow](q, ctx)
+	if err != nil {
+		return nil, nil, nil, nil, nil, err
+	}
+	if len(rows) == 0 {
+		return nil, nil, nil, nil, nil, nil
+	}
+	r := rows[0]
+	return r.Daily, r.Orgs, r.Subtopics, r.Outlets, r.Articles, nil
+}
+

@@ -10,7 +10,8 @@ import { fetchGdeltEvents, fetchGdeltGkg } from '../../api';
 import { MetricCard, EmptyState, ErrorBanner } from '../../dashboards/shared';
 import {
   MAX_GKG_DAYS, CHART_TOOLTIP, AXIS_LABEL, SPLIT_LINE,
-  cameoLabel, toneColor, spanOf, SourceLink, LoadingPulse,
+  cameoLabel, fipsCountryName, isTodayUTC, shortDateLabel,
+  toneColor, spanOf, SourceLink, LoadingPulse,
 } from './shared';
 
 // Labels are a frontend concern: the API returns raw GDELT codes.
@@ -21,18 +22,29 @@ const QUAD_LABELS: Record<number, string> = {
   4: 'Material Conflict',
 };
 
-export default function OverviewTab({ startDate, endDate }: { startDate: string; endDate: string }) {
+export default function OverviewTab({
+  startDate,
+  endDate,
+  active = true,
+}: {
+  startDate: string;
+  endDate: string;
+  active?: boolean;
+}) {
   const [events, setEvents] = useState<GdeltEventsData | null>(null);
   const [eventsLoading, setEventsLoading] = useState(true);
   const [eventsError, setEventsError] = useState('');
+  const [eventsLoadedKey, setEventsLoadedKey] = useState('');
 
   const [gkg, setGkg] = useState<GdeltGkgData | null>(null);
   const [gkgLoading, setGkgLoading] = useState(true);
   const [gkgError, setGkgError] = useState('');
+  const [gkgLoadedKey, setGkgLoadedKey] = useState('');
 
   const [mapReady, setMapReady] = useState(false);
 
   const gkgTooWide = spanOf(startDate, endDate) > MAX_GKG_DAYS;
+  const rangeKey = `${startDate}:${endDate}`;
 
   // ECharts 6 ships no built-in maps; the world outline is a vendored
   // Natural Earth 110m GeoJSON registered once per app lifetime.
@@ -51,25 +63,48 @@ export default function OverviewTab({ startDate, endDate }: { startDate: string;
   }, []);
 
   useEffect(() => {
+    if (!active || eventsLoadedKey === rangeKey) return;
+    const ac = new AbortController();
     setEventsLoading(true);
     setEventsError('');
-    fetchGdeltEvents(startDate, endDate)
-      .then(setEvents)
-      .catch(e => setEventsError(e.response?.data || e.message))
-      .finally(() => setEventsLoading(false));
-  }, [startDate, endDate]);
+    fetchGdeltEvents(startDate, endDate, ac.signal)
+      .then(d => {
+        if (!ac.signal.aborted) {
+          setEvents(d);
+          setEventsLoadedKey(rangeKey);
+        }
+      })
+      .catch(e => {
+        if (!ac.signal.aborted) setEventsError(e.response?.data || e.message);
+      })
+      .finally(() => {
+        if (!ac.signal.aborted) setEventsLoading(false);
+      });
+    return () => ac.abort();
+  }, [startDate, endDate, active, eventsLoadedKey, rangeKey]);
 
   // The GKG panel loads independently so heavy theme parsing never blocks
   // the event panels.
   useEffect(() => {
-    if (gkgTooWide) return;
+    if (!active || gkgTooWide || gkgLoadedKey === rangeKey) return;
+    const ac = new AbortController();
     setGkgLoading(true);
     setGkgError('');
-    fetchGdeltGkg(startDate, endDate)
-      .then(setGkg)
-      .catch(e => setGkgError(e.response?.data || e.message))
-      .finally(() => setGkgLoading(false));
-  }, [startDate, endDate, gkgTooWide]);
+    fetchGdeltGkg(startDate, endDate, ac.signal)
+      .then(d => {
+        if (!ac.signal.aborted) {
+          setGkg(d);
+          setGkgLoadedKey(rangeKey);
+        }
+      })
+      .catch(e => {
+        if (!ac.signal.aborted) setGkgError(e.response?.data || e.message);
+      })
+      .finally(() => {
+        if (!ac.signal.aborted) setGkgLoading(false);
+      });
+    return () => ac.abort();
+  }, [startDate, endDate, gkgTooWide, active, gkgLoadedKey, rangeKey]);
 
   const conflictShare = useMemo(() => {
     if (!events || events.overall.event_count === 0) return 0;
@@ -245,7 +280,7 @@ function NewsTable({ news }: { news: GdeltNews[] }) {
   return (
     <div className="rounded-2xl border border-zinc-800/50 p-6" style={{ background: '#111114' }}>
       <h3 className="text-sm font-semibold text-white mb-1">Breaking Conflict Reports</h3>
-      <p className="text-xs text-zinc-500 mb-4">Top {news.length} most-mentioned reports (one row per article)</p>
+      <p className="text-xs text-zinc-500 mb-4">Top {news.length} most-mentioned reports in initial 15-min batch (one row per article)</p>
       {news.length > 0 ? (
         <div className="max-h-[420px] overflow-y-auto">
           <table className="w-full text-xs">
@@ -255,7 +290,7 @@ function NewsTable({ news }: { news: GdeltNews[] }) {
                 <th className="py-2 pr-3 font-medium">Country</th>
                 <th className="py-2 pr-3 font-medium">Type</th>
                 <th className="py-2 pr-3 font-medium text-right">Tone</th>
-                <th className="py-2 pr-3 font-medium text-right">Mentions</th>
+                <th className="py-2 pr-3 font-medium text-right" title="Mentions in the first 15-minute batch when GDELT extracted the event">Mentions (1st batch)</th>
                 <th className="py-2 font-medium">Source</th>
               </tr>
             </thead>
@@ -263,7 +298,9 @@ function NewsTable({ news }: { news: GdeltNews[] }) {
               {news.map((n, i) => (
                 <tr key={`${n.source_url}-${i}`} className="border-t border-zinc-800/40 text-zinc-400">
                   <td className="py-2 pr-3 font-mono text-[11px] whitespace-nowrap">{n.ingest_date}</td>
-                  <td className="py-2 pr-3 font-mono text-[11px]">{n.fips_country}</td>
+                  <td className="py-2 pr-3 text-[11px]" title={n.fips_country ? `FIPS: ${n.fips_country}` : undefined}>
+                    {fipsCountryName(n.fips_country) || '—'}
+                  </td>
                   <td className="py-2 pr-3">{cameoLabel(n.event_root_code)}</td>
                   <td className="py-2 pr-3 text-right font-mono" style={{ color: toneColor(n.avg_tone) }}>
                     {n.avg_tone.toFixed(1)}
@@ -369,7 +406,7 @@ function dailyOption(daily: GdeltDaily[]) {
     grid: { left: 8, right: 8, bottom: 8, top: 30, containLabel: true },
     xAxis: {
       type: 'category',
-      data: daily.map(d => d.ingest_date.slice(5)),
+      data: daily.map(d => shortDateLabel(d.ingest_date)),
       axisLabel: { ...AXIS_LABEL, fontSize: 9 },
       axisLine: { show: false },
       axisTick: { show: false },
@@ -382,9 +419,13 @@ function dailyOption(daily: GdeltDaily[]) {
       {
         name: 'Events',
         type: 'bar',
-        data: daily.map(d => d.event_count),
+        data: daily.map(d => ({
+          value: d.event_count,
+          itemStyle: isTodayUTC(d.ingest_date)
+            ? { color: 'rgba(2,132,199,0.28)', borderColor: '#0284c7', borderType: 'dashed', borderWidth: 1, borderRadius: [3, 3, 0, 0] }
+            : { color: 'rgba(2,132,199,0.55)', borderRadius: [3, 3, 0, 0] },
+        })),
         barMaxWidth: 20,
-        itemStyle: { color: 'rgba(2,132,199,0.55)', borderRadius: [3, 3, 0, 0] },
       },
       {
         name: 'Tone',

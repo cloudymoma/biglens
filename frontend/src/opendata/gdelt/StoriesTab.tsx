@@ -22,22 +22,43 @@ function mentionsPerHour(s: GdeltStoryRow): number {
   return s.mentions / Math.max(s.span_minutes / 60, 1);
 }
 
-export default function StoriesTab({ startDate, endDate }: { startDate: string; endDate: string }) {
+export default function StoriesTab({
+  startDate,
+  endDate,
+  active = true,
+}: {
+  startDate: string;
+  endDate: string;
+  active?: boolean;
+}) {
   const [data, setData] = useState<GdeltStoriesData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [loadedKey, setLoadedKey] = useState('');
 
   const tooWide = spanOf(startDate, endDate) > MAX_STORIES_DAYS;
+  const rangeKey = `${startDate}:${endDate}`;
 
   useEffect(() => {
-    if (tooWide) return;
+    if (!active || tooWide || loadedKey === rangeKey) return;
+    const ac = new AbortController();
     setLoading(true);
     setError('');
-    fetchGdeltStories(startDate, endDate)
-      .then(setData)
-      .catch(e => setError(e.response?.data || e.message))
-      .finally(() => setLoading(false));
-  }, [startDate, endDate, tooWide]);
+    fetchGdeltStories(startDate, endDate, ac.signal)
+      .then(d => {
+        if (!ac.signal.aborted) {
+          setData(d);
+          setLoadedKey(rangeKey);
+        }
+      })
+      .catch(e => {
+        if (!ac.signal.aborted) setError(e.response?.data || e.message);
+      })
+      .finally(() => {
+        if (!ac.signal.aborted) setLoading(false);
+      });
+    return () => ac.abort();
+  }, [startDate, endDate, tooWide, active, loadedKey, rangeKey]);
 
   if (tooWide) return <RangeTooWide maxDays={MAX_STORIES_DAYS} what="Story velocity (mentions stream)" />;
   if (error) return <ErrorBanner message={error} />;
@@ -48,7 +69,7 @@ export default function StoriesTab({ startDate, endDate }: { startDate: string; 
     <div className="space-y-6">
       <Section
         title="Widest-Spreading Stories"
-        note="Top 10 by distinct outlets — spread across independent sources, not raw mention volume"
+        note="Top 10 events first reported in this window, ranked by distinct outlets — spread across independent sources, not raw mention volume"
       >
         <div className="h-[380px]">
           <ReactECharts option={spreadOption(data.stories.slice(0, 10))} style={{ height: '100%' }} notMerge />
@@ -57,7 +78,7 @@ export default function StoriesTab({ startDate, endDate }: { startDate: string; 
 
       <Section
         title="Story Board"
-        note={`Top ${data.stories.length} events by outlet spread · mentions with GDELT confidence ≥ 40`}
+        note={`Top ${data.stories.length} events first reported in this window by outlet spread · mentions with GDELT confidence ≥ 40`}
       >
         <div className="max-h-[520px] overflow-y-auto">
           <table className="w-full text-xs">
@@ -98,10 +119,11 @@ export default function StoriesTab({ startDate, endDate }: { startDate: string; 
       </Section>
 
       <p className="text-[11px] text-zinc-600">
-        Built from the GDELT mentions stream: every re-mention of an event across ~10k monitored
-        outlets. Ranking by distinct outlets favors stories independently picked up worldwide over
-        stories one syndicate repeats. Mentions/h averages over the story's observed lifetime
-        within the window, so long-running stories read slower than fresh bursts.
+        Built from the GDELT mentions stream for events first reported in the selected window:
+        every re-mention of an event across ~10k monitored outlets. Ranking by distinct outlets
+        favors stories independently picked up worldwide over stories one syndicate repeats.
+        Mentions/h averages over the story's observed lifetime within the window, so long-running
+        stories read slower than fresh bursts.
       </p>
     </div>
   );

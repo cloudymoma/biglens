@@ -20,9 +20,10 @@ import (
 )
 
 const (
-	ghcndProject       = "bigquery-public-data"
-	ghcndDataset       = "ghcn_d"
-	ghcndStationsTable = "`bigquery-public-data.ghcn_d.ghcnd_stations`"
+	ghcndProject        = "bigquery-public-data"
+	ghcndDataset        = "ghcn_d"
+	ghcndStationsTable  = "`bigquery-public-data.ghcn_d.ghcnd_stations`"
+	weatherMaxBytesBill = 4 * 1024 * 1024 * 1024 // 4 GiB
 )
 
 func ghcndTable(year int) string {
@@ -54,14 +55,23 @@ type WeatherCoverageRow struct {
 }
 
 // GetWeatherRecentCoverage returns per-day TMAX station counts for the 10
-// days up to MAX(date), newest first. In early January the current year's
-// table may not exist yet, so its presence is checked via a metadata Get
-// (free) before querying, falling back one year.
-func (b *BQClient) GetWeatherRecentCoverage(ctx context.Context) ([]WeatherCoverageRow, error) {
+// days up to MAX(date), newest first, along with the table's LastModifiedTime.
+// In early January the current year's table may not exist yet, so its presence
+// is checked via a metadata Get (free) before querying, falling back one year.
+// Because (id, date, element) is unique in GHCN-Daily, COUNTIF avoids scanning
+// the 11-char id column (~48% fewer bytes scanned).
+func (b *BQClient) GetWeatherRecentCoverage(ctx context.Context) ([]WeatherCoverageRow, time.Time, error) {
 	year := time.Now().UTC().Year()
 	tbl := b.client.DatasetInProject(ghcndProject, ghcndDataset).Table(fmt.Sprintf("ghcnd_%d", year))
-	if _, err := tbl.Metadata(ctx); err != nil {
+	md, err := tbl.Metadata(ctx)
+	if err != nil {
 		year--
+		tbl = b.client.DatasetInProject(ghcndProject, ghcndDataset).Table(fmt.Sprintf("ghcnd_%d", year))
+		md, _ = tbl.Metadata(ctx)
+	}
+	var lastMod time.Time
+	if md != nil {
+		lastMod = md.LastModifiedTime
 	}
 	// A window ending in the first days of January would under-report because
 	// it can't see into the previous year's table; acceptable for a default-
@@ -69,12 +79,14 @@ func (b *BQClient) GetWeatherRecentCoverage(ctx context.Context) ([]WeatherCover
 	q := b.client.Query(fmt.Sprintf(`
 		SELECT
 			FORMAT_DATE('%%Y-%%m-%%d', date) AS date,
-			COUNT(DISTINCT IF(element = 'TMAX' AND qflag IS NULL, id, NULL)) AS tmax_stations
+			COUNTIF(element = 'TMAX' AND qflag IS NULL) AS tmax_stations
 		FROM %s
 		WHERE date > DATE_SUB((SELECT MAX(date) FROM %s), INTERVAL 10 DAY)
 		GROUP BY date
 		ORDER BY date DESC`, ghcndTable(year), ghcndTable(year)))
-	return collectRows[WeatherCoverageRow](q, ctx)
+	q.MaxBytesBilled = weatherMaxBytesBill
+	rows, err := collectRows[WeatherCoverageRow](q, ctx)
+	return rows, lastMod, err
 }
 
 // --- /dashboard: one-day snapshot pivot (map + KPIs + leaderboards) ---
@@ -117,6 +129,7 @@ func (b *BQClient) GetWeatherSnapshot(ctx context.Context, day civil.Date) ([]We
 		GROUP BY t.id, name, state, country, latitude, longitude`,
 		ghcndTable(day.Year), ghcndStationsTable))
 	q.Parameters = []bigquery.QueryParameter{{Name: "snap_date", Value: day}}
+	q.MaxBytesBilled = weatherMaxBytesBill
 	return collectRows[WeatherStationRow](q, ctx)
 }
 
@@ -141,8 +154,8 @@ func (b *BQClient) GetWeatherDaily(ctx context.Context, start, end civil.Date) (
 			ROUND(AVG(IF(element = 'TMAX', value / 10, NULL)), 2) AS avg_tmax_c,
 			ROUND(AVG(IF(element = 'TMIN', value / 10, NULL)), 2) AS avg_tmin_c,
 			ROUND(AVG(IF(element = 'PRCP', value / 10, NULL)), 2) AS avg_prcp_mm,
-			COUNT(DISTINCT IF(element = 'TMAX', id, NULL)) AS tmax_stations,
-			COUNT(DISTINCT IF(element = 'PRCP', id, NULL)) AS prcp_stations
+			COUNTIF(element = 'TMAX') AS tmax_stations,
+			COUNTIF(element = 'PRCP') AS prcp_stations
 		FROM %s
 		WHERE date BETWEEN @start_date AND @end_date
 			AND element IN ('TMAX', 'TMIN', 'PRCP')
@@ -153,5 +166,77 @@ func (b *BQClient) GetWeatherDaily(ctx context.Context, start, end civil.Date) (
 		{Name: "start_date", Value: start},
 		{Name: "end_date", Value: end},
 	}
+	q.MaxBytesBilled = weatherMaxBytesBill
 	return collectRows[WeatherDailyRow](q, ctx)
 }
+
+type weatherDashboardBundle struct {
+	Daily    []WeatherDailyRow   `bigquery:"daily"`
+	Stations []WeatherStationRow `bigquery:"stations"`
+}
+
+// GetWeatherDashboardConsolidated scans ghcnd_YYYY once to produce both the
+// trailing daily trend and the snapshot day's station pivot (~50% fewer bytes).
+func (b *BQClient) GetWeatherDashboardConsolidated(ctx context.Context, start, snap civil.Date) ([]WeatherStationRow, []WeatherDailyRow, error) {
+	q := b.client.Query(fmt.Sprintf(`
+		WITH base AS (
+			SELECT id, date, element, value
+			FROM %s
+			WHERE date BETWEEN @start_date AND @snap_date
+				AND element IN ('TMAX', 'TMIN', 'PRCP', 'SNOW')
+				AND qflag IS NULL
+		)
+		SELECT
+			ARRAY(
+				SELECT AS STRUCT
+					FORMAT_DATE('%%Y-%%m-%%d', date) AS date,
+					ROUND(AVG(IF(element = 'TMAX', value / 10, NULL)), 2) AS avg_tmax_c,
+					ROUND(AVG(IF(element = 'TMIN', value / 10, NULL)), 2) AS avg_tmin_c,
+					ROUND(AVG(IF(element = 'PRCP', value / 10, NULL)), 2) AS avg_prcp_mm,
+					COUNTIF(element = 'TMAX') AS tmax_stations,
+					COUNTIF(element = 'PRCP') AS prcp_stations
+				FROM base
+				WHERE element IN ('TMAX', 'TMIN', 'PRCP')
+				GROUP BY date
+				ORDER BY date
+			) AS daily,
+			ARRAY(
+				SELECT AS STRUCT
+					COALESCE(s.name, t.id) AS name,
+					COALESCE(s.state, '') AS state,
+					SUBSTR(t.id, 1, 2) AS country,
+					ROUND(s.latitude, 2) AS latitude,
+					ROUND(s.longitude, 2) AS longitude,
+					ROUND(MAX(IF(t.element = 'TMAX', t.value / 10, NULL)), 1) AS tmax_c,
+					ROUND(MAX(IF(t.element = 'TMIN', t.value / 10, NULL)), 1) AS tmin_c,
+					ROUND(MAX(IF(t.element = 'PRCP', t.value / 10, NULL)), 1) AS prcp_mm,
+					MAX(IF(t.element = 'SNOW', t.value, NULL)) AS snow_mm
+				FROM base t
+				JOIN %s s ON s.id = t.id
+				WHERE t.date = @snap_date
+					AND s.latitude IS NOT NULL
+					AND s.longitude IS NOT NULL
+				GROUP BY t.id, name, state, country, latitude, longitude
+			) AS stations`, ghcndFrom(start.Year, snap.Year), ghcndStationsTable))
+	q.Parameters = []bigquery.QueryParameter{
+		{Name: "start_date", Value: start},
+		{Name: "snap_date", Value: snap},
+	}
+	q.MaxBytesBilled = weatherMaxBytesBill
+	rows, err := collectRows[weatherDashboardBundle](q, ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(rows) == 0 {
+		return []WeatherStationRow{}, []WeatherDailyRow{}, nil
+	}
+	b0 := rows[0]
+	if b0.Stations == nil {
+		b0.Stations = []WeatherStationRow{}
+	}
+	if b0.Daily == nil {
+		b0.Daily = []WeatherDailyRow{}
+	}
+	return b0.Stations, b0.Daily, nil
+}
+

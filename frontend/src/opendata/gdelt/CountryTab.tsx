@@ -5,44 +5,79 @@ import { fetchGdeltDyads, fetchGdeltCountry } from '../../api';
 import { EmptyState, ErrorBanner } from '../../dashboards/shared';
 import {
   CHART_TOOLTIP, AXIS_LABEL, SPLIT_LINE,
+  isTodayUTC, shortDateLabel,
   toneColor, goldsteinColor, Section, SourceLink, LoadingPulse,
 } from './shared';
 import { cameoFullLabel } from './cameo';
 
 // Everything on this tab is keyed on CAMEO actor country codes (USA, RUS,
 // CHN, ...): "events involving X", not "events located in X".
-export default function CountryTab({ startDate, endDate }: { startDate: string; endDate: string }) {
+export default function CountryTab({
+  startDate,
+  endDate,
+  active = true,
+}: {
+  startDate: string;
+  endDate: string;
+  active?: boolean;
+}) {
   const [dyads, setDyads] = useState<GdeltDyadsData | null>(null);
   const [dyadsLoading, setDyadsLoading] = useState(true);
   const [dyadsError, setDyadsError] = useState('');
+  const [dyadsLoadedKey, setDyadsLoadedKey] = useState('');
 
   const [country, setCountry] = useState('');
   const [detail, setDetail] = useState<GdeltCountryData | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState('');
+  const [detailLoadedKey, setDetailLoadedKey] = useState('');
+
+  const rangeKey = `${startDate}:${endDate}`;
+  const detailKey = `${startDate}:${endDate}:${country}`;
 
   useEffect(() => {
+    if (!active || dyadsLoadedKey === rangeKey) return;
+    const ac = new AbortController();
     setDyadsLoading(true);
     setDyadsError('');
-    fetchGdeltDyads(startDate, endDate)
+    fetchGdeltDyads(startDate, endDate, ac.signal)
       .then(data => {
-        setDyads(data);
-        // Default to the most active country the first time data arrives.
-        setCountry(prev => prev || data.countries[0]?.country || '');
+        if (!ac.signal.aborted) {
+          setDyads(data);
+          setDyadsLoadedKey(rangeKey);
+          // Default to the most active country the first time data arrives.
+          setCountry(prev => prev || data.countries[0]?.country || '');
+        }
       })
-      .catch(e => setDyadsError(e.response?.data || e.message))
-      .finally(() => setDyadsLoading(false));
-  }, [startDate, endDate]);
+      .catch(e => {
+        if (!ac.signal.aborted) setDyadsError(e.response?.data || e.message);
+      })
+      .finally(() => {
+        if (!ac.signal.aborted) setDyadsLoading(false);
+      });
+    return () => ac.abort();
+  }, [startDate, endDate, active, dyadsLoadedKey, rangeKey]);
 
   useEffect(() => {
-    if (!country) return;
+    if (!active || !country || detailLoadedKey === detailKey) return;
+    const ac = new AbortController();
     setDetailLoading(true);
     setDetailError('');
-    fetchGdeltCountry(startDate, endDate, country)
-      .then(setDetail)
-      .catch(e => setDetailError(e.response?.data || e.message))
-      .finally(() => setDetailLoading(false));
-  }, [startDate, endDate, country]);
+    fetchGdeltCountry(startDate, endDate, country, ac.signal)
+      .then(d => {
+        if (!ac.signal.aborted) {
+          setDetail(d);
+          setDetailLoadedKey(detailKey);
+        }
+      })
+      .catch(e => {
+        if (!ac.signal.aborted) setDetailError(e.response?.data || e.message);
+      })
+      .finally(() => {
+        if (!ac.signal.aborted) setDetailLoading(false);
+      });
+    return () => ac.abort();
+  }, [startDate, endDate, country, active, detailLoadedKey, detailKey]);
 
   if (dyadsError) return <ErrorBanner message={dyadsError} />;
   if (dyadsLoading || !dyads) return <LoadingPulse />;
@@ -167,7 +202,7 @@ export default function CountryTab({ startDate, endDate }: { startDate: string; 
             </Section>
           </div>
 
-          <Section title="Biggest Stories" note={`Top ${detail.top_events.length} most-mentioned events involving ${detail.country} (one row per article)`}>
+          <Section title="Biggest Stories" note={`Top ${detail.top_events.length} most-mentioned events in initial 15-min batch involving ${detail.country} (one row per article)`}>
             {detail.top_events.length > 0 ? (
               <div className="max-h-[440px] overflow-y-auto">
                 <table className="w-full text-xs">
@@ -177,8 +212,8 @@ export default function CountryTab({ startDate, endDate }: { startDate: string; 
                       <th className="py-2 pr-3 font-medium">Actors</th>
                       <th className="py-2 pr-3 font-medium">Event</th>
                       <th className="py-2 pr-3 font-medium text-right">Goldstein</th>
-                      <th className="py-2 pr-3 font-medium text-right">Mentions</th>
-                      <th className="py-2 pr-3 font-medium text-right">Sources</th>
+                      <th className="py-2 pr-3 font-medium text-right" title="Mentions in the first 15-minute batch when GDELT extracted the event">Mentions (1st batch)</th>
+                      <th className="py-2 pr-3 font-medium text-right" title="Sources in the first 15-minute batch when GDELT extracted the event">Sources (1st batch)</th>
                       <th className="py-2 font-medium">Link</th>
                     </tr>
                   </thead>
@@ -237,7 +272,7 @@ function countryDailyOption(daily: GdeltCountryDaily[]) {
     grid: { left: 8, right: 8, bottom: 8, top: 30, containLabel: true },
     xAxis: {
       type: 'category',
-      data: daily.map(d => d.ingest_date.slice(5)),
+      data: daily.map(d => shortDateLabel(d.ingest_date)),
       axisLabel: { ...AXIS_LABEL, fontSize: 9 },
       axisLine: { show: false },
       axisTick: { show: false },
@@ -250,9 +285,13 @@ function countryDailyOption(daily: GdeltCountryDaily[]) {
       {
         name: 'Events',
         type: 'bar',
-        data: daily.map(d => d.event_count),
+        data: daily.map(d => ({
+          value: d.event_count,
+          itemStyle: isTodayUTC(d.ingest_date)
+            ? { color: 'rgba(2,132,199,0.28)', borderColor: '#0284c7', borderType: 'dashed', borderWidth: 1, borderRadius: [3, 3, 0, 0] }
+            : { color: 'rgba(2,132,199,0.55)', borderRadius: [3, 3, 0, 0] },
+        })),
         barMaxWidth: 20,
-        itemStyle: { color: 'rgba(2,132,199,0.55)', borderRadius: [3, 3, 0, 0] },
       },
       {
         name: 'Tone',

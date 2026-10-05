@@ -313,23 +313,26 @@ export async function fetchSemSafety(market: SemMarket, geo: string): Promise<Se
 
 // --- BigQuery Open Data: GDELT ---
 
-export async function fetchGdeltEvents(startDate: string, endDate: string): Promise<GdeltEventsData> {
+export async function fetchGdeltEvents(startDate: string, endDate: string, signal?: AbortSignal): Promise<GdeltEventsData> {
   const { data } = await axios.get('/api/opendata/gdelt/events', {
     params: { start_date: startDate, end_date: endDate },
+    signal,
   });
   return data;
 }
 
-export async function fetchGdeltGkg(startDate: string, endDate: string): Promise<GdeltGkgData> {
+export async function fetchGdeltGkg(startDate: string, endDate: string, signal?: AbortSignal): Promise<GdeltGkgData> {
   const { data } = await axios.get('/api/opendata/gdelt/gkg', {
     params: { start_date: startDate, end_date: endDate },
+    signal,
   });
   return data;
 }
 
-export async function fetchGdeltDyads(startDate: string, endDate: string): Promise<GdeltDyadsData> {
+export async function fetchGdeltDyads(startDate: string, endDate: string, signal?: AbortSignal): Promise<GdeltDyadsData> {
   const { data } = await axios.get('/api/opendata/gdelt/dyads', {
     params: { start_date: startDate, end_date: endDate },
+    signal,
   });
   return data;
 }
@@ -338,23 +341,27 @@ export async function fetchGdeltCountry(
   startDate: string,
   endDate: string,
   country: string,
+  signal?: AbortSignal,
 ): Promise<GdeltCountryData> {
   const { data } = await axios.get('/api/opendata/gdelt/country', {
     params: { start_date: startDate, end_date: endDate, country },
+    signal,
   });
   return data;
 }
 
-export async function fetchGdeltImpact(startDate: string, endDate: string): Promise<GdeltImpactData> {
+export async function fetchGdeltImpact(startDate: string, endDate: string, signal?: AbortSignal): Promise<GdeltImpactData> {
   const { data } = await axios.get('/api/opendata/gdelt/impact', {
     params: { start_date: startDate, end_date: endDate },
+    signal,
   });
   return data;
 }
 
-export async function fetchGdeltStories(startDate: string, endDate: string): Promise<GdeltStoriesData> {
+export async function fetchGdeltStories(startDate: string, endDate: string, signal?: AbortSignal): Promise<GdeltStoriesData> {
   const { data } = await axios.get('/api/opendata/gdelt/stories', {
     params: { start_date: startDate, end_date: endDate },
+    signal,
   });
   return data;
 }
@@ -363,23 +370,26 @@ export async function fetchGdeltIndustry(
   startDate: string,
   endDate: string,
   industry: GdeltIndustryKey,
+  signal?: AbortSignal,
 ): Promise<GdeltIndustryData> {
   const { data } = await axios.get('/api/opendata/gdelt/industry', {
     params: { start_date: startDate, end_date: endDate, industry },
+    signal,
   });
   return data;
 }
 
 // --- BigQuery Open Data: NOAA GHCN-Daily weather ---
 
-export async function fetchWeatherMeta(): Promise<WeatherMeta> {
-  const { data } = await axios.get('/api/opendata/weather/meta');
+export async function fetchWeatherMeta(signal?: AbortSignal): Promise<WeatherMeta> {
+  const { data } = await axios.get('/api/opendata/weather/meta', { signal });
   return data;
 }
 
-export async function fetchWeatherDashboard(date: string, days: number): Promise<WeatherDashboardData> {
+export async function fetchWeatherDashboard(date: string, days: number, signal?: AbortSignal): Promise<WeatherDashboardData> {
   const { data } = await axios.get('/api/opendata/weather/dashboard', {
     params: { date, days: String(days) },
+    signal,
   });
   return data;
 }

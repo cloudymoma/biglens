@@ -10,6 +10,7 @@ package main
 //	GET /api/opendata/gdelt/industry?...&industry=finance        (Industry Pulse)
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"net/http"
@@ -19,7 +20,6 @@ import (
 	"time"
 
 	"cloud.google.com/go/civil"
-	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -31,11 +31,32 @@ const (
 	// Story velocity is a short-window concept; the mentions stream is also
 	// ~3x the events table per day.
 	maxGdeltStoriesDays = 14
+
+	gdeltQueryTimeout  = 2 * time.Minute
+	gdeltHistoricalTTL = 24 * time.Hour
+	gdeltLiveTTL       = 10 * time.Minute
 )
 
 // gdeltFlight collapses concurrent identical queries the instant a cache
 // entry expires, so one BigQuery round-trip serves all waiters.
 var gdeltFlight singleflight.Group
+
+// gdeltCacheTTL caches completed historical UTC windows for 24h (past
+// _PARTITIONDATE partitions are immutable) while keeping windows ending today
+// at 10m so 15-minute GDELT updates stay fresh.
+func gdeltCacheTTL(end civil.Date) time.Duration {
+	if end.Before(civil.DateOf(time.Now().UTC())) {
+		return gdeltHistoricalTTL
+	}
+	return gdeltLiveTTL
+}
+
+// gdeltDetachedCtx detaches the singleflight work from the first caller's
+// request cancellation so a single aborted tab switch does not cancel a paid
+// BigQuery scan for other waiters or skip populating the cache.
+func gdeltDetachedCtx(r *http.Request) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(r.Context()), gdeltQueryTimeout)
+}
 
 // parseGdeltRange validates start_date/end_date. _PARTITIONDATE is a UTC
 // date, so "today" is evaluated in UTC.
@@ -110,47 +131,26 @@ func (h *APIHandler) GdeltEvents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	v, err, _ := gdeltFlight.Do(key, func() (any, error) {
-		data := GdeltEventsData{
-			Hotspots:     []GdeltHotspot{},
-			ConflictNews: []GdeltNews{},
-		}
-		var summary []GdeltSummaryRow
+		ctx, cancel := gdeltDetachedCtx(r)
+		defer cancel()
 
-		g, ctx := errgroup.WithContext(r.Context())
-		g.Go(func() error {
-			rows, err := h.bq.GetGdeltSummary(ctx, start, end)
-			if err != nil {
-				return err
-			}
-			summary = rows
-			return nil
-		})
-		g.Go(func() error {
-			hotspots, err := h.bq.GetGdeltHotspots(ctx, start, end)
-			if err != nil {
-				return err
-			}
-			if hotspots != nil {
-				data.Hotspots = hotspots
-			}
-			return nil
-		})
-		g.Go(func() error {
-			news, err := h.bq.GetGdeltConflictNews(ctx, start, end)
-			if err != nil {
-				return err
-			}
-			if news != nil {
-				data.ConflictNews = news
-			}
-			return nil
-		})
-		if err := g.Wait(); err != nil {
+		summary, hotspots, news, err := h.bq.GetGdeltEventsConsolidated(ctx, start, end)
+		if err != nil {
 			return nil, err
+		}
+		data := GdeltEventsData{
+			Hotspots:     hotspots,
+			ConflictNews: news,
+		}
+		if data.Hotspots == nil {
+			data.Hotspots = []GdeltHotspot{}
+		}
+		if data.ConflictNews == nil {
+			data.ConflictNews = []GdeltNews{}
 		}
 
 		data.Overall, data.Daily, data.QuadClass, data.EventTypes = rollupGdeltSummary(summary)
-		h.cache.Set(key, &data)
+		h.cache.SetWithTTL(key, &data, gdeltCacheTTL(end))
 		return &data, nil
 	})
 	if err != nil {
@@ -262,37 +262,25 @@ func (h *APIHandler) GdeltDyads(w http.ResponseWriter, r *http.Request) {
 	}
 
 	v, err, _ := gdeltFlight.Do(key, func() (any, error) {
-		data := GdeltDyadsData{
-			Dyads:     []GdeltDyadRow{},
-			Countries: []GdeltCountryCount{},
-		}
+		ctx, cancel := gdeltDetachedCtx(r)
+		defer cancel()
 
-		g, ctx := errgroup.WithContext(r.Context())
-		g.Go(func() error {
-			dyads, err := h.bq.GetGdeltDyads(ctx, start, end)
-			if err != nil {
-				return err
-			}
-			if dyads != nil {
-				data.Dyads = dyads
-			}
-			return nil
-		})
-		g.Go(func() error {
-			countries, err := h.bq.GetGdeltActorCountries(ctx, start, end)
-			if err != nil {
-				return err
-			}
-			if countries != nil {
-				data.Countries = countries
-			}
-			return nil
-		})
-		if err := g.Wait(); err != nil {
+		dyads, countries, err := h.bq.GetGdeltDyadsConsolidated(ctx, start, end)
+		if err != nil {
 			return nil, err
 		}
+		data := GdeltDyadsData{
+			Dyads:     dyads,
+			Countries: countries,
+		}
+		if data.Dyads == nil {
+			data.Dyads = []GdeltDyadRow{}
+		}
+		if data.Countries == nil {
+			data.Countries = []GdeltCountryCount{}
+		}
 
-		h.cache.Set(key, &data)
+		h.cache.SetWithTTL(key, &data, gdeltCacheTTL(end))
 		return &data, nil
 	})
 	if err != nil {
@@ -336,60 +324,34 @@ func (h *APIHandler) GdeltCountry(w http.ResponseWriter, r *http.Request) {
 	}
 
 	v, err, _ := gdeltFlight.Do(key, func() (any, error) {
-		data := GdeltCountryData{
-			Country:    country,
-			Daily:      []GdeltCountryDaily{},
-			EventTypes: []GdeltCountryEventType{},
-			Partners:   []GdeltPartnerRow{},
-			TopEvents:  []GdeltCountryEvent{},
-		}
+		ctx, cancel := gdeltDetachedCtx(r)
+		defer cancel()
 
-		g, ctx := errgroup.WithContext(r.Context())
-		g.Go(func() error {
-			daily, err := h.bq.GetGdeltCountryDaily(ctx, start, end, country)
-			if err != nil {
-				return err
-			}
-			if daily != nil {
-				data.Daily = daily
-			}
-			return nil
-		})
-		g.Go(func() error {
-			types, err := h.bq.GetGdeltCountryEventTypes(ctx, start, end, country)
-			if err != nil {
-				return err
-			}
-			if types != nil {
-				data.EventTypes = types
-			}
-			return nil
-		})
-		g.Go(func() error {
-			partners, err := h.bq.GetGdeltCountryPartners(ctx, start, end, country)
-			if err != nil {
-				return err
-			}
-			if partners != nil {
-				data.Partners = partners
-			}
-			return nil
-		})
-		g.Go(func() error {
-			events, err := h.bq.GetGdeltCountryEvents(ctx, start, end, country)
-			if err != nil {
-				return err
-			}
-			if events != nil {
-				data.TopEvents = events
-			}
-			return nil
-		})
-		if err := g.Wait(); err != nil {
+		daily, types, partners, events, err := h.bq.GetGdeltCountryConsolidated(ctx, start, end, country)
+		if err != nil {
 			return nil, err
 		}
+		data := GdeltCountryData{
+			Country:    country,
+			Daily:      daily,
+			EventTypes: types,
+			Partners:   partners,
+			TopEvents:  events,
+		}
+		if data.Daily == nil {
+			data.Daily = []GdeltCountryDaily{}
+		}
+		if data.EventTypes == nil {
+			data.EventTypes = []GdeltCountryEventType{}
+		}
+		if data.Partners == nil {
+			data.Partners = []GdeltPartnerRow{}
+		}
+		if data.TopEvents == nil {
+			data.TopEvents = []GdeltCountryEvent{}
+		}
 
-		h.cache.Set(key, &data)
+		h.cache.SetWithTTL(key, &data, gdeltCacheTTL(end))
 		return &data, nil
 	})
 	if err != nil {
@@ -421,48 +383,29 @@ func (h *APIHandler) GdeltImpact(w http.ResponseWriter, r *http.Request) {
 	}
 
 	v, err, _ := gdeltFlight.Do(key, func() (any, error) {
-		data := GdeltImpactData{
-			Daily:     []GdeltImpactDaily{},
-			Countries: []GdeltImpactCountry{},
-			Incidents: []GdeltImpactIncident{},
-		}
+		ctx, cancel := gdeltDetachedCtx(r)
+		defer cancel()
 
-		g, ctx := errgroup.WithContext(r.Context())
-		g.Go(func() error {
-			daily, err := h.bq.GetGdeltImpactDaily(ctx, start, end)
-			if err != nil {
-				return err
-			}
-			if daily != nil {
-				data.Daily = daily
-			}
-			return nil
-		})
-		g.Go(func() error {
-			countries, err := h.bq.GetGdeltImpactCountries(ctx, start, end)
-			if err != nil {
-				return err
-			}
-			if countries != nil {
-				data.Countries = countries
-			}
-			return nil
-		})
-		g.Go(func() error {
-			incidents, err := h.bq.GetGdeltImpactIncidents(ctx, start, end)
-			if err != nil {
-				return err
-			}
-			if incidents != nil {
-				data.Incidents = incidents
-			}
-			return nil
-		})
-		if err := g.Wait(); err != nil {
+		daily, countries, incidents, err := h.bq.GetGdeltImpactConsolidated(ctx, start, end)
+		if err != nil {
 			return nil, err
 		}
+		data := GdeltImpactData{
+			Daily:     daily,
+			Countries: countries,
+			Incidents: incidents,
+		}
+		if data.Daily == nil {
+			data.Daily = []GdeltImpactDaily{}
+		}
+		if data.Countries == nil {
+			data.Countries = []GdeltImpactCountry{}
+		}
+		if data.Incidents == nil {
+			data.Incidents = []GdeltImpactIncident{}
+		}
 
-		h.cache.Set(key, &data)
+		h.cache.SetWithTTL(key, &data, gdeltCacheTTL(end))
 		return &data, nil
 	})
 	if err != nil {
@@ -492,15 +435,18 @@ func (h *APIHandler) GdeltStories(w http.ResponseWriter, r *http.Request) {
 	}
 
 	v, err, _ := gdeltFlight.Do(key, func() (any, error) {
+		ctx, cancel := gdeltDetachedCtx(r)
+		defer cancel()
+
 		data := GdeltStoriesData{Stories: []GdeltStoryRow{}}
-		stories, err := h.bq.GetGdeltStories(r.Context(), start, end)
+		stories, err := h.bq.GetGdeltStories(ctx, start, end)
 		if err != nil {
 			return nil, err
 		}
 		if stories != nil {
 			data.Stories = stories
 		}
-		h.cache.Set(key, &data)
+		h.cache.SetWithTTL(key, &data, gdeltCacheTTL(end))
 		return &data, nil
 	})
 	if err != nil {
@@ -532,48 +478,29 @@ func (h *APIHandler) GdeltGkg(w http.ResponseWriter, r *http.Request) {
 	}
 
 	v, err, _ := gdeltFlight.Do(key, func() (any, error) {
-		data := GdeltGkgData{
-			Themes:  []GdeltNamedCount{},
-			Persons: []GdeltNamedCount{},
-			Sources: []GdeltMediaSource{},
-		}
+		ctx, cancel := gdeltDetachedCtx(r)
+		defer cancel()
 
-		g, ctx := errgroup.WithContext(r.Context())
-		g.Go(func() error {
-			themes, err := h.bq.GetGdeltThemes(ctx, start, end)
-			if err != nil {
-				return err
-			}
-			if themes != nil {
-				data.Themes = themes
-			}
-			return nil
-		})
-		g.Go(func() error {
-			persons, err := h.bq.GetGdeltPersons(ctx, start, end)
-			if err != nil {
-				return err
-			}
-			if persons != nil {
-				data.Persons = persons
-			}
-			return nil
-		})
-		g.Go(func() error {
-			sources, err := h.bq.GetGdeltMediaSources(ctx, start, end)
-			if err != nil {
-				return err
-			}
-			if sources != nil {
-				data.Sources = sources
-			}
-			return nil
-		})
-		if err := g.Wait(); err != nil {
+		themes, persons, sources, err := h.bq.GetGdeltGkgConsolidated(ctx, start, end)
+		if err != nil {
 			return nil, err
 		}
+		data := GdeltGkgData{
+			Themes:  themes,
+			Persons: persons,
+			Sources: sources,
+		}
+		if data.Themes == nil {
+			data.Themes = []GdeltNamedCount{}
+		}
+		if data.Persons == nil {
+			data.Persons = []GdeltNamedCount{}
+		}
+		if data.Sources == nil {
+			data.Sources = []GdeltMediaSource{}
+		}
 
-		h.cache.Set(key, &data)
+		h.cache.SetWithTTL(key, &data, gdeltCacheTTL(end))
 		return &data, nil
 	})
 	if err != nil {
@@ -615,70 +542,37 @@ func (h *APIHandler) GdeltIndustry(w http.ResponseWriter, r *http.Request) {
 	}
 
 	v, err, _ := gdeltFlight.Do(key, func() (any, error) {
-		data := GdeltIndustryData{
-			Daily:     []GdeltIndustryDaily{},
-			Orgs:      []GdeltIndustryOrg{},
-			Subtopics: []GdeltNamedCount{},
-			Outlets:   []GdeltMediaSource{},
-			Articles:  []GdeltIndustryArticle{},
-		}
+		ctx, cancel := gdeltDetachedCtx(r)
+		defer cancel()
 
-		g, ctx := errgroup.WithContext(r.Context())
-		g.Go(func() error {
-			daily, err := h.bq.GetGdeltIndustryDaily(ctx, start, end, themeRe)
-			if err != nil {
-				return err
-			}
-			if daily != nil {
-				data.Daily = daily
-			}
-			return nil
-		})
-		g.Go(func() error {
-			orgs, err := h.bq.GetGdeltIndustryOrgs(ctx, start, end, themeRe)
-			if err != nil {
-				return err
-			}
-			if orgs != nil {
-				data.Orgs = orgs
-			}
-			return nil
-		})
-		g.Go(func() error {
-			subtopics, err := h.bq.GetGdeltIndustrySubtopics(ctx, start, end, themeRe)
-			if err != nil {
-				return err
-			}
-			if subtopics != nil {
-				data.Subtopics = subtopics
-			}
-			return nil
-		})
-		g.Go(func() error {
-			outlets, err := h.bq.GetGdeltIndustryOutlets(ctx, start, end, themeRe)
-			if err != nil {
-				return err
-			}
-			if outlets != nil {
-				data.Outlets = outlets
-			}
-			return nil
-		})
-		g.Go(func() error {
-			articles, err := h.bq.GetGdeltIndustryArticles(ctx, start, end, themeRe)
-			if err != nil {
-				return err
-			}
-			if articles != nil {
-				data.Articles = articles
-			}
-			return nil
-		})
-		if err := g.Wait(); err != nil {
+		daily, orgs, subtopics, outlets, articles, err := h.bq.GetGdeltIndustryConsolidated(ctx, start, end, themeRe)
+		if err != nil {
 			return nil, err
 		}
+		data := GdeltIndustryData{
+			Daily:     daily,
+			Orgs:      orgs,
+			Subtopics: subtopics,
+			Outlets:   outlets,
+			Articles:  articles,
+		}
+		if data.Daily == nil {
+			data.Daily = []GdeltIndustryDaily{}
+		}
+		if data.Orgs == nil {
+			data.Orgs = []GdeltIndustryOrg{}
+		}
+		if data.Subtopics == nil {
+			data.Subtopics = []GdeltNamedCount{}
+		}
+		if data.Outlets == nil {
+			data.Outlets = []GdeltMediaSource{}
+		}
+		if data.Articles == nil {
+			data.Articles = []GdeltIndustryArticle{}
+		}
 
-		h.cache.Set(key, &data)
+		h.cache.SetWithTTL(key, &data, gdeltCacheTTL(end))
 		return &data, nil
 	})
 	if err != nil {
@@ -687,3 +581,4 @@ func (h *APIHandler) GdeltIndustry(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, v)
 }
+

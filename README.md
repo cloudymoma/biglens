@@ -204,26 +204,22 @@ peak week). The leaderboard therefore intentionally sorts by rank, not score.
 
 A real-time global news sentiment and geopolitical monitoring dashboard,
 powered by the [GDELT Project](https://www.gdeltproject.org/) 2.0 tables
-`gdelt-bq.gdeltv2.events_partitioned` and `gdelt-bq.gdeltv2.gkg_partitioned`.
-GDELT machine-reads news media worldwide in 100+ languages and refreshes
-every 15 minutes; BigLens queries the partitioned tables directly (no
-intermediate tables or views).
+`gdelt-bq.gdeltv2.events_partitioned`, `gdelt-bq.gdeltv2.gkg_partitioned`, and
+`gdelt-bq.gdeltv2.eventmentions_partitioned`. GDELT machine-reads news media
+worldwide in 100+ languages and refreshes every 15 minutes; BigLens queries the
+partitioned tables directly (no intermediate tables or views).
 
-| Widget | Description |
+| Tab | Widgets & Description |
 |---|---|
-| **Global Event Hotspots** | World map of the top 500 locations — bubble size = event count, color = average tone |
-| **Sentiment Gauge** | Weighted global average tone for the selected range |
-| **Volume & Tone Trend** | Daily event count (bars) vs. daily average tone (line) |
-| **Cooperation vs Conflict** | Donut of the event mix across the four QuadClasses |
-| **Risk Matrix** | Event types plotted by Goldstein score (x) vs. activity (y, log) — lower-right = high-volume destabilizing |
-| **Conflict Categories** | Event counts per CAMEO conflict root code (Protest, Coerce, Assault, Fight, …) |
-| **Breaking Conflict Reports** | Top 50 most-mentioned conflict articles, one row per source URL |
-| **Trending Themes** | Treemap of the top 50 GKG themes by article count |
-| **Most Covered People / Leading Media Sources** | Top 20 people and top 10 outlets (colored by average tone) |
+| **Overview** | **Global Event Hotspots** (top 500 city/feature cells on a 0.1° grid where `ActionGeo_Type IN (3, 4)`), **Sentiment Gauge**, **Volume & Tone Trend**, **Cooperation vs Conflict** (QuadClass donut), **Risk Matrix** (Goldstein vs. activity), **Conflict Categories** (CAMEO root codes `'10'`–`'20'`), **Breaking Conflict Reports** (top 50 deduplicated by `SOURCEURL`), plus GKG **Trending Themes** (top 50), **Most Covered People** (top 20), and **Leading Media Sources** (top 10) |
+| **Country & Relations** | **Global Tension Board** (top 30 bilateral CAMEO actor country pairs), country drill-down with **Daily Activity**, **What Is Happening** (top 15 full CAMEO codes), **Interaction Partners**, and **Biggest Stories** |
+| **Human Impact** | GKG `V2Counts` coverage across 6 categories (`KILL`, `WOUND`, `ARREST`, `KIDNAP`, `DISPLACED`, `SEIZE`): **Daily Impact Reporting**, **Most Affected Countries** (FIPS 10-4 mapped to country names), and **Most Reported Incidents** |
+| **Story Velocity** | Built from `eventmentions_partitioned` joined to `events_partitioned` (`Confidence >= 40`) for events first reported in the window: **Widest-Spreading Stories** (top 10 by distinct outlets) and **Story Board** (top 40 with mentions/hour velocity) |
+| **Industry Pulse** | Curated GKG theme verticals across 11 industries (`finance`, `retail`, `biomedical`, `education`, `technology`, `transport`, `energy`, `agriculture`, `tourism`, `defense`, `realestate`): **Daily Pulse**, **Companies in the News**, **Sub-topics**, **Top Outlets**, and **Most Negative Articles** |
 
-Filters: quick ranges (3 / 7 / 30 days) plus a custom UTC date range. The
-event panels accept up to 90 days; the theme/entity (GKG) panel up to 30 days
-and loads independently, so the fast event charts never wait for it.
+Filters: quick ranges (3 / 7 / 30 days) plus a custom UTC date range. Event
+tabs accept up to **90 days**, GKG-backed panels/tabs up to **30 days**, and
+Story Velocity up to **14 days**. Only the active tab fetches on range changes.
 
 #### Understanding the data
 
@@ -237,6 +233,15 @@ what a news-pulse dashboard should show.
   (`_PARTITIONDATE`), not the date the underlying event happened. This is the
   right axis for "what is the news covering right now", and it is also the
   table's partition key, so every query prunes to only the selected days.
+  When the range includes today (UTC), the current day's bar is marked as
+  `(partial)` since 15-minute batches are still arriving.
+- **Country codes** — `ActionGeo_CountryCode` (Overview, Human Impact) uses
+  2-letter **FIPS 10-4** codes (`GM` = Germany, `UK` = United Kingdom,
+  `CH` = China, `SZ` = Switzerland, `RS` = Russia, `JA` = Japan, `KS` = South
+  Korea, `AS` = Australia), which the UI translates to country names.
+  `Actor1CountryCode` / `Actor2CountryCode` (Country & Relations) use 3-letter
+  **CAMEO** sovereign country codes (regional/multi-country codes such as
+  `EUR`, `AFR`, `WST` are excluded).
 - **Tone** — the average emotional tone of the language in the articles
   describing an event, from GDELT's sentiment engine. The scale is
   −100…+100 but real-world values almost always fall in −10…+10; below −2
@@ -252,9 +257,11 @@ what a news-pulse dashboard should show.
   [CAMEO taxonomy](http://data.gdeltproject.org/documentation/CAMEO.Manual.1.1b3.pdf)
   (Appeal, Consult, Threaten, Protest, Fight, …). Codes '10'+ are the
   conflict side. The API returns raw codes; the UI maps them to labels.
-- **Mentions** — how many times an event was mentioned across all monitored
-  documents (`NumMentions`); the prominence signal that ranks the
-  breaking-reports table.
+- **Mentions (1st batch)** — `NumMentions` and `NumSources` on `events_partitioned`
+  record how many times an event was mentioned in the **initial 15-minute batch**
+  when the event was first extracted. For full cross-batch propagation across
+  subsequent 15-minute intervals, use the **Story Velocity** tab (which queries
+  `eventmentions_partitioned`).
 - **Themes / People (GKG)** — from the Global Knowledge Graph, which tags
   every *article* with themes (e.g. `PROTEST`, `WB_2670_JOBS`) and named
   people. Their weights are **article counts**: an article mentioning a theme
@@ -270,23 +277,25 @@ what a news-pulse dashboard should show.
   mathematically identical to averaging the raw rows. A plain mean of group
   averages would let a 10-event group distort the global tone as much as a
   100,000-event group.
-- **Hotspots** are event coordinates rounded to a 0.1° grid (~11 km) and
-  aggregated per cell; the map shows the 500 busiest cells.
+- **Hotspots** filter to city/landmark coordinates (`ActionGeo_Type IN (3, 4)`),
+  excluding country/state geographic centroids (`ActionGeo_Type IN (1, 2, 5)`)
+  and `(0, 0)`, rounded to a 0.1° grid (~11 km) and aggregated per cell.
 - **Breaking reports** are deduplicated by `SOURCEURL` (keeping each
   article's highest-mention event row), because GDELT emits several event
   rows per article and one big story would otherwise flood the top 50.
-- **Cost guardrails**: native `DATE` parameters against the partition key,
-  hard span caps (90 / 30 days), server-side `GROUP BY + LIMIT`, the shared
-  10-minute cache, and request coalescing (`singleflight`) so concurrent
-  identical requests trigger a single BigQuery job. A full cache miss on the
-  default 3-day window scans well under 1 GB — a fraction of a cent at
-  on-demand pricing.
+- **Cost guardrails**: native `DATE` parameters against `_PARTITIONTIME`,
+  single-scan consolidated `ARRAY(SELECT AS STRUCT ...)` queries per endpoint,
+  hard span caps (90 / 30 / 14 days), `MaximumBytesBilled` caps (4 GiB for
+  Events, 16 GiB for GKG), 10-minute live / 24-hour historical caching, and
+  request coalescing (`singleflight`) with detached contexts. On the default
+  3-day window, a cold cache miss on Overview scans ~48 MB for Events and
+  ~676 MB for GKG (~724 MB total, under half a cent at on-demand pricing).
 
 ### Global Weather
 
 Daily land-station observations from NOAA GHCN-Daily
-(`bigquery-public-data.ghcn_d`): ~20,000 stations worldwide, about one day
-behind real time.
+(`bigquery-public-data.ghcn_d`): ~20,000 active stations worldwide (~6,000
+reporting `TMAX` on a settled day).
 
 | Widget | Description |
 |---|---|
@@ -296,8 +305,10 @@ behind real time.
 
 Filters: snapshot date (back to 1900) and a 7–31 day trailing window. Trend
 averages are means across reporting stations — a network mean, not a
-physical global average. The default date skips the newest 1–2 days while
-GHCN backfill settles.
+physical global average. Because NOAA stations backfill over ~3–5 days and the
+BigQuery public table syncs periodically, the default date automatically selects
+the freshest day with settled coverage (≥3,000 `TMAX` stations) and shades the
+provisional 4-day tail on the trend chart.
 
 ### Crypto Pulse
 

@@ -10,12 +10,13 @@ package main
 // extra round-trip per request.
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 
 	"cloud.google.com/go/civil"
-	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -24,7 +25,8 @@ const (
 	weatherMinDays     = 7
 	// weatherMaxDays caps the trend window so a request touches at most two
 	// year tables (the GHCN-D shards are unpartitioned full-table scans).
-	weatherMaxDays = 31
+	weatherMaxDays  = 31
+	weatherCacheTTL = 24 * time.Hour
 )
 
 // weatherMinDate bounds time travel; every ghcnd_YYYY table from 1899 on
@@ -73,7 +75,10 @@ func (h *APIHandler) weatherMeta(r *http.Request) (*WeatherMetaData, error) {
 		}
 	}
 	v, err, _ := weatherFlight.Do(key, func() (any, error) {
-		coverage, err := h.bq.GetWeatherRecentCoverage(r.Context())
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 2*time.Minute)
+		defer cancel()
+
+		coverage, lastMod, err := h.bq.GetWeatherRecentCoverage(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -85,6 +90,9 @@ func (h *APIHandler) weatherMeta(r *http.Request) (*WeatherMetaData, error) {
 			DefaultDate: pickWeatherDefaultDate(coverage),
 		}
 		h.cache.Set(key, meta)
+		if !lastMod.IsZero() {
+			h.cache.SetWithTTL(fmt.Sprintf("opendata:weather:meta:%d", lastMod.Unix()), meta, weatherCacheTTL)
+		}
 		return meta, nil
 	})
 	if err != nil {
@@ -175,40 +183,52 @@ func (h *APIHandler) WeatherDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	v, err, _ := weatherFlight.Do(key, func() (any, error) {
-		data := WeatherDashboardData{
-			SnapshotDate: snap.String(),
-			Stations:     []WeatherStationRow{},
-			Daily:        []WeatherDailyRow{},
-		}
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 2*time.Minute)
+		defer cancel()
+
+		snapKey := fmt.Sprintf("opendata:weather:snap:%s", snap)
+		dailyKey := fmt.Sprintf("opendata:weather:daily:%s:%d", snap, days)
 		start := snap.AddDays(-(days - 1))
 
-		g, ctx := errgroup.WithContext(r.Context())
-		g.Go(func() error {
-			stations, err := h.bq.GetWeatherSnapshot(ctx, snap)
+		var stations []WeatherStationRow
+		var daily []WeatherDailyRow
+		cachedStations, hasStations := h.cache.Get(snapKey)
+		cachedDaily, hasDaily := h.cache.Get(dailyKey)
+
+		switch {
+		case hasStations && hasDaily:
+			stations = cachedStations.([]WeatherStationRow)
+			daily = cachedDaily.([]WeatherDailyRow)
+		case hasStations && !hasDaily:
+			// Switching 7 / 14 / 30 days on the same snapshot date: reuse cached stations.
+			stations = cachedStations.([]WeatherStationRow)
+			d, err := h.bq.GetWeatherDaily(ctx, start, snap)
 			if err != nil {
-				return err
+				return nil, err
 			}
-			if stations != nil {
-				data.Stations = stations
+			if d == nil {
+				d = []WeatherDailyRow{}
 			}
-			return nil
-		})
-		g.Go(func() error {
-			daily, err := h.bq.GetWeatherDaily(ctx, start, snap)
+			daily = d
+			h.cache.SetWithTTL(dailyKey, daily, weatherCacheTTL)
+		default:
+			// Cold cache for this snapshot date: scan ghcnd_YYYY once for both.
+			s, d, err := h.bq.GetWeatherDashboardConsolidated(ctx, start, snap)
 			if err != nil {
-				return err
+				return nil, err
 			}
-			if daily != nil {
-				data.Daily = daily
-			}
-			return nil
-		})
-		if err := g.Wait(); err != nil {
-			return nil, err
+			stations, daily = s, d
+			h.cache.SetWithTTL(snapKey, stations, weatherCacheTTL)
+			h.cache.SetWithTTL(dailyKey, daily, weatherCacheTTL)
 		}
 
-		data.Overall = rollupWeatherOverall(data.Stations)
-		h.cache.Set(key, &data)
+		data := WeatherDashboardData{
+			SnapshotDate: snap.String(),
+			Overall:      rollupWeatherOverall(stations),
+			Stations:     stations,
+			Daily:        daily,
+		}
+		h.cache.SetWithTTL(key, &data, weatherCacheTTL)
 		return &data, nil
 	})
 	if err != nil {
