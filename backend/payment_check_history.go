@@ -14,7 +14,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode"
 )
 
 const (
@@ -80,54 +79,6 @@ type blockscoutTxRow struct {
 	Input           string `json:"input"`
 	TokenSymbol     string `json:"tokenSymbol"`
 	TokenDecimal    string `json:"tokenDecimal"`
-}
-
-var mimicHomoglyphs = map[rune]rune{
-	'₮': 'T',
-	// Cyrillic lookalikes
-	'А': 'A', 'а': 'A',
-	'В': 'B', 'в': 'B',
-	'С': 'C', 'с': 'C',
-	'Е': 'E', 'е': 'E',
-	'Н': 'H', 'н': 'H',
-	'І': 'I', 'і': 'I',
-	'К': 'K', 'к': 'K',
-	'М': 'M', 'м': 'M',
-	'О': 'O', 'о': 'O',
-	'Р': 'P', 'р': 'P',
-	'Ѕ': 'S', 'ѕ': 'S',
-	'Т': 'T', 'т': 'T',
-	'У': 'Y', 'у': 'Y',
-	'Х': 'X', 'х': 'X',
-	'Ү': 'Y', 'ү': 'Y',
-	// Greek lookalikes
-	'Α': 'A', 'Β': 'B', 'Ε': 'E', 'Ζ': 'Z', 'Η': 'H',
-	'Ι': 'I', 'Κ': 'K', 'Μ': 'M', 'Ν': 'N', 'Ο': 'O',
-	'Ρ': 'P', 'Τ': 'T', 'Υ': 'Y', 'Χ': 'X',
-	// Superscript / subscript zero
-	'⁰': '0', '₀': '0',
-}
-
-// normalizeMimicSymbol normalizes an upstream token symbol to detect
-// counterfeit tokens mimicking USDT / USDC (spec §5.4, review-2 #6).
-func normalizeMimicSymbol(s string) string {
-	var b strings.Builder
-	for _, r := range s {
-		if unicode.IsSpace(r) || unicode.Is(unicode.Cf, r) {
-			continue
-		}
-		if r >= 0xFF01 && r <= 0xFF5E {
-			r -= 0xFEE0 // fullwidth ASCII to standard ASCII
-		}
-		if mapped, ok := mimicHomoglyphs[r]; ok {
-			r = mapped
-		}
-		b.WriteRune(unicode.ToUpper(r))
-	}
-	out := b.String()
-	out = strings.TrimSuffix(out, ".E")
-	out = strings.TrimSuffix(out, "0")
-	return out
 }
 
 // decodeTransferCalldata decodes ERC-20 / TRC-20 transfer(address,uint256)
