@@ -39,10 +39,22 @@ func oracleCalldata(addr string) string {
 	return riskOracleSelector + strings.Repeat("0", 24) + strings.TrimPrefix(addr, "0x")
 }
 
-// parseOracleResponse accepts exactly the two 32-byte booleans. Anything else
-// — "0x" (no contract on that chain), an error object, or a result object
-// wrapped in HTTP 200 — is an error, never "not sanctioned".
-func parseOracleResponse(body []byte) (bool, string) {
+func parseBool32Hex(res string) (bool, string) {
+	switch strings.ToLower(res) {
+	case riskOracleTrue:
+		return true, ""
+	case riskOracleFalse:
+		return false, ""
+	default:
+		return false, "bad_response"
+	}
+}
+
+// parseBool32Response accepts a JSON-RPC response carrying one of the two
+// 32-byte booleans. Anything else — "0x" (no contract or function on that
+// chain), an error object, or a result object wrapped in HTTP 200 — is an
+// error, never "false".
+func parseBool32Response(body []byte) (bool, string) {
 	var resp struct {
 		Result json.RawMessage `json:"result"`
 		Error  json.RawMessage `json:"error"`
@@ -57,14 +69,11 @@ func parseOracleResponse(body []byte) (bool, string) {
 	if err := json.Unmarshal(resp.Result, &res); err != nil {
 		return false, "bad_response"
 	}
-	switch strings.ToLower(res) {
-	case riskOracleTrue:
-		return true, ""
-	case riskOracleFalse:
-		return false, ""
-	default:
-		return false, "bad_response"
-	}
+	return parseBool32Hex(res)
+}
+
+func parseOracleResponse(body []byte) (bool, string) {
+	return parseBool32Response(body)
 }
 
 func oracleCallOnce(ctx context.Context, rpcURL, addr string) (bool, string) {
@@ -75,6 +84,7 @@ func oracleCallOnce(ctx context.Context, rpcURL, addr string) (bool, string) {
 		return false, "bad_request"
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", evmUserAgent)
 	resp, err := riskHTTPClient.Do(req)
 	if err != nil {
 		return false, upstreamErrCode(err)

@@ -15,6 +15,7 @@ func applyCryptoGasConfig(c CryptoGasConfig) {
 	mempoolRecentURL = mempool + "/api/v1/blocks"
 
 	tron := strings.TrimRight(c.TronGridBaseURL, "/")
+	tronGridBaseURL = tron
 	tronEnergyPricesURL = tron + "/wallet/getenergyprices"
 	tronBandwidthPricesURL = tron + "/wallet/getbandwidthprices"
 	tronTxByIDURL = tron + "/wallet/gettransactionbyid"
