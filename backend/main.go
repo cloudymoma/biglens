@@ -97,6 +97,9 @@ func main() {
 		"base": gasCfg.BaseRPCURLs,
 	}
 	api.risk.blockscoutURLs = cfg.PaymentCheck.BlockscoutURLs
+	if cfg.PaymentCheck.LogsMaxSpan > 0 {
+		payLogsMaxSpan = cfg.PaymentCheck.LogsMaxSpan
+	}
 	api.risk.cfg = cfg
 	api.risk.bqSrc = bqStablecoinSource{client: bq.client}
 	api.risk.invalidateCache = invalidate
@@ -189,6 +192,8 @@ func main() {
 	mux.Handle("/api/opendata/crypto/address-risk/overview", h(api.AddressRiskOverview))
 	mux.Handle("/api/opendata/crypto/address-risk/keys", logMW(addressRiskKeysHandler(api)))
 	mux.Handle("/api/opendata/crypto/address-risk/backfill", logMW(addressRiskBackfillHandler(api)))
+	mux.Handle("/api/opendata/crypto/payment-check/live", h(api.PaymentCheckLive))
+	mux.Handle("/api/opendata/crypto/payment-check/history", h(api.PaymentCheckHistory))
 	mux.Handle("/api/gcp_billing/config", h(api.BillingConfig))
 	mux.Handle("/api/gcp_billing/meta", h(api.BillingMeta))
 	mux.Handle("/api/gcp_billing/overview", h(api.BillingOverview))

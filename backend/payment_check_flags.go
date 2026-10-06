@@ -168,6 +168,9 @@ func applyFlags(txs []payTx, asset string, fam chainFamily) {
 	sort.SliceStable(order, func(a, b int) bool {
 		ia, ib := order[a], order[b]
 		if hasTime[ia] != hasTime[ib] {
+			if txs[ia].Block > 0 && txs[ib].Block > 0 && txs[ia].Block != txs[ib].Block {
+				return txs[ia].Block < txs[ib].Block
+			}
 			// Known timestamps precede fresh unsettled RPC logs without a timestamp.
 			return hasTime[ia]
 		}
