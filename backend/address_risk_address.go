@@ -17,15 +17,7 @@ var errBadAddress = errors.New("enter a 0x address (42 characters)")
 // form used for lookups and cache keys. A mixed-case address whose EIP-55
 // checksum does not match is still accepted, with checksumWarning set.
 func parseEthAddress(raw string) (string, bool, error) {
-	s := strings.TrimSpace(raw)
-	if !ethAddressRe.MatchString(s) {
-		return "", false, errBadAddress
-	}
-	body := s[2:]
-	lower := strings.ToLower(body)
-	mixed := body != lower && body != strings.ToUpper(body)
-	warn := mixed && !eip55Valid(s)
-	return "0x" + lower, warn, nil
+	return parseChainAddress("eth", raw)
 }
 
 // eip55Valid reports whether addr's letter casing matches its EIP-55 checksum:
