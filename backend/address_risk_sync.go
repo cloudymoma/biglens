@@ -53,11 +53,13 @@ func parseMEWBody(body []byte, _ string) ([]listEntry, int, error) {
 	return parseMEWDarklist(body)
 }
 
-// riskListSources: OFAC is the ETH list plus the EVM addresses OFAC tags as
-// USDT/USDC (TRON lines are dropped by the parser) — 124 addresses today.
+// riskListSources: OFAC covers ETH, TRX, XBT plus the addresses OFAC tags as
+// USDT/USDC across EVM, TRON, and Bitcoin (~900 addresses as of 2026-10-05).
 var riskListSources = []riskListSource{
 	{ID: "ofac", Parse: parseOFACBody, Files: []riskListFile{
 		{URL: "https://raw.githubusercontent.com/0xB10C/ofac-sanctioned-digital-currency-addresses/lists/sanctioned_addresses_ETH.txt"},
+		{URL: "https://raw.githubusercontent.com/0xB10C/ofac-sanctioned-digital-currency-addresses/lists/sanctioned_addresses_TRX.txt", Label: "tagged TRX"},
+		{URL: "https://raw.githubusercontent.com/0xB10C/ofac-sanctioned-digital-currency-addresses/lists/sanctioned_addresses_XBT.txt", Label: "tagged XBT"},
 		{URL: "https://raw.githubusercontent.com/0xB10C/ofac-sanctioned-digital-currency-addresses/lists/sanctioned_addresses_USDT.txt", Label: "tagged USDT"},
 		{URL: "https://raw.githubusercontent.com/0xB10C/ofac-sanctioned-digital-currency-addresses/lists/sanctioned_addresses_USDC.txt", Label: "tagged USDC"},
 	}},

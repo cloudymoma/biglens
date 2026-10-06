@@ -16,14 +16,26 @@ import (
 
 var listAddressRe = regexp.MustCompile(`^0x[0-9a-f]{40}$`)
 
-// normalizeListAddress trims, lowercases and validates one upstream value.
+// normalizeEVMListAddress trims, lowercases and validates one EVM address.
+func normalizeEVMListAddress(s string) (string, bool) {
+	a, _, err := parseChainAddress("eth", s)
+	return a, err == nil
+}
+
+// normalizeListAddress trims, normalizes, and checksum-validates one upstream
+// value across EVM (lowercase hex), TRON (exact-case base58), and Bitcoin
+// (lowercase bech32/bech32m or exact-case base58).
 func normalizeListAddress(s string) (string, bool) {
-	a := strings.ToLower(strings.TrimSpace(s))
-	return a, listAddressRe.MatchString(a)
+	for _, chain := range []string{"eth", "tron", "btc"} {
+		if a, _, err := parseChainAddress(chain, s); err == nil {
+			return a, true
+		}
+	}
+	return "", false
 }
 
 // parseOFACText parses a 0xB10C sanctioned_addresses_*.txt file: one address
-// per line. The USDT file also holds TRON addresses, which the regex drops.
+// per line (EVM, TRON, or Bitcoin).
 func parseOFACText(body []byte, label string) ([]listEntry, int) {
 	var out []listEntry
 	skipped := 0
@@ -56,7 +68,7 @@ func parseMEWDarklist(body []byte) ([]listEntry, int, error) {
 	var out []listEntry
 	skipped := 0
 	for _, r := range rows {
-		a, ok := normalizeListAddress(r.Address)
+		a, ok := normalizeEVMListAddress(r.Address)
 		if !ok {
 			skipped++
 			continue

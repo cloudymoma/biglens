@@ -235,3 +235,41 @@ func TestSyncSourceNotifiesOnlyOnReplace(t *testing.T) {
 		t.Errorf("onChange called %d times, want 1", notified)
 	}
 }
+
+func TestOFACSourceFiles(t *testing.T) {
+	var ofac *riskListSource
+	for i := range riskListSources {
+		if riskListSources[i].ID == "ofac" {
+			ofac = &riskListSources[i]
+			break
+		}
+	}
+	if ofac == nil {
+		t.Fatal("missing ofac source")
+	}
+	if len(ofac.Files) != 5 {
+		t.Fatalf("len(ofac.Files) = %d, want 5: %+v", len(ofac.Files), ofac.Files)
+	}
+	const prefix = "https://raw.githubusercontent.com/0xB10C/ofac-sanctioned-digital-currency-addresses/lists/sanctioned_addresses_"
+	wantLabels := map[string]string{
+		prefix + "ETH.txt":  "",
+		prefix + "TRX.txt":  "tagged TRX",
+		prefix + "XBT.txt":  "tagged XBT",
+		prefix + "USDT.txt": "tagged USDT",
+		prefix + "USDC.txt": "tagged USDC",
+	}
+	for _, f := range ofac.Files {
+		wantLabel, ok := wantLabels[f.URL]
+		if !ok {
+			t.Errorf("unexpected OFAC file URL %q", f.URL)
+			continue
+		}
+		if f.Label != wantLabel {
+			t.Errorf("file %q label = %q, want %q", f.URL, f.Label, wantLabel)
+		}
+		delete(wantLabels, f.URL)
+	}
+	if len(wantLabels) != 0 {
+		t.Errorf("missing OFAC files: %v", wantLabels)
+	}
+}
