@@ -217,7 +217,7 @@ func TestKeysConcurrentWithLookupsAndConfigWrites(t *testing.T) {
 			addressRiskKeysHandler(h).ServeHTTP(rec, httptest.NewRequest("DELETE", "/api/opendata/crypto/address-risk/keys?provider=etherscan", nil))
 		}()
 		go func() { defer wg.Done(); SaveConfig(h.risk.cfg) }()
-		go func() { defer wg.Done(); h.risk.lookup(t.Context(), assocTarget) }()
+		go func() { defer wg.Done(); h.risk.lookup(t.Context(), "eth", assocTarget) }()
 	}
 	wg.Wait()
 }

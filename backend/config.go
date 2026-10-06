@@ -32,11 +32,34 @@ type Config struct {
 	GCPResources struct {
 		Projects []string `yaml:"projects"`
 	} `yaml:"gcp_resources"`
-	AddressRisk AddressRiskConfig `yaml:"address_risk,omitempty"`
-	CryptoGas   CryptoGasConfig   `yaml:"crypto_gas,omitempty"`
+	AddressRisk  AddressRiskConfig  `yaml:"address_risk,omitempty"`
+	CryptoGas    CryptoGasConfig    `yaml:"crypto_gas,omitempty"`
+	PaymentCheck PaymentCheckConfig `yaml:"payment_check,omitempty"`
 
 	// path is where this config was loaded from, so SaveConfig can write back.
 	path string
+}
+
+var defaultBlockscoutURLs = map[string]string{
+	"eth":  "https://eth.blockscout.com",
+	"arb":  "https://arbitrum.blockscout.com",
+	"op":   "https://explorer.optimism.io",
+	"base": "https://base.blockscout.com",
+}
+
+type PaymentCheckConfig struct {
+	BlockscoutURLs map[string]string `yaml:"blockscout_urls,omitempty"`
+	LogsMaxSpan    uint64            `yaml:"logs_max_span,omitempty"` // 0 → 10000; Task 8
+}
+
+func (c PaymentCheckConfig) blockscoutURL(chain string) string {
+	if u := c.BlockscoutURLs[chain]; u != "" {
+		return u
+	}
+	if chain == "eth" {
+		return blockscoutBaseURL
+	}
+	return defaultBlockscoutURLs[chain]
 }
 
 // AddressRiskConfig configures the Crypto Pulse "Address Risk" tab. Every

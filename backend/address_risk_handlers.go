@@ -27,7 +27,15 @@ func (h *APIHandler) AddressRiskLookup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	addr, warn, err := parseEthAddress(r.URL.Query().Get("address"))
+	chain := r.URL.Query().Get("chain")
+	if chain == "" {
+		chain = "eth"
+	}
+	if _, ok := chains[chain]; !ok {
+		writeError(w, "unknown chain", http.StatusBadRequest)
+		return
+	}
+	addr, warn, err := parseChainAddress(chain, r.URL.Query().Get("address"))
 	if err != nil {
 		writeError(w, err.Error(), http.StatusBadRequest) // fixed message, no user input
 		return
@@ -38,7 +46,7 @@ func (h *APIHandler) AddressRiskLookup(w http.ResponseWriter, r *http.Request) {
 	if etherscanKey != "" {
 		hasKey = "1"
 	}
-	key := "address-risk:lookup:" + addr + ":" + hasKey
+	key := "address-risk:lookup:" + chain + ":" + addr + ":" + hasKey
 	var res *riskLookupResult
 	if cached, ok := h.cache.Get(key); ok {
 		res = cached.(*riskLookupResult)
@@ -46,7 +54,7 @@ func (h *APIHandler) AddressRiskLookup(w http.ResponseWriter, r *http.Request) {
 		// WithoutCancel: one disconnecting caller must not cancel every waiter
 		// sharing this flight; each source still has its own timeout.
 		v, _, _ := h.risk.flight.Do(key, func() (any, error) {
-			out := h.risk.lookupKey(context.WithoutCancel(r.Context()), addr, etherscanKey)
+			out := h.risk.lookupKey(context.WithoutCancel(r.Context()), chain, addr, etherscanKey)
 			if out.cacheable() {
 				h.cache.Set(key, out)
 			}

@@ -232,10 +232,10 @@ func goplusClues(result map[string]any, addr, asOf string) []riskClue {
 
 // checkGoPlus reports GoPlus failures carried inside HTTP 200 (code != 1) as
 // errors; a rate-limited reply must never read as "no hits".
-func checkGoPlus(ctx context.Context, addr string, now time.Time) ([]riskClue, string) {
+func checkGoPlus(ctx context.Context, chainID, addr string, now time.Time) ([]riskClue, string) {
 	ctx, cancel := context.WithTimeout(ctx, riskSourceTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, goplusBaseURL+addr+"?chain_id=1", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, goplusBaseURL+addr+"?chain_id="+chainID, nil)
 	if err != nil {
 		return nil, "bad_request"
 	}
@@ -312,13 +312,14 @@ func (t blockscoutTag) text() string {
 
 // checkBlockscoutAddress inspects Blockscout V2 address metadata for scam
 // reputation and high-risk public/metadata tags (never contract self-names).
-func checkBlockscoutAddress(ctx context.Context, addr string, now time.Time) ([]riskClue, string) {
-	if blockscoutBaseURL == "" {
+func checkBlockscoutAddress(ctx context.Context, baseURL, addr string, now time.Time) ([]riskClue, string) {
+	if baseURL == "" {
 		return nil, ""
 	}
 	ctx, cancel := context.WithTimeout(ctx, riskSourceTimeout)
 	defer cancel()
-	u := strings.TrimRight(blockscoutBaseURL, "/") + "/api/v2/addresses/" + addr
+	base := strings.TrimRight(baseURL, "/")
+	u := base + "/api/v2/addresses/" + addr
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, "bad_request"
@@ -353,7 +354,7 @@ func checkBlockscoutAddress(ctx context.Context, addr string, now time.Time) ([]
 		return nil, "bad_response"
 	}
 	asOf := fmtTime(now)
-	ref := "https://eth.blockscout.com/address/" + addr
+	ref := base + "/address/" + addr
 	var out []riskClue
 	if parsed.IsScam || strings.EqualFold(parsed.Reputation, "scam") {
 		out = append(out, riskClue{

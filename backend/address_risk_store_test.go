@@ -310,3 +310,45 @@ func TestDestroyedTotals(t *testing.T) {
 		t.Errorf("all total = %v", all)
 	}
 }
+
+func TestRiskPoolForAddressesByChain(t *testing.T) {
+	s := newTestRiskStore(t)
+	ctx := context.Background()
+	const (
+		evmOFAC   = "0x098b716b8aaf21512996dc57eb0615e2383e2f96"
+		evmMEW    = "0x2222222222222222222222222222222222222222"
+		evmFrozen = "0x3333333333333333333333333333333333333333"
+		tronOFAC  = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
+	)
+	s.replaceList(ctx, "ofac", []listEntry{{Address: evmOFAC}, {Address: tronOFAC}}, "h", time.Now())
+	s.replaceList(ctx, "mew_darklist", []listEntry{{Address: evmMEW}, {Address: tronOFAC}}, "h", time.Now())
+	s.insertStablecoinEvents(ctx, []stablecoinEvent{
+		{TxHash: "0xf", LogIndex: 1, Token: "USDT", Action: "freeze", Address: evmFrozen, BlockNumber: 1, BlockTime: "2026-09-01T00:00:00Z"},
+	}, "2026-08-27", "2026-09-25", time.Now())
+
+	addrs := []string{evmOFAC, evmMEW, evmFrozen, tronOFAC}
+
+	ethPool, err := s.riskPoolForAddresses(ctx, "eth", addrs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(ethPool[evmOFAC], ",") != "ofac" || strings.Join(ethPool[evmMEW], ",") != "mew_darklist" || strings.Join(ethPool[evmFrozen], ",") != "stablecoin" {
+		t.Errorf("eth pool = %v", ethPool)
+	}
+
+	arbPool, err := s.riskPoolForAddresses(ctx, "arb", addrs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(arbPool[evmOFAC], ",") != "ofac" || strings.Join(arbPool[evmMEW], ",") != "mew_darklist" || len(arbPool[evmFrozen]) != 0 {
+		t.Errorf("arb pool = %v (must not include Ethereum stablecoin freeze)", arbPool)
+	}
+
+	tronPool, err := s.riskPoolForAddresses(ctx, "tron", addrs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(tronPool[tronOFAC], ",") != "ofac" || len(tronPool[evmMEW]) != 0 || len(tronPool[evmFrozen]) != 0 {
+		t.Errorf("tron pool = %v (must only include ofac)", tronPool)
+	}
+}

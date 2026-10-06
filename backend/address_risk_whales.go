@@ -42,7 +42,7 @@ func (s *addressRiskService) tagWhales(ctx context.Context, d *CryptoWhalesData)
 	if len(addrs) == 0 {
 		return d
 	}
-	pool, err := s.store.riskPoolForAddresses(ctx, addrs)
+	pool, err := s.store.riskPoolForAddresses(ctx, "eth", addrs)
 	if err != nil {
 		slog.Warn("address_risk whales badges skipped", "error", err)
 		return d
@@ -68,4 +68,3 @@ func (s *addressRiskService) tagWhales(ctx context.Context, d *CryptoWhalesData)
 	}
 	return &c
 }
-

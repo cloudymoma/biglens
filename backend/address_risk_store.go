@@ -384,10 +384,10 @@ func (s *riskStore) riskPoolEntries(ctx context.Context) (riskPool, error) {
 	return pool, nil
 }
 
-// riskPoolForAddresses queries only the specified lowercase addresses against
-// list_entries and stablecoin_events using their address indexes, avoiding a
-// full-table scan on every cached ETH Whales request.
-func (s *riskStore) riskPoolForAddresses(ctx context.Context, addrs []string) (riskPool, error) {
+// riskPoolForAddresses queries only the specified addresses against
+// list_entries and (for Ethereum) stablecoin_events using their address
+// indexes, avoiding a full-table scan on every cached ETH Whales request.
+func (s *riskStore) riskPoolForAddresses(ctx context.Context, chain string, addrs []string) (riskPool, error) {
 	pool := riskPool{}
 	if len(addrs) == 0 {
 		return pool, nil
@@ -399,8 +399,12 @@ func (s *riskStore) riskPoolForAddresses(ctx context.Context, addrs []string) (r
 		args[i] = a
 	}
 	inClause := "WHERE address IN (" + strings.Join(placeholders, ",") + ")"
+	listWhere := inClause
+	if chain == "tron" || chain == "btc" {
+		listWhere += " AND source = 'ofac'"
+	}
 
-	listQuery := `SELECT address, source FROM list_entries ` + inClause + ` ORDER BY source DESC`
+	listQuery := `SELECT address, source FROM list_entries ` + listWhere + ` ORDER BY source DESC`
 	rows, err := s.db.QueryContext(ctx, listQuery, args...)
 	if err != nil {
 		return nil, fmt.Errorf("pool lists subset: %w", err)
@@ -415,6 +419,10 @@ func (s *riskStore) riskPoolForAddresses(ctx context.Context, addrs []string) (r
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
+	}
+
+	if chain != "eth" {
+		return pool, nil
 	}
 
 	stQuery := fmt.Sprintf(latestStablecoinStateSQL, inClause)
@@ -435,7 +443,6 @@ func (s *riskStore) riskPoolForAddresses(ctx context.Context, addrs []string) (r
 	}
 	return pool, stRows.Err()
 }
-
 
 type backfillMeta struct {
 	Status, SinceDate, ThroughDate             string

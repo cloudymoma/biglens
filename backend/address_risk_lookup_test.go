@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -151,7 +153,18 @@ type fakeUpstreams struct {
 func newFakeUpstreams(t *testing.T, oracleBody, goplusBody string, goplusDelay time.Duration) *fakeUpstreams {
 	t.Helper()
 	f := &fakeUpstreams{}
-	f.oracle = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(oracleBody)) }))
+	f.oracle = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Params []json.RawMessage `json:"params"`
+		}
+		b, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(b, &req)
+		if !strings.Contains(string(b), riskOracleContract) {
+			w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":"` + oracleFalse + `"}`))
+			return
+		}
+		w.Write([]byte(oracleBody))
+	}))
 	f.goplus = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.goplusCalls.Add(1)
 		time.Sleep(goplusDelay)
@@ -201,16 +214,16 @@ func TestServiceLookupRoninLikeHit(t *testing.T) {
 	store.replaceList(ctx, "ofac", []listEntry{{Address: ronin}}, "h", riskNow.Add(-time.Hour))
 	store.replaceList(ctx, "mew_darklist", []listEntry{{Address: "0x2222222222222222222222222222222222222222"}}, "h", riskNow.Add(-time.Hour))
 	markStablecoinSynced(t, store, stablecoinEvent{TxHash: "0xfreeze", LogIndex: 7, Token: "USDT", Action: "freeze",
-		Address: ronin, BlockNumber: 14580000, BlockTime: "2022-04-14T18:00:00Z"})
+		Address: ronin, BlockNumber: 14580000, BlockTime: "2026-04-14T18:00:00Z"})
 	svc := newAddressRiskService(store, []string{up.oracle.URL})
 	svc.now = func() time.Time { return riskNow }
 
-	res := svc.lookup(ctx, ronin)
+	res := svc.lookup(ctx, "eth", ronin)
 	var codes []string
 	for _, c := range res.Clues {
 		codes = append(codes, c.Severity+":"+c.Code)
 	}
-	// Order: severity, then source order ofac, mew, stablecoin, oracle, goplus.
+	// Order: severity, then source order ofac, mew, stablecoin, issuer_freeze, oracle, goplus.
 	want := "critical:ofac_listed,critical:stablecoin_frozen,critical:oracle_sanctioned,critical:goplus_flag,warning:goplus_flag"
 	if strings.Join(codes, ",") != want {
 		t.Errorf("clues = %v, want %s", codes, want)
@@ -222,10 +235,10 @@ func TestServiceLookupRoninLikeHit(t *testing.T) {
 	for _, s := range res.Sources {
 		ids = append(ids, s.ID+"="+s.Status)
 	}
-	if strings.Join(ids, ",") != "ofac=ok,mew_darklist=ok,stablecoin=ok,chainalysis_oracle=ok,goplus=ok,etherscan=not_configured" {
+	if strings.Join(ids, ",") != "ofac=ok,mew_darklist=ok,stablecoin=ok,issuer_freeze=ok,chainalysis_oracle=ok,goplus=ok,etherscan=not_configured" {
 		t.Errorf("sources = %v", ids)
 	}
-	if res.Disclaimer != riskDisclaimer || res.QueriedAt != "2026-09-26T12:00:00Z" {
+	if res.Disclaimer != riskDisclaimer || res.QueriedAt != "2026-09-26T12:00:00Z" || res.Chain != "eth" {
 		t.Errorf("result metadata = %+v", res)
 	}
 }
@@ -233,7 +246,7 @@ func TestServiceLookupRoninLikeHit(t *testing.T) {
 func TestServiceLookupStoreUnavailableStillRunsLiveSources(t *testing.T) {
 	up := newFakeUpstreams(t, `{"result":"`+oracleFalse+`"}`, `{"code":1,"result":{"sanctioned":"0"}}`, 0)
 	svc := newAddressRiskService(nil, []string{up.oracle.URL})
-	res := svc.lookup(context.Background(), ronin)
+	res := svc.lookup(context.Background(), "eth", ronin)
 	if !res.hasError() || up.goplusCalls.Load() != 1 {
 		t.Fatalf("hasError = %v, goplus calls = %d", res.hasError(), up.goplusCalls.Load())
 	}
@@ -255,12 +268,12 @@ func TestServiceLookupGoPlusTimeout(t *testing.T) {
 	markStablecoinSynced(t, store)
 	svc := newAddressRiskService(store, []string{up.oracle.URL})
 	svc.now = func() time.Time { return riskNow }
-	res := svc.lookup(context.Background(), ronin)
+	res := svc.lookup(context.Background(), "eth", ronin)
 	gp := sourceByID(t, res.Sources, "goplus")
 	if gp.ID != "goplus" || gp.Status != "error" || gp.Error != "timeout" || !res.hasError() {
 		t.Errorf("goplus source = %+v", gp)
 	}
-	if res.Summary.Text != "Nothing found in 4 sources that completed; 1 could not be fully checked (see Sources)." {
+	if res.Summary.Text != "Nothing found in 5 sources that completed; 1 could not be fully checked (see Sources)." {
 		t.Errorf("text = %q", res.Summary.Text)
 	}
 }
@@ -366,7 +379,7 @@ func TestServiceLookupPartialCoverage(t *testing.T) {
 	store.insertStablecoinEvents(ctx, nil, "2026-08-27", "2026-09-25", riskNow)
 	svc := newAddressRiskService(store, []string{up.oracle.URL})
 	svc.now = func() time.Time { return riskNow }
-	res := svc.lookup(ctx, ronin)
+	res := svc.lookup(ctx, "eth", ronin)
 	sc := sourceByID(t, res.Sources, "stablecoin")
 	if sc.Status != "partial" || sc.CoverageFrom != "2026-08-27" || sc.Cursor != "2026-09-25" || sc.SendsAddress {
 		t.Errorf("stablecoin source = %+v", sc)
@@ -433,7 +446,7 @@ func TestBlockscoutFallbackAndLiveCounterpartyScreening(t *testing.T) {
 	svc := newAddressRiskService(store, []string{oracleSrv.URL})
 	svc.now = func() time.Time { return riskNow }
 
-	res := svc.lookup(ctx, target)
+	res := svc.lookup(ctx, "eth", target)
 	es := sourceByID(t, res.Sources, "etherscan")
 	if es.Status != "ok" || len(es.Hosts) == 0 {
 		t.Fatalf("etherscan source (via Blockscout fallback) = %+v", es)
@@ -515,7 +528,7 @@ func TestCounterpartyScreenErrorsAreNotCached(t *testing.T) {
 	svc := newAddressRiskService(store, []string{oracleSrv.URL})
 	svc.now = func() time.Time { return riskNow }
 
-	res := svc.lookup(ctx, target)
+	res := svc.lookup(ctx, "eth", target)
 	if len(res.Summary.Failed) != 0 {
 		t.Fatalf("Summary.Failed = %v, want empty (the target's own sources are healthy)", res.Summary.Failed)
 	}
@@ -551,7 +564,7 @@ func TestBlockscoutAddressErrorSurfacedInSources(t *testing.T) {
 	svc := newAddressRiskService(store, []string{up.oracle.URL})
 	svc.now = func() time.Time { return riskNow }
 
-	res := svc.lookup(ctx, "0x1111111111111111111111111111111111111111")
+	res := svc.lookup(ctx, "eth", "0x1111111111111111111111111111111111111111")
 	bs := sourceByID(t, res.Sources, "blockscout")
 	if bs.Status != "error" || bs.Error != "upstream_http_500" {
 		t.Fatalf("blockscout source = %+v, want status=error error=upstream_http_500", bs)
@@ -579,7 +592,7 @@ func TestBlockscoutTagRegexRejectsFalsePositives(t *testing.T) {
 	blockscoutBaseURL = bsSrv.URL
 	defer func() { blockscoutBaseURL = origBS }()
 
-	clues, code := checkBlockscoutAddress(context.Background(), "0x40c57923924b5c5c5455c48d93317139addac8fb", riskNow)
+	clues, code := checkBlockscoutAddress(context.Background(), bsSrv.URL, "0x40c57923924b5c5c5455c48d93317139addac8fb", riskNow)
 	if code != "" || len(clues) != 0 {
 		t.Fatalf("clues = %+v, code = %q, want empty clues and empty code", clues, code)
 	}
@@ -617,12 +630,222 @@ func TestBlockscoutFallbackOnEtherscanTimeout(t *testing.T) {
 	svc := newAddressRiskService(store, []string{up.oracle.URL})
 	svc.now = func() time.Time { return riskNow }
 
-	res := svc.lookupKey(ctx, "0x1111111111111111111111111111111111111111", "slow-key")
+	res := svc.lookupKey(ctx, "eth", "0x1111111111111111111111111111111111111111", "slow-key")
 	es := sourceByID(t, res.Sources, "etherscan")
 	if es.Status != "ok" {
 		t.Fatalf("etherscan source after timeout with Blockscout fallback = %+v, want status=ok", es)
 	}
 	if len(res.Summary.Failed) != 0 {
 		t.Fatalf("Summary.Failed = %v, want empty", res.Summary.Failed)
+	}
+}
+
+func TestRiskSourcesForChain(t *testing.T) {
+	up := newFakeUpstreams(t, `{"result":"`+oracleFalse+`"}`, `{"code":1,"result":{}}`, 0)
+	bsSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/v2/addresses/") {
+			w.Write([]byte(`{"is_scam":false,"reputation":"ok"}`))
+			return
+		}
+		w.Write([]byte(`{"status":"0","message":"No transactions found","result":[]}`))
+	}))
+	defer bsSrv.Close()
+	tronSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"result":{"result":true},"constant_result":["` + oracleFalse[2:] + `"]}`))
+	}))
+	defer tronSrv.Close()
+
+	origBS, origTron := blockscoutBaseURL, tronGridBaseURL
+	blockscoutBaseURL = bsSrv.URL
+	tronGridBaseURL = tronSrv.URL
+	defer func() { blockscoutBaseURL, tronGridBaseURL = origBS, origTron }()
+
+	store := newTestRiskStore(t)
+	ctx := context.Background()
+	store.replaceList(ctx, "ofac", []listEntry{{Address: ronin}}, "h", riskNow)
+	store.replaceList(ctx, "mew_darklist", []listEntry{{Address: "0x2222222222222222222222222222222222222222"}}, "h", riskNow)
+	markStablecoinSynced(t, store)
+
+	svc := newAddressRiskService(store, []string{up.oracle.URL})
+	svc.now = func() time.Time { return riskNow }
+
+	tests := []struct {
+		chain string
+		addr  string
+		want  string
+	}{
+		{"eth", "0x1111111111111111111111111111111111111111", "ofac,mew_darklist,stablecoin,issuer_freeze,chainalysis_oracle,goplus,blockscout,etherscan"},
+		{"arb", "0x1111111111111111111111111111111111111111", "ofac,mew_darklist,issuer_freeze,chainalysis_oracle,goplus,blockscout"},
+		{"op", "0x1111111111111111111111111111111111111111", "ofac,mew_darklist,issuer_freeze,chainalysis_oracle,goplus,blockscout"},
+		{"base", "0x1111111111111111111111111111111111111111", "ofac,mew_darklist,issuer_freeze,goplus,blockscout"},
+		{"tron", "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t", "ofac,issuer_freeze,goplus"},
+		{"btc", "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", "ofac"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.chain, func(t *testing.T) {
+			if got := strings.Join(riskSourcesFor(tt.chain), ","); got != tt.want {
+				t.Fatalf("riskSourcesFor(%q) = %s, want %s", tt.chain, got, tt.want)
+			}
+			res := svc.lookup(ctx, tt.chain, tt.addr)
+			var ids []string
+			for _, s := range res.Sources {
+				ids = append(ids, s.ID)
+			}
+			if got := strings.Join(ids, ","); got != tt.want {
+				t.Errorf("lookup(%q).Sources = %s, want %s", tt.chain, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLookupGoPlusChainID(t *testing.T) {
+	up := newFakeUpstreams(t, `{"result":"`+oracleFalse+`"}`, `{"code":1,"result":{}}`, 0)
+	tronSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"result":{"result":true},"constant_result":["` + oracleFalse[2:] + `"]}`))
+	}))
+	defer tronSrv.Close()
+	origTron := tronGridBaseURL
+	tronGridBaseURL = tronSrv.URL
+	defer func() { tronGridBaseURL = origTron }()
+
+	var seenChainIDs []string
+	gpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenChainIDs = append(seenChainIDs, r.URL.Query().Get("chain_id"))
+		w.Write([]byte(`{"code":1,"result":{}}`))
+	}))
+	defer gpSrv.Close()
+	goplusBaseURL = gpSrv.URL + "/api/v1/address_security/"
+
+	store := newTestRiskStore(t)
+	ctx := context.Background()
+	store.replaceList(ctx, "ofac", []listEntry{{Address: ronin}}, "h", riskNow)
+	store.replaceList(ctx, "mew_darklist", []listEntry{{Address: "0x2222222222222222222222222222222222222222"}}, "h", riskNow)
+	svc := newAddressRiskService(store, []string{up.oracle.URL})
+	svc.now = func() time.Time { return riskNow }
+
+	svc.lookup(ctx, "arb", "0x1111111111111111111111111111111111111111")
+	svc.lookup(ctx, "tron", "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t")
+	if strings.Join(seenChainIDs, ",") != "42161,tron" {
+		t.Errorf("GoPlus chain_id values = %v, want [42161 tron]", seenChainIDs)
+	}
+}
+
+func TestLookupBaseHasNoOracle(t *testing.T) {
+	var oracleCalls atomic.Int32
+	rpcSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		if strings.Contains(string(b), riskOracleContract) {
+			oracleCalls.Add(1)
+		}
+		w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":"` + oracleFalse + `"}`))
+	}))
+	defer rpcSrv.Close()
+
+	up := newFakeUpstreams(t, `{"result":"`+oracleFalse+`"}`, `{"code":1,"result":{}}`, 0)
+	_ = up
+	store := newTestRiskStore(t)
+	ctx := context.Background()
+	store.replaceList(ctx, "ofac", []listEntry{{Address: ronin}}, "h", riskNow)
+	store.replaceList(ctx, "mew_darklist", []listEntry{{Address: "0x2222222222222222222222222222222222222222"}}, "h", riskNow)
+	svc := newAddressRiskService(store, []string{rpcSrv.URL})
+	svc.now = func() time.Time { return riskNow }
+
+	res := svc.lookup(ctx, "base", "0x1111111111111111111111111111111111111111")
+	for _, s := range res.Sources {
+		if s.ID == "chainalysis_oracle" {
+			t.Errorf("base lookup must not include chainalysis_oracle: %+v", res.Sources)
+		}
+	}
+	if oracleCalls.Load() != 0 {
+		t.Errorf("oracle contract received %d RPC calls on base, want 0", oracleCalls.Load())
+	}
+}
+
+func TestLookupTronOFACHit(t *testing.T) {
+	up := newFakeUpstreams(t, `{"result":"`+oracleFalse+`"}`, `{"code":1,"result":{}}`, 0)
+	tronSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"result":{"result":true},"constant_result":["` + oracleFalse[2:] + `"]}`))
+	}))
+	defer tronSrv.Close()
+	origTron := tronGridBaseURL
+	tronGridBaseURL = tronSrv.URL
+	defer func() { tronGridBaseURL = origTron }()
+
+	const tronOFAC = "TFf5a3s322222222222222222222222222" // valid 34-char base58? Use real TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t
+	const tronAddr = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
+	_ = tronOFAC
+	store := newTestRiskStore(t)
+	ctx := context.Background()
+	store.replaceList(ctx, "ofac", []listEntry{{Address: tronAddr, Label: "sanctioned TRON"}}, "h", riskNow)
+
+	svc := newAddressRiskService(store, []string{up.oracle.URL})
+	svc.now = func() time.Time { return riskNow }
+	res := svc.lookup(ctx, "tron", tronAddr)
+	if len(res.Clues) != 1 || res.Clues[0].Severity != sevCritical || res.Clues[0].Code != "ofac_listed" {
+		t.Fatalf("tron OFAC clues = %+v", res.Clues)
+	}
+
+	h := &APIHandler{cache: NewCache(time.Minute), risk: svc}
+	rec, _ := doLookup(t, h, "chain=eth&address="+tronAddr)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("chain=eth with TRON address: status = %d, want 400", rec.Code)
+	}
+}
+
+func TestLookupBTCOnlyOFAC(t *testing.T) {
+	var liveCalls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		liveCalls.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	origG, origBS, origTron := goplusBaseURL, blockscoutBaseURL, tronGridBaseURL
+	goplusBaseURL, blockscoutBaseURL, tronGridBaseURL = srv.URL+"/", srv.URL, srv.URL
+	defer func() { goplusBaseURL, blockscoutBaseURL, tronGridBaseURL = origG, origBS, origTron }()
+
+	const btcAddr = "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"
+	store := newTestRiskStore(t)
+	ctx := context.Background()
+	store.replaceList(ctx, "ofac", []listEntry{{Address: btcAddr, Label: "sanctioned BTC"}}, "h", riskNow)
+	store.replaceList(ctx, "mew_darklist", []listEntry{{Address: "0x2222222222222222222222222222222222222222"}}, "h", riskNow)
+
+	svc := newAddressRiskService(store, []string{srv.URL})
+	svc.now = func() time.Time { return riskNow }
+	res := svc.lookup(ctx, "btc", btcAddr)
+	if len(res.Sources) != 1 || res.Sources[0].ID != "ofac" || res.Sources[0].Status != "ok" {
+		t.Fatalf("btc sources = %+v, want only ofac=ok", res.Sources)
+	}
+	if len(res.Clues) != 1 || res.Clues[0].Code != "ofac_listed" {
+		t.Fatalf("btc clues = %+v", res.Clues)
+	}
+	if liveCalls.Load() != 0 {
+		t.Errorf("btc lookup made %d live calls, want 0", liveCalls.Load())
+	}
+}
+
+func TestLocalCheckSkipsEthFreezeOnL2(t *testing.T) {
+	up := newFakeUpstreams(t, `{"result":"`+oracleFalse+`"}`, `{"code":1,"result":{}}`, 0)
+	store := newTestRiskStore(t)
+	ctx := context.Background()
+	store.replaceList(ctx, "ofac", []listEntry{{Address: "0x1111111111111111111111111111111111111111"}}, "h", riskNow)
+	store.replaceList(ctx, "mew_darklist", []listEntry{{Address: "0x2222222222222222222222222222222222222222"}}, "h", riskNow)
+	markStablecoinSynced(t, store, stablecoinEvent{
+		TxHash: "0xethfreeze", LogIndex: 1, Token: "USDT", Action: "freeze",
+		Address: ronin, BlockNumber: 15000000, BlockTime: "2023-01-01T00:00:00Z",
+	})
+
+	svc := newAddressRiskService(store, []string{up.oracle.URL})
+	svc.now = func() time.Time { return riskNow }
+
+	res := svc.lookup(ctx, "arb", ronin)
+	for _, s := range res.Sources {
+		if s.ID == "stablecoin" {
+			t.Errorf("arb lookup must not include local Ethereum stablecoin source: %+v", res.Sources)
+		}
+	}
+	for _, c := range res.Clues {
+		if c.Source == "stablecoin" || c.Code == "stablecoin_frozen" {
+			t.Errorf("arb lookup leaked Ethereum freeze clue: %+v", c)
+		}
 	}
 }

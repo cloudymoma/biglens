@@ -49,13 +49,13 @@ func seededService(t *testing.T) (*addressRiskService, *riskStore) {
 func TestServiceLookupEtherscanNotConfigured(t *testing.T) {
 	calls := fakeEtherscan(t, nil, 0)
 	svc, _ := seededService(t)
-	res := svc.lookup(context.Background(), assocTarget)
+	res := svc.lookup(context.Background(), "eth", assocTarget)
 	es := sourceByID(t, res.Sources, "etherscan")
 	if es.Status != "not_configured" || !es.SendsAddress || es.SignupURL != "https://etherscan.io/myapikey" ||
 		es.HelpURL != "https://docs.etherscan.io/set-up-your-api-key" || calls.Load() != 0 || res.AssociationScope != nil {
 		t.Errorf("etherscan source = %+v, calls %d", es, calls.Load())
 	}
-	want := "No records in the 5 sources checked. Not checked: Etherscan association analysis (no API key)."
+	want := "No records in the 6 sources checked. Not checked: Etherscan association analysis (no API key)."
 	if res.Summary.Text != want || strings.Join(res.Summary.Skipped, ",") != "etherscan" {
 		t.Errorf("summary = %+v", res.Summary)
 	}
@@ -68,7 +68,7 @@ func TestServiceLookupAssociation(t *testing.T) {
 	}, 0)
 	svc, _ := seededService(t)
 	svc.setEtherscanKey(testEtherscanKey)
-	res := svc.lookup(context.Background(), assocTarget)
+	res := svc.lookup(context.Background(), "eth", assocTarget)
 	es := sourceByID(t, res.Sources, "etherscan")
 	if es.Status != "ok" || strings.Join(es.Hosts, ",") != strings.Join(hostsOf(etherscanBaseURL), ",") || !es.SendsAddress {
 		t.Errorf("etherscan source = %+v", es)
@@ -91,7 +91,7 @@ func TestServiceLookupEtherscanWithoutLocalPool(t *testing.T) {
 	up := newFakeUpstreams(t, `{"result":"`+oracleFalse+`"}`, `{"code":1,"result":{}}`, 0)
 	svc := newAddressRiskService(nil, []string{up.oracle.URL})
 	svc.setEtherscanKey(testEtherscanKey)
-	res := svc.lookup(context.Background(), assocTarget)
+	res := svc.lookup(context.Background(), "eth", assocTarget)
 	es := sourceByID(t, res.Sources, "etherscan")
 	if es.Status != "error" || es.Error != "local_pool_unavailable" || calls.Load() != 0 {
 		t.Errorf("etherscan source = %+v, calls %d", es, calls.Load())
@@ -102,12 +102,12 @@ func TestServiceLookupEtherscanKeyInvalid(t *testing.T) {
 	fakeEtherscan(t, map[string]string{"txlist": `{"status":"0","message":"NOTOK","result":"Invalid API Key (#err2)|x"}`}, 0)
 	svc, _ := seededService(t)
 	svc.setEtherscanKey(testEtherscanKey)
-	res := svc.lookup(context.Background(), assocTarget)
+	res := svc.lookup(context.Background(), "eth", assocTarget)
 	es := sourceByID(t, res.Sources, "etherscan")
 	if es.Status != "error" || es.Error != "key_invalid" || res.cacheable() || res.AssociationScope != nil {
 		t.Errorf("etherscan source = %+v cacheable %v", es, res.cacheable())
 	}
-	if !strings.HasPrefix(res.Summary.Text, "Nothing found in 5 sources that completed; 1 could not be fully checked") {
+	if !strings.HasPrefix(res.Summary.Text, "Nothing found in 6 sources that completed; 1 could not be fully checked") {
 		t.Errorf("text = %q", res.Summary.Text)
 	}
 }
@@ -141,7 +141,7 @@ func TestEtherscanKeyNeverLeaks(t *testing.T) {
 	if es := sourceByID(t, res.Sources, "etherscan"); es.Error != "timeout" {
 		t.Fatalf("etherscan source = %+v", es)
 	}
-	cached, _ := h.cache.Get("address-risk:lookup:" + assocTarget + ":1")
+	cached, _ := h.cache.Get("address-risk:lookup:eth:" + assocTarget + ":1")
 	cachedJSON, _ := json.Marshal(cached)
 	for name, s := range map[string]string{"response": rec.Body.String(), "cache": string(cachedJSON), "logs": logs.String()} {
 		if strings.Contains(s, testEtherscanKey) {
@@ -157,7 +157,7 @@ func TestServiceLookupEtherscanEmptyPool(t *testing.T) {
 	up := newFakeUpstreams(t, `{"result":"`+oracleFalse+`"}`, `{"code":1,"result":{}}`, 0)
 	svc := newAddressRiskService(newTestRiskStore(t), []string{up.oracle.URL})
 	svc.setEtherscanKey(testEtherscanKey)
-	res := svc.lookup(context.Background(), assocTarget)
+	res := svc.lookup(context.Background(), "eth", assocTarget)
 	es := sourceByID(t, res.Sources, "etherscan")
 	if es.Status != "error" || es.Error != "local_pool_unavailable" || calls.Load() != 0 {
 		t.Errorf("etherscan source = %+v, calls %d", es, calls.Load())
@@ -171,7 +171,7 @@ func TestServiceLookupEtherscanShowsUpstreamReason(t *testing.T) {
 	fakeEtherscan(t, map[string]string{"txlist": `{"status":"0","message":"NOTOK","result":"` + reason + `"}`}, 0)
 	svc, _ := seededService(t)
 	svc.setEtherscanKey(testEtherscanKey)
-	res := svc.lookup(context.Background(), assocTarget)
+	res := svc.lookup(context.Background(), "eth", assocTarget)
 	es := sourceByID(t, res.Sources, "etherscan")
 	if es.Status != "error" || es.Error != "bad_response" || !strings.Contains(es.LastError, "Free API access is not supported") {
 		t.Errorf("etherscan source = %+v", es)
@@ -188,7 +188,7 @@ func TestServiceLookupEtherscanCallsOverlap(t *testing.T) {
 	svc, _ := seededService(t)
 	riskSourceTimeout = time.Second // 3 × 400 ms only fits if the calls overlap
 	svc.setEtherscanKey(testEtherscanKey)
-	res := svc.lookup(context.Background(), assocTarget)
+	res := svc.lookup(context.Background(), "eth", assocTarget)
 	if es := sourceByID(t, res.Sources, "etherscan"); es.Status != "ok" {
 		t.Errorf("etherscan source = %+v", es)
 	}

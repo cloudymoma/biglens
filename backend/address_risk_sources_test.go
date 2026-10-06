@@ -190,7 +190,7 @@ func TestCheckGoPlus(t *testing.T) {
 			}))
 			defer srv.Close()
 			goplusBaseURL = srv.URL + "/api/v1/address_security/"
-			clues, code := checkGoPlus(context.Background(), "0xabc", now)
+			clues, code := checkGoPlus(context.Background(), "1", "0xabc", now)
 			if code != tt.wantCode || len(clues) != tt.wantClues {
 				t.Errorf("got (%d clues, %q), want (%d, %q)", len(clues), code, tt.wantClues, tt.wantCode)
 			}

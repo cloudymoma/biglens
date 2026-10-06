@@ -133,3 +133,37 @@ func TestAddressRiskLookupDoesNotCacheBeforeFirstSync(t *testing.T) {
 		t.Errorf("clues after first sync = %+v; the pre-sync result was served from cache", res.Clues)
 	}
 }
+
+func TestAddressRiskLookupChainParam(t *testing.T) {
+	up := newFakeUpstreams(t, `{"result":"`+oracleFalse+`"}`, `{"code":1,"result":{}}`, 0)
+	store := newTestRiskStore(t)
+	ctx := context.Background()
+	store.replaceList(ctx, "ofac", []listEntry{{Address: ronin}}, "h", riskNow)
+	store.replaceList(ctx, "mew_darklist", []listEntry{{Address: "0x2222222222222222222222222222222222222222"}}, "h", riskNow)
+	markStablecoinSynced(t, store)
+	h := riskHandler(t, store, []string{up.oracle.URL})
+
+	// Omitting chain defaults to eth.
+	rec, resEth := doLookup(t, h, "address="+ronin)
+	if rec.Code != http.StatusOK || resEth.Chain != "eth" {
+		t.Fatalf("default chain: code=%d, chain=%q", rec.Code, resEth.Chain)
+	}
+	if up.goplusCalls.Load() != 1 {
+		t.Fatalf("goplus calls after eth lookup = %d, want 1", up.goplusCalls.Load())
+	}
+
+	// Unknown chain → 400 "unknown chain".
+	recBad, _ := doLookup(t, h, "chain=solana&address="+ronin)
+	if recBad.Code != http.StatusBadRequest || !strings.Contains(recBad.Body.String(), "unknown chain") {
+		t.Errorf("unknown chain: code=%d, body=%q", recBad.Code, recBad.Body.String())
+	}
+
+	// Same EVM address on arb has its own cache key and does not reuse eth's cached result.
+	recArb, resArb := doLookup(t, h, "chain=arb&address="+ronin)
+	if recArb.Code != http.StatusOK || resArb.Chain != "arb" {
+		t.Fatalf("arb chain: code=%d, chain=%q", recArb.Code, resArb.Chain)
+	}
+	if up.goplusCalls.Load() != 2 {
+		t.Errorf("goplus calls after arb lookup = %d, want 2 (eth and arb cache keys must not collide)", up.goplusCalls.Load())
+	}
+}

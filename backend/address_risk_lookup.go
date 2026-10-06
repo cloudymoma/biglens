@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math/big"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -37,7 +38,33 @@ const (
 )
 
 // riskSourceOrder fixes source and clue order in every response.
-var riskSourceOrder = map[string]int{"ofac": 0, "mew_darklist": 1, "stablecoin": 2, "chainalysis_oracle": 3, "goplus": 4, "blockscout": 5, "etherscan": 6}
+var riskSourceOrder = map[string]int{
+	"ofac":               0,
+	"mew_darklist":       1,
+	"stablecoin":         2,
+	"issuer_freeze":      3,
+	"chainalysis_oracle": 4,
+	"goplus":             5,
+	"blockscout":         6,
+	"etherscan":          7,
+}
+
+func riskSourcesFor(chain string) []string {
+	switch chain {
+	case "eth":
+		return []string{"ofac", "mew_darklist", "stablecoin", "issuer_freeze", "chainalysis_oracle", "goplus", "blockscout", "etherscan"}
+	case "arb", "op":
+		return []string{"ofac", "mew_darklist", "issuer_freeze", "chainalysis_oracle", "goplus", "blockscout"}
+	case "base":
+		return []string{"ofac", "mew_darklist", "issuer_freeze", "goplus", "blockscout"}
+	case "tron":
+		return []string{"ofac", "issuer_freeze", "goplus"}
+	case "btc":
+		return []string{"ofac"}
+	default:
+		return nil
+	}
+}
 
 // riskSkippedNotes explains not_configured sources.
 var riskSkippedNotes = map[string]string{"etherscan": "Etherscan association analysis (no API key)"}
@@ -74,6 +101,7 @@ type riskSummary struct {
 }
 
 type riskLookupResult struct {
+	Chain           string       `json:"chain"`
 	Address         string       `json:"address"`
 	ChecksumWarning bool         `json:"checksum_warning"`
 	QueriedAt       string       `json:"queried_at"`
@@ -295,10 +323,12 @@ func hostsOf(urls ...string) []string {
 }
 
 type addressRiskService struct {
-	store   *riskStore // nil when the SQLite file could not be opened
-	rpcURLs []string
-	now     func() time.Time
-	flight  singleflight.Group
+	store          *riskStore // nil when the SQLite file could not be opened
+	rpcURLs        []string
+	chainRPCs      map[string][]string
+	blockscoutURLs map[string]string
+	now            func() time.Time
+	flight         singleflight.Group
 	// etherscanKey is the only place lookups read the key from: config
 	// writes happen under configMu, and reading cfg here would race.
 	etherscanKey    atomic.Pointer[string]
@@ -311,6 +341,23 @@ type addressRiskService struct {
 	backfillMu      sync.Mutex
 	backfillRunning bool
 	pendingPlan     *backfillPlan // last unconfirmed dry-run estimate; guarded by backfillMu
+}
+
+func (s *addressRiskService) rpcsFor(chain string) []string {
+	if rpcs, ok := s.chainRPCs[chain]; ok {
+		return rpcs
+	}
+	return s.rpcURLs
+}
+
+func (s *addressRiskService) blockscoutURL(chain string) string {
+	if u := s.blockscoutURLs[chain]; u != "" {
+		return u
+	}
+	if chain == "eth" || blockscoutBaseURL != "https://eth.blockscout.com" {
+		return blockscoutBaseURL
+	}
+	return PaymentCheckConfig{}.blockscoutURL(chain)
 }
 
 func (s *addressRiskService) setEtherscanKey(k string) { s.etherscanKey.Store(&k) }
@@ -348,9 +395,12 @@ func (s *addressRiskService) screenCounterparties(ctx context.Context, candidate
 				var oracleCode, gpCode, bsCode string
 				var gpClues, bsClues []riskClue
 				cwg.Add(3)
-				go func() { defer cwg.Done(); oracleHit, oracleCode = checkOracle(scCtx, s.rpcURLs, cp) }()
-				go func() { defer cwg.Done(); gpClues, gpCode = checkGoPlus(scCtx, cp, now) }()
-				go func() { defer cwg.Done(); bsClues, bsCode = checkBlockscoutAddress(scCtx, cp, now) }()
+				go func() { defer cwg.Done(); oracleHit, oracleCode = checkOracle(scCtx, s.rpcsFor("eth"), cp) }()
+				go func() { defer cwg.Done(); gpClues, gpCode = checkGoPlus(scCtx, "1", cp, now) }()
+				go func() {
+					defer cwg.Done()
+					bsClues, bsCode = checkBlockscoutAddress(scCtx, s.blockscoutURL("eth"), cp, now)
+				}()
 				cwg.Wait()
 				errs := 0
 				if oracleCode != "" {
@@ -502,11 +552,16 @@ func newAddressRiskService(store *riskStore, rpcURLs []string) *addressRiskServi
 // riskLocalIDs are the sources answered from SQLite, in response order.
 var riskLocalIDs = []string{"ofac", "mew_darklist", "stablecoin"}
 
-// localSources builds the local sources' status from one sync_state read.
-func (s *addressRiskService) localSources(states map[string]syncState, err error) []riskSource {
+// localSources builds the local sources' status from one sync_state read,
+// filtered to the local sources applicable to chain.
+func (s *addressRiskService) localSources(chain string, states map[string]syncState, err error) []riskSource {
+	want := riskSourcesFor(chain)
 	out := make([]riskSource, 0, len(riskLocalIDs))
 	now := s.now()
 	for _, id := range riskLocalIDs {
+		if !slices.Contains(want, id) {
+			continue
+		}
 		if s.store == nil || err != nil {
 			out = append(out, riskSource{ID: id, Status: "error", Error: "unavailable"})
 			continue
@@ -531,67 +586,111 @@ func (s *addressRiskService) readStates(ctx context.Context) (map[string]syncSta
 	return s.store.allSyncStates(ctx)
 }
 
-// listSources reports the local sources' status; used by /sources.
+// listSources reports all local sources' status; used by /sources.
 func (s *addressRiskService) listSources(ctx context.Context) []riskSource {
 	states, err := s.readStates(ctx)
-	return s.localSources(states, err)
+	return s.localSources("eth", states, err)
 }
 
-func (s *addressRiskService) localCheck(ctx context.Context, addr string) ([]riskSource, []riskClue) {
+func (s *addressRiskService) localCheck(ctx context.Context, chain, addr string) ([]riskSource, []riskClue, []stablecoinState) {
+	want := riskSourcesFor(chain)
 	states, err := s.readStates(ctx)
-	sources := s.localSources(states, err)
+	sources := s.localSources(chain, states, err)
 	if s.store == nil || err != nil {
-		return sources, nil
+		return sources, nil, nil
 	}
-	hits, err := s.store.listHits(ctx, addr)
+	rawHits, err := s.store.listHits(ctx, addr)
+	var hits []listHit
+	for _, h := range rawHits {
+		if slices.Contains(want, h.Source) {
+			hits = append(hits, h)
+		}
+	}
 	var frozen []stablecoinState
 	var destroyed map[string]*big.Int
-	if err == nil {
-		frozen, err = s.store.stablecoinStates(ctx, addr)
-	}
-	if err == nil {
-		destroyed, err = s.store.destroyedTotals(ctx, addr)
+	if chain == "eth" {
+		if err == nil {
+			frozen, err = s.store.stablecoinStates(ctx, addr)
+		}
+		if err == nil {
+			destroyed, err = s.store.destroyedTotals(ctx, addr)
+		}
 	}
 	if err != nil {
 		for i := range sources {
 			sources[i] = riskSource{ID: sources[i].ID, Status: "error", Error: "unavailable"}
 		}
-		return sources, nil
+		return sources, nil, nil
 	}
-	clues := append(listClues(hits, states), stablecoinClues(frozen, destroyed, states[stablecoinSourceID].Cursor)...)
+	clues := listClues(hits, states)
+	if chain == "eth" {
+		clues = append(clues, stablecoinClues(frozen, destroyed, states[stablecoinSourceID].Cursor)...)
+	}
 	sortClues(clues)
-	return sources, clues
+	return sources, clues, frozen
 }
 
-func (s *addressRiskService) lookup(ctx context.Context, addr string) *riskLookupResult {
-	return s.lookupKey(ctx, addr, s.etherscanKeySnapshot())
+func (s *addressRiskService) lookup(ctx context.Context, chain, addr string) *riskLookupResult {
+	return s.lookupKey(ctx, chain, addr, s.etherscanKeySnapshot())
 }
 
-func (s *addressRiskService) lookupKey(ctx context.Context, addr, etherscanKey string) *riskLookupResult {
+func (s *addressRiskService) lookupKey(ctx context.Context, chain, addr, etherscanKey string) *riskLookupResult {
+	if chain == "" {
+		chain = "eth"
+	}
+	want := riskSourcesFor(chain)
+	has := func(id string) bool { return slices.Contains(want, id) }
+	rpcs := s.rpcsFor(chain)
+	bsURL := s.blockscoutURL(chain)
 	now := s.now()
 	var (
-		wg                                   sync.WaitGroup
-		localSrc                             []riskSource
-		localClues, goplusFound, bsAddrClues []riskClue
-		oracleHit                            bool
-		oracleCode, goplusCode, bsCode       string
-		etherSrc                             riskSource
-		etherClues                           []riskClue
-		scope                                *riskAssociationScope
+		wg                                         sync.WaitGroup
+		localSrc                                   []riskSource
+		localClues, goplusFound, bsAddrClues       []riskClue
+		localFrozen                                []stablecoinState
+		freezeStates                               []issuerFreezeState
+		oracleHit                                  bool
+		freezeCode, oracleCode, goplusCode, bsCode string
+		etherSrc                                   riskSource
+		etherClues                                 []riskClue
+		scope                                      *riskAssociationScope
 	)
-	wg.Add(5)
-	go func() { defer wg.Done(); localSrc, localClues = s.localCheck(ctx, addr) }()
-	go func() { defer wg.Done(); oracleHit, oracleCode = checkOracle(ctx, s.rpcURLs, addr) }()
-	go func() { defer wg.Done(); goplusFound, goplusCode = checkGoPlus(ctx, addr, now) }()
-	go func() { defer wg.Done(); bsAddrClues, bsCode = checkBlockscoutAddress(ctx, addr, now) }()
-	go func() { defer wg.Done(); etherSrc, etherClues, scope = s.checkEtherscan(ctx, addr, etherscanKey, now) }()
+	wg.Add(1)
+	go func() { defer wg.Done(); localSrc, localClues, localFrozen = s.localCheck(ctx, chain, addr) }()
+	if has("issuer_freeze") {
+		wg.Add(1)
+		go func() { defer wg.Done(); freezeStates, freezeCode = checkIssuerFreeze(ctx, chain, addr, "", rpcs) }()
+	}
+	if has("chainalysis_oracle") {
+		wg.Add(1)
+		go func() { defer wg.Done(); oracleHit, oracleCode = checkOracle(ctx, rpcs, addr) }()
+	}
+	if has("goplus") {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			goplusFound, goplusCode = checkGoPlus(ctx, chains[chain].GoPlusChainID, addr, now)
+		}()
+	}
+	if has("blockscout") {
+		wg.Add(1)
+		go func() { defer wg.Done(); bsAddrClues, bsCode = checkBlockscoutAddress(ctx, bsURL, addr, now) }()
+	}
+	if has("etherscan") {
+		wg.Add(1)
+		go func() { defer wg.Done(); etherSrc, etherClues, scope = s.checkEtherscan(ctx, addr, etherscanKey, now) }()
+	}
 	wg.Wait()
 
+	asOf := fmtTime(now)
 	clues := append([]riskClue{}, localClues...)
-	if oracleHit {
+	if has("issuer_freeze") {
+		clues = append(clues, issuerFreezeClues(chain, freezeStates, localFrozen, asOf)...)
+	}
+	if has("chainalysis_oracle") && oracleHit {
 		clues = append(clues, riskClue{Severity: sevCritical, Source: "chainalysis_oracle", Code: "oracle_sanctioned",
-			Title: riskTitleOracle, AsOf: fmtTime(now),
-			RefURL: "https://etherscan.io/address/" + riskOracleContract + "#readContract"})
+			Title: riskTitleOracle, AsOf: asOf,
+			RefURL: fmt.Sprintf(chains[chain].AddressURL, riskOracleContract) + "#readContract"})
 	}
 	clues = append(clues, goplusFound...)
 	clues = append(clues, bsAddrClues...)
@@ -605,17 +704,31 @@ func (s *addressRiskService) lookupKey(ctx context.Context, addr, etherscanKey s
 		}
 		return src
 	}
-	sources := append(localSrc,
-		live("chainalysis_oracle", oracleCode, hostsOf(s.rpcURLs...)),
-		live("goplus", goplusCode, hostsOf(goplusBaseURL)))
-	if blockscoutBaseURL != "" {
-		sources = append(sources, live("blockscout", bsCode, hostsOf(blockscoutBaseURL)))
+	sources := append([]riskSource{}, localSrc...)
+	if has("issuer_freeze") {
+		freezeHosts := hostsOf(rpcs...)
+		if chains[chain].Family == familyTron {
+			freezeHosts = hostsOf(tronGridBaseURL)
+		}
+		sources = append(sources, live("issuer_freeze", freezeCode, freezeHosts))
 	}
-	sources = append(sources, etherSrc)
+	if has("chainalysis_oracle") {
+		sources = append(sources, live("chainalysis_oracle", oracleCode, hostsOf(rpcs...)))
+	}
+	if has("goplus") {
+		sources = append(sources, live("goplus", goplusCode, hostsOf(goplusBaseURL)))
+	}
+	if has("blockscout") && bsURL != "" {
+		sources = append(sources, live("blockscout", bsCode, hostsOf(bsURL)))
+	}
+	if has("etherscan") {
+		sources = append(sources, etherSrc)
+	}
 
 	return &riskLookupResult{
+		Chain:            chain,
 		Address:          addr,
-		QueriedAt:        fmtTime(now),
+		QueriedAt:        asOf,
 		Summary:          buildRiskSummary(clues, sources),
 		Disclaimer:       riskDisclaimer,
 		Clues:            clues,

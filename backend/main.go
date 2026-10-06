@@ -88,7 +88,15 @@ func main() {
 			initialDays: cfg.AddressRisk.initialSyncDays(), onChange: invalidate}
 		go runAddressRiskSync(ctx, time.Hour, lists.syncDue, stable.syncOnce)
 	}
+	gasCfg := cfg.CryptoGas.withDefaults()
 	api.risk = newAddressRiskService(rstore, cfg.AddressRisk.rpcURLs())
+	api.risk.chainRPCs = map[string][]string{
+		"eth":  cfg.AddressRisk.rpcURLs(),
+		"arb":  gasCfg.ArbitrumRPCURLs,
+		"op":   gasCfg.OptimismRPCURLs,
+		"base": gasCfg.BaseRPCURLs,
+	}
+	api.risk.blockscoutURLs = cfg.PaymentCheck.BlockscoutURLs
 	api.risk.cfg = cfg
 	api.risk.bqSrc = bqStablecoinSource{client: bq.client}
 	api.risk.invalidateCache = invalidate
@@ -266,4 +274,3 @@ func (w *gzipResponseWriter) Write(b []byte) (int, error) {
 func (w *gzipResponseWriter) Unwrap() http.ResponseWriter {
 	return w.ResponseWriter
 }
-

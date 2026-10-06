@@ -21,3 +21,13 @@ catalog:
 #     - "https://eth.drpc.org"
 #   initial_sync_days: 30                 # first-start sync of USDT/USDC freeze history (days, max 31; 0 = off, ~$0.5 once)
 #   etherscan_api_key: ""                 # optional, free: https://etherscan.io/myapikey — easier to set in the UI (Address Risk tab)
+
+# Crypto Pulse → Payment Check (all optional; defaults shown)
+# payment_check:
+#   blockscout_urls:
+#     eth: "https://eth.blockscout.com"
+#     arb: "https://arbitrum.blockscout.com"
+#     op: "https://explorer.optimism.io"
+#     base: "https://base.blockscout.com"
+#   logs_max_span: 10000                  # eth_getLogs max block span per chunk
+
