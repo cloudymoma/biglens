@@ -140,12 +140,8 @@ func etherscanList(ctx context.Context, key, action, addr string) ([]etherscanRo
 	return normalizeEtherscanRows(rows), "", ""
 }
 
-// blockscoutList fetches the newest 1000 rows of one account action from
+// blockscoutListAt fetches the newest 1000 rows of one account action from
 // Blockscout's keyless Etherscan-compatible RPC endpoint.
-func blockscoutList(ctx context.Context, action, addr string) ([]etherscanRow, string) {
-	return blockscoutListAt(ctx, blockscoutBaseURL, action, addr)
-}
-
 func blockscoutListAt(ctx context.Context, baseURL, action, addr string) ([]etherscanRow, string) {
 	if baseURL == "" {
 		return nil, "not_configured"

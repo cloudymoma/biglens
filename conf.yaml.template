@@ -24,7 +24,7 @@ catalog:
 
 # Crypto Pulse → Payment Check (all optional; defaults shown)
 # payment_check:
-#   blockscout_urls:
+#   blockscout_urls:                      # set a chain to "" to disable Blockscout on it
 #     eth: "https://eth.blockscout.com"
 #     arb: "https://arbitrum.blockscout.com"
 #     op: "https://explorer.optimism.io"
