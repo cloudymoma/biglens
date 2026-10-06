@@ -1,6 +1,7 @@
 import axios from 'axios';
 import type {
   AddressRiskBackfillStatus,
+  AddressRiskChain,
   AddressRiskKeyInfo,
   AddressRiskLookup,
   AddressRiskOverview,
@@ -456,8 +457,15 @@ export async function fetchCryptoSpot(): Promise<CryptoSpotData | null> {
   }
 }
 
-export async function fetchAddressRiskLookup(address: string, signal?: AbortSignal): Promise<AddressRiskLookup> {
-  const { data } = await axios.get('/api/opendata/crypto/address-risk/lookup', { params: { address }, signal });
+export async function fetchAddressRiskLookup(
+  address: string,
+  chain: AddressRiskChain = 'eth',
+  signal?: AbortSignal,
+): Promise<AddressRiskLookup> {
+  const { data } = await axios.get('/api/opendata/crypto/address-risk/lookup', {
+    params: { address, chain },
+    signal,
+  });
   return data;
 }
 

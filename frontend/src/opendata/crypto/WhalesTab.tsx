@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import ReactECharts from 'echarts-for-react';
 import { ExternalLink } from 'lucide-react';
-import type { CryptoWhalesData, CryptoChain } from '../../types';
+import type { AddressRiskChain, CryptoWhalesData, CryptoChain } from '../../types';
 import { fetchCryptoWhales } from '../../api';
 import { RISK_BADGES } from './addressRiskTools';
 import { EmptyState, ErrorBanner } from '../../dashboards/shared';
@@ -25,12 +25,12 @@ const unit = (chain: CryptoChain) => (chain === 'btc' ? 'BTC' : 'ETH');
 function EthAddress({ address, risk, onInspect }: {
   address: string;
   risk?: string[];
-  onInspect?: (address: string) => void;
+  onInspect?: (address: string, chain?: AddressRiskChain) => void;
 }) {
   if (!address) return <span>—</span>;
   return (
     <span className="inline-flex items-center gap-1">
-      <button type="button" title={`${address} — check in Address Risk`} onClick={() => onInspect?.(address)}
+      <button type="button" title={`${address} — check in Address Risk`} onClick={() => onInspect?.(address, 'eth')}
               className="hover:text-white underline decoration-zinc-700">
         {shortHash(address)}
       </button>
@@ -44,7 +44,7 @@ function EthAddress({ address, risk, onInspect }: {
   );
 }
 
-export default function WhalesTab({ onInspect }: { onInspect?: (address: string) => void }) {
+export default function WhalesTab({ onInspect }: { onInspect?: (address: string, chain?: AddressRiskChain) => void }) {
   const [days, setDays] = useState(90);
   const [chain, setChain] = useState<CryptoChain>('btc');
   const [data, setData] = useState<CryptoWhalesData | null>(null);

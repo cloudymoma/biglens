@@ -1,11 +1,8 @@
 import { useEffect, useEffectEvent, useRef, useState } from 'react';
-import { ExternalLink } from 'lucide-react';
 import type {
   AddressRiskBackfillStatus,
+  AddressRiskChain,
   AddressRiskLookup,
-  AddressRiskScope,
-  AddressRiskSeverity,
-  AddressRiskSource,
   AddressRiskSources,
 } from '../../types';
 import {
@@ -16,79 +13,17 @@ import {
 } from '../../api';
 import { ErrorBanner } from '../../dashboards/shared';
 import { fmtNum, Panel } from './shared';
-import { RISK_SOURCE_LABELS as SOURCE_LABELS, RISK_TOOLS, REVOKE_CASH_URL } from './addressRiskTools';
+import {
+  ago,
+  detectAddressFamily,
+  isValidAddressForChain,
+  RISK_CHAINS,
+  RISK_SOURCE_LABELS as SOURCE_LABELS,
+  sourceState,
+} from './addressRiskTools';
 import AddressRiskOverview from './AddressRiskOverview';
 import EtherscanKeyPanel from './EtherscanKeyPanel';
-
-const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
-
-// Severity is always shown as text + count; color is a secondary cue only.
-const GROUPS: { id: AddressRiskSeverity; label: string; color: string }[] = [
-  { id: 'critical', label: 'Critical', color: '#f87171' },
-  { id: 'warning', label: 'Warning', color: '#fb923c' },
-  { id: 'association', label: 'Association', color: '#fde047' },
-  { id: 'info', label: 'Info', color: '#a1a1aa' },
-];
-
-const ERROR_TEXT: Record<string, string> = {
-  timeout: 'timeout',
-  network_error: 'network error',
-  rate_limited: 'rate limited',
-  pending: 'data pending',
-  bad_response: 'unexpected response',
-  unavailable: 'local database unavailable',
-  key_invalid: 'API key rejected',
-  key_throttled: 'key checks throttled',
-  rate_limited_local: 'local rate limit reached',
-  local_pool_unavailable: 'local lists unavailable',
-};
-
-// Query health in neutral words — never a green check (spec §8.2).
-function sourceState(s: AddressRiskSource): string {
-  switch (s.status) {
-    case 'ok': return 'checked';
-    case 'stale': return 'stale data';
-    case 'empty': return 'not synced yet';
-    case 'partial': return 'partial coverage';
-    case 'not_configured': return 'not configured';
-    default: {
-      const e = s.error ?? '';
-      if (e.startsWith('upstream_http_')) return `upstream HTTP ${e.slice('upstream_http_'.length)}`;
-      return ERROR_TEXT[e] ?? 'error';
-    }
-  }
-}
-
-const ETHERSCAN_PAGE = 1000;
-const SCOPE_LABELS: ['txlist' | 'tokentx' | 'txlistinternal', string][] = [
-  ['txlist', 'Transactions'], ['tokentx', 'Token transfers'], ['txlistinternal', 'Internal transfers'],
-];
-
-// What the association analysis actually covered, per list (spec §8.4): for
-// a busy address 1000 rows can be only a few hours.
-function associationNotes(r: AddressRiskLookup): string[] {
-  const es = r.sources.find(s => s.id === 'etherscan');
-  if (!es || es.status === 'not_configured') {
-    return ['Not checked: add a free Etherscan API key above to see transfers with listed addresses.'];
-  }
-  const sc: AddressRiskScope | null = r.association_scope;
-  if (es.status !== 'ok' || !sc) return [`Not checked: ${es.hosts?.includes('eth.blockscout.com') ? 'Blockscout' : 'Etherscan'} ${sourceState(es)}${es.last_error ? ` (${es.last_error})` : ''}.`];
-  const lines = SCOPE_LABELS.map(([k, label]) => {
-    const l = sc[k];
-    return l.n < ETHERSCAN_PAGE ? `${label}: all ${l.n}` : `${label}: latest ${l.n} (since ${l.oldest_at.slice(0, 10)})`;
-  });
-  lines.push(`${sc.hops} hop · tokens: ${sc.token_allowlist.join(', ')}`);
-  if (sc.counterparties_screened > 0) {
-    const errSuffix = sc.counterparty_errors
-      ? ` (${sc.counterparty_errors} live check error${sc.counterparty_errors === 1 ? '' : 's'})`
-      : '';
-    lines.push(
-      `Live counterparty screening: ${sc.counterparties_screened} top counterpart${sc.counterparties_screened === 1 ? 'y' : 'ies'} checked${errSuffix}.`,
-    );
-  }
-  if (sc.truncated) lines.push('Showing the first 200 counterparties.');
-  return lines;
-}
+import RiskResultView from './RiskResultView';
 
 // GB (1e9), as the backend and CLI print it.
 function fmtGB(bytes: number): string {
@@ -104,15 +39,54 @@ interface DryRunPlan {
   batches: number;
 }
 
-function ago(iso: string): string {
-  const mins = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60000));
-  if (mins < 1) return 'just now';
-  if (mins < 60) return `${mins} min ago`;
-  const h = Math.round(mins / 60);
-  return h < 48 ? `${h} h ago` : `${Math.round(h / 24)} days ago`;
+function buildThirdPartyNote(
+  chain: AddressRiskChain,
+  chainLabel: string,
+  result: AddressRiskLookup | null,
+  meta: AddressRiskSources | null,
+): string {
+  if (result && (result.chain || 'eth') === chain) {
+    const sent = result.sources.filter(s => s.sends_address && s.hosts && s.hosts.length > 0);
+    const local = result.sources.filter(s => !s.sends_address).map(s => SOURCE_LABELS[s.id] ?? s.id);
+    const localText = local.length > 0 ? `${local.join(', ')} checks run on this server.` : '';
+    if (sent.length === 0) {
+      return `Lookups on ${chainLabel} do not send this address to any third party. ${localText}`.trim();
+    }
+    const hosts = Array.from(new Set(sent.flatMap(s => s.hosts ?? [])));
+    const hopNote = chain === 'eth' ? ' (and up to 4 top counterparties during 1-hop screening)' : '';
+    return `Lookups on ${chainLabel} send this address${hopNote} to: ${hosts.join(', ')}. ${localText}`.trim();
+  }
+
+  const rpcHosts = meta?.rpc_hosts.join(', ') || 'public Ethereum RPCs';
+  const goplusHost = meta?.goplus_host || 'api.gopluslabs.io';
+  switch (chain) {
+    case 'btc':
+      return 'Lookups on Bitcoin do not send this address to any third party. OFAC checks run on this server.';
+    case 'tron':
+      return `Lookups on TRON send this address to TronGrid (issuer freeze) and ${goplusHost}. OFAC checks run on this server.`;
+    case 'base':
+      return `Lookups on Base send this address to configured Base RPCs (issuer freeze), ${goplusHost}, and base.blockscout.com. OFAC and MEW checks run on this server.`;
+    case 'arb':
+    case 'op': {
+      const bsHost = chain === 'arb' ? 'arbitrum.blockscout.com' : 'explorer.optimism.io';
+      return `Lookups on ${chainLabel} send this address to configured ${chainLabel} RPCs (issuer freeze & Chainalysis oracle), ${goplusHost}, and ${bsHost}. OFAC and MEW checks run on this server.`;
+    }
+    default:
+      return (
+        `Lookups send this address (and up to 4 top counterparties during 1-hop screening) to: ${rpcHosts} ` +
+        `(issuer freeze & Chainalysis oracle; tried in order), ${goplusHost}, eth.blockscout.com` +
+        `${meta?.etherscan?.configured ? ', and api.etherscan.io' : ' (also used as keyless 1-hop fallback)'}. ` +
+        'OFAC, MEW and stablecoin checks run on this server.'
+      );
+  }
 }
 
-export default function AddressRiskTab({ inspect: inspectReq }: { inspect?: { address: string; seq: number } }) {
+export default function AddressRiskTab({
+  inspect: inspectReq,
+}: {
+  inspect?: { address: string; chain?: AddressRiskChain; seq: number };
+}) {
+  const [chain, setChain] = useState<AddressRiskChain>('eth');
   const [input, setInput] = useState('');
   const [inputError, setInputError] = useState('');
   const [result, setResult] = useState<AddressRiskLookup | null>(null);
@@ -187,10 +161,11 @@ export default function AddressRiskTab({ inspect: inspectReq }: { inspect?: { ad
       .finally(() => setBackfillBusy(false));
   };
 
-  const lookup = (raw: string) => {
+  const lookup = (raw: string, targetChain: AddressRiskChain = chain) => {
     const addr = raw.trim();
-    if (!ADDRESS_RE.test(addr)) {
-      setInputError('Enter a 0x address (42 characters). ENS names are not supported.');
+    const chainOpt = RISK_CHAINS.find(c => c.id === targetChain) ?? RISK_CHAINS[0];
+    if (!isValidAddressForChain(targetChain, addr)) {
+      setInputError(chainOpt.formatHint);
       return;
     }
     setInputError('');
@@ -200,9 +175,9 @@ export default function AddressRiskTab({ inspect: inspectReq }: { inspect?: { ad
     setResult(null); // never leave a previous address's clues on screen while loading
     setError('');
     setLoading(true);
-    fetchAddressRiskLookup(addr, ctrl.signal)
+    fetchAddressRiskLookup(addr, targetChain, ctrl.signal)
       .then(r => {
-        if (ctrl.signal.aborted || r.address !== addr.toLowerCase()) return;
+        if (ctrl.signal.aborted || r.address.toLowerCase() !== addr.toLowerCase()) return;
         setResult(r);
         refreshMeta(); // source status chips must not freeze at mount time
         requestAnimationFrame(() => resultRef.current?.focus());
@@ -219,15 +194,16 @@ export default function AddressRiskTab({ inspect: inspectReq }: { inspect?: { ad
       });
   };
 
-  const inspect = (addr: string) => {
+  const inspect = (addr: string, targetChain: AddressRiskChain = 'eth') => {
+    setChain(targetChain);
     setInput(addr);
-    lookup(addr);
+    lookup(addr, targetChain);
   };
 
   // An address clicked in Whales & Flow (spec §11.4). The tab stays mounted,
   // so the lookup is driven by seq, not by mounting.
   const onInspect = useEffectEvent(() => {
-    if (inspectReq?.address) inspect(inspectReq.address);
+    if (inspectReq?.address) inspect(inspectReq.address, inspectReq.chain ?? 'eth');
   });
   const inspectSeq = inspectReq?.seq ?? 0;
   useEffect(() => {
@@ -237,10 +213,14 @@ export default function AddressRiskTab({ inspect: inspectReq }: { inspect?: { ad
     if (inspectSeq > 0) onInspect();
   }, [inspectSeq]);
 
-  const rpcHosts = meta?.rpc_hosts.join(', ') || 'public Ethereum RPCs';
-  const goplusHost = meta?.goplus_host || 'api.gopluslabs.io';
-  const esSource = result?.sources.find(s => s.id === 'etherscan');
-  const usedBlockscoutFallback = Boolean(esSource?.hosts?.includes('eth.blockscout.com'));
+  const selectedChainOpt = RISK_CHAINS.find(c => c.id === chain) ?? RISK_CHAINS[0];
+  const detectedFamily = detectAddressFamily(input);
+  const familyMismatch = detectedFamily !== null && detectedFamily !== selectedChainOpt.family ? detectedFamily : null;
+
+  const selectChain = (nextChain: AddressRiskChain) => {
+    setChain(nextChain);
+    setInputError('');
+  };
 
   return (
     <div className="space-y-4">
@@ -368,17 +348,37 @@ export default function AddressRiskTab({ inspect: inspectReq }: { inspect?: { ad
         </div>
       )}
 
-      <Panel title="Ethereum address risk clues" note="Ethereum mainnet only">
+      <Panel title="Address risk clues" note="Ethereum, Arbitrum, Optimism, Base, TRON · Bitcoin: OFAC only">
+        <div className="mb-2.5 flex flex-wrap items-center gap-1.5" role="group" aria-label="Chain">
+          {RISK_CHAINS.map(c => {
+            const active = chain === c.id;
+            return (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => selectChain(c.id)}
+                className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors border ${
+                  active
+                    ? 'bg-zinc-800 text-white border-zinc-700'
+                    : 'bg-zinc-900/50 text-zinc-400 border-zinc-800/80 hover:text-zinc-200 hover:border-zinc-700'
+                }`}
+              >
+                {c.label}{active ? ' ✓' : ''}
+              </button>
+            );
+          })}
+        </div>
+
         <form
           className="flex gap-2"
-          onSubmit={e => { e.preventDefault(); lookup(input); }}
+          onSubmit={e => { e.preventDefault(); lookup(input, chain); }}
         >
           <input
             value={input}
             onChange={e => setInput(e.target.value)}
-            placeholder="0x… address"
+            placeholder={selectedChainOpt.placeholder}
             spellCheck={false}
-            aria-label="Ethereum address"
+            aria-label={`${selectedChainOpt.label} address`}
             className="flex-1 rounded-lg bg-zinc-900 border border-zinc-800 px-3 py-2 text-sm font-mono text-zinc-200 focus:outline-none focus:border-zinc-600"
           />
           <button
@@ -389,10 +389,50 @@ export default function AddressRiskTab({ inspect: inspectReq }: { inspect?: { ad
             {loading ? 'Checking…' : 'Check'}
           </button>
         </form>
+
+        {familyMismatch === 'tron' && (
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-amber-300">
+            <span>This looks like a TRON address — switch to TRON?</span>
+            <button
+              type="button"
+              onClick={() => selectChain('tron')}
+              className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-200 border border-amber-500/30 hover:bg-amber-500/30"
+            >
+              Switch to TRON
+            </button>
+          </div>
+        )}
+        {familyMismatch === 'btc' && (
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-amber-300">
+            <span>This looks like a Bitcoin address — switch to Bitcoin?</span>
+            <button
+              type="button"
+              onClick={() => selectChain('btc')}
+              className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-200 border border-amber-500/30 hover:bg-amber-500/30"
+            >
+              Switch to Bitcoin
+            </button>
+          </div>
+        )}
+        {familyMismatch === 'evm' && (
+          <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-amber-300">
+            <span>This looks like an EVM address — switch to Ethereum?</span>
+            {RISK_CHAINS.filter(c => c.family === 'evm').map(c => (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => selectChain(c.id)}
+                className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-200 border border-amber-500/30 hover:bg-amber-500/30"
+              >
+                Switch to {c.label}
+              </button>
+            ))}
+          </div>
+        )}
+
         {inputError && <p className="mt-2 text-xs text-orange-400">{inputError}</p>}
         <p className="mt-3 text-[11px] text-zinc-500">
-          Lookups send this address (and up to 4 top counterparties during 1-hop screening) to: {rpcHosts} (Chainalysis oracle; tried in order), {goplusHost}, eth.blockscout.com{meta?.etherscan?.configured ? ', and api.etherscan.io' : ' (also used as keyless 1-hop fallback)'}. OFAC, MEW
-          and stablecoin checks run on this server.
+          {buildThirdPartyNote(chain, selectedChainOpt.label, result, meta)}
         </p>
         {meta && (
           <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-zinc-500">
@@ -408,104 +448,9 @@ export default function AddressRiskTab({ inspect: inspectReq }: { inspect?: { ad
 
       {error && <ErrorBanner message={error} />}
 
-      {result && (
-        <Panel title="Result" note={`checked ${ago(result.queried_at)}`}>
-          <h4 ref={resultRef} tabIndex={-1} className="font-mono text-sm text-white break-all outline-none">
-            {result.address}
-          </h4>
-          {result.checksum_warning && (
-            <p className="mt-2 text-xs text-orange-400">
-              The address's upper/lower-case checksum (EIP-55) does not match — check it for typos. Results are for the lowercase address.
-            </p>
-          )}
-          <p role="status" className="mt-3 text-sm text-zinc-200">{result.summary.text}</p>
-          <p className="mt-1 text-[11px] text-zinc-500">{result.disclaimer}</p>
+      {result && <RiskResultView result={result} headingRef={resultRef} />}
 
-          <div className="mt-4 space-y-4">
-            {GROUPS.map(g => {
-              const clues = result.clues.filter(c => c.severity === g.id);
-              if (clues.length === 0 && g.id !== 'association') return null;
-              return (
-                <section key={g.id}>
-                  <h5 className="text-xs font-semibold" style={{ color: g.color }}>
-                    {g.label} ({clues.length})
-                  </h5>
-                  {g.id === 'association' && (
-                    <div className="mt-1 text-[11px] text-zinc-500">
-                      {usedBlockscoutFallback ? (
-                        <a href="https://eth.blockscout.com" target="_blank" rel="noopener noreferrer" className="text-zinc-400 hover:text-zinc-200">
-                          Data provided by Blockscout (keyless fallback)
-                        </a>
-                      ) : (
-                        <a href="https://etherscan.io" target="_blank" rel="noopener noreferrer" className="text-zinc-400 hover:text-zinc-200">
-                          Data provided by Etherscan
-                        </a>
-                      )}
-                      {associationNotes(result).map(n => <p key={n}>{n}</p>)}
-                    </div>
-                  )}
-                  <ul className="mt-2 space-y-2">
-                    {clues.map((c, i) => (
-                      <li key={`${c.source}-${c.flag}-${i}`} className="rounded-lg border border-zinc-800 p-3 text-xs">
-                        <div className="flex items-start justify-between gap-3">
-                          <span className="text-zinc-200">
-                            <span className="text-zinc-500">{g.label} · </span>{c.title}
-                          </span>
-                          {c.ref_url && (
-                            <a href={c.ref_url} target="_blank" rel="noopener noreferrer"
-                               className="shrink-0 text-zinc-400 hover:text-zinc-200 inline-flex items-center gap-1">
-                              source <ExternalLink size={11} />
-                            </a>
-                          )}
-                        </div>
-                        {c.detail && <p className="mt-1 text-zinc-400">{c.detail}</p>}
-                        <p className="mt-1 text-[11px] text-zinc-600">
-                          {SOURCE_LABELS[c.source] ?? c.source}
-                          {c.association ? ` · ${c.association.tx_count} tx · latest ${c.association.amount}` : ''}
-                          {c.observed_at ? ` · on ${c.observed_at.slice(0, 10)}` : ''}
-                          {c.as_of ? ` · data as of ${c.as_of.slice(0, 16).replace('T', ' ')} UTC` : ''}
-                        </p>
-                      </li>
-                    ))}
-                  </ul>
-                </section>
-              );
-            })}
-          </div>
-
-          <div className="mt-4 flex flex-wrap gap-2 text-[11px] text-zinc-500">
-            {result.sources.map(s => (
-              <span key={s.id} className="rounded-md border border-zinc-800 px-2 py-0.5" title={s.hosts?.join(', ')}>
-                {SOURCE_LABELS[s.id] ?? s.id} · {sourceState(s)}{s.sends_address ? ' · address sent' : ''}
-              </span>
-            ))}
-          </div>
-
-          <div className="mt-5">
-            <h5 className="text-xs font-semibold text-zinc-300">Free third-party tools</h5>
-            <p className="text-[11px] text-zinc-600">Opens in a new tab and sends this address to that site.</p>
-            <ul className="mt-2 grid sm:grid-cols-2 gap-2">
-              {RISK_TOOLS.map(t => (
-                <li key={t.id}>
-                  <a href={t.url(result.address)} target="_blank" rel="noopener noreferrer"
-                     className="text-xs text-zinc-300 hover:text-white inline-flex items-center gap-1">
-                    {t.label} <ExternalLink size={11} />
-                  </a>
-                  <span className="ml-2 text-[11px] text-zinc-600">{t.hint}</span>
-                </li>
-              ))}
-            </ul>
-            <p className="mt-3 text-[11px] text-zinc-500">
-              Check your own wallet's token approvals →{' '}
-              <a href={REVOKE_CASH_URL} target="_blank" rel="noopener noreferrer" className="text-zinc-300 hover:text-white">
-                Revoke.cash
-              </a>
-            </p>
-          </div>
-        </Panel>
-      )}
-
-      <AddressRiskOverview sources={meta} onInspect={inspect} />
+      <AddressRiskOverview sources={meta} onInspect={addr => inspect(addr, 'eth')} />
     </div>
   );
 }

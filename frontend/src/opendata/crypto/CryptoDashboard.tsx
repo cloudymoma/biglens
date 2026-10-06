@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type React from 'react';
+import type { AddressRiskChain } from '../../types';
 import PulseTab from './PulseTab';
 import FeesTab from './FeesTab';
 import WhalesTab from './WhalesTab';
@@ -24,16 +25,20 @@ export default function CryptoDashboard() {
 
   // Whales → Address Risk hand-off. seq changes on every click, so clicking
   // the same address again re-runs the lookup in the already-mounted tab.
-  const [inspect, setInspect] = useState({ address: '', seq: 0 });
+  const [inspect, setInspect] = useState<{ address: string; chain: AddressRiskChain; seq: number }>({
+    address: '',
+    chain: 'eth',
+    seq: 0,
+  });
 
   const select = (id: TabId) => {
     setActive(id);
     setVisited(prev => new Set(prev).add(id));
   };
 
-  const inspectAddress = (address: string) => {
+  const inspectAddress = (address: string, chain: AddressRiskChain = 'eth') => {
     select('risk');
-    setInspect(prev => ({ address, seq: prev.seq + 1 }));
+    setInspect(prev => ({ address, chain, seq: prev.seq + 1 }));
   };
 
   const tabBody: Record<TabId, React.ReactNode> = {

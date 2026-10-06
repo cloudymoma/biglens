@@ -986,6 +986,7 @@ export interface CryptoSpotData {
 
 // --- Crypto Pulse: Address Risk (field names mirror backend/address_risk_lookup.go) ---
 
+export type AddressRiskChain = 'eth' | 'arb' | 'op' | 'base' | 'tron' | 'btc';
 export type AddressRiskStatus = 'ok' | 'partial' | 'stale' | 'empty' | 'error' | 'not_configured';
 export type AddressRiskSeverity = 'critical' | 'warning' | 'association' | 'info';
 
@@ -1054,6 +1055,7 @@ export interface AddressRiskSummary {
 }
 
 export interface AddressRiskLookup {
+  chain: AddressRiskChain;
   address: string;
   checksum_warning: boolean;
   queried_at: string;
