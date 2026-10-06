@@ -461,3 +461,20 @@ func gasAllTimeFromRow(r gasRecordRow) GasAllTime {
 	}
 	return at
 }
+
+// currentGasAllTimeMap returns the latest merged all-time base-fee records
+// (or the pre-computed seeds before the first background delta scan finishes)
+// so /gas-pulse never blocks on the all-time BigQuery scan.
+func currentGasAllTimeMap() map[string]GasAllTime {
+	gasAllTimeState.mu.Lock()
+	defer gasAllTimeState.mu.Unlock()
+	src := gasAllTimeState.records
+	if len(src) == 0 {
+		src = gasAllTimeSeeds
+	}
+	m := make(map[string]GasAllTime, len(src))
+	for chain, row := range src {
+		m[chain] = gasAllTimeFromRow(row)
+	}
+	return m
+}

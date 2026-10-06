@@ -4,7 +4,9 @@ package main
 //
 //	cd /opt/biglens/backend && sudo -u biglens ./biglens-server --address-risk-backfill [--since 2017-11-28 | --since-days N] [--yes]
 //
-// Without --yes it only prints the dry-run estimate (free). It first closes a
+// Without --yes it checks the exported block watermark (~25 MB partitioned logs
+// check) and prints the dry-run estimate for the backfill batches without
+// running them. It first closes a
 // forward gap after the cursor (31-day chunks), then fills whole years from
 // coverage_from back to --since, newest first; every batch commits its events
 // and watermark together, so a failed run resumes where it stopped.
@@ -206,8 +208,9 @@ func finalizeBackfillMeta(ctx context.Context, store *riskStore, base backfillMe
 	return store.saveBackfillMeta(ctx, base)
 }
 
-// estimateBackfill plans the batches and runs BigQuery dry-runs without
-// billing or mutating SQLite watermarks.
+// estimateBackfill checks the exported block watermark (~25 MB partitioned logs
+// check), plans the batches, and runs free BigQuery dry-runs without mutating
+// SQLite watermarks.
 func estimateBackfill(ctx context.Context, src stablecoinSource, store *riskStore, since civil.Date, force bool, now time.Time) (batches []backfillBatch, sizes []int64, totalBytes int64, end civil.Date, st syncState, err error) {
 	end, ok, err := safeEnd(ctx, src, now)
 	if err != nil {
@@ -291,7 +294,7 @@ func runAddressRiskBackfill(ctx context.Context, src stablecoinSource, store *ri
 	}
 	fmt.Fprintf(out, "Total: %.1f GB, ~$%.2f (dry-run estimate; actual billing is usually lower)\n", float64(total)/1e9, bytesToUSD(total))
 	if !opts.Yes {
-		fmt.Fprintln(out, "Dry run only — nothing was billed. Re-run with --yes to backfill.")
+		fmt.Fprintln(out, "Dry run only — no backfill batches were run (only the ~25 MB block-watermark check ran). Re-run with --yes to backfill.")
 		return nil
 	}
 
@@ -304,6 +307,7 @@ func runAddressRiskBackfill(ctx context.Context, src stablecoinSource, store *ri
 
 		maxBytes := max(sizes[i]+sizes[i]/10, backfillMinMaxBytes) // dry-run × 1.1
 		events, billed, err := src.Fetch(ctx, b.Start, b.End, maxBytes)
+		meta.BytesBilled += billed
 		if err != nil {
 			werr := fmt.Errorf("%s: %w (re-run to resume)", b.Label, err)
 			saveBackfillFailure(ctx, store, meta, werr)
@@ -314,7 +318,6 @@ func runAddressRiskBackfill(ctx context.Context, src stablecoinSource, store *ri
 			saveBackfillFailure(ctx, store, meta, werr)
 			return werr
 		}
-		meta.BytesBilled += billed
 		totalCnt, usdtCnt, usdcCnt, _ := store.stablecoinEventCounts(ctx)
 		meta.EventsStored = totalCnt
 		meta.USDTEvents = usdtCnt

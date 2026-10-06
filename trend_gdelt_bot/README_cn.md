@@ -311,7 +311,7 @@ Always follow this Two-Tier routing hierarchy and domain rules:
 | **`vw_topic_news_trends_unified`** | 视图 | *统一分析宽表* | **智能体主宽表：** 关联每日搜索词、排名、分数与国家新闻情绪、Goldstein 冲突分及主导新闻类别。 |
 | **`trend_gdelt_graph`** | 属性图 | `node_countries`、`node_search_terms`、`edge_trended_in` | **图模型（预览）：** `Country` 与 `SearchTerm` 节点、`TRENDED_IN` 边，通过 ISO GQL / `GRAPH_TABLE` 查询。需 Enterprise/Enterprise Plus 预留。 |
 | **`vw_raw_trends_international_history`** | 视图（Tier 2） | `google_trends.international_top_terms` | **下钻：** 未聚合的约 5 年周度热度历史（`snapshot_date`、`week`、`region_name`、`search_score`）。 |
-| **`vw_raw_trends_international_rising_history`** | 视图（Tier 2） | `google_trends.international_top_rising_terms` | **下钻：** 地区级飙升词及各地区 `percent_gain` 与周度历史。 |
+| **`vw_raw_trends_international_rising_history`** | 视图（Tier 2） | `google_trends.international_top_rising_terms` | **下钻：** 地区级飙升词、全国级 `percent_gain` 及各地区周度 `search_score` 历史。 |
 | **`vw_raw_trends_us_dma`** | 视图（Tier 2） | `google_trends.top_terms` | **下钻：** 美国 Nielsen DMA 都会区级 Top 25（`dma_name`、`dma_id`）及周度历史。 |
 | **`vw_raw_trends_us_dma_rising`** | 视图（Tier 2） | `google_trends.top_rising_terms` | **下钻：** 美国 DMA 级飙升词及 `percent_gain`。 |
 | **`vw_raw_trends_us_hourly`** | 视图（Tier 2） | `google_trends_hourly.top_terms_hourly` | **实时：** 美国 DMA 级日内 Top 25（`snapshot_time` DATETIME）；每天多快照、保留约 30 天、每快照约 1 年周度历史。 |

@@ -14,7 +14,7 @@
 -- Unlike the Tier 1 curated views (90/30-day windows, aggregated), these are
 -- UNAGGREGATED pass-throughs for explicit drill-down requests: full history,
 -- US metro (DMA) granularity, intraday hourly snapshots, region-level rising
--- percent gains, and GKG entity lists. Columns are still
+-- weekly score history (with country-wide percent_gain), and GKG entity lists. Columns are still
 -- projected and renamed (never SELECT *): the raw GDELT/Trends column names
 -- and packed "Name,offset;Name,offset" strings are hostile to NL-to-SQL, and
 -- pseudo-columns like _PARTITIONDATE are not visible through a view unless

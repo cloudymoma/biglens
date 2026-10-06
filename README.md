@@ -376,13 +376,13 @@ If the file cannot be opened the server still starts and lookups report the loca
 Looked-up addresses are kept only in the 10-minute in-memory cache — never written to disk or logs.
 
 **Freeze history (BigQuery).** On first start the server syncs the last 30 days of USDT/USDC freeze events
-(~89–100 GB scanned, ~$0.5–$0.6 once), then one new day per day (~3.3 GB for the logs scan plus ~25 MB for the
-partitioned completeness check, ~$0.02/day). `address_risk.initial_sync_days`
+(~110–130 GB scanned, ~$0.6–$0.8 once), then one new day per day (~3.5–4.5 GB for the logs scan plus ~25 MB for the
+partitioned completeness check, ~$0.02–$0.03/day). `address_risk.initial_sync_days`
 changes the window (0 disables it, max 31). Until the full history is backfilled, lookups say
 "Freeze history covers … only". The backfill is safe to run while the server runs:
 
 ```bash
-cd /opt/biglens/backend && sudo -u biglens ./biglens-server --address-risk-backfill        # dry run: per-year cost, bills nothing
+cd /opt/biglens/backend && sudo -u biglens ./biglens-server --address-risk-backfill        # dry run: per-year cost (~25 MB watermark check, no backfill batches run)
 cd /opt/biglens/backend && sudo -u biglens ./biglens-server --address-risk-backfill --yes  # full history since 2017-11-28: ~3.4 TB, ~$20
 ```
 

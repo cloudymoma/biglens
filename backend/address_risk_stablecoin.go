@@ -154,9 +154,6 @@ func (b bqStablecoinSource) Fetch(ctx context.Context, start, end civil.Date, ma
 			}
 		}
 		cancel()
-		if ctx.Err() != nil && billed == 0 {
-			billed = 1
-		}
 		return nil, billed, err
 	}
 	if err := status.Err(); err != nil {

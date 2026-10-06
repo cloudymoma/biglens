@@ -65,8 +65,9 @@ func pickWeatherDefaultDate(rows []WeatherCoverageRow) string {
 	return best
 }
 
-// weatherMeta returns the cached meta (latest + default date), querying
-// recent coverage on a miss under singleflight.
+// weatherMeta returns the cached meta (latest + default date), checking the
+// table's LastModifiedTime (free metadata call) when the 10m hot key expires
+// and only running the ~299 MiB coverage query when the table actually changed.
 func (h *APIHandler) weatherMeta(r *http.Request) (*WeatherMetaData, error) {
 	const key = "opendata:weather:meta"
 	if cached, ok := h.cache.Get(key); ok {
@@ -75,10 +76,27 @@ func (h *APIHandler) weatherMeta(r *http.Request) (*WeatherMetaData, error) {
 		}
 	}
 	v, err, _ := weatherFlight.Do(key, func() (any, error) {
+		if cached, ok := h.cache.Get(key); ok {
+			if meta, ok := cached.(*WeatherMetaData); ok {
+				return meta, nil
+			}
+		}
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 2*time.Minute)
 		defer cancel()
 
-		coverage, lastMod, err := h.bq.GetWeatherRecentCoverage(ctx)
+		year, lastMod := h.bq.GetWeatherTableYearAndLastMod(ctx)
+		var modKey string
+		if !lastMod.IsZero() {
+			modKey = fmt.Sprintf("opendata:weather:meta:%d", lastMod.Unix())
+			if cached, ok := h.cache.Get(modKey); ok {
+				if meta, ok := cached.(*WeatherMetaData); ok {
+					h.cache.Set(key, meta)
+					return meta, nil
+				}
+			}
+		}
+
+		coverage, err := h.bq.GetWeatherRecentCoverageForYear(ctx, year)
 		if err != nil {
 			return nil, err
 		}
@@ -90,8 +108,8 @@ func (h *APIHandler) weatherMeta(r *http.Request) (*WeatherMetaData, error) {
 			DefaultDate: pickWeatherDefaultDate(coverage),
 		}
 		h.cache.Set(key, meta)
-		if !lastMod.IsZero() {
-			h.cache.SetWithTTL(fmt.Sprintf("opendata:weather:meta:%d", lastMod.Unix()), meta, weatherCacheTTL)
+		if modKey != "" {
+			h.cache.SetWithTTL(modKey, meta, weatherCacheTTL)
 		}
 		return meta, nil
 	})

@@ -210,23 +210,28 @@ func (h *APIHandler) gasSeries(r *http.Request, chain string, start, end time.Ti
 }
 
 func (h *APIHandler) gasAllTime(r *http.Request) (map[string]GasAllTime, error) {
-	v, err := h.cachedFetchOrBackoff(gasAllTimeKey, gasAllTimeTTL, gasCalibrationRetryAfter, func() (any, error) {
-		ctx, cancel := gasFetchContext(r)
-		defer cancel()
-		rows, err := h.bq.GetGasAllTime(ctx)
-		if err != nil {
-			return nil, err
-		}
-		m := make(map[string]GasAllTime, len(rows))
-		for _, row := range rows {
-			m[row.Chain] = gasAllTimeFromRow(row)
-		}
-		return m, nil
-	})
-	if err != nil {
-		return nil, err
+	if cached, ok := h.cache.Get(gasAllTimeKey); ok {
+		return cached.(map[string]GasAllTime), nil
 	}
-	return v.(map[string]GasAllTime), nil
+	if h.bq != nil && h.bq.client != nil {
+		reqCtx := context.WithoutCancel(r.Context())
+		go func() {
+			_, _ = h.cachedFetchOrBackoff(gasAllTimeKey, gasAllTimeTTL, gasCalibrationRetryAfter, func() (any, error) {
+				ctx, cancel := context.WithTimeout(reqCtx, gasFetchTimeout)
+				defer cancel()
+				rows, err := h.bq.GetGasAllTime(ctx)
+				if err != nil {
+					return nil, err
+				}
+				m := make(map[string]GasAllTime, len(rows))
+				for _, row := range rows {
+					m[row.Chain] = gasAllTimeFromRow(row)
+				}
+				return m, nil
+			})
+		}()
+	}
+	return currentGasAllTimeMap(), nil
 }
 
 func (h *APIHandler) gasTronAllTime(r *http.Request) (*GasAllTime, error) {

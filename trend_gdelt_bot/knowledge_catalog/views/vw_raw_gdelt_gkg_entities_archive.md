@@ -28,4 +28,4 @@ Tier 2 proxy view over [gkg_partitioned](/tables/gkg_partitioned) exposing the e
 
 # Relationships
 - Derived from: [gkg_partitioned](/tables/gkg_partitioned)
-- Curated counterpart (last 30 days, first theme only): [vw_gdelt_gkg_themes_daily](/views/vw_gdelt_gkg_themes_daily)
+- Curated counterpart (last 30 days, `primary_theme` + full `themes` array): [vw_gdelt_gkg_themes_daily](/views/vw_gdelt_gkg_themes_daily)

@@ -9,8 +9,9 @@ package main
 //     against net_usage); one sample alone can be an unusually short encoding.
 //   - USDC transfer gas: median over the last 6h of Ethereum transactions,
 //     applied to every EVM chain in the ladder.
-// About 1.3 GB of BigQuery per day. The BigQuery and TronGrid halves are
-// cached separately (24h), and a failed half is retried only after a back-off.
+// About 1.55 GB of BigQuery per day (~1.26 GB TRON 24h modes + ~56 MB TRON 60m
+// samples + ~234 MB Ethereum 6h USDC transfers). The BigQuery and TronGrid
+// halves are cached separately (24h), and a failed half is retried only after a back-off.
 
 import (
 	"bytes"
@@ -243,7 +244,7 @@ func (b *BQClient) GetUSDCTransferGas(ctx context.Context) (*usdcGasRow, error) 
 	return &rows[0], nil
 }
 
-// gasCalibrationSamples is the BigQuery half of the calibration (~1.3 GB):
+// gasCalibrationSamples is the BigQuery half of the calibration (~1.55 GB):
 // the modal USDT energies with candidate sample hashes, and the USDC transfer
 // gas median. Cached on its own so a TronGrid failure never re-runs it.
 type gasCalibrationSamples struct {

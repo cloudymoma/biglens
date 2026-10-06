@@ -15,7 +15,7 @@ Decodes raw numeric and alphanumeric CAMEO codes from [events_partitioned](/tabl
 
 # Schema
 - `report_date` (DATE) — Reporting (ingestion) date.
-- `country_code` (STRING) — ISO 3166-1 alpha-2 code of the action location, mapped from FIPS. NULL when the country is not covered by Google Trends (and therefore not in the mapping).
+- `country_code` (STRING) — ISO 3166-1 alpha-2 code of the action location, mapped from FIPS 10-4 via `dim_fips_iso_country` (186 countries). NULL only when `ActionGeo_CountryCode` is missing or an unmapped territory code.
 - `fips_country_code` (STRING) — Raw FIPS 10-4 code from `ActionGeo_CountryCode` (full global coverage).
 - `location_name` (STRING) — Full geographic location description.
 - `primary_actor` (STRING) — First actor.

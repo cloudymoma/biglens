@@ -1,7 +1,7 @@
 ---
 type: BigQuery Table
 title: International Top Terms
-description: Raw Google Trends daily snapshot of the top 25 search queries across ~50 countries and sub-national regions.
+description: Raw Google Trends daily snapshot of the top 25 search queries across 42 countries and sub-national regions.
 resource: bigquery:bigquery-public-data.google_trends.international_top_terms
 tags:
   - source_table

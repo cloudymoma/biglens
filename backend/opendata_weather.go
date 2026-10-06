@@ -54,13 +54,10 @@ type WeatherCoverageRow struct {
 	TmaxStations int64  `bigquery:"tmax_stations"`
 }
 
-// GetWeatherRecentCoverage returns per-day TMAX station counts for the 10
-// days up to MAX(date), newest first, along with the table's LastModifiedTime.
-// In early January the current year's table may not exist yet, so its presence
-// is checked via a metadata Get (free) before querying, falling back one year.
-// Because (id, date, element) is unique in GHCN-Daily, COUNTIF avoids scanning
-// the 11-char id column (~48% fewer bytes scanned).
-func (b *BQClient) GetWeatherRecentCoverage(ctx context.Context) ([]WeatherCoverageRow, time.Time, error) {
+// GetWeatherTableYearAndLastMod resolves the active GHCN-Daily yearly table
+// (falling back one year in early January before the new year's table exists)
+// and returns its LastModifiedTime via a free tables.get metadata call.
+func (b *BQClient) GetWeatherTableYearAndLastMod(ctx context.Context) (int, time.Time) {
 	year := time.Now().UTC().Year()
 	tbl := b.client.DatasetInProject(ghcndProject, ghcndDataset).Table(fmt.Sprintf("ghcnd_%d", year))
 	md, err := tbl.Metadata(ctx)
@@ -73,6 +70,13 @@ func (b *BQClient) GetWeatherRecentCoverage(ctx context.Context) ([]WeatherCover
 	if md != nil {
 		lastMod = md.LastModifiedTime
 	}
+	return year, lastMod
+}
+
+// GetWeatherRecentCoverageForYear runs the 10-day TMAX coverage query on the
+// specified yearly table. Because (id, date, element) is unique in GHCN-Daily,
+// COUNTIF avoids scanning the 11-char id column (~48% fewer bytes scanned).
+func (b *BQClient) GetWeatherRecentCoverageForYear(ctx context.Context, year int) ([]WeatherCoverageRow, error) {
 	// A window ending in the first days of January would under-report because
 	// it can't see into the previous year's table; acceptable for a default-
 	// date heuristic (the fallbacks below still yield a valid day).
@@ -85,7 +89,14 @@ func (b *BQClient) GetWeatherRecentCoverage(ctx context.Context) ([]WeatherCover
 		GROUP BY date
 		ORDER BY date DESC`, ghcndTable(year), ghcndTable(year)))
 	q.MaxBytesBilled = weatherMaxBytesBill
-	rows, err := collectRows[WeatherCoverageRow](q, ctx)
+	return collectRows[WeatherCoverageRow](q, ctx)
+}
+
+// GetWeatherRecentCoverage returns per-day TMAX station counts for the 10
+// days up to MAX(date), newest first, along with the table's LastModifiedTime.
+func (b *BQClient) GetWeatherRecentCoverage(ctx context.Context) ([]WeatherCoverageRow, time.Time, error) {
+	year, lastMod := b.GetWeatherTableYearAndLastMod(ctx)
+	rows, err := b.GetWeatherRecentCoverageForYear(ctx, year)
 	return rows, lastMod, err
 }
 

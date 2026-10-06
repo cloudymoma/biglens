@@ -278,16 +278,18 @@ GDELT 是*新闻报道*的索引，而非经核实事件的登记册。每行是
 | 标签页 | 组件 |
 |---|---|
 | **网络脉搏** | 双链 KPI（最新完整 UTC 日）、每日交易数、结算金额、活跃地址（近似去重发送方，≤90 天）、区块拥挤度、出块量 |
-| **手续费市场** | BTC 中位数 sat/vB 与 ETH 平均 gwei 趋势、BTC 矿工收入（补贴 vs 手续费）、ETH EIP-1559 销毁 vs 小费、拥挤度-费率散点图 |
-| **巨鲸与资金流** | Top 50 大额转账（区块浏览器链接）、巨鲸交易趋势（≥100 BTC / ≥1,000 ETH）、Top 收款地址、Top 1% 金额集中度 |
-| **代币经济** | Top 25 ERC-20 代币（按转账次数）、代币 vs 原生交易活跃度、新合约部署、代币流动 Treemap |
-| **挖矿经济** | 全网算力、矿工收入、每 TH/s 收益、最新一日矿机经济性、各矿机关机币价（可调电价、PUE、矿池费率、BTC 价格、自定义矿机） |
+| **手续费市场** | **72h Gas Pulse**（默认）：BTC、ETH、Arbitrum、Optimism、Polygon、TRON 与 Solana 最近 72 个完整 UTC 小时的费率区间与负载趋势、72h 分位数/中位数、全时 Base Fee 极值（从预置基线增量扫描 BigQuery，每日后台刷新）及 TRON 能量价格历史；以及 **Daily Economics**：BTC 中位数 sat/vB 与 ETH 平均 gwei 趋势、BTC 矿工收入（补贴 vs 手续费）、ETH EIP-1559 销毁 vs 小费、拥挤度-费率散点图 |
+| **巨鲸与资金流** | Top 50 大额转账（区块浏览器链接）、巨鲸交易趋势（≥100 BTC / ≥1,000 ETH）、Top 收款地址、Top 1% 金额集中度（仅统计有转账金额的交易） |
+| **代币经济** | Top 25 代币合约（按 Transfer 事件数，含 ERC-20 与 ERC-721）、代币 vs 原生交易活跃度、新合约部署、代币流动 Treemap |
+| **挖矿经济** | 全网算力（7 日均值 + 单日隐含值）、矿工收入、每 TH/s 收益、最新一日矿机经济性、各矿机关机币价（可调电价、PUE、矿池费率、BTC 价格、自定义矿机） |
 | **地址风险（Address Risk）** | 以太坊地址风险线索查询、冻结历史概览与数据源表，详见下文 [Address Risk](#address-risk以太坊地址风险线索) |
 
-区间：各页支持 7/30/90 天，轻量聚合趋势（网络脉搏、手续费）另支持 1 年；
-代币查询上限 30 天。所有查询均按分区键裁剪 —— `crypto_ethereum` 按
-`block_timestamp` 天分区直接过滤，`crypto_bitcoin` 按 `block_timestamp_month`
-月分区，因此 BTC 查询同时携带月分区边界与精确时间窗。
+区间：各页支持 7/30/90 天，轻量聚合趋势（网络脉搏、手续费、挖矿）另支持 1 年；
+代币查询上限 30 天。日级接口对齐至已结算的完整 UTC 日（带午夜后 20 分钟入库缓冲），
+并缓存至下一个 UTC 日切换。所有查询均限制时间窗口 —— `crypto_bitcoin.transactions` 与
+`crypto_ethereum.transactions` / `token_transfers` 按 `block_timestamp` 天分区裁剪，
+`crypto_ethereum.blocks` 与 `contracts` 同时携带 Merge 后区块号下界（`number >= @start_block`
+/ `block_number >= @start_block`）与精确时间窗，且每条查询均设置 `MaxBytesBilled`。
 
 #### 数据含义
 
@@ -295,7 +297,7 @@ GDELT 是*新闻报道*的索引，而非经核实事件的登记册。每行是
 或计数：
 
 - **结算金额（BTC）** 为交易输出之和，包含返回发送方的找零 —— 是经济转移
-  量的上界，图表提示中亦有注明。
+  量的上界，图表提示中亦有注明。以太坊结算金额统计成功顶层交易（`receipt_status = 1`）的 `value`，不含合约内部转账。
 - **活跃地址** 为每日近似去重发送方（`APPROX_COUNT_DISTINCT`，约 1% 误差），
   衡量网络活跃度而非用户数（一人可持有多个地址）。
 - **代币活跃度只统计转账次数，绝不求和金额**：跨代币金额相加没有意义，且
@@ -319,10 +321,10 @@ GDELT 是*新闻报道*的索引，而非经核实事件的登记册。每行是
 
 本地数据存放在 `data/security.db`（相对于工作目录，可用 `address_risk.db_path` 修改）。文件打不开时服务照常启动，查询结果会标明本地名单不可用。查询过的地址只保存在 10 分钟的内存缓存里，不写磁盘，也不写日志。
 
-**冻结历史（BigQuery）**。服务首次启动时同步最近 30 天的 USDT/USDC 冻结事件（扫描约 89–100 GB，一次性约 $0.5–$0.6），之后每天增量同步一天（`logs` 表扫描约 3.3 GB + 分区完整性检查约 25 MB，每天约 $0.02）。`address_risk.initial_sync_days` 可修改天数（0 关闭，最大 31）。全量回填之前，查询结果会注明 "Freeze history covers … only"。回填时服务可以继续运行：
+**冻结历史（BigQuery）**。服务首次启动时同步最近 30 天的 USDT/USDC 冻结事件（扫描约 110–130 GB，一次性约 $0.6–$0.8），之后每天增量同步一天（`logs` 表扫描约 3.5–4.5 GB + 分区完整性检查约 25 MB，每天约 $0.02–$0.03）。`address_risk.initial_sync_days` 可修改天数（0 关闭，最大 31）。全量回填之前，查询结果会注明 "Freeze history covers … only"。回填时服务可以继续运行：
 
 ```bash
-cd /opt/biglens/backend && sudo -u biglens ./biglens-server --address-risk-backfill        # 只做 dry-run：打印每年的预估费用，不产生费用
+cd /opt/biglens/backend && sudo -u biglens ./biglens-server --address-risk-backfill        # 只做 dry-run：打印每年的预估费用（仅运行约 25 MB 的区块水位检查，不跑回填批次）
 cd /opt/biglens/backend && sudo -u biglens ./biglens-server --address-risk-backfill --yes  # 全量（2017-11-28 至今）：约 3.4 TB，约 $20
 ```
 

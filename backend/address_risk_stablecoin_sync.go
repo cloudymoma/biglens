@@ -182,7 +182,7 @@ func (s *stablecoinSyncer) sync(ctx context.Context) (stablecoinRun, bool) {
 		// BigQuery errors carry no API key or looked-up address (the service
 		// account authenticates out of band), so the detail is safe to log.
 		slog.Warn("address_risk bigquery", "source", stablecoinSourceID, "error", err)
-		if billed > 0 {
+		if billed > 0 || errors.Is(err, context.DeadlineExceeded) {
 			s.retryAfter = now.Add(stablecoinBilledRetry)
 		}
 		return stablecoinRun{start: start, end: end, billed: billed, errCode: bqErrCode(err)}, true
