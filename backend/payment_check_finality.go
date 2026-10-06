@@ -146,7 +146,10 @@ func classifyEVM(block uint64, blockTime int64, failed bool, h payHeads, now int
 	if block <= h.Finalized {
 		return levelFinalized, 100, 0
 	}
-	age := max(int64(0), now-blockTime)
+	var age int64
+	if blockTime > 0 {
+		age = max(int64(0), now-blockTime)
+	}
 	eta := max(0, h.FinalLagSec-int(age))
 	if block <= h.Safe {
 		// F < B <= S guarantees h.Safe > h.Finalized.

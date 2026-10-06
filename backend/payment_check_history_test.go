@@ -836,3 +836,75 @@ func TestFetchTronRecent(t *testing.T) {
 		t.Errorf("len(txs) = %d, want 1", len(txs))
 	}
 }
+
+func TestFetchTronHistoryNineSlowRequestsSucceed(t *testing.T) {
+	const tronAddr = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
+	origLimiter := tronGridLimiter
+	tronGridLimiter = rateLimiterUnlimited()
+	defer func() { tronGridLimiter = origLimiter }()
+
+	var totalReqs atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		totalReqs.Add(1)
+		// Every request takes 1 second; 9 requests total (1 registry trc20 page +
+		// 1 unfiltered trc20 page + 1 only_from page + 1 solidified block +
+		// 5 gettransactioninfobyid calls). With per-request 8s timeout, an overall
+		// 20s timeout, and concurrency, this must succeed well within budget.
+		time.Sleep(time.Second)
+
+		switch r.URL.Path {
+		case "/v1/accounts/" + tronAddr + "/transactions/trc20":
+			if r.URL.Query().Get("contract_address") == "" {
+				w.Write([]byte(`{"data":[],"success":true,"meta":{}}`))
+				return
+			}
+			rows := make([]map[string]any, 5)
+			for i := range rows {
+				rows[i] = map[string]any{
+					"transaction_id":  fmt.Sprintf("tx_slow_%d", i),
+					"block_timestamp": int64(1759600000000 - i*1000),
+					"from":            "TFp3Ls4mH7cjP2c9mG3tZ6uX8vW1nK2jR9",
+					"to":              tronAddr,
+					"type":            "Transfer",
+					"value":           "1000000",
+					"token_info": map[string]any{
+						"symbol":   "USDT",
+						"address":  tronAddr,
+						"decimals": 6,
+					},
+				}
+			}
+			b, _ := json.Marshal(map[string]any{"data": rows, "success": true, "meta": map[string]any{}})
+			w.Write(b)
+		case "/v1/accounts/" + tronAddr + "/transactions":
+			w.Write([]byte(`{"data":[],"success":true,"meta":{}}`))
+		case "/walletsolidity/getnowblock":
+			w.Write([]byte(`{"block_header":{"raw_data":{"number":86844300,"timestamp":1759599900000}}}`))
+		case "/wallet/gettransactioninfobyid":
+			w.Write([]byte(`{"blockNumber":86844305}`))
+		default:
+			w.Write([]byte(`{}`))
+		}
+	}))
+	defer srv.Close()
+
+	orig := tronGridBaseURL
+	tronGridBaseURL = srv.URL
+	defer func() { tronGridBaseURL = orig }()
+
+	txs, _, err := fetchTronHistory(context.Background(), "USDT", tronAddr, time.Unix(1759500000, 0).UTC())
+	if err != nil {
+		t.Fatalf("fetchTronHistory with 9 x 1s requests failed: %v", err)
+	}
+	if totalReqs.Load() != 9 {
+		t.Errorf("totalReqs = %d, want 9", totalReqs.Load())
+	}
+	if len(txs) != 5 {
+		t.Fatalf("len(txs) = %d, want 5", len(txs))
+	}
+	for i, tx := range txs {
+		if tx.Block != 86844305 {
+			t.Errorf("txs[%d].Block = %d, want 86844305", i, tx.Block)
+		}
+	}
+}

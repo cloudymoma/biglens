@@ -19,6 +19,7 @@ import (
 
 const (
 	payHistoryWindow       = 7 * 24 * time.Hour
+	payTronHistoryTimeout  = 20 * time.Second
 	payHistoryMaxRows      = 1000
 	payRecentPageSize      = 20
 	tronPageSize           = 200
@@ -823,7 +824,9 @@ func fetchTronTRC20Page(ctx context.Context, addr, contract string, minTS int64,
 		q.Set("fingerprint", fingerprint)
 	}
 	path := "/v1/accounts/" + url.PathEscape(addr) + "/transactions/trc20?" + q.Encode()
-	raw, code := tronGridDo(ctx, http.MethodGet, path, nil)
+	reqCtx, cancel := context.WithTimeout(ctx, payUpstreamTimeout)
+	defer cancel()
+	raw, code := tronGridDo(reqCtx, http.MethodGet, path, nil)
 	if code != "" {
 		return nil, "", code
 	}
@@ -853,7 +856,9 @@ func fetchTronTransactionsPage(ctx context.Context, addr string, onlyFrom bool, 
 		q.Set("fingerprint", fingerprint)
 	}
 	path := "/v1/accounts/" + url.PathEscape(addr) + "/transactions?" + q.Encode()
-	raw, code := tronGridDo(ctx, http.MethodGet, path, nil)
+	reqCtx, cancel := context.WithTimeout(ctx, payUpstreamTimeout)
+	defer cancel()
+	raw, code := tronGridDo(reqCtx, http.MethodGet, path, nil)
 	if code != "" {
 		return nil, "", code
 	}
@@ -1034,7 +1039,9 @@ func fetchTronTxBlockNumber(ctx context.Context, txID string) uint64 {
 	if err != nil {
 		return 0
 	}
-	raw, code := tronGridDo(ctx, http.MethodPost, "/wallet/gettransactioninfobyid", payload)
+	reqCtx, cancel := context.WithTimeout(ctx, payUpstreamTimeout)
+	defer cancel()
+	raw, code := tronGridDo(reqCtx, http.MethodPost, "/wallet/gettransactioninfobyid", payload)
 	if code != "" {
 		return 0
 	}
@@ -1050,7 +1057,7 @@ func fetchTronTxBlockNumber(ctx context.Context, txID string) uint64 {
 // fetchTronHistory fetches the 7-day transaction history for USDT or TRX on
 // TRON via TronGrid, returning raw rows and scope metadata.
 func fetchTronHistory(ctx context.Context, asset, addr string, since time.Time) ([]payTx, payHistoryScope, error) {
-	ctx, cancel := context.WithTimeout(ctx, payUpstreamTimeout)
+	ctx, cancel := context.WithTimeout(ctx, payTronHistoryTimeout)
 	defer cancel()
 	minTS := since.UnixMilli()
 	scope := payHistoryScope{Hosts: hostsOf(tronGridBaseURL)}
@@ -1080,40 +1087,83 @@ func fetchTronHistory(ctx context.Context, asset, addr string, since time.Time) 
 		return txs, scope, nil
 	}
 
-	var txs []payTx
-	for _, tok := range tokensFor(asset, "tron") {
-		var regRows []tronTRC20Row
-		fp := ""
-		for len(regRows) < payHistoryMaxRows {
-			page, nextFP, code := fetchTronTRC20Page(ctx, addr, tok.Contract, minTS, tronPageSize, fp)
-			if code != "" {
-				return nil, scope, errors.New(code)
+	var (
+		regTxs         []payTx
+		regCount       int
+		regTruncated   bool
+		regCode        string
+		unfilteredRows []tronTRC20Row
+		unfilteredCode string
+		outRows        []tronTxRow
+		outCode        string
+		solidTime      int64
+		wg             sync.WaitGroup
+	)
+
+	wg.Add(4)
+	go func() {
+		defer wg.Done()
+		for _, tok := range tokensFor(asset, "tron") {
+			var regRows []tronTRC20Row
+			fp := ""
+			for len(regRows) < payHistoryMaxRows {
+				page, nextFP, code := fetchTronTRC20Page(ctx, addr, tok.Contract, minTS, tronPageSize, fp)
+				if code != "" {
+					regCode = code
+					return
+				}
+				regRows = append(regRows, page...)
+				if nextFP == "" || len(page) == 0 {
+					break
+				}
+				if len(regRows) >= payHistoryMaxRows {
+					regTruncated = true
+					regRows = regRows[:payHistoryMaxRows]
+					break
+				}
+				fp = nextFP
 			}
-			regRows = append(regRows, page...)
-			if nextFP == "" || len(page) == 0 {
-				break
+			regCount += len(regRows)
+			for _, r := range regRows {
+				if tx, ok := convertTronTRC20Row(r, asset, addr, false); ok {
+					regTxs = append(regTxs, tx)
+				}
 			}
-			if len(regRows) >= payHistoryMaxRows {
-				scope.Truncated = true
-				regRows = regRows[:payHistoryMaxRows]
-				break
-			}
-			fp = nextFP
 		}
-		scope.TRC20 += len(regRows)
-		for _, r := range regRows {
-			if tx, ok := convertTronTRC20Row(r, asset, addr, false); ok {
-				txs = append(txs, tx)
-			}
-		}
+	}()
+	go func() {
+		defer wg.Done()
+		// Single unfiltered page (200 rows) to surface counterfeit USDT transfers;
+		// keep only non-registry contracts so official USDT rows are not duplicated (review P2-1).
+		unfilteredRows, _, unfilteredCode = fetchTronTRC20Page(ctx, addr, "", minTS, tronPageSize, "")
+	}()
+	go func() {
+		defer wg.Done()
+		// Single page of outgoing account transactions to catch failed TRC-20 transfers
+		// (e.g. OUT_OF_ENERGY), which emit no Transfer event (review P1-10, review-2 #4).
+		outRows, _, outCode = fetchTronTransactionsPage(ctx, addr, true, minTS, tronPageSize, "")
+	}()
+	go func() {
+		defer wg.Done()
+		solidCtx, solidCancel := context.WithTimeout(ctx, payUpstreamTimeout)
+		defer solidCancel()
+		_, solidTime, _ = fetchTronBlockOnce(solidCtx, "/walletsolidity/getnowblock")
+	}()
+	wg.Wait()
+
+	if regCode != "" {
+		return nil, scope, errors.New(regCode)
+	}
+	if unfilteredCode != "" {
+		return nil, scope, errors.New(unfilteredCode)
+	}
+	if outCode != "" {
+		return nil, scope, errors.New(outCode)
 	}
 
-	// Single unfiltered page (200 rows) to surface counterfeit USDT transfers;
-	// keep only non-registry contracts so official USDT rows are not duplicated (review P2-1).
-	unfilteredRows, _, code := fetchTronTRC20Page(ctx, addr, "", minTS, tronPageSize, "")
-	if code != "" {
-		return nil, scope, errors.New(code)
-	}
+	txs := regTxs
+	scope.TRC20 = regCount
+	scope.Truncated = regTruncated
 	for _, r := range unfilteredRows {
 		if tx, ok := convertTronTRC20Row(r, asset, addr, true); ok {
 			txs = append(txs, tx)
@@ -1121,12 +1171,6 @@ func fetchTronHistory(ctx context.Context, asset, addr string, since time.Time) 
 		}
 	}
 
-	// Single page of outgoing account transactions to catch failed TRC-20 transfers
-	// (e.g. OUT_OF_ENERGY), which emit no Transfer event (review P1-10, review-2 #4).
-	outRows, _, code := fetchTronTransactionsPage(ctx, addr, true, minTS, tronPageSize, "")
-	if code != "" {
-		return nil, scope, errors.New(code)
-	}
 	scope.Transactions = len(outRows)
 	if len(outRows) >= tronPageSize {
 		scope.TruncatedFailedOutgoing = true
@@ -1135,10 +1179,9 @@ func fetchTronHistory(ctx context.Context, asset, addr string, since time.Time) 
 	sortPayTxsDesc(txs)
 
 	// Resolve block numbers for at most the 5 newest unsolidified TRC-20 rows (review-2 #4).
-	_, solidTime, _ := fetchTronBlockOnce(ctx, "/walletsolidity/getnowblock")
-	lookups := 0
+	var lookupIndices []int
 	for i := range txs {
-		if lookups >= tronMaxTxInfoLookups {
+		if len(lookupIndices) >= tronMaxTxInfoLookups {
 			break
 		}
 		if txs[i].Block != 0 || txs[i].Failed {
@@ -1151,11 +1194,20 @@ func fetchTronHistory(ctx context.Context, asset, addr string, since time.Time) 
 		if solidTime > 0 && txTime.Unix() <= solidTime {
 			continue
 		}
-		lookups++
-		if blk := fetchTronTxBlockNumber(ctx, txs[i].TxHash); blk > 0 {
-			txs[i].Block = blk
-		}
+		lookupIndices = append(lookupIndices, i)
 	}
+
+	var txInfoWG sync.WaitGroup
+	for _, idx := range lookupIndices {
+		txInfoWG.Add(1)
+		go func(i int) {
+			defer txInfoWG.Done()
+			if blk := fetchTronTxBlockNumber(ctx, txs[i].TxHash); blk > 0 {
+				txs[i].Block = blk
+			}
+		}(idx)
+	}
+	txInfoWG.Wait()
 
 	return txs, scope, nil
 }

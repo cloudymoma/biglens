@@ -93,6 +93,26 @@ func TestClassifyEVMNegativeAgeAndZeroLag(t *testing.T) {
 	}
 }
 
+func TestClassifyEVMUnknownBlockTimeIsNotNearlyFinal(t *testing.T) {
+	heads := payHeads{
+		Latest:      1000,
+		Safe:        960,
+		Finalized:   920,
+		LatestTime:  1759600000,
+		SafeTime:    1759599500,
+		FinalTime:   1759599100,
+		SafeLagSec:  500,
+		FinalLagSec: 900,
+	}
+	// When an RPC log has a known block number (995 > Safe) but no blockTimestamp
+	// (blockTime <= 0), age must be treated as 0 rather than now - 0 = 1.75e9s,
+	// so progress is 10 (not 75) and ETA is FinalLagSec (900, not 0).
+	lvl, prog, eta := classifyEVM(995, 0, false, heads, 1759600000)
+	if lvl != levelSoft || prog != 10 || eta != 900 {
+		t.Fatalf("unknown blockTime = (%s, %d, %d), want (SOFT, 10, 900)", lvl, prog, eta)
+	}
+}
+
 func TestClassifyTron(t *testing.T) {
 	heads := payHeads{
 		Latest:      118,
