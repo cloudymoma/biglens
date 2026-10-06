@@ -218,6 +218,12 @@ export default function AddressRiskTab({
   const familyMismatch = detectedFamily !== null && detectedFamily !== selectedChainOpt.family ? detectedFamily : null;
 
   const selectChain = (nextChain: AddressRiskChain) => {
+    if (nextChain !== chain) {
+      abortRef.current?.abort();
+      setLoading(false);
+      setResult(null);
+      setError('');
+    }
     setChain(nextChain);
     setInputError('');
   };
@@ -436,14 +442,16 @@ export default function AddressRiskTab({
         </p>
         {meta && (
           <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-zinc-500">
-            {meta.lists.map(s => (
-              <span key={s.id} className="rounded-md border border-zinc-800 px-2 py-0.5">
-                {SOURCE_LABELS[s.id] ?? s.id} · {sourceState(s)}{s.coverage_from ? ` · since ${s.coverage_from}` : ''}{s.last_ok_at ? ` · fetched ${ago(s.last_ok_at)}` : ''}
-              </span>
-            ))}
+            {meta.lists
+              .filter(s => selectedChainOpt.localSources.includes(s.id))
+              .map(s => (
+                <span key={s.id} className="rounded-md border border-zinc-800 px-2 py-0.5">
+                  {SOURCE_LABELS[s.id] ?? s.id} · {sourceState(s)}{s.coverage_from ? ` · since ${s.coverage_from}` : ''}{s.last_ok_at ? ` · fetched ${ago(s.last_ok_at)}` : ''}
+                </span>
+              ))}
           </div>
         )}
-        <EtherscanKeyPanel info={meta?.etherscan ?? null} onChange={refreshMeta} />
+        {chain === 'eth' && <EtherscanKeyPanel info={meta?.etherscan ?? null} onChange={refreshMeta} />}
       </Panel>
 
       {error && <ErrorBanner message={error} />}

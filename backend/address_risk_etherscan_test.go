@@ -135,11 +135,8 @@ func TestBlockscoutListNormalizesTransactionHashAndStatus2(t *testing.T) {
 		w.Write([]byte(`{"status":"2","message":"Some internal transactions not yet processed","result":[{"transactionHash":"0xabc","from":"0x1","to":"0x2","value":"100","isError":"0","timeStamp":"1700000000"}]}`))
 	}))
 	defer srv.Close()
-	origBS := blockscoutBaseURL
-	blockscoutBaseURL = srv.URL
-	defer func() { blockscoutBaseURL = origBS }()
 
-	rows, code := blockscoutList(context.Background(), "txlistinternal", "0x1111111111111111111111111111111111111111")
+	rows, code := blockscoutListAt(context.Background(), srv.URL, "txlistinternal", "0x1111111111111111111111111111111111111111")
 	if code != "" || len(rows) != 1 || rows[0].Hash != "0xabc" {
 		t.Fatalf("rows = %+v, code = %q", rows, code)
 	}

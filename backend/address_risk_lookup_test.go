@@ -430,11 +430,10 @@ func TestBlockscoutFallbackAndLiveCounterpartyScreening(t *testing.T) {
 	}))
 	defer bsSrv.Close()
 
-	origG, origBS, origT := goplusBaseURL, blockscoutBaseURL, riskSourceTimeout
+	origG, origT := goplusBaseURL, riskSourceTimeout
 	goplusBaseURL = goplusSrv.URL + "/api/v1/address_security/"
-	blockscoutBaseURL = bsSrv.URL
 	riskSourceTimeout = time.Second
-	defer func() { goplusBaseURL, blockscoutBaseURL, riskSourceTimeout = origG, origBS, origT }()
+	defer func() { goplusBaseURL, riskSourceTimeout = origG, origT }()
 
 	store := newTestRiskStore(t)
 	ctx := context.Background()
@@ -445,6 +444,7 @@ func TestBlockscoutFallbackAndLiveCounterpartyScreening(t *testing.T) {
 	// No Etherscan API key configured: should fall back to Blockscout!
 	svc := newAddressRiskService(store, []string{oracleSrv.URL})
 	svc.now = func() time.Time { return riskNow }
+	svc.blockscoutURLs = map[string]string{"eth": bsSrv.URL}
 
 	res := svc.lookup(ctx, "eth", target)
 	es := sourceByID(t, res.Sources, "etherscan")
@@ -514,11 +514,10 @@ func TestCounterpartyScreenErrorsAreNotCached(t *testing.T) {
 	}))
 	defer bsSrv.Close()
 
-	origG, origBS, origT := goplusBaseURL, blockscoutBaseURL, riskSourceTimeout
+	origG, origT := goplusBaseURL, riskSourceTimeout
 	goplusBaseURL = goplusSrv.URL + "/api/v1/address_security/"
-	blockscoutBaseURL = bsSrv.URL
 	riskSourceTimeout = time.Second
-	defer func() { goplusBaseURL, blockscoutBaseURL, riskSourceTimeout = origG, origBS, origT }()
+	defer func() { goplusBaseURL, riskSourceTimeout = origG, origT }()
 
 	store := newTestRiskStore(t)
 	ctx := context.Background()
@@ -527,6 +526,7 @@ func TestCounterpartyScreenErrorsAreNotCached(t *testing.T) {
 	markStablecoinSynced(t, store)
 	svc := newAddressRiskService(store, []string{oracleSrv.URL})
 	svc.now = func() time.Time { return riskNow }
+	svc.blockscoutURLs = map[string]string{"eth": bsSrv.URL}
 
 	res := svc.lookup(ctx, "eth", target)
 	if len(res.Summary.Failed) != 0 {
@@ -551,10 +551,6 @@ func TestBlockscoutAddressErrorSurfacedInSources(t *testing.T) {
 	}))
 	defer bsSrv.Close()
 
-	origBS := blockscoutBaseURL
-	blockscoutBaseURL = bsSrv.URL
-	defer func() { blockscoutBaseURL = origBS }()
-
 	store := newTestRiskStore(t)
 	ctx := context.Background()
 	store.replaceList(ctx, "ofac", []listEntry{{Address: ronin}}, "h", riskNow)
@@ -563,6 +559,7 @@ func TestBlockscoutAddressErrorSurfacedInSources(t *testing.T) {
 
 	svc := newAddressRiskService(store, []string{up.oracle.URL})
 	svc.now = func() time.Time { return riskNow }
+	svc.blockscoutURLs = map[string]string{"eth": bsSrv.URL}
 
 	res := svc.lookup(ctx, "eth", "0x1111111111111111111111111111111111111111")
 	bs := sourceByID(t, res.Sources, "blockscout")
@@ -588,10 +585,6 @@ func TestBlockscoutTagRegexRejectsFalsePositives(t *testing.T) {
 	}))
 	defer bsSrv.Close()
 
-	origBS := blockscoutBaseURL
-	blockscoutBaseURL = bsSrv.URL
-	defer func() { blockscoutBaseURL = origBS }()
-
 	clues, code := checkBlockscoutAddress(context.Background(), bsSrv.URL, "0x40c57923924b5c5c5455c48d93317139addac8fb", riskNow)
 	if code != "" || len(clues) != 0 {
 		t.Fatalf("clues = %+v, code = %q, want empty clues and empty code", clues, code)
@@ -616,10 +609,9 @@ func TestBlockscoutFallbackOnEtherscanTimeout(t *testing.T) {
 	}))
 	defer bsSrv.Close()
 
-	origBS, origT := blockscoutBaseURL, riskSourceTimeout
-	blockscoutBaseURL = bsSrv.URL
+	origT := riskSourceTimeout
 	riskSourceTimeout = 40 * time.Millisecond
-	defer func() { blockscoutBaseURL, riskSourceTimeout = origBS, origT }()
+	defer func() { riskSourceTimeout = origT }()
 
 	store := newTestRiskStore(t)
 	ctx := context.Background()
@@ -629,6 +621,7 @@ func TestBlockscoutFallbackOnEtherscanTimeout(t *testing.T) {
 
 	svc := newAddressRiskService(store, []string{up.oracle.URL})
 	svc.now = func() time.Time { return riskNow }
+	svc.blockscoutURLs = map[string]string{"eth": bsSrv.URL}
 
 	res := svc.lookupKey(ctx, "eth", "0x1111111111111111111111111111111111111111", "slow-key")
 	es := sourceByID(t, res.Sources, "etherscan")
@@ -655,10 +648,9 @@ func TestRiskSourcesForChain(t *testing.T) {
 	}))
 	defer tronSrv.Close()
 
-	origBS, origTron := blockscoutBaseURL, tronGridBaseURL
-	blockscoutBaseURL = bsSrv.URL
+	origTron := tronGridBaseURL
 	tronGridBaseURL = tronSrv.URL
-	defer func() { blockscoutBaseURL, tronGridBaseURL = origBS, origTron }()
+	defer func() { tronGridBaseURL = origTron }()
 
 	store := newTestRiskStore(t)
 	ctx := context.Background()
@@ -668,6 +660,12 @@ func TestRiskSourcesForChain(t *testing.T) {
 
 	svc := newAddressRiskService(store, []string{up.oracle.URL})
 	svc.now = func() time.Time { return riskNow }
+	svc.blockscoutURLs = map[string]string{
+		"eth":  bsSrv.URL,
+		"arb":  bsSrv.URL,
+		"op":   bsSrv.URL,
+		"base": bsSrv.URL,
+	}
 
 	tests := []struct {
 		chain string
@@ -722,6 +720,7 @@ func TestLookupGoPlusChainID(t *testing.T) {
 	store.replaceList(ctx, "mew_darklist", []listEntry{{Address: "0x2222222222222222222222222222222222222222"}}, "h", riskNow)
 	svc := newAddressRiskService(store, []string{up.oracle.URL})
 	svc.now = func() time.Time { return riskNow }
+	svc.blockscoutURLs = map[string]string{"arb": ""}
 
 	svc.lookup(ctx, "arb", "0x1111111111111111111111111111111111111111")
 	svc.lookup(ctx, "tron", "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t")
@@ -749,6 +748,7 @@ func TestLookupBaseHasNoOracle(t *testing.T) {
 	store.replaceList(ctx, "mew_darklist", []listEntry{{Address: "0x2222222222222222222222222222222222222222"}}, "h", riskNow)
 	svc := newAddressRiskService(store, []string{rpcSrv.URL})
 	svc.now = func() time.Time { return riskNow }
+	svc.blockscoutURLs = map[string]string{"base": ""}
 
 	res := svc.lookup(ctx, "base", "0x1111111111111111111111111111111111111111")
 	for _, s := range res.Sources {
@@ -771,9 +771,7 @@ func TestLookupTronOFACHit(t *testing.T) {
 	tronGridBaseURL = tronSrv.URL
 	defer func() { tronGridBaseURL = origTron }()
 
-	const tronOFAC = "TFf5a3s322222222222222222222222222" // valid 34-char base58? Use real TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t
 	const tronAddr = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
-	_ = tronOFAC
 	store := newTestRiskStore(t)
 	ctx := context.Background()
 	store.replaceList(ctx, "ofac", []listEntry{{Address: tronAddr, Label: "sanctioned TRON"}}, "h", riskNow)
@@ -799,9 +797,9 @@ func TestLookupBTCOnlyOFAC(t *testing.T) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer srv.Close()
-	origG, origBS, origTron := goplusBaseURL, blockscoutBaseURL, tronGridBaseURL
-	goplusBaseURL, blockscoutBaseURL, tronGridBaseURL = srv.URL+"/", srv.URL, srv.URL
-	defer func() { goplusBaseURL, blockscoutBaseURL, tronGridBaseURL = origG, origBS, origTron }()
+	origG, origTron := goplusBaseURL, tronGridBaseURL
+	goplusBaseURL, tronGridBaseURL = srv.URL+"/", srv.URL
+	defer func() { goplusBaseURL, tronGridBaseURL = origG, origTron }()
 
 	const btcAddr = "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"
 	store := newTestRiskStore(t)
@@ -811,6 +809,7 @@ func TestLookupBTCOnlyOFAC(t *testing.T) {
 
 	svc := newAddressRiskService(store, []string{srv.URL})
 	svc.now = func() time.Time { return riskNow }
+	svc.blockscoutURLs = map[string]string{"eth": srv.URL, "arb": srv.URL, "op": srv.URL, "base": srv.URL}
 	res := svc.lookup(ctx, "btc", btcAddr)
 	if len(res.Sources) != 1 || res.Sources[0].ID != "ofac" || res.Sources[0].Status != "ok" {
 		t.Fatalf("btc sources = %+v, want only ofac=ok", res.Sources)
@@ -836,6 +835,7 @@ func TestLocalCheckSkipsEthFreezeOnL2(t *testing.T) {
 
 	svc := newAddressRiskService(store, []string{up.oracle.URL})
 	svc.now = func() time.Time { return riskNow }
+	svc.blockscoutURLs = map[string]string{"arb": ""}
 
 	res := svc.lookup(ctx, "arb", ronin)
 	for _, s := range res.Sources {
@@ -847,5 +847,89 @@ func TestLocalCheckSkipsEthFreezeOnL2(t *testing.T) {
 		if c.Source == "stablecoin" || c.Code == "stablecoin_frozen" {
 			t.Errorf("arb lookup leaked Ethereum freeze clue: %+v", c)
 		}
+	}
+}
+
+func TestLookupBlockscoutPerChainURL(t *testing.T) {
+	var cfg PaymentCheckConfig
+	if got := cfg.blockscoutURL("arb"); got != "https://arbitrum.blockscout.com" {
+		t.Errorf("default arb blockscoutURL = %q", got)
+	}
+	if got := cfg.blockscoutURL("op"); got != "https://explorer.optimism.io" {
+		t.Errorf("default op blockscoutURL = %q", got)
+	}
+	if got := cfg.blockscoutURL("base"); got != "https://base.blockscout.com" {
+		t.Errorf("default base blockscoutURL = %q", got)
+	}
+	if got := cfg.blockscoutURL("tron"); got != "" {
+		t.Errorf("default tron blockscoutURL = %q, want empty", got)
+	}
+
+	up := newFakeUpstreams(t, `{"result":"`+oracleFalse+`"}`, `{"code":1,"result":{}}`, 0)
+	var ethHits, arbHits atomic.Int32
+	ethBS := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ethHits.Add(1)
+		w.Write([]byte(`{"is_scam":false,"reputation":"ok"}`))
+	}))
+	defer ethBS.Close()
+	arbBS := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		arbHits.Add(1)
+		w.Write([]byte(`{"is_scam":true,"reputation":"scam","public_tags":[{"display_name":"Arb Phishing"}]}`))
+	}))
+	defer arbBS.Close()
+
+	store := newTestRiskStore(t)
+	ctx := context.Background()
+	store.replaceList(ctx, "ofac", []listEntry{{Address: ronin}}, "h", riskNow)
+	store.replaceList(ctx, "mew_darklist", []listEntry{{Address: "0x2222222222222222222222222222222222222222"}}, "h", riskNow)
+
+	svc := newAddressRiskService(store, []string{up.oracle.URL})
+	svc.now = func() time.Time { return riskNow }
+	svc.blockscoutURLs = map[string]string{
+		"eth": ethBS.URL,
+		"arb": arbBS.URL,
+	}
+
+	res := svc.lookup(ctx, "arb", "0x1111111111111111111111111111111111111111")
+	if arbHits.Load() != 1 || ethHits.Load() != 0 {
+		t.Fatalf("arbHits = %d, ethHits = %d; arb lookup must hit arb Blockscout only", arbHits.Load(), ethHits.Load())
+	}
+	bs := sourceByID(t, res.Sources, "blockscout")
+	if bs.Status != "ok" || strings.Join(bs.Hosts, ",") != strings.Join(hostsOf(arbBS.URL), ",") {
+		t.Errorf("arb blockscout source = %+v, want hosts=%v", bs, hostsOf(arbBS.URL))
+	}
+}
+
+func TestCheckEtherscanKeylessHostsAreBlockscout(t *testing.T) {
+	up := newFakeUpstreams(t, `{"result":"`+oracleFalse+`"}`, `{"code":1,"result":{}}`, 0)
+	bsSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/v2/addresses/") {
+			w.Write([]byte(`{"is_scam":false,"reputation":"ok"}`))
+			return
+		}
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer bsSrv.Close()
+
+	store := newTestRiskStore(t)
+	ctx := context.Background()
+	store.replaceList(ctx, "ofac", []listEntry{{Address: ronin}}, "h", riskNow)
+	store.replaceList(ctx, "mew_darklist", []listEntry{{Address: "0x2222222222222222222222222222222222222222"}}, "h", riskNow)
+	markStablecoinSynced(t, store)
+
+	svc := newAddressRiskService(store, []string{up.oracle.URL})
+	svc.now = func() time.Time { return riskNow }
+	svc.blockscoutURLs = map[string]string{"eth": bsSrv.URL}
+
+	// No Etherscan key configured: 1-hop check goes directly to Blockscout and fails with 502.
+	// Its reported host must be Blockscout's host, never api.etherscan.io.
+	res := svc.lookup(ctx, "eth", "0x1111111111111111111111111111111111111111")
+	es := sourceByID(t, res.Sources, "etherscan")
+	if es.Status != "error" || es.Error != "upstream_http_502" {
+		t.Fatalf("etherscan source = %+v, want status=error error=upstream_http_502", es)
+	}
+	wantHost := strings.Join(hostsOf(bsSrv.URL), ",")
+	if got := strings.Join(es.Hosts, ","); got != wantHost || strings.Contains(got, "etherscan") {
+		t.Errorf("keyless etherscan error hosts = %v, want [%s] (must not report api.etherscan.io)", es.Hosts, wantHost)
 	}
 }

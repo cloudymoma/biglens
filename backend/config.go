@@ -41,7 +41,6 @@ type Config struct {
 }
 
 var defaultBlockscoutURLs = map[string]string{
-	"eth":  "https://eth.blockscout.com",
 	"arb":  "https://arbitrum.blockscout.com",
 	"op":   "https://explorer.optimism.io",
 	"base": "https://base.blockscout.com",
@@ -53,13 +52,16 @@ type PaymentCheckConfig struct {
 }
 
 func (c PaymentCheckConfig) blockscoutURL(chain string) string {
-	if u := c.BlockscoutURLs[chain]; u != "" {
+	if u, ok := c.BlockscoutURLs[chain]; ok {
+		return u
+	}
+	if u := defaultBlockscoutURLs[chain]; u != "" {
 		return u
 	}
 	if chain == "eth" {
 		return blockscoutBaseURL
 	}
-	return defaultBlockscoutURLs[chain]
+	return ""
 }
 
 // AddressRiskConfig configures the Crypto Pulse "Address Risk" tab. Every

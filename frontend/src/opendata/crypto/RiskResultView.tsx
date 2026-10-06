@@ -10,6 +10,7 @@ import { Panel } from './shared';
 import {
   ago,
   REVOKE_CASH_URL,
+  RISK_CHAINS,
   RISK_SOURCE_LABELS as SOURCE_LABELS,
   RISK_TOOLS,
   sourceState,
@@ -70,6 +71,7 @@ export default function RiskResultView({
   headingRef?: React.RefObject<HTMLHeadingElement | null>;
 }) {
   const chain: AddressRiskChain = result.chain || 'eth';
+  const chainLabel = RISK_CHAINS.find(c => c.id === chain)?.label ?? chain;
   const esSource = result.sources.find(s => s.id === 'etherscan');
   const usedBlockscoutFallback = Boolean(esSource?.hosts?.includes('eth.blockscout.com'));
   const hasAssociationSource = Boolean(esSource) || chain === 'eth';
@@ -89,7 +91,12 @@ export default function RiskResultView({
     const compactGroups = GROUPS.filter(g => g.id === 'critical' || g.id === 'warning');
     return (
       <div className="space-y-2">
-        <p role="status" className="text-xs text-zinc-200">{result.summary.text}</p>
+        <p role="status" className="text-xs text-zinc-200">
+          <span className="mr-1.5 rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] font-medium text-zinc-300">
+            {chainLabel}
+          </span>
+          {result.summary.text}
+        </p>
         {compactGroups.map(g => {
           const clues = result.clues.filter(c => c.severity === g.id);
           if (clues.length === 0) return null;
@@ -129,7 +136,7 @@ export default function RiskResultView({
   }
 
   return (
-    <Panel title="Result" note={`checked ${ago(result.queried_at)}`}>
+    <Panel title={`Result · ${chainLabel}`} note={`checked ${ago(result.queried_at)}`}>
       <h4 ref={headingRef} tabIndex={-1} className="font-mono text-sm text-white break-all outline-none">
         {result.address}
       </h4>

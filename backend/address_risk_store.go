@@ -398,9 +398,10 @@ func (s *riskStore) riskPoolForAddresses(ctx context.Context, chain string, addr
 		placeholders[i] = "?"
 		args[i] = a
 	}
+	want := riskSourcesFor(chain)
 	inClause := "WHERE address IN (" + strings.Join(placeholders, ",") + ")"
 	listWhere := inClause
-	if chain == "tron" || chain == "btc" {
+	if !slices.Contains(want, "mew_darklist") {
 		listWhere += " AND source = 'ofac'"
 	}
 
@@ -421,7 +422,7 @@ func (s *riskStore) riskPoolForAddresses(ctx context.Context, chain string, addr
 		return nil, err
 	}
 
-	if chain != "eth" {
+	if !slices.Contains(want, "stablecoin") {
 		return pool, nil
 	}
 

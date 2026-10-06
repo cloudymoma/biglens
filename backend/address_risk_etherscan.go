@@ -143,14 +143,18 @@ func etherscanList(ctx context.Context, key, action, addr string) ([]etherscanRo
 // blockscoutList fetches the newest 1000 rows of one account action from
 // Blockscout's keyless Etherscan-compatible RPC endpoint.
 func blockscoutList(ctx context.Context, action, addr string) ([]etherscanRow, string) {
-	if blockscoutBaseURL == "" {
+	return blockscoutListAt(ctx, blockscoutBaseURL, action, addr)
+}
+
+func blockscoutListAt(ctx context.Context, baseURL, action, addr string) ([]etherscanRow, string) {
+	if baseURL == "" {
 		return nil, "not_configured"
 	}
 	q := url.Values{
 		"module": {"account"}, "action": {action}, "address": {addr},
 		"page": {"1"}, "offset": {etherscanPageSize}, "sort": {"desc"},
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(blockscoutBaseURL, "/")+"/api?"+q.Encode(), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(baseURL, "/")+"/api?"+q.Encode(), nil)
 	if err != nil {
 		return nil, "bad_request"
 	}

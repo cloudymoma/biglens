@@ -351,13 +351,7 @@ func (s *addressRiskService) rpcsFor(chain string) []string {
 }
 
 func (s *addressRiskService) blockscoutURL(chain string) string {
-	if u := s.blockscoutURLs[chain]; u != "" {
-		return u
-	}
-	if chain == "eth" || blockscoutBaseURL != "https://eth.blockscout.com" {
-		return blockscoutBaseURL
-	}
-	return PaymentCheckConfig{}.blockscoutURL(chain)
+	return PaymentCheckConfig{BlockscoutURLs: s.blockscoutURLs}.blockscoutURL(chain)
 }
 
 func (s *addressRiskService) setEtherscanKey(k string) { s.etherscanKey.Store(&k) }
@@ -452,13 +446,18 @@ func (s *addressRiskService) screenCounterparties(ctx context.Context, candidate
 // Etherscan key is configured (or Etherscan fails transiently) and Blockscout
 // is enabled, it falls back to Blockscout's Etherscan-compatible API.
 func (s *addressRiskService) checkEtherscan(ctx context.Context, addr, key string, now time.Time) (riskSource, []riskClue, *riskAssociationScope) {
-	src := riskSource{ID: "etherscan", Status: "ok", Hosts: hostsOf(etherscanBaseURL), SendsAddress: true,
+	bsURL := s.blockscoutURL("eth")
+	hosts := hostsOf(etherscanBaseURL)
+	if key == "" {
+		hosts = hostsOf(bsURL)
+	}
+	src := riskSource{ID: "etherscan", Status: "ok", Hosts: hosts, SendsAddress: true,
 		SignupURL: etherscanSignupURL, HelpURL: etherscanHelpURL}
 	fail := func(code string) (riskSource, []riskClue, *riskAssociationScope) {
 		src.Status, src.Error = "error", code
 		return src, nil, nil
 	}
-	if key == "" && blockscoutBaseURL == "" {
+	if key == "" && bsURL == "" {
 		src.Status = "not_configured"
 		return src, nil, nil
 	}
@@ -498,7 +497,7 @@ func (s *addressRiskService) checkEtherscan(ctx context.Context, addr, key strin
 				etherscanErrCode = r.code
 				// Explicit key/plan errors from Etherscan are surfaced directly
 				// unless Blockscout fallback can answer for transient failures.
-				if r.code == "key_invalid" || r.code == "key_throttled" || r.code == "bad_response" || blockscoutBaseURL == "" {
+				if r.code == "key_invalid" || r.code == "key_throttled" || r.code == "bad_response" || bsURL == "" {
 					return fail(r.code)
 				}
 				needFallback = true
@@ -515,7 +514,7 @@ func (s *addressRiskService) checkEtherscan(ctx context.Context, addr, key strin
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				rows, code := blockscoutList(bsCtx, action, addr)
+				rows, code := blockscoutListAt(bsCtx, bsURL, action, addr)
 				bResults[i] = listResult{rows: rows, code: code}
 			}()
 		}
@@ -531,7 +530,7 @@ func (s *addressRiskService) checkEtherscan(ctx context.Context, addr, key strin
 		}
 		results = bResults
 		src.LastError = ""
-		src.Hosts = hostsOf(blockscoutBaseURL)
+		src.Hosts = hostsOf(bsURL)
 	}
 
 	candidates, firstFunder := topCounterpartiesToScreen(addr, results[0].rows, results[1].rows, results[2].rows, pool)
@@ -586,7 +585,8 @@ func (s *addressRiskService) readStates(ctx context.Context) (map[string]syncSta
 	return s.store.allSyncStates(ctx)
 }
 
-// listSources reports all local sources' status; used by /sources.
+// listSources reports all local sources' status for /sources ("eth" is the
+// superset that includes every local source: ofac, mew_darklist, stablecoin).
 func (s *addressRiskService) listSources(ctx context.Context) []riskSource {
 	states, err := s.readStates(ctx)
 	return s.localSources("eth", states, err)

@@ -142,6 +142,7 @@ func TestAddressRiskLookupChainParam(t *testing.T) {
 	store.replaceList(ctx, "mew_darklist", []listEntry{{Address: "0x2222222222222222222222222222222222222222"}}, "h", riskNow)
 	markStablecoinSynced(t, store)
 	h := riskHandler(t, store, []string{up.oracle.URL})
+	h.risk.blockscoutURLs = map[string]string{"arb": ""}
 
 	// Omitting chain defaults to eth.
 	rec, resEth := doLookup(t, h, "address="+ronin)

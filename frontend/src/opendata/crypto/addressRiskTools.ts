@@ -13,15 +13,16 @@ export interface RiskChainOption {
   family: AddressFamily;
   placeholder: string;
   formatHint: string;
+  localSources: string[];
 }
 
 export const RISK_CHAINS: RiskChainOption[] = [
-  { id: 'eth', label: 'Ethereum', family: 'evm', placeholder: '0x… address', formatHint: 'Enter a 0x address (42 characters). ENS names are not supported.' },
-  { id: 'arb', label: 'Arbitrum', family: 'evm', placeholder: '0x… address', formatHint: 'Enter a 0x address (42 characters). ENS names are not supported.' },
-  { id: 'op', label: 'Optimism', family: 'evm', placeholder: '0x… address', formatHint: 'Enter a 0x address (42 characters). ENS names are not supported.' },
-  { id: 'base', label: 'Base', family: 'evm', placeholder: '0x… address', formatHint: 'Enter a 0x address (42 characters). ENS names are not supported.' },
-  { id: 'tron', label: 'TRON', family: 'tron', placeholder: 'T… address', formatHint: 'Enter a TRON address starting with T (34 base58 characters).' },
-  { id: 'btc', label: 'Bitcoin', family: 'btc', placeholder: '1…, 3…, or bc1… address', formatHint: 'Enter a Bitcoin mainnet address (1…, 3…, or bc1…).' },
+  { id: 'eth', label: 'Ethereum', family: 'evm', placeholder: '0x… address', formatHint: 'Enter a 0x address (42 characters). ENS names are not supported.', localSources: ['ofac', 'mew_darklist', 'stablecoin'] },
+  { id: 'arb', label: 'Arbitrum', family: 'evm', placeholder: '0x… address', formatHint: 'Enter a 0x address (42 characters). ENS names are not supported.', localSources: ['ofac', 'mew_darklist'] },
+  { id: 'op', label: 'Optimism', family: 'evm', placeholder: '0x… address', formatHint: 'Enter a 0x address (42 characters). ENS names are not supported.', localSources: ['ofac', 'mew_darklist'] },
+  { id: 'base', label: 'Base', family: 'evm', placeholder: '0x… address', formatHint: 'Enter a 0x address (42 characters). ENS names are not supported.', localSources: ['ofac', 'mew_darklist'] },
+  { id: 'tron', label: 'TRON', family: 'tron', placeholder: 'T… address', formatHint: 'Enter a TRON address starting with T (34 base58 characters).', localSources: ['ofac'] },
+  { id: 'btc', label: 'Bitcoin', family: 'btc', placeholder: '1…, 3…, or bc1… address', formatHint: 'Enter a Bitcoin mainnet address (1…, 3…, or bc1…).', localSources: ['ofac'] },
 ];
 
 const EVM_ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
