@@ -95,11 +95,13 @@ func TestStorageOverviewSQLAndRollup(t *testing.T) {
 		"table_schema = @dataset",
 		"GROUP BY ROLLUP(table_schema)",
 		"ORDER BY is_rollup DESC",
-		"LIMIT 51",
 	} {
 		if !strings.Contains(sql, want) {
 			t.Errorf("storageOverviewSQL missing %q in:\n%s", want, sql)
 		}
+	}
+	if strings.Contains(sql, "LIMIT 51") {
+		t.Errorf("storageOverviewSQL should not truncate datasets with LIMIT 51:\n%s", sql)
 	}
 
 	stats, bd, ds := rollupStorageOverview([]storageRollupRow{
@@ -148,12 +150,24 @@ func TestRecommendationsAndErrorSQL(t *testing.T) {
 
 	where, _ := QueryFilters{TimeRange: "7d"}.JobsWhere("creation_time")
 	for name, sql := range map[string]string{
+		"errorOverviewSQL":   errorOverviewSQL("`p`.`region-us`", where),
 		"errorStatsSQL":      errorStatsSQL("`p`.`region-us`", where),
 		"topFailingUsersSQL": topFailingUsersSQL("`p`.`region-us`", where),
 	} {
 		if !strings.Contains(sql, "(statement_type IS NULL OR statement_type != 'SCRIPT')") {
 			t.Errorf("%s missing SCRIPT exclusion in:\n%s", name, sql)
 		}
+	}
+
+	errStats, failUsers := rollupErrorOverview([]errorOverviewRow{
+		{Reason: "invalidQuery", GReason: 0, GUser: 1, JobCount: 8, SlotMs: 500},
+		{UserEmail: "alice@example.com", GReason: 1, GUser: 0, JobCount: 5, SlotMs: 1024},
+	})
+	if len(errStats) != 1 || errStats[0].Reason != "invalidQuery" || errStats[0].JobCount != 8 {
+		t.Errorf("unexpected ErrorStats: %+v", errStats)
+	}
+	if len(failUsers) != 1 || failUsers[0].UserEmail != "alice@example.com" || failUsers[0].JobCount != 5 {
+		t.Errorf("unexpected FailingUsers: %+v", failUsers)
 	}
 }
 

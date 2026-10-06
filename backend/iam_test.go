@@ -67,12 +67,17 @@ func TestIAMQueriesAndRollups(t *testing.T) {
 
 	ohSQL := offHoursSQL("`p`.`region-us`", "creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY)")
 	for _, want := range []string{
+		"EXTRACT(DAYOFWEEK FROM creation_time AT TIME ZONE @tz) AS dow",
+		"EXTRACT(HOUR FROM creation_time AT TIME ZONE @tz) AS hr",
 		"GROUP BY GROUPING SETS ((dow, hr), (email))",
 		"COUNTIF(hr NOT BETWEEN 8 AND 19 OR dow IN (1, 7)) AS off_hours_jobs",
 	} {
 		if !strings.Contains(ohSQL, want) {
 			t.Errorf("offHoursSQL missing %q in:\n%s", want, ohSQL)
 		}
+	}
+	if validateTimeZone("Asia/Shanghai") != "Asia/Shanghai" || validateTimeZone("invalid/zone") != "UTC" {
+		t.Errorf("unexpected validateTimeZone behavior")
 	}
 	cells, ohTop := splitOffHoursRows([]offHoursGroupingRow{
 		{Dow: 1, Hr: 14, IsCell: 1, Jobs: 9},

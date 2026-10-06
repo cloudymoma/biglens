@@ -42,7 +42,11 @@ const DEFAULT_PRICING: RegionPricing = {
 
 const REGIONAL_PRICING: Record<string, RegionPricing> = {
   us: DEFAULT_PRICING,
-  eu: DEFAULT_PRICING,
+  eu: {
+    onDemandPerTiB: 6.25,
+    storageRates: { activeLogical: 0.02, longTermLogical: 0.01, activePhysical: 0.044, longTermPhysical: 0.022 },
+    slotHourRates: { standard: 0.044, enterprise: 0.066, enterprise_plus: 0.11 },
+  },
   'us-central1': {
     onDemandPerTiB: 6.25,
     storageRates: { activeLogical: 0.023, longTermLogical: 0.016, activePhysical: 0.04, longTermPhysical: 0.02 },
@@ -60,8 +64,8 @@ const REGIONAL_PRICING: Record<string, RegionPricing> = {
   },
   'us-east4': {
     onDemandPerTiB: 6.25,
-    storageRates: { activeLogical: 0.023, longTermLogical: 0.016, activePhysical: 0.044, longTermPhysical: 0.022 },
-    slotHourRates: { standard: 0.044, enterprise: 0.066, enterprise_plus: 0.11 },
+    storageRates: { activeLogical: 0.023, longTermLogical: 0.016, activePhysical: 0.05, longTermPhysical: 0.025 },
+    slotHourRates: { standard: 0.04, enterprise: 0.06, enterprise_plus: 0.1 },
   },
   'europe-west1': {
     onDemandPerTiB: 6.25,
@@ -86,12 +90,12 @@ const REGIONAL_PRICING: Record<string, RegionPricing> = {
   'asia-northeast1': {
     onDemandPerTiB: 7.5,
     storageRates: { activeLogical: 0.023, longTermLogical: 0.016, activePhysical: 0.052, longTermPhysical: 0.026 },
-    slotHourRates: { standard: 0.052, enterprise: 0.078, enterprise_plus: 0.13 },
+    slotHourRates: { standard: 0.051, enterprise: 0.078, enterprise_plus: 0.13 },
   },
   'asia-southeast1': {
-    onDemandPerTiB: 7.1875,
-    storageRates: { activeLogical: 0.023, longTermLogical: 0.016, activePhysical: 0.044, longTermPhysical: 0.022 },
-    slotHourRates: { standard: 0.044, enterprise: 0.066, enterprise_plus: 0.11 },
+    onDemandPerTiB: 8.4375,
+    storageRates: { activeLogical: 0.02, longTermLogical: 0.01, activePhysical: 0.046, longTermPhysical: 0.023 },
+    slotHourRates: { standard: 0.049, enterprise: 0.075, enterprise_plus: 0.125 },
   },
   'australia-southeast1': {
     onDemandPerTiB: 7.8125,
@@ -99,9 +103,9 @@ const REGIONAL_PRICING: Record<string, RegionPricing> = {
     slotHourRates: { standard: 0.052, enterprise: 0.078, enterprise_plus: 0.13 },
   },
   'southamerica-east1': {
-    onDemandPerTiB: 9.375,
-    storageRates: { activeLogical: 0.023, longTermLogical: 0.016, activePhysical: 0.06, longTermPhysical: 0.03 },
-    slotHourRates: { standard: 0.06, enterprise: 0.09, enterprise_plus: 0.15 },
+    onDemandPerTiB: 11.25,
+    storageRates: { activeLogical: 0.023, longTermLogical: 0.016, activePhysical: 0.07, longTermPhysical: 0.035 },
+    slotHourRates: { standard: 0.062, enterprise: 0.096, enterprise_plus: 0.16 },
   },
 };
 

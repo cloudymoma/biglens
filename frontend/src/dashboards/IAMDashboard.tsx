@@ -20,18 +20,26 @@ export default function IAMDashboard({ region, timeRange }: Props) {
   const [loading, setLoading] = useState(true);
   const [selectedEmails, setSelectedEmails] = useState<string[]>([]);
   const [view, setView] = useState<'activity' | 'posture'>('activity');
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 
   useEffect(() => {
     if (view !== 'activity') return;
+    const controller = new AbortController();
     let active = true;
     setLoading(true);
     setError('');
-    fetchIAMDashboard(region, selectedEmails, timeRange)
+    fetchIAMDashboard(region, selectedEmails, timeRange, tz, controller.signal)
       .then(d => { if (active) setData(d); })
-      .catch(e => { if (active) setError(e.response?.data || e.message); })
+      .catch(e => {
+        if (!active || controller.signal.aborted || e?.code === 'ERR_CANCELED') return;
+        setError(e.response?.data || e.message);
+      })
       .finally(() => { if (active) setLoading(false); });
-    return () => { active = false; };
-  }, [region, timeRange, selectedEmails, view]);
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [region, timeRange, selectedEmails, view, tz]);
 
   const handleAddEmail = (email: string) => {
     if (!selectedEmails.includes(email)) {
@@ -85,7 +93,7 @@ export default function IAMDashboard({ region, timeRange }: Props) {
             <>
               <DegradedNotice widgets={data.degraded_widgets} />
               <SummaryCards summary={data.summary} />
-              <UsageTimelineChart timeline={data.timeline || []} />
+              <UsageTimelineChart timeline={data.timeline || []} timeRange={timeRange} />
               <TopCallersTable callers={data.top_callers || []} />
               <InactiveSection
                 inactive7={data.inactive_7d || []}
@@ -93,7 +101,7 @@ export default function IAMDashboard({ region, timeRange }: Props) {
                 inactive90={data.inactive_90d || []}
               />
               <NewActorsCard actors={data.new_actors || []} />
-              <OffHoursHeatmap cells={data.off_hours || []} top={data.off_hours_top || []} />
+              <OffHoursHeatmap cells={data.off_hours || []} top={data.off_hours_top || []} tz={tz} />
               <ExfilSignalsTable signals={data.exfil_signals || []} />
             </>
           )}
@@ -306,7 +314,7 @@ function SummaryCards({ summary }: { summary: IAMDashboardData['summary'] }) {
 
 // --- Usage Timeline Chart ---
 
-function UsageTimelineChart({ timeline }: { timeline: IAMDashboardData['timeline'] & {} }) {
+function UsageTimelineChart({ timeline, timeRange }: { timeline: IAMDashboardData['timeline'] & {}; timeRange: string }) {
   if (!timeline || timeline.length === 0) {
     return (
       <div className="rounded-2xl border border-zinc-800/50 p-6" style={{ background: '#111114' }}>
@@ -318,7 +326,21 @@ function UsageTimelineChart({ timeline }: { timeline: IAMDashboardData['timeline
   }
 
   const emails = [...new Set(timeline.map(t => t.email))];
-  const buckets = [...new Set(timeline.map(t => t.bucket))].sort();
+  const isDailyBucket = timeRange === '30d' || timeRange === '90d';
+  const stepMs = isDailyBucket ? 86_400_000 : 3_600_000;
+  const rawBuckets = [...new Set(timeline.map(t => t.bucket))].sort();
+  const buckets: string[] = [];
+  if (rawBuckets.length > 0) {
+    const startMs = Date.parse(rawBuckets[0]);
+    const endMs = Date.parse(rawBuckets[rawBuckets.length - 1]);
+    if (Number.isFinite(startMs) && Number.isFinite(endMs) && endMs >= startMs) {
+      for (let ms = startMs; ms <= endMs; ms += stepMs) {
+        buckets.push(new Date(ms).toISOString().replace('.000Z', 'Z'));
+      }
+    } else {
+      buckets.push(...rawBuckets);
+    }
+  }
 
   const COLORS = [
     '#38bdf8', '#c084fc', '#4ade80', '#fb7185', '#fbbf24',
@@ -328,8 +350,6 @@ function UsageTimelineChart({ timeline }: { timeline: IAMDashboardData['timeline
   const emailMap = new Map<string, Map<string, number>>();
   for (const e of emails) emailMap.set(e, new Map());
   for (const t of timeline) emailMap.get(t.email)!.set(t.bucket, t.call_count);
-
-  const isDailyBucket = buckets.every(b => b.endsWith('T00:00:00Z'));
 
   const series = emails.map((email, i) => ({
     name: email,
@@ -695,7 +715,7 @@ function NewActorsCard({ actors }: { actors: NewActor[] }) {
 
 // --- Off-Hours Heatmap ---
 
-function OffHoursHeatmap({ cells, top }: { cells: OffHoursCell[]; top: OffHoursUser[] }) {
+function OffHoursHeatmap({ cells, top, tz }: { cells: OffHoursCell[]; top: OffHoursUser[]; tz: string }) {
   const DOW_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
   const heatmapData = cells.map(c => [c.hr, c.dow - 1, c.jobs]);
@@ -710,7 +730,7 @@ function OffHoursHeatmap({ cells, top }: { cells: OffHoursCell[]; top: OffHoursU
       textStyle: { color: '#e4e4e7', fontSize: 11 },
       formatter: (params: any) => {
         const [hr, dow, jobs] = params.data;
-        return `${DOW_LABELS[dow]} ${hr.toString().padStart(2, '0')}:00 UTC<br/>${jobs} jobs`;
+        return `${DOW_LABELS[dow]} ${hr.toString().padStart(2, '0')}:00 (${tz})<br/>${jobs} jobs`;
       },
     },
     grid: { left: 48, right: 24, bottom: 32, top: 12 },
@@ -752,7 +772,7 @@ function OffHoursHeatmap({ cells, top }: { cells: OffHoursCell[]; top: OffHoursU
         <Clock size={16} className="text-cyan-400" />
         <h3 className="text-sm font-semibold text-white">Off-Hours Activity</h3>
       </div>
-      <p className="text-xs text-zinc-500 mb-4">Human (non-service-account) jobs by weekday × hour, UTC</p>
+      <p className="text-xs text-zinc-500 mb-4">Human (non-service-account) jobs by weekday × hour ({tz})</p>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2">
@@ -766,7 +786,7 @@ function OffHoursHeatmap({ cells, top }: { cells: OffHoursCell[]; top: OffHoursU
         </div>
 
         <div>
-          <h4 className="text-xs font-semibold text-white mb-3">Top Off-Hours Principals (nights 20:00–08:00 &amp; weekends UTC)</h4>
+          <h4 className="text-xs font-semibold text-white mb-3">Top Off-Hours Principals (nights 20:00–08:00 &amp; weekends, {tz})</h4>
           {top.length > 0 ? (
             <div className="space-y-2">
               {top.slice(0, 10).map((user, i) => (

@@ -65,12 +65,12 @@ type CalculatorPresets struct {
 var calcStorageRegions = []StorageRegionPreset{
 	{Region: "us-central1", Label: "Iowa (us-central1)", Rates: StorageRates{0.023, 0.016, 0.04, 0.02}},
 	{Region: "us", Label: "US (multi-region)", Rates: StorageRates{0.02, 0.01, 0.04, 0.02}},
-	{Region: "eu", Label: "EU (multi-region)", Rates: StorageRates{0.02, 0.01, 0.04, 0.02}},
-	{Region: "us-east4", Label: "N. Virginia (us-east4)", Rates: StorageRates{0.023, 0.016, 0.044, 0.022}},
+	{Region: "eu", Label: "EU (multi-region)", Rates: StorageRates{0.02, 0.01, 0.044, 0.022}},
+	{Region: "us-east4", Label: "N. Virginia (us-east4)", Rates: StorageRates{0.023, 0.016, 0.05, 0.025}},
 	{Region: "asia-northeast1", Label: "Tokyo (asia-northeast1)", Rates: StorageRates{0.023, 0.016, 0.052, 0.026}},
 	{Region: "europe-west2", Label: "London (europe-west2)", Rates: StorageRates{0.023, 0.016, 0.052, 0.026}},
-	{Region: "asia-southeast1", Label: "Singapore (asia-southeast1)", Rates: StorageRates{0.023, 0.016, 0.044, 0.022}},
-	{Region: "southamerica-east1", Label: "São Paulo (southamerica-east1)", Rates: StorageRates{0.023, 0.016, 0.06, 0.03}},
+	{Region: "asia-southeast1", Label: "Singapore (asia-southeast1)", Rates: StorageRates{0.02, 0.01, 0.046, 0.023}},
+	{Region: "southamerica-east1", Label: "São Paulo (southamerica-east1)", Rates: StorageRates{0.023, 0.016, 0.07, 0.035}},
 }
 
 // Commit rates are resource-based commitments (dedicated slots billed 24x7).

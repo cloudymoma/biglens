@@ -15,14 +15,21 @@ export default function SecurityPosture({ region, timeRange }: Props) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    const controller = new AbortController();
     let active = true;
     setLoading(true);
     setError('');
-    fetchSecurityDashboard(region, timeRange)
+    fetchSecurityDashboard(region, timeRange, controller.signal)
       .then(d => { if (active) setData(d); })
-      .catch(e => { if (active) setError(e.response?.data || e.message); })
+      .catch(e => {
+        if (!active || controller.signal.aborted || e?.code === 'ERR_CANCELED') return;
+        setError(e.response?.data || e.message);
+      })
       .finally(() => { if (active) setLoading(false); });
-    return () => { active = false; };
+    return () => {
+      active = false;
+      controller.abort();
+    };
   }, [region]);
 
   if (loading) return <LoadingPulse />;

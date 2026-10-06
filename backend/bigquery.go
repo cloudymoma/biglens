@@ -102,8 +102,7 @@ func storageOverviewSQL(regionRef, where string) string {
 		FROM %[1]s.INFORMATION_SCHEMA.TABLE_STORAGE_BY_PROJECT
 		LEFT JOIN ds_models dm ON dm.schema_name = table_schema%[2]s
 		GROUP BY ROLLUP(table_schema)
-		ORDER BY is_rollup DESC, (active_logical + long_term_logical) DESC
-		LIMIT 51`,
+		ORDER BY is_rollup DESC, (active_logical + long_term_logical) DESC`,
 		regionRef, storageBaseTableWhere(where))
 }
 
@@ -132,22 +131,20 @@ func rollupStorageOverview(rows []storageRollupRow) (*StorageStats, *StorageBrea
 			}
 			continue
 		}
-		if len(datasets) < 50 {
-			model := r.BillingModel
-			if model == "" {
-				model = "LOGICAL"
-			}
-			datasets = append(datasets, DatasetStorage{
-				Dataset:          r.Dataset,
-				BillingModel:     model,
-				ActiveLogical:    r.ActiveLogical,
-				LongTermLogical:  r.LongTermLogical,
-				ActivePhysical:   r.ActivePhysical,
-				LongTermPhysical: r.LongTermPhysical,
-				TimeTravel:       r.TimeTravel,
-				FailSafe:         r.FailSafe,
-			})
+		model := r.BillingModel
+		if model == "" {
+			model = "LOGICAL"
 		}
+		datasets = append(datasets, DatasetStorage{
+			Dataset:          r.Dataset,
+			BillingModel:     model,
+			ActiveLogical:    r.ActiveLogical,
+			LongTermLogical:  r.LongTermLogical,
+			ActivePhysical:   r.ActivePhysical,
+			LongTermPhysical: r.LongTermPhysical,
+			TimeTravel:       r.TimeTravel,
+			FailSafe:         r.FailSafe,
+		})
 	}
 	return stats, bd, datasets
 }

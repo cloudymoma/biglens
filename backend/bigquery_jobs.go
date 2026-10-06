@@ -69,6 +69,86 @@ func (b *BQClient) GetTopFailingUsers(ctx context.Context, filters QueryFilters)
 	return collectRows[FailingUser](q, ctx)
 }
 
+type errorOverviewRow struct {
+	GReason   int64  `bigquery:"g_reason"`
+	GUser     int64  `bigquery:"g_user"`
+	Reason    string `bigquery:"reason"`
+	UserEmail string `bigquery:"user_email"`
+	JobCount  int64  `bigquery:"job_count"`
+	SlotMs    int64  `bigquery:"slot_ms"`
+}
+
+func errorOverviewSQL(regionRef, where string) string {
+	return fmt.Sprintf(
+		`SELECT
+			g_reason,
+			g_user,
+			IFNULL(reason, '') AS reason,
+			IFNULL(user_email, '') AS user_email,
+			job_count,
+			slot_ms
+		FROM (
+			SELECT
+				GROUPING(reason) AS g_reason,
+				GROUPING(user_email) AS g_user,
+				reason,
+				user_email,
+				COUNT(*) AS job_count,
+				IFNULL(SUM(total_slot_ms), 0) AS slot_ms
+			FROM (
+				SELECT
+					IFNULL(error_result.reason, 'unknown') AS reason,
+					IFNULL(user_email, '') AS user_email,
+					total_slot_ms
+				FROM %s.INFORMATION_SCHEMA.JOBS_BY_PROJECT
+				%s AND error_result IS NOT NULL
+					AND (statement_type IS NULL OR statement_type != 'SCRIPT')
+			)
+			GROUP BY GROUPING SETS ((reason), (user_email))
+		)
+		ORDER BY g_reason ASC, slot_ms DESC`,
+		regionRef, where)
+}
+
+func rollupErrorOverview(rows []errorOverviewRow) ([]ErrorStat, []FailingUser) {
+	var stats []ErrorStat
+	var users []FailingUser
+	for _, r := range rows {
+		switch {
+		case r.GReason == 0 && r.GUser == 1:
+			stats = append(stats, ErrorStat{
+				Reason:   r.Reason,
+				JobCount: r.JobCount,
+				SlotMs:   r.SlotMs,
+			})
+		case r.GReason == 1 && r.GUser == 0:
+			if len(users) < 10 {
+				users = append(users, FailingUser{
+					UserEmail: r.UserEmail,
+					JobCount:  r.JobCount,
+					SlotMs:    r.SlotMs,
+				})
+			}
+		}
+	}
+	return stats, users
+}
+
+// GetErrorOverview scans JOBS_BY_PROJECT once with GROUPING SETS ((reason), (user_email))
+// to return both ErrorStat and top 10 FailingUser rows.
+func (b *BQClient) GetErrorOverview(ctx context.Context, filters QueryFilters) ([]ErrorStat, []FailingUser, error) {
+	where, params := filters.JobsWhere("creation_time")
+	q := b.client.Query(errorOverviewSQL(b.regionRef(filters.Region), where))
+	q.Parameters = params
+	rows, err := collectRows[errorOverviewRow](q, ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	es, fu := rollupErrorOverview(rows)
+	return es, fu, nil
+}
+
+
 // --- Widget 4.3: Performance Insights ---
 
 // perfInsightFlags is the shared SELECT fragment deriving one boolean per

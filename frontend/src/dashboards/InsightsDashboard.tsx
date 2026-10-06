@@ -4,7 +4,7 @@ import { Lightbulb, Sparkles, AlertTriangle, DollarSign, XCircle, Gauge, Repeat 
 import type { QueryFilters, InsightsDashboardData, PerfInsightJob } from '../types';
 import { fetchInsightsDashboard } from '../api';
 import { formatBytes, EmptyState, ErrorBanner, DegradedNotice } from './shared';
-import { ON_DEMAND_PER_TIB } from './pricing';
+import { getRegionPricing, TIB } from './pricing';
 
 const INSIGHT_FLAGS: { key: keyof PerfInsightJob; label: string }[] = [
   { key: 'slot_contention', label: 'Slot Contention' },
@@ -36,6 +36,7 @@ export default function InsightsDashboard({ filters, onDrillToJobs }: {
   if (error) return <ErrorBanner message={error} />;
   if (!data) return null;
 
+  const onDemandPerTiB = getRegionPricing(filters.region).onDemandPerTiB;
   const recs = data.recommendations || [];
   const totalSavings = recs.reduce((s, r) => s + (r.projected_savings_usd || 0), 0);
   const isClustering = (r: string, cat?: string) => /PartitionCluster|Clustering/i.test(r) || cat === 'PERFORMANCE';
@@ -274,7 +275,7 @@ export default function InsightsDashboard({ filters, onDrillToJobs }: {
                     <td className="py-2.5 px-3 text-right text-white font-mono">{q.runs}</td>
                     <td className="py-2.5 px-3 text-right text-zinc-400 font-mono">{q.user_count}</td>
                     <td className="py-2.5 px-3 text-right text-zinc-300 font-mono">{formatBytes(q.total_bytes)}</td>
-                    <td className="py-2.5 px-3 text-right text-amber-400 font-mono">${((q.total_bytes / Math.pow(1024, 4)) * ON_DEMAND_PER_TIB).toFixed(2)}</td>
+                    <td className="py-2.5 px-3 text-right text-amber-400 font-mono">${((q.total_bytes / TIB) * onDemandPerTiB).toFixed(2)}</td>
                   </tr>
                 ))}
               </tbody>

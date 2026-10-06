@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"cloud.google.com/go/bigquery"
 )
@@ -534,6 +535,17 @@ type offHoursGroupingRow struct {
 	OffHoursJobs int64  `bigquery:"off_hours_jobs"`
 }
 
+func validateTimeZone(tz string) string {
+	tz = strings.TrimSpace(tz)
+	if tz == "" {
+		return "UTC"
+	}
+	if _, err := time.LoadLocation(tz); err != nil {
+		return "UTC"
+	}
+	return tz
+}
+
 func offHoursSQL(regionRef, where string) string {
 	return fmt.Sprintf(
 		`SELECT
@@ -553,8 +565,8 @@ func offHoursSQL(regionRef, where string) string {
 				COUNTIF(hr NOT BETWEEN 8 AND 19 OR dow IN (1, 7)) AS off_hours_jobs
 			FROM (
 				SELECT
-					EXTRACT(DAYOFWEEK FROM creation_time) AS dow,
-					EXTRACT(HOUR FROM creation_time) AS hr,
+					EXTRACT(DAYOFWEEK FROM creation_time AT TIME ZONE @tz) AS dow,
+					EXTRACT(HOUR FROM creation_time AT TIME ZONE @tz) AS hr,
 					user_email AS email
 				FROM %s.INFORMATION_SCHEMA.JOBS_BY_PROJECT
 				WHERE %s
@@ -588,10 +600,13 @@ func splitOffHoursRows(rows []offHoursGroupingRow) ([]OffHoursCell, []OffHoursUs
 	return cells, top
 }
 
-func (b *BQClient) GetOffHours(ctx context.Context, region string, emails []string, timeRange string) ([]OffHoursCell, []OffHoursUser, error) {
+func (b *BQClient) GetOffHours(ctx context.Context, region string, emails []string, timeRange, tz string) ([]OffHoursCell, []OffHoursUser, error) {
 	interval := timeRangeToInterval(timeRange)
+	tz = validateTimeZone(tz)
 	var clauses []string
-	var params []bigquery.QueryParameter
+	params := []bigquery.QueryParameter{
+		{Name: "tz", Value: tz},
+	}
 	clauses = append(clauses,
 		fmt.Sprintf("creation_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL %s)", interval),
 		"user_email IS NOT NULL",

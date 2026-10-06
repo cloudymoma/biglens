@@ -115,15 +115,29 @@ export async function fetchJobsDashboard(filters: QueryFilters): Promise<JobsDas
   return data;
 }
 
-export async function fetchIAMDashboard(region: string, emails: string[], timeRange: string): Promise<IAMDashboardData> {
+export async function fetchIAMDashboard(
+  region: string,
+  emails: string[],
+  timeRange: string,
+  tz?: string,
+  signal?: AbortSignal,
+): Promise<IAMDashboardData> {
   const params: Record<string, string> = { region, time_range: timeRange };
   if (emails.length > 0) params.emails = emails.join(',');
-  const { data } = await axios.get('/api/dashboard/iam', { params });
+  if (tz) params.tz = tz;
+  const { data } = await axios.get('/api/dashboard/iam', { params, signal });
   return data;
 }
 
-export async function fetchSecurityDashboard(region: string, timeRange: string): Promise<SecurityDashboardData> {
-  const { data } = await axios.get('/api/dashboard/security', { params: { region, time_range: timeRange } });
+export async function fetchSecurityDashboard(
+  region: string,
+  timeRange: string,
+  signal?: AbortSignal,
+): Promise<SecurityDashboardData> {
+  const { data } = await axios.get('/api/dashboard/security', {
+    params: { region, time_range: timeRange },
+    signal,
+  });
   return data;
 }
 

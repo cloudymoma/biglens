@@ -242,7 +242,7 @@ export default function StorageDashboard({ filters }: { filters: QueryFilters })
                 </tr>
               </thead>
               <tbody>
-                {datasetStorage.map((d, i) => {
+                {datasetStorage.slice(0, 50).map((d, i) => {
                   const logical = d.active_logical + d.long_term_logical;
                   const physical = d.active_physical + d.long_term_physical + d.fail_safe;
                   const physicalNoTT = Math.max(0, d.active_physical - d.time_travel) + d.long_term_physical;

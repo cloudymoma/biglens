@@ -106,8 +106,11 @@ func TestParseEmailsNormalizesAndSorts(t *testing.T) {
 	if !reflect.DeepEqual(e1, want) || !reflect.DeepEqual(e2, want) {
 		t.Errorf("parseEmails = %v / %v, want %v", e1, e2, want)
 	}
-	if iamCacheKey("us", "7d", e1) != iamCacheKey("us", "7d", e2) {
+	if iamCacheKey("us", "7d", "UTC", e1) != iamCacheKey("us", "7d", "UTC", e2) {
 		t.Errorf("iamCacheKey differs for reordered/duplicate emails")
+	}
+	if iamCacheKey("us", "7d", "UTC", e1) == iamCacheKey("us", "7d", "Asia/Shanghai", e1) {
+		t.Errorf("iamCacheKey should distinguish timezones")
 	}
 }
 

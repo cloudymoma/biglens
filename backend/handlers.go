@@ -432,19 +432,11 @@ func (h *APIHandler) InsightsDashboard(w http.ResponseWriter, r *http.Request) {
 		})
 
 		g.Go(func() error {
-			es, err := h.bq.GetErrorStats(ctx, filters)
+			es, fu, err := h.bq.GetErrorOverview(ctx, filters)
 			if err != nil {
 				return err
 			}
 			data.ErrorStats = es
-			return nil
-		})
-
-		g.Go(func() error {
-			fu, err := h.bq.GetTopFailingUsers(ctx, filters)
-			if err != nil {
-				return err
-			}
 			data.FailingUsers = fu
 			return nil
 		})
@@ -540,116 +532,129 @@ type IAMDashboardData struct {
 	DegradedWidgets []string         `json:"degraded_widgets,omitempty"`
 }
 
-func iamCacheKey(region, timeRange string, emails []string) string {
-	return "iam_dashboard:" + region + ":" + timeRange + ":" + strings.Join(emails, ",")
+func iamCacheKey(region, timeRange, tz string, emails []string) string {
+	return "iam_dashboard:" + region + ":" + timeRange + ":" + tz + ":" + strings.Join(emails, ",")
 }
 
 func (h *APIHandler) IAMDashboard(w http.ResponseWriter, r *http.Request) {
 	filters := ParseFilters(r)
 	emails := parseEmails(r)
-	key := iamCacheKey(filters.Region, filters.TimeRange, emails)
+	tz := validateTimeZone(r.URL.Query().Get("tz"))
+	key := iamCacheKey(filters.Region, filters.TimeRange, tz, emails)
 
 	if cached, ok := h.cache.Get(key); ok {
 		writeJSON(w, cached)
 		return
 	}
 
-	var data IAMDashboardData
-	var mu sync.Mutex
-	addDegraded := func(name string) {
-		mu.Lock()
-		data.DegradedWidgets = append(data.DegradedWidgets, name)
-		mu.Unlock()
-	}
-	g, ctx := errgroup.WithContext(r.Context())
-
-	g.Go(func() error {
-		s, tc, err := h.bq.GetIdentityStats(ctx, filters.Region, emails, filters.TimeRange, 20)
-		if err != nil {
-			slog.Warn("identity stats widget degraded", "error", err)
-			addDegraded("top_callers")
-			return nil
+	val, err, _ := h.sf.Do(key, func() (any, error) {
+		if cached, ok := h.cache.Get(key); ok {
+			return cached, nil
 		}
-		data.Summary = s
-		data.TopCallers = tc
-		return nil
-	})
 
-	g.Go(func() error {
-		t, err := h.bq.GetUsageTimeline(ctx, filters.Region, emails, filters.TimeRange)
-		if err != nil {
-			return err
+		var data IAMDashboardData
+		var mu sync.Mutex
+		addDegraded := func(name string) {
+			mu.Lock()
+			data.DegradedWidgets = append(data.DegradedWidgets, name)
+			mu.Unlock()
 		}
-		data.Timeline = t
-		return nil
-	})
+		bgCtx := context.WithoutCancel(r.Context())
+		g, ctx := errgroup.WithContext(bgCtx)
 
-	g.Go(func() error {
-		// The 180-day scan is independent of time_range and emails, so cache
-		// the raw rows per region for 30 minutes with singleflight deduplication
-		// and slice both Inactive (7/30/90d) and NewActors in Go.
-		longKey := "iam_long_window_180d:" + filters.Region
-		var rows []longWindowIAMRow
-		if cached, ok := h.cache.Get(longKey); ok {
-			rows, _ = cached.([]longWindowIAMRow)
-		}
-		if rows == nil {
-			v, err, _ := h.sf.Do(longKey, func() (any, error) {
-				if cached, ok := h.cache.Get(longKey); ok {
-					return cached, nil
-				}
-				fetched, err := h.bq.GetLongWindowIAM(ctx, filters.Region)
-				if err != nil {
-					return nil, err
-				}
-				h.cache.SetWithTTL(longKey, fetched, 30*time.Minute)
-				return fetched, nil
-			})
+		g.Go(func() error {
+			s, tc, err := h.bq.GetIdentityStats(ctx, filters.Region, emails, filters.TimeRange, 20)
 			if err != nil {
-				slog.Warn("long-window IAM widgets degraded", "error", err)
-				addDegraded("inactive_emails")
-				addDegraded("new_actors")
+				slog.Warn("identity stats widget degraded", "error", err)
+				addDegraded("top_callers")
 				return nil
 			}
-			rows, _ = v.([]longWindowIAMRow)
-		}
-		i7, na := splitLongWindowIAM(rows, 7, emails)
-		data.Inactive7 = i7
-		data.Inactive30, data.Inactive90 = bucketInactiveEmails(i7)
-		data.NewActors = na
-		return nil
-	})
-
-	g.Go(func() error {
-		cells, top, err := h.bq.GetOffHours(ctx, filters.Region, emails, filters.TimeRange)
-		if err != nil {
-			slog.Warn("off-hours widget degraded", "error", err)
-			addDegraded("off_hours")
+			data.Summary = s
+			data.TopCallers = tc
 			return nil
-		}
-		data.OffHours = cells
-		data.OffHoursTop = top
-		return nil
-	})
+		})
 
-	g.Go(func() error {
-		ex, err := h.bq.GetExfilSignals(ctx, filters.Region, emails, filters.TimeRange)
-		if err != nil {
-			slog.Warn("exfil signals widget degraded", "error", err)
-			addDegraded("exfil_signals")
+		g.Go(func() error {
+			t, err := h.bq.GetUsageTimeline(ctx, filters.Region, emails, filters.TimeRange)
+			if err != nil {
+				return err
+			}
+			data.Timeline = t
 			return nil
-		}
-		data.Exfil = ex
-		return nil
-	})
+		})
 
-	if err := g.Wait(); err != nil {
+		g.Go(func() error {
+			// The 180-day scan is independent of time_range and emails, so cache
+			// the raw rows per region for 30 minutes with singleflight deduplication
+			// and slice both Inactive (7/30/90d) and NewActors in Go.
+			longKey := "iam_long_window_180d:" + filters.Region
+			var rows []longWindowIAMRow
+			if cached, ok := h.cache.Get(longKey); ok {
+				rows, _ = cached.([]longWindowIAMRow)
+			}
+			if rows == nil {
+				v, err, _ := h.sf.Do(longKey, func() (any, error) {
+					if cached, ok := h.cache.Get(longKey); ok {
+						return cached, nil
+					}
+					fetched, err := h.bq.GetLongWindowIAM(bgCtx, filters.Region)
+					if err != nil {
+						return nil, err
+					}
+					h.cache.SetWithTTL(longKey, fetched, 30*time.Minute)
+					return fetched, nil
+				})
+				if err != nil {
+					slog.Warn("long-window IAM widgets degraded", "error", err)
+					addDegraded("inactive_emails")
+					addDegraded("new_actors")
+					return nil
+				}
+				rows, _ = v.([]longWindowIAMRow)
+			}
+			i7, na := splitLongWindowIAM(rows, 7, emails)
+			data.Inactive7 = i7
+			data.Inactive30, data.Inactive90 = bucketInactiveEmails(i7)
+			data.NewActors = na
+			return nil
+		})
+
+		g.Go(func() error {
+			cells, top, err := h.bq.GetOffHours(ctx, filters.Region, emails, filters.TimeRange, tz)
+			if err != nil {
+				slog.Warn("off-hours widget degraded", "error", err)
+				addDegraded("off_hours")
+				return nil
+			}
+			data.OffHours = cells
+			data.OffHoursTop = top
+			return nil
+		})
+
+		g.Go(func() error {
+			ex, err := h.bq.GetExfilSignals(ctx, filters.Region, emails, filters.TimeRange)
+			if err != nil {
+				slog.Warn("exfil signals widget degraded", "error", err)
+				addDegraded("exfil_signals")
+				return nil
+			}
+			data.Exfil = ex
+			return nil
+		})
+
+		if err := g.Wait(); err != nil {
+			return nil, err
+		}
+
+		h.cache.Set(key, &data)
+		return &data, nil
+	})
+	if err != nil {
 		writeError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	h.cache.Set(key, &data)
-	writeJSON(w, &data)
+	writeJSON(w, val)
 }
 
 // bucketInactiveEmails splits a >=7-day inactivity list into its >=30 and
@@ -683,7 +688,8 @@ func (h *APIHandler) SearchEmails(w http.ResponseWriter, r *http.Request) {
 			if c, ok := h.cache.Get(cacheKey); ok {
 				return c, nil
 			}
-			emails, err := h.bq.GetDistinctEmails180d(r.Context(), region)
+			bgCtx := context.WithoutCancel(r.Context())
+			emails, err := h.bq.GetDistinctEmails180d(bgCtx, region)
 			if err != nil {
 				return nil, err
 			}
@@ -771,7 +777,8 @@ func (h *APIHandler) SecurityDashboard(w http.ResponseWriter, r *http.Request) {
 			data.DegradedWidgets = append(data.DegradedWidgets, name)
 			mu.Unlock()
 		}
-		g, ctx := errgroup.WithContext(r.Context())
+		bgCtx := context.WithoutCancel(r.Context())
+		g, ctx := errgroup.WithContext(bgCtx)
 
 		var activePrincipals map[string]bool
 
