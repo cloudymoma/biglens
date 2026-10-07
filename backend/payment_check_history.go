@@ -118,6 +118,7 @@ func blockscoutTxListAt(ctx context.Context, baseURL, action, addr string, offse
 	if err != nil {
 		return nil, "bad_request"
 	}
+	req.Header.Set("User-Agent", blockscoutUserAgent)
 	resp, err := riskHTTPClient.Do(req)
 	if err != nil {
 		return nil, upstreamErrCode(err)
@@ -129,7 +130,7 @@ func blockscoutTxListAt(ctx context.Context, baseURL, action, addr string, offse
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Sprintf("upstream_http_%d", resp.StatusCode)
 	}
-	body, err := readCapped(resp.Body, 8<<20)
+	body, err := readCapped(resp.Body, 96<<20)
 	if err != nil {
 		return nil, "bad_response"
 	}
@@ -788,9 +789,7 @@ func fetchTronTRC20Page(ctx context.Context, addr, contract string, minTS int64,
 		q.Set("fingerprint", fingerprint)
 	}
 	path := "/v1/accounts/" + url.PathEscape(addr) + "/transactions/trc20?" + q.Encode()
-	reqCtx, cancel := context.WithTimeout(ctx, payUpstreamTimeout)
-	defer cancel()
-	raw, code := tronGridDo(reqCtx, http.MethodGet, path, nil)
+	raw, code := tronGridDo(ctx, http.MethodGet, path, nil)
 	if code != "" {
 		return nil, "", code
 	}
@@ -820,9 +819,7 @@ func fetchTronTransactionsPage(ctx context.Context, addr string, onlyFrom bool, 
 		q.Set("fingerprint", fingerprint)
 	}
 	path := "/v1/accounts/" + url.PathEscape(addr) + "/transactions?" + q.Encode()
-	reqCtx, cancel := context.WithTimeout(ctx, payUpstreamTimeout)
-	defer cancel()
-	raw, code := tronGridDo(reqCtx, http.MethodGet, path, nil)
+	raw, code := tronGridDo(ctx, http.MethodGet, path, nil)
 	if code != "" {
 		return nil, "", code
 	}
@@ -1179,9 +1176,6 @@ func fetchTronHistory(ctx context.Context, asset, addr string, since time.Time) 
 // fetchTronRecent fetches the newest 20 rows (page 1 only) for the lightweight
 // recent-transactions check in /live (spec §5.6).
 func fetchTronRecent(ctx context.Context, asset, addr string) ([]payTx, error) {
-	ctx, cancel := context.WithTimeout(ctx, payUpstreamTimeout)
-	defer cancel()
-
 	if asset == "TRX" {
 		rows, _, code := fetchTronTransactionsPage(ctx, addr, false, 0, payRecentPageSize, "")
 		if code != "" {
@@ -1204,11 +1198,6 @@ func fetchTronRecent(ctx context.Context, asset, addr string) ([]payTx, error) {
 			}
 		}
 	}
-	outRows, _, code := fetchTronTransactionsPage(ctx, addr, true, 0, payRecentPageSize, "")
-	if code != "" {
-		return nil, errors.New(code)
-	}
-	txs = append(txs, convertTronAccountTxRows(outRows, asset, addr)...)
 	sortPayTxsDesc(txs)
 	return txs, nil
 }

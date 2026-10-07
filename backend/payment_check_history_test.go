@@ -409,9 +409,13 @@ func TestFetchTronHistoryPaging(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	orig := tronGridBaseURL
+	orig, origLim := tronGridBaseURL, tronGridLimiter
 	tronGridBaseURL = srv.URL
-	defer func() { tronGridBaseURL = orig }()
+	tronGridLimiter = rateLimiterUnlimited()
+	defer func() {
+		tronGridBaseURL = orig
+		tronGridLimiter = origLim
+	}()
 
 	txs, scope, err := fetchTronHistory(context.Background(), "USDT", tronAddr, time.Unix(1759500000, 0).UTC())
 	if err != nil {
@@ -452,9 +456,13 @@ func TestFetchTronHistoryFinalizedByTimestamp(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	orig := tronGridBaseURL
+	orig, origLim := tronGridBaseURL, tronGridLimiter
 	tronGridBaseURL = srv.URL
-	defer func() { tronGridBaseURL = orig }()
+	tronGridLimiter = rateLimiterUnlimited()
+	defer func() {
+		tronGridBaseURL = orig
+		tronGridLimiter = origLim
+	}()
 
 	_, _, err := fetchTronHistory(context.Background(), "USDT", tronAddr, time.Unix(1759500000, 0).UTC())
 	if err != nil {
@@ -487,9 +495,13 @@ func TestFetchTronHistoryCounterfeit(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	orig := tronGridBaseURL
+	orig, origLim := tronGridBaseURL, tronGridLimiter
 	tronGridBaseURL = srv.URL
-	defer func() { tronGridBaseURL = orig }()
+	tronGridLimiter = rateLimiterUnlimited()
+	defer func() {
+		tronGridBaseURL = orig
+		tronGridLimiter = origLim
+	}()
 
 	txs, _, err := fetchTronHistory(context.Background(), "USDT", tronAddr, time.Unix(1759500000, 0).UTC())
 	if err != nil {
@@ -516,9 +528,13 @@ func TestFetchTronHistoryFailedTRX(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	orig := tronGridBaseURL
+	orig, origLim := tronGridBaseURL, tronGridLimiter
 	tronGridBaseURL = srv.URL
-	defer func() { tronGridBaseURL = orig }()
+	tronGridLimiter = rateLimiterUnlimited()
+	defer func() {
+		tronGridBaseURL = orig
+		tronGridLimiter = origLim
+	}()
 
 	txs, _, err := fetchTronHistory(context.Background(), "TRX", tronAddr, time.Unix(1759500000, 0).UTC())
 	if err != nil {
@@ -557,9 +573,13 @@ func TestFetchTronHistoryUnfilteredPageKeepsOnlyNonRegistry(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	orig := tronGridBaseURL
+	orig, origLim := tronGridBaseURL, tronGridLimiter
 	tronGridBaseURL = srv.URL
-	defer func() { tronGridBaseURL = orig }()
+	tronGridLimiter = rateLimiterUnlimited()
+	defer func() {
+		tronGridBaseURL = orig
+		tronGridLimiter = origLim
+	}()
 
 	txs, _, err := fetchTronHistory(context.Background(), "USDT", tronAddr, time.Unix(1759500000, 0).UTC())
 	if err != nil {
@@ -593,9 +613,13 @@ func TestFetchTronHistoryFailedTRC20Outgoing(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	orig := tronGridBaseURL
+	orig, origLim := tronGridBaseURL, tronGridLimiter
 	tronGridBaseURL = srv.URL
-	defer func() { tronGridBaseURL = orig }()
+	tronGridLimiter = rateLimiterUnlimited()
+	defer func() {
+		tronGridBaseURL = orig
+		tronGridLimiter = origLim
+	}()
 
 	txs, _, err := fetchTronHistory(context.Background(), "USDT", tronAddr, time.Unix(1759500000, 0).UTC())
 	if err != nil {
@@ -641,9 +665,13 @@ func TestFetchTronHistoryTxInfoEmptyKeepsBlockZero(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	orig := tronGridBaseURL
+	orig, origLim := tronGridBaseURL, tronGridLimiter
 	tronGridBaseURL = srv.URL
-	defer func() { tronGridBaseURL = orig }()
+	tronGridLimiter = rateLimiterUnlimited()
+	defer func() {
+		tronGridBaseURL = orig
+		tronGridLimiter = origLim
+	}()
 
 	txs, _, err := fetchTronHistory(context.Background(), "USDT", tronAddr, time.Unix(1759500000, 0).UTC())
 	if err != nil {
@@ -760,9 +788,13 @@ func TestFetchTronHistoryFailedOutgoingSinglePage(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	orig := tronGridBaseURL
+	orig, origLim := tronGridBaseURL, tronGridLimiter
 	tronGridBaseURL = srv.URL
-	defer func() { tronGridBaseURL = orig }()
+	tronGridLimiter = rateLimiterUnlimited()
+	defer func() {
+		tronGridBaseURL = orig
+		tronGridLimiter = origLim
+	}()
 
 	_, scope, err := fetchTronHistory(context.Background(), "USDT", tronAddr, time.Unix(1759500000, 0).UTC())
 	if err != nil {
@@ -821,9 +853,13 @@ func TestFetchTronRecent(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	orig := tronGridBaseURL
+	orig, origLim := tronGridBaseURL, tronGridLimiter
 	tronGridBaseURL = srv.URL
-	defer func() { tronGridBaseURL = orig }()
+	tronGridLimiter = rateLimiterUnlimited()
+	defer func() {
+		tronGridBaseURL = orig
+		tronGridLimiter = origLim
+	}()
 
 	txs, err := fetchTronRecent(context.Background(), "USDT", tronAddr)
 	if err != nil {

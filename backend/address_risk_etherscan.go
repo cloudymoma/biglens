@@ -18,9 +18,10 @@ import (
 )
 
 const (
-	etherscanSignupURL = "https://etherscan.io/myapikey"
-	etherscanHelpURL   = "https://docs.etherscan.io/set-up-your-api-key"
-	etherscanPageSize  = "1000" // free-tier maximum per request
+	etherscanSignupURL  = "https://etherscan.io/myapikey"
+	etherscanHelpURL    = "https://docs.etherscan.io/set-up-your-api-key"
+	etherscanPageSize   = "1000" // free-tier maximum per request
+	blockscoutUserAgent = "Mozilla/5.0 (compatible; BigLens/1.0)"
 )
 
 var (
@@ -154,6 +155,7 @@ func blockscoutListAt(ctx context.Context, baseURL, action, addr string) ([]ethe
 	if err != nil {
 		return nil, "bad_request"
 	}
+	req.Header.Set("User-Agent", blockscoutUserAgent)
 	resp, err := riskHTTPClient.Do(req)
 	if err != nil {
 		return nil, upstreamErrCode(err)

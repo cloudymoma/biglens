@@ -23,6 +23,9 @@ const (
 
 func newTestPaymentAPIHandler(t *testing.T, rpcs map[string][]string, blockscouts map[string]string) *APIHandler {
 	t.Helper()
+	origLim := tronGridLimiter
+	tronGridLimiter = rateLimiterUnlimited()
+	t.Cleanup(func() { tronGridLimiter = origLim })
 	store := newTestRiskStore(t)
 	svc := newAddressRiskService(store, rpcs["eth"])
 	svc.chainRPCs = rpcs

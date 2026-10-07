@@ -167,18 +167,33 @@ func TestEVMCallsSendUserAgent(t *testing.T) {
 }
 
 func TestTronGridDoRateLimited(t *testing.T) {
-	origLim := tronGridLimiter
+	origLim, origV1Lim := tronGridLimiter, tronGridV1Limiter
 	// 1 token per hour, burst 1, pre-exhausted.
 	lim := rate.NewLimiter(rate.Every(time.Hour), 1)
 	lim.Allow()
 	tronGridLimiter = lim
-	defer func() { tronGridLimiter = origLim }()
+	defer func() {
+		tronGridLimiter = origLim
+		tronGridV1Limiter = origV1Lim
+	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	_, code := tronGridDo(ctx, http.MethodGet, "/wallet/getnowblock", nil)
 	if code != "rate_limited_local" {
 		t.Errorf("tronGridDo code = %q, want rate_limited_local", code)
+	}
+
+	// Verify /v1/ limiter also rate-limits when exhausted even if general limiter has tokens.
+	tronGridLimiter = rate.NewLimiter(100, 100)
+	v1Lim := rate.NewLimiter(rate.Every(time.Hour), 1)
+	v1Lim.Allow()
+	tronGridV1Limiter = v1Lim
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel2()
+	_, code2 := tronGridDo(ctx2, http.MethodGet, "/v1/accounts/TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7/transactions/trc20", nil)
+	if code2 != "rate_limited_local" {
+		t.Errorf("tronGridDo(/v1/...) code = %q, want rate_limited_local", code2)
 	}
 }
 

@@ -324,6 +324,7 @@ func checkBlockscoutAddress(ctx context.Context, baseURL, addr string, now time.
 	if err != nil {
 		return nil, "bad_request"
 	}
+	req.Header.Set("User-Agent", blockscoutUserAgent)
 	resp, err := riskHTTPClient.Do(req)
 	if err != nil {
 		return nil, upstreamErrCode(err)
