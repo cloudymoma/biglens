@@ -156,25 +156,25 @@ func hasHighTrustLookalike(cp string, trust map[string]trustLevel, fam chainFami
 func applyFlags(txs []payTx, asset string, fam chainFamily) {
 	order := make([]int, len(txs))
 	parsedTime := make([]int64, len(txs))
-	hasTime := make([]bool, len(txs))
 	for i := range txs {
 		order[i] = i
 		if t, err := time.Parse(time.RFC3339, txs[i].Timestamp); err == nil {
 			parsedTime[i] = t.UnixNano()
-			hasTime[i] = true
 		}
 	}
 
 	sort.SliceStable(order, func(a, b int) bool {
 		ia, ib := order[a], order[b]
-		if hasTime[ia] != hasTime[ib] {
-			if txs[ia].Block > 0 && txs[ib].Block > 0 && txs[ia].Block != txs[ib].Block {
+		if fam == familyEVM {
+			if txs[ia].Block != txs[ib].Block {
 				return txs[ia].Block < txs[ib].Block
 			}
-			// Known timestamps precede fresh unsettled RPC logs without a timestamp.
-			return hasTime[ia]
+			if parsedTime[ia] != parsedTime[ib] {
+				return parsedTime[ia] < parsedTime[ib]
+			}
+			return txs[ia].TxHash < txs[ib].TxHash
 		}
-		if hasTime[ia] && parsedTime[ia] != parsedTime[ib] {
+		if parsedTime[ia] != parsedTime[ib] {
 			return parsedTime[ia] < parsedTime[ib]
 		}
 		if txs[ia].Block != txs[ib].Block {
@@ -267,7 +267,7 @@ func applyLocalHits(ctx context.Context, store *riskStore, network string, txs [
 	}
 	pool, err := store.riskPoolForAddresses(ctx, network, addrs)
 	if err != nil {
-		return err
+		return errors.New("unavailable")
 	}
 	for i := range txs {
 		cp := canonFlagAddr(txs[i].Counterparty, fam)

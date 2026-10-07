@@ -403,17 +403,30 @@ func convertEVMEthRows(txlist, internal []blockscoutTxRow, network, addr string,
 }
 
 func sortPayTxsDesc(txs []payTx) {
+	allHaveBlock := true
+	for i := range txs {
+		if txs[i].Block == 0 {
+			allHaveBlock = false
+			break
+		}
+	}
 	sort.SliceStable(txs, func(i, j int) bool {
-		if txs[i].Timestamp != txs[j].Timestamp {
-			if txs[i].Timestamp == "" || txs[j].Timestamp == "" {
-				if txs[i].Block > 0 && txs[j].Block > 0 && txs[i].Block != txs[j].Block {
-					return txs[i].Block > txs[j].Block
-				}
-				return txs[i].Timestamp == ""
+		if allHaveBlock {
+			if txs[i].Block != txs[j].Block {
+				return txs[i].Block > txs[j].Block
 			}
+			if txs[i].Timestamp != txs[j].Timestamp {
+				return txs[i].Timestamp > txs[j].Timestamp
+			}
+			return txs[i].TxHash > txs[j].TxHash
+		}
+		if txs[i].Timestamp != txs[j].Timestamp {
 			return txs[i].Timestamp > txs[j].Timestamp
 		}
-		return txs[i].Block > txs[j].Block
+		if txs[i].Block != txs[j].Block {
+			return txs[i].Block > txs[j].Block
+		}
+		return txs[i].TxHash > txs[j].TxHash
 	})
 }
 

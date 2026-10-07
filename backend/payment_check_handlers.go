@@ -357,8 +357,10 @@ func (h *APIHandler) PaymentCheckLive(w http.ResponseWriter, r *http.Request) {
 	candidates := mergeTxs(unsettledTxs, recentTxs, histTxs)
 	classifyPayTxs(candidates, network, heads, now.Unix())
 	applyFlags(candidates, asset, chains[network].Family)
-	if store != nil && len(candidates) > 0 {
-		_ = applyLocalHits(bgCtx, store, network, candidates)
+	if len(candidates) > 0 {
+		if err := applyLocalHits(bgCtx, store, network, candidates); err != nil {
+			localErr = fmt.Errorf("unavailable")
+		}
 	}
 
 	var latest *payTx
@@ -407,7 +409,15 @@ func (h *APIHandler) PaymentCheckLive(w http.ResponseWriter, r *http.Request) {
 				TxHash:   tx.TxHash,
 			})
 		}
-		if slices.Contains(tx.Flags, "lookalike") && (slices.Contains(tx.Flags, "zero_value") || slices.Contains(tx.Flags, "dust")) {
+		if slices.Contains(tx.Flags, "sent_to_lookalike") {
+			alerts = append(alerts, payAlert{
+				Severity: "critical",
+				Code:     "sent_to_lookalike",
+				Message:  fmt.Sprintf("Outgoing transfer (%s %s) was sent to a lookalike address (%s) matching an earlier counterparty.", tx.Amount, tx.Symbol, tx.Counterparty),
+				TxHash:   tx.TxHash,
+			})
+		}
+		if slices.Contains(tx.Flags, "lookalike") {
 			alerts = append(alerts, payAlert{
 				Severity: "warning",
 				Code:     "poisoning_received",
@@ -461,7 +471,7 @@ func (h *APIHandler) PaymentCheckLive(w http.ResponseWriter, r *http.Request) {
 
 	localSrc := riskSource{ID: "local", Status: "ok"}
 	if localErr != nil {
-		localSrc.Status, localSrc.Error = "error", localErr.Error()
+		localSrc.Status, localSrc.Error = "error", "unavailable"
 	}
 	sources = append(sources, localSrc)
 
@@ -618,7 +628,7 @@ func (h *APIHandler) PaymentCheckHistory(w http.ResponseWriter, r *http.Request)
 
 	localSrc := riskSource{ID: "local", Status: "ok"}
 	if localErr != nil {
-		localSrc.Status, localSrc.Error = "error", localErr.Error()
+		localSrc.Status, localSrc.Error = "error", "unavailable"
 	}
 	sources = append(sources, localSrc)
 

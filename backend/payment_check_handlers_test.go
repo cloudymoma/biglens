@@ -756,3 +756,238 @@ func TestPaymentCheckHeadsUseLagSampler(t *testing.T) {
 		t.Fatalf("Heads lag = (%d, %d), want sampler median (80, 950)", resp.Heads.SafeLagSec, resp.Heads.FinalLagSec)
 	}
 }
+
+func TestPaymentCheckLocalErrorFixedCodeAndLiveMarksError(t *testing.T) {
+	nowSec := time.Now().Unix()
+	rpcSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Method string            `json:"method"`
+			Params []json.RawMessage `json:"params"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		switch req.Method {
+		case "eth_getBlockByNumber":
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":1,"result":{"number":"0x64","timestamp":"0x%x"}}`, nowSec)
+		case "eth_call":
+			fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"result":"0x0000000000000000000000000000000000000000000000000000000000000000"}`)
+		case "eth_getLogs":
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":1,"result":[
+				{
+					"address":"0xdac17f958d2ee523a2206206994597c13d831ec7",
+					"topics":[%q,%q,%q],
+					"data":"0x0000000000000000000000000000000000000000000000000000000005f5e100",
+					"blockNumber":"0x60",
+					"blockTimestamp":"0x%x",
+					"transactionHash":"0xincoming_local_err"
+				}
+			]}`,
+				erc20TransferTopic,
+				"0x"+pad32EVMAddr(handlerTestEVMPayer),
+				"0x"+pad32EVMAddr(handlerTestEVMAddr),
+				nowSec-20,
+			)
+		}
+	}))
+	defer rpcSrv.Close()
+
+	bsSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("action") == "tokentx" {
+			fmt.Fprintf(w, `{"status":"1","message":"OK","result":[{
+				"hash":"0xincoming_local_err",
+				"from":%q,
+				"to":%q,
+				"value":"100000000",
+				"timeStamp":"%d",
+				"contractAddress":"0xdac17f958d2ee523a2206206994597c13d831ec7",
+				"blockNumber":"96",
+				"tokenSymbol":"USDT",
+				"tokenDecimal":"6"
+			}]}`, handlerTestEVMPayer, handlerTestEVMAddr, nowSec-20)
+			return
+		}
+		fmt.Fprint(w, `{"status":"1","message":"OK","result":[]}`)
+	}))
+	defer bsSrv.Close()
+
+	h := newTestPaymentAPIHandler(t, map[string][]string{"eth": {rpcSrv.URL}}, map[string]string{"eth": bsSrv.URL})
+	// Drop stablecoin_events so store.listHits(ownAddr) succeeds on address_risk_hits,
+	// while applyLocalHits -> store.riskPoolForAddresses fails with a raw SQLite error.
+	if _, err := h.risk.store.db.Exec(`DROP TABLE stablecoin_events`); err != nil {
+		t.Fatalf("drop table: %v", err)
+	}
+
+	// 1. /history must report local source status="error" with fixed error="unavailable" (never raw SQLite text)
+	recHist := httptest.NewRecorder()
+	h.PaymentCheckHistory(recHist, httptest.NewRequest(http.MethodGet, "/api/opendata/crypto/payment-check/history?asset=USDT&network=eth&address="+handlerTestEVMAddr, nil))
+	var histResp payHistoryResponse
+	if err := json.Unmarshal(recHist.Body.Bytes(), &histResp); err != nil {
+		t.Fatalf("unmarshal history: %v", err)
+	}
+	var histLocal *riskSource
+	for i := range histResp.Sources {
+		if histResp.Sources[i].ID == "local" {
+			histLocal = &histResp.Sources[i]
+		}
+	}
+	if histLocal == nil || histLocal.Status != "error" || histLocal.Error != "unavailable" {
+		t.Fatalf("/history local source = %+v, want status=error error=unavailable", histLocal)
+	}
+
+	// 2. /live must also mark local source status="error" error="unavailable" when applyLocalHits fails
+	recLive := httptest.NewRecorder()
+	h.PaymentCheckLive(recLive, httptest.NewRequest(http.MethodGet, "/api/opendata/crypto/payment-check/live?asset=USDT&network=eth&address="+handlerTestEVMAddr, nil))
+	var liveResp payLiveResponse
+	if err := json.Unmarshal(recLive.Body.Bytes(), &liveResp); err != nil {
+		t.Fatalf("unmarshal live: %v", err)
+	}
+	var liveLocal *riskSource
+	for i := range liveResp.Sources {
+		if liveResp.Sources[i].ID == "local" {
+			liveLocal = &liveResp.Sources[i]
+		}
+	}
+	if liveLocal == nil || liveLocal.Status != "error" || liveLocal.Error != "unavailable" {
+		t.Fatalf("/live local source = %+v, want status=error error=unavailable", liveLocal)
+	}
+}
+
+func TestPaymentCheckLiveOneUSDTLookalikeAlert(t *testing.T) {
+	nowSec := time.Now().Unix()
+	rpcSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Method string            `json:"method"`
+			Params []json.RawMessage `json:"params"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		switch req.Method {
+		case "eth_getBlockByNumber":
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":1,"result":{"number":"0x64","timestamp":"0x%x"}}`, nowSec)
+		case "eth_call":
+			fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"result":"0x0000000000000000000000000000000000000000000000000000000000000000"}`)
+		case "eth_getLogs":
+			// 1st log at block 95: 100 USDT from real counterparty
+			// 2nd log at block 96: 1 USDT (non-dust!) from lookalike counterparty (G1)
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":1,"result":[
+				{
+					"address":"0xdac17f958d2ee523a2206206994597c13d831ec7",
+					"topics":[%q,%q,%q],
+					"data":"0x0000000000000000000000000000000000000000000000000000000005f5e100",
+					"blockNumber":"0x5f",
+					"blockTimestamp":"0x%x",
+					"transactionHash":"0xreal100"
+				},
+				{
+					"address":"0xdac17f958d2ee523a2206206994597c13d831ec7",
+					"topics":[%q,%q,%q],
+					"data":"0x00000000000000000000000000000000000000000000000000000000000f4240",
+					"blockNumber":"0x60",
+					"blockTimestamp":"0x%x",
+					"transactionHash":"0xlookalike1usdt"
+				}
+			]}`,
+				erc20TransferTopic,
+				"0x"+pad32EVMAddr(handlerTestEVMPayer),
+				"0x"+pad32EVMAddr(handlerTestEVMAddr),
+				nowSec-120,
+				erc20TransferTopic,
+				"0x"+pad32EVMAddr(handlerTestEVMMimic),
+				"0x"+pad32EVMAddr(handlerTestEVMAddr),
+				nowSec-30,
+			)
+		}
+	}))
+	defer rpcSrv.Close()
+
+	h := newTestPaymentAPIHandler(t, map[string][]string{"eth": {rpcSrv.URL}}, nil)
+	rec := httptest.NewRecorder()
+	h.PaymentCheckLive(rec, httptest.NewRequest(http.MethodGet, "/api/opendata/crypto/payment-check/live?asset=USDT&network=eth&address="+handlerTestEVMAddr, nil))
+
+	var resp payLiveResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	// Settlement card selection rule is unchanged: 1 USDT is non-dust so Latest is 0xlookalike1usdt
+	if resp.Latest == nil || resp.Latest.TxHash != "0xlookalike1usdt" {
+		t.Fatalf("Latest = %+v, want 0xlookalike1usdt", resp.Latest)
+	}
+	foundAlert := false
+	for _, a := range resp.Alerts {
+		if a.Severity == "warning" && a.Code == "poisoning_received" && a.TxHash == "0xlookalike1usdt" {
+			foundAlert = true
+		}
+	}
+	if !foundAlert {
+		t.Fatalf("Alerts = %+v, expected warning poisoning_received for 1 USDT lookalike transfer", resp.Alerts)
+	}
+}
+
+func TestPaymentCheckLiveSentToLookalikeAlert(t *testing.T) {
+	nowSec := time.Now().Unix()
+	rpcSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Method string            `json:"method"`
+			Params []json.RawMessage `json:"params"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		switch req.Method {
+		case "eth_getBlockByNumber":
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":1,"result":{"number":"0x64","timestamp":"0x%x"}}`, nowSec)
+		case "eth_call":
+			fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"result":"0x0000000000000000000000000000000000000000000000000000000000000000"}`)
+		case "eth_getLogs":
+			fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"result":[]}`)
+		}
+	}))
+	defer rpcSrv.Close()
+
+	h := newTestPaymentAPIHandler(t, map[string][]string{"eth": {rpcSrv.URL}}, nil)
+	// Seed history cache with:
+	// 1. Earlier incoming from real counterparty (block 90)
+	// 2. Recent outgoing of 500 USDT to lookalike counterparty (block 95, within 24h)
+	histKey := "pay:hist:eth:USDT:" + handlerTestEVMAddr
+	h.cache.SetWithTTL(histKey, &cachedPayHistory{
+		txs: []payTx{
+			{
+				TxHash:        "0xsent_wrong",
+				Direction:     "out",
+				Timestamp:     time.Unix(nowSec-60, 0).UTC().Format(time.RFC3339),
+				Amount:        "500",
+				Symbol:        "USDT",
+				TokenContract: "0xdac17f958d2ee523a2206206994597c13d831ec7",
+				TokenTier:     tierNative,
+				Counterparty:  handlerTestEVMMimic,
+				Block:         95,
+				rawValue:      "500000000",
+			},
+			{
+				TxHash:        "0xreal_in",
+				Direction:     "in",
+				Timestamp:     time.Unix(nowSec-3600, 0).UTC().Format(time.RFC3339),
+				Amount:        "500",
+				Symbol:        "USDT",
+				TokenContract: "0xdac17f958d2ee523a2206206994597c13d831ec7",
+				TokenTier:     tierNative,
+				Counterparty:  handlerTestEVMPayer,
+				Block:         90,
+				rawValue:      "500000000",
+			},
+		},
+	}, payHistoryCacheTTL)
+
+	rec := httptest.NewRecorder()
+	h.PaymentCheckLive(rec, httptest.NewRequest(http.MethodGet, "/api/opendata/crypto/payment-check/live?asset=USDT&network=eth&address="+handlerTestEVMAddr, nil))
+
+	var resp payLiveResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	foundSentAlert := false
+	for _, a := range resp.Alerts {
+		if a.Severity == "critical" && a.Code == "sent_to_lookalike" && a.TxHash == "0xsent_wrong" {
+			foundSentAlert = true
+		}
+	}
+	if !foundSentAlert {
+		t.Fatalf("Alerts = %+v, expected critical sent_to_lookalike alert for 0xsent_wrong", resp.Alerts)
+	}
+}
