@@ -330,6 +330,34 @@ export function shortAddr(addr: string): string {
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 }
 
+export const PAY_SOURCE_LABELS: Record<string, string> = {
+  rpc: 'Chain RPC',
+  trongrid: 'TronGrid',
+  blockscout: 'Blockscout',
+  issuer_freeze: 'Issuer freeze (live)',
+  local: 'Local lists (OFAC / MEW / freezes)',
+};
+
+const PAY_ERROR_TEXT: Record<string, string> = {
+  timeout: 'timeout',
+  network_error: 'network error',
+  rate_limited: 'rate limited',
+  bad_response: 'unexpected response',
+  bad_request: 'bad request',
+  no_rpc: 'no RPC configured',
+  unavailable: 'unavailable',
+};
+
+export function formatPayError(code?: string): string {
+  if (!code) return 'unavailable';
+  return PAY_ERROR_TEXT[code] ?? code.replace(/_/g, ' ');
+}
+
+export function fmtAsOf(iso: string): string {
+  if (!iso || iso.length < 19) return iso;
+  return `${iso.slice(11, 19)} UTC`;
+}
+
 const VALID_ASSETS = new Set<PaymentAsset>(['USDT', 'USDC', 'ETH', 'TRX']);
 const VALID_NETWORKS = new Set<PaymentNetwork>(['tron', 'eth', 'arb', 'op', 'base']);
 

@@ -1,5 +1,14 @@
-import { useState } from 'react';
-import type { AddressRiskChain, PaymentAsset, PaymentNetwork, PaymentQueryParams } from '../../types';
+import { useEffect, useRef, useState } from 'react';
+import type {
+  AddressRiskChain,
+  PaymentAsset,
+  PaymentHistoryResponse,
+  PaymentLiveResponse,
+  PaymentNetwork,
+  PaymentQueryParams,
+} from '../../types';
+import { fetchPaymentHistory, fetchPaymentLive } from '../../api';
+import { ErrorBanner } from '../../dashboards/shared';
 import { Panel } from './shared';
 import {
   detectAddressFamily,
@@ -11,6 +20,15 @@ import {
   parsePaymentHash,
   writePaymentHash,
 } from './paymentCheck';
+import {
+  PaymentAlertsBanner,
+  PaymentBalancePanel,
+  PaymentLatestCard,
+  PaymentSourcesFooter,
+} from './PaymentLivePanels';
+
+const FAST_POLL_MS = 5_000;
+const SLOW_POLL_MS = 30_000;
 
 const FAMILY_LABELS: Record<'evm' | 'tron' | 'btc', string> = {
   evm: 'an EVM',
@@ -34,6 +52,7 @@ export default function PaymentCheckTab({
   const [input, setInput] = useState<string>(initial.address);
   const [inputError, setInputError] = useState<string>('');
   const [submitted, setSubmitted] = useState<PaymentQueryParams | null>(initialValid);
+  const [submitSeq, setSubmitSeq] = useState<number>(0);
 
   const supportedNetworks = PAY_ASSET_NETWORKS[asset];
   const currentNetOpt = PAY_NETWORKS[network];
@@ -53,6 +72,7 @@ export default function PaymentCheckTab({
     if (trimmedInput && isValidAddressForChain(nextNet, trimmedInput)) {
       writePaymentHash(nextAsset, nextNet, trimmedInput);
       setSubmitted({ asset: nextAsset, network: nextNet, address: trimmedInput });
+      setSubmitSeq(s => s + 1);
     } else {
       writePaymentHash(nextAsset, nextNet, '');
       setSubmitted(null);
@@ -65,6 +85,7 @@ export default function PaymentCheckTab({
     if (trimmedInput && isValidAddressForChain(nextNet, trimmedInput)) {
       writePaymentHash(asset, nextNet, trimmedInput);
       setSubmitted({ asset, network: nextNet, address: trimmedInput });
+      setSubmitSeq(s => s + 1);
     } else {
       writePaymentHash(asset, nextNet, '');
       setSubmitted(null);
@@ -81,6 +102,7 @@ export default function PaymentCheckTab({
     setInputError('');
     writePaymentHash(asset, targetNet, addr);
     setSubmitted({ asset, network: targetNet, address: addr });
+    setSubmitSeq(s => s + 1);
   };
 
   return (
@@ -229,21 +251,168 @@ export default function PaymentCheckTab({
       </Panel>
 
       {submitted && (
-        <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-zinc-400 font-mono">
-          <span>
-            Active target: {submitted.asset} on {PAY_NETWORKS[submitted.network].label} · {submitted.address}
-          </span>
-          {onInspect && (
-            <button
-              type="button"
-              onClick={() => onInspect(submitted.address, submitted.network)}
-              className="text-zinc-400 hover:text-zinc-200 underline underline-offset-2 font-sans"
-            >
-              Open in Address Risk
-            </button>
-          )}
-        </div>
+        <PaymentCheckSession
+          key={`${submitted.asset}:${submitted.network}:${submitted.address}:${submitSeq}`}
+          params={submitted}
+          onInspect={onInspect}
+        />
       )}
+    </div>
+  );
+}
+
+function PaymentCheckSession({
+  params,
+  onInspect,
+}: {
+  params: PaymentQueryParams;
+  onInspect?: (address: string, chain: AddressRiskChain) => void;
+}) {
+  const [live, setLive] = useState<PaymentLiveResponse | null>(null);
+  const [liveError, setLiveError] = useState<string>('');
+  const [history, setHistory] = useState<PaymentHistoryResponse | null>(null);
+
+  const liveCtrlRef = useRef<AbortController | null>(null);
+  const histCtrlRef = useRef<AbortController | null>(null);
+  const lastSeenLatestHashRef = useRef<string | undefined>(undefined);
+
+  const pollMs =
+    live?.latest && live.latest.level !== 'FINALIZED' ? FAST_POLL_MS : SLOW_POLL_MS;
+
+  // Initial load + first-screen alert backfill (review-2 #2):
+  // When /history returns for the first time for these params, immediately
+  // trigger a silent /live refresh so /live sees the populated 60s history
+  // cache and computes complete 7-day lookalike alerts without showing a
+  // loading state.
+  useEffect(() => {
+    let alive = true;
+
+    const loadLive = () => {
+      liveCtrlRef.current?.abort();
+      const ctrl = new AbortController();
+      liveCtrlRef.current = ctrl;
+      fetchPaymentLive(params, ctrl.signal)
+        .then(d => {
+          if (!alive || ctrl.signal.aborted) return;
+          const prevHash = lastSeenLatestHashRef.current;
+          const nextHash = d.latest?.tx_hash ?? '';
+          if (prevHash !== undefined && nextHash && nextHash !== prevHash) {
+            // A new incoming transfer appeared in /live — refresh 7d history (§5.9).
+            loadHistory(false);
+          }
+          lastSeenLatestHashRef.current = nextHash;
+          setLive(d);
+          setLiveError('');
+        })
+        .catch(e => {
+          if (!alive || ctrl.signal.aborted) return;
+          const d = e.response?.data;
+          setLiveError(typeof d === 'string' && d ? d : e.message || 'live check failed');
+        });
+    };
+
+    const loadHistory = (isFirstForParams: boolean) => {
+      histCtrlRef.current?.abort();
+      const ctrl = new AbortController();
+      histCtrlRef.current = ctrl;
+      fetchPaymentHistory(params, ctrl.signal)
+        .then(h => {
+          if (!alive || ctrl.signal.aborted) return;
+          setHistory(h);
+          if (isFirstForParams) {
+            // Silent /live backfill now that backend pay:hist cache is warm (review-2 #2).
+            loadLive();
+          }
+        })
+        .catch(() => {
+          // History errors are handled in Task 13's PaymentHistory panel.
+        });
+    };
+
+    loadLive();
+    loadHistory(true);
+
+    return () => {
+      alive = false;
+      liveCtrlRef.current?.abort();
+      histCtrlRef.current?.abort();
+    };
+  }, [params]);
+
+  // Adaptive polling for /live: 5s while latest is not FINALIZED, 30s otherwise.
+  // Pauses when the tab is hidden and refreshes immediately when visible again.
+  useEffect(() => {
+    let alive = true;
+
+    const pollOnce = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      liveCtrlRef.current?.abort();
+      const ctrl = new AbortController();
+      liveCtrlRef.current = ctrl;
+      fetchPaymentLive(params, ctrl.signal)
+        .then(d => {
+          if (!alive || ctrl.signal.aborted) return;
+          const prevHash = lastSeenLatestHashRef.current;
+          const nextHash = d.latest?.tx_hash ?? '';
+          if (prevHash !== undefined && nextHash && nextHash !== prevHash) {
+            histCtrlRef.current?.abort();
+            const hCtrl = new AbortController();
+            histCtrlRef.current = hCtrl;
+            fetchPaymentHistory(params, hCtrl.signal)
+              .then(h => {
+                if (alive && !hCtrl.signal.aborted) setHistory(h);
+              })
+              .catch(() => {});
+          }
+          lastSeenLatestHashRef.current = nextHash;
+          setLive(d);
+          setLiveError('');
+        })
+        .catch(e => {
+          if (!alive || ctrl.signal.aborted) return;
+          const d = e.response?.data;
+          setLiveError(typeof d === 'string' && d ? d : e.message || 'live check failed');
+        });
+    };
+
+    const onVis = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        pollOnce();
+      }
+    };
+
+    const timer = window.setInterval(pollOnce, pollMs);
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVis);
+    }
+
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVis);
+      }
+    };
+  }, [params, pollMs]);
+
+  if (liveError && !live) {
+    return <ErrorBanner message={liveError} />;
+  }
+  if (!live) {
+    return (
+      <div className="text-xs text-zinc-500">
+        Checking live settlement status and balances for {params.asset} on {PAY_NETWORKS[params.network].label}…
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {liveError && <ErrorBanner message={liveError} />}
+      <PaymentAlertsBanner alerts={live.alerts} network={live.network} />
+      <PaymentBalancePanel live={live} />
+      <PaymentLatestCard live={live} pollSec={pollMs / 1000} onInspect={onInspect} />
+      <PaymentSourcesFooter liveSources={live.sources} historySources={history?.sources} />
     </div>
   );
 }
