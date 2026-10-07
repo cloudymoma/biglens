@@ -26,6 +26,7 @@ import {
   PaymentLatestCard,
   PaymentSourcesFooter,
 } from './PaymentLivePanels';
+import PaymentHistory from './PaymentHistory';
 
 const FAST_POLL_MS = 5_000;
 const SLOW_POLL_MS = 30_000;
@@ -271,6 +272,8 @@ function PaymentCheckSession({
   const [live, setLive] = useState<PaymentLiveResponse | null>(null);
   const [liveError, setLiveError] = useState<string>('');
   const [history, setHistory] = useState<PaymentHistoryResponse | null>(null);
+  const [historyLoading, setHistoryLoading] = useState<boolean>(true);
+  const [historyError, setHistoryError] = useState<string>('');
 
   const liveCtrlRef = useRef<AbortController | null>(null);
   const histCtrlRef = useRef<AbortController | null>(null);
@@ -319,13 +322,18 @@ function PaymentCheckSession({
         .then(h => {
           if (!alive || ctrl.signal.aborted) return;
           setHistory(h);
+          setHistoryError('');
+          setHistoryLoading(false);
           if (isFirstForParams) {
             // Silent /live backfill now that backend pay:hist cache is warm (review-2 #2).
             loadLive();
           }
         })
-        .catch(() => {
-          // History errors are handled in Task 13's PaymentHistory panel.
+        .catch(e => {
+          if (!alive || ctrl.signal.aborted) return;
+          const d = e.response?.data;
+          setHistoryError(typeof d === 'string' && d ? d : e.message || '7d history failed');
+          setHistoryLoading(false);
         });
     };
 
@@ -360,7 +368,11 @@ function PaymentCheckSession({
             histCtrlRef.current = hCtrl;
             fetchPaymentHistory(params, hCtrl.signal)
               .then(h => {
-                if (alive && !hCtrl.signal.aborted) setHistory(h);
+                if (alive && !hCtrl.signal.aborted) {
+                  setHistory(h);
+                  setHistoryError('');
+                  setHistoryLoading(false);
+                }
               })
               .catch(() => {});
           }
@@ -412,6 +424,13 @@ function PaymentCheckSession({
       <PaymentAlertsBanner alerts={live.alerts} network={live.network} />
       <PaymentBalancePanel live={live} />
       <PaymentLatestCard live={live} pollSec={pollMs / 1000} onInspect={onInspect} />
+      <PaymentHistory
+        history={history}
+        loading={historyLoading}
+        error={historyError}
+        heads={live.heads}
+        onInspect={onInspect}
+      />
       <PaymentSourcesFooter liveSources={live.sources} historySources={history?.sources} />
     </div>
   );
