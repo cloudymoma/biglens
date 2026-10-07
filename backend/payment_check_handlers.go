@@ -397,34 +397,61 @@ func (h *APIHandler) PaymentCheckLive(w http.ResponseWriter, r *http.Request) {
 			Message:  "This address appears on the OFAC SDN sanctions list.",
 		})
 	}
+	type txAlertCand struct {
+		prio  int
+		alert payAlert
+	}
+	var txAlertOrder []string
+	txAlerts := make(map[string]txAlertCand)
 	for _, tx := range candidates {
 		if !isWithinAlertWindow(tx.Timestamp, now) {
 			continue
 		}
-		if slices.Contains(tx.Flags, "counterfeit_token") {
-			alerts = append(alerts, payAlert{
-				Severity: "critical",
-				Code:     "counterfeit_received",
-				Message:  fmt.Sprintf("Counterfeit %s transfer (%s %s) detected in the last 24h — not genuine %s.", asset, tx.Amount, tx.Symbol, asset),
-				TxHash:   tx.TxHash,
-			})
+		var cand txAlertCand
+		switch {
+		case slices.Contains(tx.Flags, "counterfeit_token"):
+			cand = txAlertCand{
+				prio: 3,
+				alert: payAlert{
+					Severity: "critical",
+					Code:     "counterfeit_received",
+					Message:  fmt.Sprintf("Counterfeit %s transfer (%s %s) detected in the last 24h — not genuine %s.", asset, tx.Amount, tx.Symbol, asset),
+					TxHash:   tx.TxHash,
+				},
+			}
+		case slices.Contains(tx.Flags, "sent_to_lookalike"):
+			cand = txAlertCand{
+				prio: 2,
+				alert: payAlert{
+					Severity: "critical",
+					Code:     "sent_to_lookalike",
+					Message:  fmt.Sprintf("Outgoing transfer (%s %s) was sent to a lookalike address (%s) matching an earlier counterparty.", tx.Amount, tx.Symbol, tx.Counterparty),
+					TxHash:   tx.TxHash,
+				},
+			}
+		case slices.Contains(tx.Flags, "lookalike"):
+			cand = txAlertCand{
+				prio: 1,
+				alert: payAlert{
+					Severity: "warning",
+					Code:     "poisoning_received",
+					Message:  fmt.Sprintf("Address poisoning attempt (%s %s) involving lookalike counterparty %s in the last 24h.", tx.Amount, tx.Symbol, tx.Counterparty),
+					TxHash:   tx.TxHash,
+				},
+			}
+		default:
+			continue
 		}
-		if slices.Contains(tx.Flags, "sent_to_lookalike") {
-			alerts = append(alerts, payAlert{
-				Severity: "critical",
-				Code:     "sent_to_lookalike",
-				Message:  fmt.Sprintf("Outgoing transfer (%s %s) was sent to a lookalike address (%s) matching an earlier counterparty.", tx.Amount, tx.Symbol, tx.Counterparty),
-				TxHash:   tx.TxHash,
-			})
+		existing, seen := txAlerts[tx.TxHash]
+		if !seen {
+			txAlertOrder = append(txAlertOrder, tx.TxHash)
+			txAlerts[tx.TxHash] = cand
+		} else if cand.prio > existing.prio {
+			txAlerts[tx.TxHash] = cand
 		}
-		if slices.Contains(tx.Flags, "lookalike") {
-			alerts = append(alerts, payAlert{
-				Severity: "warning",
-				Code:     "poisoning_received",
-				Message:  fmt.Sprintf("Address poisoning attempt (%s %s) involving lookalike counterparty %s in the last 24h.", tx.Amount, tx.Symbol, tx.Counterparty),
-				TxHash:   tx.TxHash,
-			})
-		}
+	}
+	for _, h := range txAlertOrder {
+		alerts = append(alerts, txAlerts[h].alert)
 	}
 
 	var sources []riskSource

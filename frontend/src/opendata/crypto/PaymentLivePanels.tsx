@@ -20,10 +20,12 @@ import {
   fmtAsOf,
   fmtDurationSec,
   formatPayError,
+  formatTokenAmount,
   levelColors,
   levelCopy,
   PAY_NETWORKS,
   PAY_SOURCE_LABELS,
+  recentTransferSourceId,
   shortAddr,
   tierBadgeInfo,
 } from './paymentCheck';
@@ -152,17 +154,21 @@ export function PaymentBalancePanel({ live }: { live: PaymentLiveResponse }) {
                       </td>
                     ) : (
                       <>
-                        <td className="py-2 px-3 text-sm text-zinc-100">{row.finalized}</td>
+                        <td className="py-2 px-3 text-sm text-zinc-100">
+                          {formatTokenAmount(row.finalized)}
+                        </td>
                         <td className="py-2 px-3 text-zinc-300">
                           {isTron ? (
                             <span className="text-zinc-600" title="TRON uses 2-tier solidity finality">
                               —
                             </span>
                           ) : (
-                            row.safe_delta
+                            formatTokenAmount(row.safe_delta)
                           )}
                         </td>
-                        <td className="py-2 pl-3 text-zinc-300">{row.latest_delta}</td>
+                        <td className="py-2 pl-3 text-zinc-300">
+                          {formatTokenAmount(row.latest_delta)}
+                        </td>
                       </>
                     )}
                   </tr>
@@ -188,15 +194,29 @@ export function PaymentLatestCard({
   const tx = live.latest;
   const netOpt = PAY_NETWORKS[live.network];
   const note = `updated ${fmtAsOf(live.as_of)} · refreshes every ${pollSec}s`;
+  const recentSrcId = recentTransferSourceId(live.network, live.asset);
+  const recentSrc = live.sources.find(s => s.id === recentSrcId);
+  const recentErrReason = recentSrc?.status === 'error' ? formatPayError(recentSrc.error) : '';
 
   return (
     <Panel title={`Latest incoming · ${live.asset}`} note={note}>
       {!tx ? (
-        <div className="text-xs text-zinc-400">
-          No genuine non-dust incoming {live.asset} transfer found in recent blocks or cached 7-day history.
-        </div>
+        recentErrReason ? (
+          <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+            Couldn&apos;t check recent transfers ({recentErrReason})
+          </div>
+        ) : (
+          <div className="text-xs text-zinc-400">
+            No genuine non-dust incoming {live.asset} transfer found in recent blocks or cached 7-day history.
+          </div>
+        )
       ) : (
         <div className="space-y-4">
+          {recentErrReason && (
+            <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+              Couldn&apos;t check recent transfers ({recentErrReason})
+            </div>
+          )}
           <LatestSettlementBody tx={tx} live={live} netOpt={netOpt} onInspect={onInspect} />
           <PayerCleanlinessSection
             key={`${live.network}:${tx.tx_hash}:${tx.counterparty}`}
@@ -287,7 +307,7 @@ function LatestSettlementBody({
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-base font-mono font-semibold text-white">
-              +{tx.amount} {tx.symbol}
+              +{formatTokenAmount(tx.amount)} {tx.symbol}
             </span>
             <span className={`rounded border px-1.5 py-0.5 text-[10px] font-medium ${tierInfo.className}`}>
               {tierInfo.label}

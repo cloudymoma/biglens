@@ -991,3 +991,75 @@ func TestPaymentCheckLiveSentToLookalikeAlert(t *testing.T) {
 		t.Fatalf("Alerts = %+v, expected critical sent_to_lookalike alert for 0xsent_wrong", resp.Alerts)
 	}
 }
+
+func TestPaymentCheckLiveDedupesAlertPerTxHash(t *testing.T) {
+	nowSec := time.Now().Unix()
+	rpcSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Method string            `json:"method"`
+			Params []json.RawMessage `json:"params"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		switch req.Method {
+		case "eth_getBlockByNumber":
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":1,"result":{"number":"0x64","timestamp":"0x%x"}}`, nowSec)
+		case "eth_call":
+			fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"result":"0x0000000000000000000000000000000000000000000000000000000000000000"}`)
+		case "eth_getLogs":
+			fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"result":[]}`)
+		}
+	}))
+	defer rpcSrv.Close()
+
+	h := newTestPaymentAPIHandler(t, map[string][]string{"eth": {rpcSrv.URL}}, nil)
+	// Seed history cache with:
+	// 1. Earlier incoming from real counterparty (block 90)
+	// 2. Counterfeit USDT transfer from lookalike counterparty (block 95, within 24h)
+	//    -> carries BOTH counterfeit_token and lookalike flags on the same tx_hash.
+	histKey := "pay:hist:eth:USDT:" + handlerTestEVMAddr
+	h.cache.SetWithTTL(histKey, &cachedPayHistory{
+		txs: []payTx{
+			{
+				TxHash:        "0xfake_and_lookalike",
+				Direction:     "in",
+				Timestamp:     time.Unix(nowSec-60, 0).UTC().Format(time.RFC3339),
+				Amount:        "1000",
+				Symbol:        "USDT",
+				TokenContract: "0x1111111111111111111111111111111111111111",
+				TokenTier:     tierCounterfeit,
+				Counterparty:  handlerTestEVMMimic,
+				Block:         95,
+				rawValue:      "1000000000",
+			},
+			{
+				TxHash:        "0xreal_in",
+				Direction:     "in",
+				Timestamp:     time.Unix(nowSec-3600, 0).UTC().Format(time.RFC3339),
+				Amount:        "500",
+				Symbol:        "USDT",
+				TokenContract: "0xdac17f958d2ee523a2206206994597c13d831ec7",
+				TokenTier:     tierNative,
+				Counterparty:  handlerTestEVMPayer,
+				Block:         90,
+				rawValue:      "500000000",
+			},
+		},
+	}, payHistoryCacheTTL)
+
+	rec := httptest.NewRecorder()
+	h.PaymentCheckLive(rec, httptest.NewRequest(http.MethodGet, "/api/opendata/crypto/payment-check/live?asset=USDT&network=eth&address="+handlerTestEVMAddr, nil))
+
+	var resp payLiveResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	var matching []payAlert
+	for _, a := range resp.Alerts {
+		if a.TxHash == "0xfake_and_lookalike" {
+			matching = append(matching, a)
+		}
+	}
+	if len(matching) != 1 || matching[0].Code != "counterfeit_received" || matching[0].Severity != "critical" {
+		t.Fatalf("Alerts for 0xfake_and_lookalike = %+v, want exactly 1 critical counterfeit_received alert", matching)
+	}
+}

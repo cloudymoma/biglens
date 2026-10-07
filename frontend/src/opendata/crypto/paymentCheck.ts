@@ -353,6 +353,25 @@ export function formatPayError(code?: string): string {
   return PAY_ERROR_TEXT[code] ?? code.replace(/_/g, ' ');
 }
 
+export function formatTokenAmount(raw: string): string {
+  if (!raw) return raw;
+  const m = raw.match(/^([+-]?)(\d+)(\.\d+)?$/);
+  if (!m) return raw;
+  const [, sign, intPart, fracPart = ''] = m;
+  const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  return `${sign}${grouped}${fracPart}`;
+}
+
+export function recentTransferSourceId(network: PaymentNetwork, asset: PaymentAsset): string {
+  if (network === 'tron') return 'trongrid';
+  if (asset === 'ETH') return 'blockscout';
+  return 'rpc';
+}
+
+export function historySourceId(network: PaymentNetwork): string {
+  return network === 'tron' ? 'trongrid' : 'blockscout';
+}
+
 export function fmtAsOf(iso: string): string {
   if (!iso || iso.length < 19) return iso;
   return `${iso.slice(11, 19)} UTC`;
