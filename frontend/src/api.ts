@@ -6,6 +6,9 @@ import type {
   AddressRiskLookup,
   AddressRiskOverview,
   AddressRiskSources,
+  PaymentHistoryResponse,
+  PaymentLiveResponse,
+  PaymentQueryParams,
   BillingFilterState,
   BillingConfigResponse,
   BillingMeta,
@@ -501,6 +504,28 @@ export async function postAddressRiskBackfill(opts: {
   dry_run_token?: string;
 }): Promise<AddressRiskBackfillStatus> {
   const { data } = await axios.post('/api/opendata/crypto/address-risk/backfill', opts);
+  return data;
+}
+
+export async function fetchPaymentLive(
+  params: PaymentQueryParams,
+  signal?: AbortSignal,
+): Promise<PaymentLiveResponse> {
+  const { data } = await axios.get('/api/opendata/crypto/payment-check/live', {
+    params,
+    signal,
+  });
+  return data;
+}
+
+export async function fetchPaymentHistory(
+  params: PaymentQueryParams,
+  signal?: AbortSignal,
+): Promise<PaymentHistoryResponse> {
+  const { data } = await axios.get('/api/opendata/crypto/payment-check/history', {
+    params,
+    signal,
+  });
   return data;
 }
 

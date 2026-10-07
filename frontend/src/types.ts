@@ -1747,3 +1747,103 @@ export interface GasLiveData {
   calibration: GasCalibration | null;
   calibration_error?: string;
 }
+
+// --- Crypto Pulse: Payment Check (field names mirror backend/payment_check_*.go) ---
+
+export type PaymentAsset = 'USDT' | 'USDC' | 'ETH' | 'TRX';
+export type PaymentNetwork = 'tron' | 'eth' | 'arb' | 'op' | 'base';
+export type PaymentTokenTier = 'native' | 'bridged' | 'counterfeit' | 'other';
+export type PaymentFinalityLevel = 'DANGER' | 'SOFT' | 'SAFE' | 'FINALIZED';
+
+export interface PaymentHeads {
+  latest: number;
+  latest_time: number;
+  safe: number;
+  safe_time: number;
+  finalized: number;
+  final_time: number;
+  safe_lag_sec: number;
+  final_lag_sec: number;
+}
+
+export interface PaymentBalanceRow {
+  label: string;
+  contract: string;
+  tier: PaymentTokenTier;
+  finalized: string;
+  safe_delta: string;
+  latest_delta: string;
+  error?: string;
+}
+
+export interface PaymentTx {
+  tx_hash: string;
+  explorer_url: string;
+  direction: 'in' | 'out';
+  timestamp: string;
+  amount: string;
+  symbol: string;
+  token_contract: string;
+  token_tier: PaymentTokenTier;
+  counterparty: string;
+  block: number;
+  failed: boolean;
+  level: PaymentFinalityLevel;
+  progress: number;
+  est_sec_left: number;
+  flags: string[];
+  counterparty_hits?: string[];
+}
+
+export interface PaymentAlert {
+  severity: 'critical' | 'warning';
+  code:
+    | 'own_address_frozen'
+    | 'own_address_sanctioned'
+    | 'counterfeit_received'
+    | 'poisoning_received'
+    | 'sent_to_lookalike';
+  message: string;
+  tx_hash?: string;
+}
+
+export interface PaymentHistoryScope {
+  hosts: string[];
+  txlist: number;
+  tokentx: number;
+  txlistinternal: number;
+  trc20: number;
+  truncated: boolean;
+}
+
+export interface PaymentLiveResponse {
+  asset: PaymentAsset;
+  network: PaymentNetwork;
+  network_label: string;
+  address: string;
+  as_of: string;
+  heads: PaymentHeads;
+  balance: PaymentBalanceRow[];
+  balance_error?: string;
+  latest: PaymentTx | null;
+  alerts: PaymentAlert[];
+  sources: AddressRiskSource[];
+}
+
+export interface PaymentHistoryResponse {
+  asset: PaymentAsset;
+  network: PaymentNetwork;
+  address: string;
+  as_of: string;
+  since: string;
+  txs: PaymentTx[];
+  scope: PaymentHistoryScope;
+  sources: AddressRiskSource[];
+}
+
+export interface PaymentQueryParams {
+  asset: PaymentAsset;
+  network: PaymentNetwork;
+  address: string;
+}
+

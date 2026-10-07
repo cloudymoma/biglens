@@ -6,6 +6,7 @@ import FeesTab from './FeesTab';
 import WhalesTab from './WhalesTab';
 import TokensTab from './TokensTab';
 import MiningTab from './MiningTab';
+import PaymentCheckTab from './PaymentCheckTab';
 import AddressRiskTab from './AddressRiskTab';
 
 const TABS = [
@@ -14,17 +15,26 @@ const TABS = [
   { id: 'whales', label: 'Whales & Flow' },
   { id: 'tokens', label: 'Token Economy' },
   { id: 'mining', label: 'Mining Economics' },
+  { id: 'payments', label: 'Payment Check' },
   { id: 'risk', label: 'Address Risk' },
 ] as const;
 
 type TabId = (typeof TABS)[number]['id'];
 
-export default function CryptoDashboard() {
-  const [active, setActive] = useState<TabId>('pulse');
-  const [visited, setVisited] = useState<ReadonlySet<TabId>>(new Set<TabId>(['pulse']));
+function initialCryptoTab(): TabId {
+  if (typeof window !== 'undefined' && window.location.hash.startsWith('#pay')) {
+    return 'payments';
+  }
+  return 'pulse';
+}
 
-  // Whales → Address Risk hand-off. seq changes on every click, so clicking
-  // the same address again re-runs the lookup in the already-mounted tab.
+export default function CryptoDashboard() {
+  const initTab = initialCryptoTab();
+  const [active, setActive] = useState<TabId>(initTab);
+  const [visited, setVisited] = useState<ReadonlySet<TabId>>(new Set<TabId>(['pulse', initTab]));
+
+  // Whales / Payment Check → Address Risk hand-off. seq changes on every click,
+  // so clicking the same address again re-runs the lookup in the already-mounted tab.
   const [inspect, setInspect] = useState<{ address: string; chain: AddressRiskChain; seq: number }>({
     address: '',
     chain: 'eth',
@@ -47,6 +57,7 @@ export default function CryptoDashboard() {
     whales: <WhalesTab onInspect={inspectAddress} />,
     tokens: <TokensTab />,
     mining: <MiningTab />,
+    payments: <PaymentCheckTab onInspect={inspectAddress} />,
     risk: <AddressRiskTab inspect={inspect} />,
   };
 
