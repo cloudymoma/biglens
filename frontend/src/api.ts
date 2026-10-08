@@ -6,6 +6,7 @@ import type {
   AddressRiskLookup,
   AddressRiskOverview,
   AddressRiskSources,
+  ScamRadarResponse,
   PaymentHistoryResponse,
   PaymentLiveResponse,
   PaymentQueryParams,
@@ -479,6 +480,11 @@ export async function fetchAddressRiskSources(): Promise<AddressRiskSources> {
 
 export async function fetchAddressRiskOverview(): Promise<AddressRiskOverview> {
   const { data } = await axios.get('/api/opendata/crypto/address-risk/overview');
+  return data;
+}
+
+export async function fetchAddressRiskScamRadar(): Promise<ScamRadarResponse> {
+  const { data } = await axios.get('/api/opendata/crypto/address-risk/scam-radar');
   return data;
 }
 

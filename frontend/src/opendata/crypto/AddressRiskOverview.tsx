@@ -6,6 +6,7 @@ import { fetchAddressRiskOverview } from '../../api';
 import { ErrorBanner, MetricCard } from '../../dashboards/shared';
 import { AXIS_LABEL, CHART_TOOLTIP, Panel, SPLIT_LINE, fmtNum, shortHash } from './shared';
 import { BACKFILL_COMMAND, RISK_SOURCE_LABELS, RISK_SOURCE_META } from './addressRiskTools';
+import ScamRadarPanel from './ScamRadarPanel';
 
 // Categorical colors only: red/orange are reserved for severity.
 const USDT_COLOR = '#60a5fa';
@@ -68,6 +69,8 @@ export default function AddressRiskOverview({ sources, onInspect }: {
   const tronEmpty = data.tron_empty ?? true;
   const tronSince = data.tron_coverage?.partial ? `since ${data.tron_coverage.coverage_from}` : 'full history';
   const statusById = new Map((sources?.lists ?? []).map(s => [s.id, s]));
+  const tronSource = statusById.get('tron_stablecoin');
+  const tronErr = tronSource?.status === 'error' ? (tronSource.last_error || tronSource.error || 'sync_failed') : '';
   const lookSource = statusById.get('scam_lookalikes');
   const entries: Record<string, string> = {
     ofac: fmtNum(data.kpis.ofac_count),
@@ -83,10 +86,12 @@ export default function AddressRiskOverview({ sources, onInspect }: {
         <MetricCard label="OFAC addresses" value={fmtNum(data.kpis.ofac_count)} icon={<Landmark size={15} />} detail="OFAC-listed addresses (EVM, TRON, Bitcoin)" accentColor="#71717a" />
         <MetricCard label="USDT frozen now" value={data.empty ? '—' : fmtNum(data.kpis.usdt_frozen_count)} icon={<Snowflake size={15} />} detail={data.empty ? 'not synced' : since} accentColor={USDT_COLOR} />
         <MetricCard label="USDC frozen now" value={data.empty ? '—' : fmtNum(data.kpis.usdc_frozen_count)} icon={<Snowflake size={15} />} detail={data.empty ? 'not synced' : since} accentColor={USDC_COLOR} />
-        <MetricCard label="USDT frozen now (TRON)" value={tronEmpty ? '—' : fmtNum(data.kpis.tron_usdt_frozen_count ?? 0)} icon={<Snowflake size={15} />} detail={tronEmpty ? 'not synced' : tronSince} accentColor={USDT_COLOR} />
+        <MetricCard label="USDT frozen now (TRON)" value={tronErr || tronEmpty ? '—' : fmtNum(data.kpis.tron_usdt_frozen_count ?? 0)} icon={<Snowflake size={15} />} detail={tronErr ? `sync error: ${tronErr}` : tronEmpty ? 'not synced' : tronSince} accentColor={USDT_COLOR} />
         <MetricCard label="USDT destroyed" value={data.empty ? '—' : fmtCompactUSD(data.kpis.usdt_destroyed_total)} valueTitle={data.empty ? undefined : fmtExactUSD(data.kpis.usdt_destroyed_total)} icon={<Flame size={15} />} detail={data.empty ? 'not synced' : `USDT · ${since}`} accentColor={USDT_COLOR} />
         <MetricCard label="MEW darklist" value={fmtNum(data.kpis.mew_darklist_count)} icon={<ListX size={15} />} detail="historical list, frozen since 2020-11" accentColor="#71717a" />
       </div>
+
+      <ScamRadarPanel onInspect={onInspect} />
 
       {(data.empty || data.coverage.partial) && (
         <Panel title="Freeze history coverage" note={data.empty ? 'not synced' : `covered since ${data.coverage.coverage_from}`}>

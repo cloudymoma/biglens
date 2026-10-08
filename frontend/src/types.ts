@@ -1141,6 +1141,57 @@ export interface AddressRiskBackfillStatus {
   error?: string;
 }
 
+export interface ScamRadarKPIs {
+  eth_day?: string;
+  eth_poison_hits: number;
+  eth_poison_victims: number;
+  eth_fake_transfers: number;
+  eth_fake_contracts: number;
+  tron_day?: string;
+  tron_poison_hits: number;
+  tron_poison_victims: number;
+  tron_candidates: number;
+  tron_usdt_freezes_30d: number;
+  btc_day?: string;
+  btc_rbf_percent: number;
+}
+
+export interface ScamTrendPoint {
+  day: string;
+  has_data: boolean;
+  eth_poison_hits: number;
+  eth_poison_victims: number;
+  tron_poison_hits: number;
+  tron_poison_victims: number;
+  eth_fake_transfers: number;
+}
+
+export interface ScamFakeToken {
+  contract: string;
+  symbol: string;
+  transfers: number;
+  recipients: number;
+  first_seen: string;
+  last_seen: string;
+  explorer_url: string;
+}
+
+export interface ScamRBF {
+  day: string;
+  txs: number;
+  rbf_txs: number;
+  percent: number;
+}
+
+export interface ScamRadarResponse {
+  coverage: Record<string, AddressRiskSource>;
+  kpis: ScamRadarKPIs;
+  trend: ScamTrendPoint[];
+  fake_tokens: ScamFakeToken[];
+  btc_rbf: ScamRBF | null;
+  empty: boolean;
+}
+
 // --- BigQuery Open Data: GCP Billing ---
 
 export interface BillingDatasetInfo {
