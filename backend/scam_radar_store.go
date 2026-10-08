@@ -128,6 +128,29 @@ func (s *riskStore) insertTronStablecoinEvents(ctx context.Context, evs []stable
 	defer stmt.Close()
 
 	dayCounts := map[string]map[string]float64{}
+	initDay := func(d string) {
+		if dayCounts[d] == nil {
+			dayCounts[d] = map[string]float64{
+				"tron_usdt_freezes":   0,
+				"tron_usdt_unfreezes": 0,
+				"tron_usdt_destroys":  0,
+			}
+		}
+	}
+	if endD, err := civil.ParseDate(cursor); err == nil {
+		startStr := newFrom
+		if startStr == "" && cur != "" {
+			if curD, err := civil.ParseDate(cur); err == nil {
+				startStr = curD.AddDays(1).String()
+			}
+		}
+		if startD, err := civil.ParseDate(startStr); err == nil {
+			for d := startD; !d.After(endD); d = d.AddDays(1) {
+				initDay(d.String())
+			}
+		}
+	}
+
 	for _, e := range evs {
 		if e.TxHash == "" || e.Address == "" || e.Token == "" || e.Action == "" {
 			return fmt.Errorf("invalid tron stablecoin event %+v", e)
@@ -137,13 +160,7 @@ func (s *riskStore) insertTronStablecoinEvents(ctx context.Context, evs []stable
 		}
 		if len(e.BlockTime) >= 10 {
 			d := e.BlockTime[:10]
-			if dayCounts[d] == nil {
-				dayCounts[d] = map[string]float64{
-					"tron_usdt_freezes":   0,
-					"tron_usdt_unfreezes": 0,
-					"tron_usdt_destroys":  0,
-				}
-			}
+			initDay(d)
 			switch e.Action {
 			case "freeze":
 				dayCounts[d]["tron_usdt_freezes"]++
