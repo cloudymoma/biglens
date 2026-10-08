@@ -944,3 +944,60 @@ func TestFetchTronHistoryNineSlowRequestsSucceed(t *testing.T) {
 		}
 	}
 }
+
+func TestBlockscoutTxListAtStreamsAndDropsTokenTxInput(t *testing.T) {
+	const addr = "0x1111111111111111111111111111111111111111"
+	calldata := "0xa9059cbb" +
+		"0000000000000000000000002222222222222222222222222222222222222222" +
+		"0000000000000000000000000000000000000000000000000000000005f5e100" +
+		strings.Repeat("ab", 4096)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		payload := map[string]any{
+			"status":  "1",
+			"message": "OK",
+			"result": []map[string]any{
+				{
+					"transactionHash": "0xabc123",
+					"from":            addr,
+					"to":              "0xdac17f958d2ee523a2206206994597c13d831ec7",
+					"value":           "1000000",
+					"isError":         "1",
+					"timeStamp":       "1759600000",
+					"contractAddress": "0xdac17f958d2ee523a2206206994597c13d831ec7",
+					"blockNumber":     "200",
+					"input":           calldata,
+					"tokenSymbol":     "USDT",
+					"tokenDecimal":    "6",
+				},
+			},
+		}
+		_ = json.NewEncoder(w).Encode(payload)
+	}))
+	defer srv.Close()
+
+	// tokentx must drop Input during streaming decode.
+	tokenRows, code := blockscoutTxListAt(context.Background(), srv.URL, "tokentx", addr, 1000)
+	if code != "" || len(tokenRows) != 1 {
+		t.Fatalf("tokentx = (%+v, %q), want 1 row and empty code", tokenRows, code)
+	}
+	if tokenRows[0].Hash != "0xabc123" {
+		t.Errorf("tokentx Hash = %q, want 0xabc123", tokenRows[0].Hash)
+	}
+	if tokenRows[0].Input != "" {
+		t.Errorf("tokentx Input len = %d, want 0 (dropped during streaming)", len(tokenRows[0].Input))
+	}
+
+	// txlist must keep only the transfer calldata prefix (<= 138 chars) needed by decodeTransferCalldata.
+	txRows, code := blockscoutTxListAt(context.Background(), srv.URL, "txlist", addr, 1000)
+	if code != "" || len(txRows) != 1 {
+		t.Fatalf("txlist = (%+v, %q), want 1 row and empty code", txRows, code)
+	}
+	if len(txRows[0].Input) > 138 {
+		t.Errorf("txlist Input len = %d, want <= 138", len(txRows[0].Input))
+	}
+	to20, amt, ok := decodeTransferCalldata(txRows[0].Input)
+	if !ok || to20 != "2222222222222222222222222222222222222222" || amt.String() != "100000000" {
+		t.Errorf("decodeTransferCalldata on capped Input = (%q, %v, %v)", to20, amt, ok)
+	}
+}

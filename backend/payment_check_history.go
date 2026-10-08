@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math/big"
 	"net/http"
 	"net/url"
@@ -25,6 +26,7 @@ const (
 	tronMaxTxInfoLookups   = 5
 	erc20TransferTopic     = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 	erc20TransferMethodHex = "a9059cbb"
+	maxTransferCalldataLen = 2 + 136 // "0x" + selector(8) + to(64) + amount(64)
 )
 
 // payLogsMaxSpan is the maximum block range per eth_getLogs call; overridable
@@ -81,6 +83,22 @@ type blockscoutTxRow struct {
 	TokenDecimal    string `json:"tokenDecimal"`
 }
 
+// blockscoutTokenTxRow omits Input so streaming tokentx responses skips multi-KB
+// DeFi calldata without allocating strings per row (Phase 1.1).
+type blockscoutTokenTxRow struct {
+	Hash            string `json:"hash"`
+	TransactionHash string `json:"transactionHash"`
+	From            string `json:"from"`
+	To              string `json:"to"`
+	Value           string `json:"value"`
+	IsError         string `json:"isError"`
+	TimeStamp       string `json:"timeStamp"`
+	ContractAddress string `json:"contractAddress"`
+	BlockNumber     string `json:"blockNumber"`
+	TokenSymbol     string `json:"tokenSymbol"`
+	TokenDecimal    string `json:"tokenDecimal"`
+}
+
 // decodeTransferCalldata decodes ERC-20 / TRC-20 transfer(address,uint256)
 // calldata (selector 0xa9059cbb + two 32-byte words = 136 hex chars). Any
 // shorter input returns ok=false without slicing past bounds (review-2 #3).
@@ -130,25 +148,90 @@ func blockscoutTxListAt(ctx context.Context, baseURL, action, addr string, offse
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Sprintf("upstream_http_%d", resp.StatusCode)
 	}
-	body, err := readCapped(resp.Body, 96<<20)
-	if err != nil {
+	dec := json.NewDecoder(io.LimitReader(resp.Body, 96<<20))
+	tok, err := dec.Token()
+	if err != nil || tok != json.Delim('{') {
 		return nil, "bad_response"
 	}
-	var env etherscanEnvelope
-	if err := json.Unmarshal(body, &env); err != nil {
-		return nil, "bad_response"
-	}
-	if (env.Status == "1" || env.Status == "2" || env.Status == "0") &&
-		strings.HasPrefix(strings.TrimSpace(string(env.Result)), "[") {
-		var rows []blockscoutTxRow
-		if err := json.Unmarshal(env.Result, &rows); err != nil {
+	var (
+		status         string
+		hasArrayResult bool
+		rows           []blockscoutTxRow
+	)
+	dropInput := action == "tokentx"
+	for dec.More() {
+		keyTok, err := dec.Token()
+		if err != nil {
 			return nil, "bad_response"
 		}
-		for i := range rows {
-			if rows[i].Hash == "" && rows[i].TransactionHash != "" {
-				rows[i].Hash = rows[i].TransactionHash
+		key, ok := keyTok.(string)
+		if !ok {
+			return nil, "bad_response"
+		}
+		switch key {
+		case "status":
+			if err := dec.Decode(&status); err != nil {
+				return nil, "bad_response"
+			}
+		case "result":
+			rtok, err := dec.Token()
+			if err != nil {
+				return nil, "bad_response"
+			}
+			if rtok != json.Delim('[') {
+				if _, isDelim := rtok.(json.Delim); isDelim {
+					return nil, "bad_response"
+				}
+				continue
+			}
+			hasArrayResult = true
+			for dec.More() {
+				var row blockscoutTxRow
+				if dropInput {
+					var tr blockscoutTokenTxRow
+					if err := dec.Decode(&tr); err != nil {
+						return nil, "bad_response"
+					}
+					row = blockscoutTxRow{
+						Hash:            tr.Hash,
+						TransactionHash: tr.TransactionHash,
+						From:            tr.From,
+						To:              tr.To,
+						Value:           tr.Value,
+						IsError:         tr.IsError,
+						TimeStamp:       tr.TimeStamp,
+						ContractAddress: tr.ContractAddress,
+						BlockNumber:     tr.BlockNumber,
+						TokenSymbol:     tr.TokenSymbol,
+						TokenDecimal:    tr.TokenDecimal,
+					}
+				} else {
+					if err := dec.Decode(&row); err != nil {
+						return nil, "bad_response"
+					}
+					if len(row.Input) > maxTransferCalldataLen {
+						row.Input = strings.Clone(row.Input[:maxTransferCalldataLen])
+					}
+				}
+				if row.Hash == "" && row.TransactionHash != "" {
+					row.Hash = row.TransactionHash
+				}
+				rows = append(rows, row)
+			}
+			if endTok, err := dec.Token(); err != nil || endTok != json.Delim(']') {
+				return nil, "bad_response"
+			}
+		default:
+			var discard json.RawMessage
+			if err := dec.Decode(&discard); err != nil {
+				return nil, "bad_response"
 			}
 		}
+	}
+	if endTok, err := dec.Token(); err != nil || endTok != json.Delim('}') {
+		return nil, "bad_response"
+	}
+	if (status == "1" || status == "2" || status == "0") && hasArrayResult {
 		return rows, ""
 	}
 	return nil, "bad_response"
