@@ -59,7 +59,7 @@ func TestBuildOverview(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !empty.Empty || empty.KPIs.OFACCount != 2 || empty.RecentEvents == nil || empty.Trend.Points == nil {
+	if !empty.Empty || !empty.TronEmpty || empty.KPIs.OFACCount != 2 || empty.KPIs.TronUSDTFrozenCount != 0 || empty.RecentEvents == nil || empty.Trend.Points == nil {
 		t.Errorf("empty overview = %+v (slices must encode as [] not null)", empty)
 	}
 	a, b := "0x3333333333333333333333333333333333333333", "0x4444444444444444444444444444444444444444"
@@ -71,14 +71,21 @@ func TestBuildOverview(t *testing.T) {
 		destroy, // b frozen before coverage, destroyed inside it: counts as frozen
 	}
 	s.insertStablecoinEvents(ctx, events, "2026-08-27", "2026-09-25", riskNow)
+	if err := s.insertTronStablecoinEvents(ctx, []stablecoinEvent{
+		{TxHash: "0xt1", LogIndex: 1, Token: "USDT", Action: "freeze", Address: "TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7", BlockNumber: 100, BlockTime: "2026-09-10T00:00:00Z"},
+		{TxHash: "0xt2", LogIndex: 1, Token: "USDT", Action: "freeze", Address: "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t", BlockNumber: 101, BlockTime: "2026-09-11T00:00:00Z"},
+		{TxHash: "0xt3", LogIndex: 2, Token: "USDT", Action: "unfreeze", Address: "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t", BlockNumber: 102, BlockTime: "2026-09-12T00:00:00Z"},
+	}, "2026-08-27", "2026-09-25", riskNow); err != nil {
+		t.Fatal(err)
+	}
 	ov, err := s.buildOverview(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ov.Empty || !ov.Coverage.Partial || ov.Coverage.CoverageFrom != "2026-08-27" {
-		t.Errorf("coverage = %+v", ov.Coverage)
+	if ov.Empty || ov.TronEmpty || !ov.Coverage.Partial || ov.Coverage.CoverageFrom != "2026-08-27" || !ov.TronCoverage.Partial {
+		t.Errorf("coverage = %+v, tron = %+v", ov.Coverage, ov.TronCoverage)
 	}
-	if ov.KPIs.USDTFrozenCount != 2 || ov.KPIs.USDCFrozenCount != 0 || ov.KPIs.USDTDestroyedTotal != "1642752.78" {
+	if ov.KPIs.USDTFrozenCount != 2 || ov.KPIs.USDCFrozenCount != 0 || ov.KPIs.TronUSDTFrozenCount != 1 || ov.KPIs.USDTDestroyedTotal != "1642752.78" {
 		t.Errorf("kpis = %+v", ov.KPIs)
 	}
 	if ov.Trend.Granularity != "day" || len(ov.Trend.Points) != 30 {

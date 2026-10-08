@@ -1098,11 +1098,14 @@ export interface AddressRiskEvent {
 
 export interface AddressRiskOverview {
   empty: boolean;
+  tron_empty?: boolean;
   coverage: { coverage_from: string; cursor: string; partial: boolean };
+  tron_coverage?: { coverage_from: string; cursor: string; partial: boolean };
   kpis: {
     ofac_count: number;
     usdt_frozen_count: number;
     usdc_frozen_count: number;
+    tron_usdt_frozen_count?: number;
     usdt_destroyed_total: string;
     mew_darklist_count: number;
   };

@@ -315,24 +315,52 @@ func TestRiskPoolForAddressesByChain(t *testing.T) {
 	s := newTestRiskStore(t)
 	ctx := context.Background()
 	const (
-		evmOFAC   = "0x098b716b8aaf21512996dc57eb0615e2383e2f96"
-		evmMEW    = "0x2222222222222222222222222222222222222222"
-		evmFrozen = "0x3333333333333333333333333333333333333333"
-		tronOFAC  = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
+		evmOFAC      = "0x098b716b8aaf21512996dc57eb0615e2383e2f96"
+		evmMEW       = "0x2222222222222222222222222222222222222222"
+		evmFrozen    = "0x3333333333333333333333333333333333333333"
+		evmLook      = "0x4444444444444444444444444444444444444444"
+		tronOFAC     = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
+		tronFrozen   = "TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7"
+		tronUnfrozen = "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb"
+		tronLook     = "TM9gdoJo11111111111111111111Zjj4Yx"
 	)
 	s.replaceList(ctx, "ofac", []listEntry{{Address: evmOFAC}, {Address: tronOFAC}}, "h", time.Now())
 	s.replaceList(ctx, "mew_darklist", []listEntry{{Address: evmMEW}, {Address: tronOFAC}}, "h", time.Now())
 	s.insertStablecoinEvents(ctx, []stablecoinEvent{
 		{TxHash: "0xf", LogIndex: 1, Token: "USDT", Action: "freeze", Address: evmFrozen, BlockNumber: 1, BlockTime: "2026-09-01T00:00:00Z"},
 	}, "2026-08-27", "2026-09-25", time.Now())
+	if err := s.insertTronStablecoinEvents(ctx, []stablecoinEvent{
+		{TxHash: "0xtf1", LogIndex: 1, Token: "USDT", Action: "freeze", Address: tronFrozen, BlockNumber: 10, BlockTime: "2026-09-01T00:00:00Z"},
+		{TxHash: "0xtf2", LogIndex: 1, Token: "USDT", Action: "freeze", Address: tronUnfrozen, BlockNumber: 11, BlockTime: "2026-09-01T00:00:00Z"},
+		{TxHash: "0xtu2", LogIndex: 2, Token: "USDT", Action: "unfreeze", Address: tronUnfrozen, BlockNumber: 12, BlockTime: "2026-09-02T00:00:00Z"},
+	}, "2026-08-27", "2026-09-25", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.applyScamBatch(ctx, scamEthSourceID, "eth", []scamDayBatch{{
+		Day: "2026-09-25",
+		Lookalikes: []lookalikeRow{
+			{Lookalike: evmLook, Imitated: evmOFAC, Hits: 5, Victims: 2, FirstSeen: "2026-09-01", LastSeen: "2026-09-25"},
+		},
+	}}, "2026-08-27", "2026-09-25", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.applyScamBatch(ctx, scamTronSourceID, "tron", []scamDayBatch{{
+		Day: "2026-09-25",
+		Lookalikes: []lookalikeRow{
+			{Lookalike: tronLook, Imitated: tronOFAC, Hits: 3, Victims: 1, FirstSeen: "2026-09-01", LastSeen: "2026-09-25"},
+		},
+	}}, "2026-08-27", "2026-09-25", time.Now()); err != nil {
+		t.Fatal(err)
+	}
 
-	addrs := []string{evmOFAC, evmMEW, evmFrozen, tronOFAC}
+	addrs := []string{evmOFAC, evmMEW, evmFrozen, evmLook, tronOFAC, tronFrozen, tronUnfrozen, tronLook}
 
 	ethPool, err := s.riskPoolForAddresses(ctx, "eth", addrs)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(ethPool[evmOFAC], ",") != "ofac" || strings.Join(ethPool[evmMEW], ",") != "mew_darklist" || strings.Join(ethPool[evmFrozen], ",") != "stablecoin" {
+	if strings.Join(ethPool[evmOFAC], ",") != "ofac" || strings.Join(ethPool[evmMEW], ",") != "mew_darklist" ||
+		strings.Join(ethPool[evmFrozen], ",") != "stablecoin" || strings.Join(ethPool[evmLook], ",") != "scam_lookalikes" {
 		t.Errorf("eth pool = %v", ethPool)
 	}
 
@@ -340,15 +368,20 @@ func TestRiskPoolForAddressesByChain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(arbPool[evmOFAC], ",") != "ofac" || strings.Join(arbPool[evmMEW], ",") != "mew_darklist" || len(arbPool[evmFrozen]) != 0 {
-		t.Errorf("arb pool = %v (must not include Ethereum stablecoin freeze)", arbPool)
+	if strings.Join(arbPool[evmOFAC], ",") != "ofac" || strings.Join(arbPool[evmMEW], ",") != "mew_darklist" ||
+		len(arbPool[evmFrozen]) != 0 || strings.Join(arbPool[evmLook], ",") != "scam_lookalikes" {
+		t.Errorf("arb pool = %v (must include ETH lookalikes but not Ethereum stablecoin freeze)", arbPool)
 	}
 
 	tronPool, err := s.riskPoolForAddresses(ctx, "tron", addrs)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(tronPool[tronOFAC], ",") != "ofac" || len(tronPool[evmMEW]) != 0 || len(tronPool[evmFrozen]) != 0 {
-		t.Errorf("tron pool = %v (must only include ofac)", tronPool)
+	if strings.Join(tronPool[tronOFAC], ",") != "ofac" ||
+		strings.Join(tronPool[tronFrozen], ",") != "tron_stablecoin" ||
+		len(tronPool[tronUnfrozen]) != 0 ||
+		strings.Join(tronPool[tronLook], ",") != "scam_lookalikes" ||
+		len(tronPool[evmMEW]) != 0 || len(tronPool[evmFrozen]) != 0 {
+		t.Errorf("tron pool = %v", tronPool)
 	}
 }

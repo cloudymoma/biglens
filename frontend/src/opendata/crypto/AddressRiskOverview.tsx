@@ -65,19 +65,25 @@ export default function AddressRiskOverview({ sources, onInspect }: {
   if (!data) return <p className="text-xs text-zinc-500">Loading overview…</p>;
 
   const since = data.coverage.partial ? `since ${data.coverage.coverage_from}` : 'full history';
+  const tronEmpty = data.tron_empty ?? true;
+  const tronSince = data.tron_coverage?.partial ? `since ${data.tron_coverage.coverage_from}` : 'full history';
   const statusById = new Map((sources?.lists ?? []).map(s => [s.id, s]));
+  const lookSource = statusById.get('scam_lookalikes');
   const entries: Record<string, string> = {
     ofac: fmtNum(data.kpis.ofac_count),
     mew_darklist: fmtNum(data.kpis.mew_darklist_count),
     stablecoin: data.empty ? '—' : `${data.coverage.coverage_from} → ${data.coverage.cursor}`,
+    tron_stablecoin: tronEmpty ? '—' : `${data.tron_coverage?.coverage_from ?? ''} → ${data.tron_coverage?.cursor ?? ''}`,
+    scam_lookalikes: lookSource?.coverage_from && lookSource?.cursor ? `${lookSource.coverage_from} → ${lookSource.cursor}` : '—',
   };
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
         <MetricCard label="OFAC addresses" value={fmtNum(data.kpis.ofac_count)} icon={<Landmark size={15} />} detail="OFAC-listed addresses (EVM, TRON, Bitcoin)" accentColor="#71717a" />
         <MetricCard label="USDT frozen now" value={data.empty ? '—' : fmtNum(data.kpis.usdt_frozen_count)} icon={<Snowflake size={15} />} detail={data.empty ? 'not synced' : since} accentColor={USDT_COLOR} />
         <MetricCard label="USDC frozen now" value={data.empty ? '—' : fmtNum(data.kpis.usdc_frozen_count)} icon={<Snowflake size={15} />} detail={data.empty ? 'not synced' : since} accentColor={USDC_COLOR} />
+        <MetricCard label="USDT frozen now (TRON)" value={tronEmpty ? '—' : fmtNum(data.kpis.tron_usdt_frozen_count ?? 0)} icon={<Snowflake size={15} />} detail={tronEmpty ? 'not synced' : tronSince} accentColor={USDT_COLOR} />
         <MetricCard label="USDT destroyed" value={data.empty ? '—' : fmtCompactUSD(data.kpis.usdt_destroyed_total)} valueTitle={data.empty ? undefined : fmtExactUSD(data.kpis.usdt_destroyed_total)} icon={<Flame size={15} />} detail={data.empty ? 'not synced' : `USDT · ${since}`} accentColor={USDT_COLOR} />
         <MetricCard label="MEW darklist" value={fmtNum(data.kpis.mew_darklist_count)} icon={<ListX size={15} />} detail="historical list, frozen since 2020-11" accentColor="#71717a" />
       </div>

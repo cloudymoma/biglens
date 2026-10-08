@@ -31,11 +31,12 @@ type riskOverviewCoverage struct {
 }
 
 type riskOverviewKPIs struct {
-	OFACCount          int    `json:"ofac_count"`
-	USDTFrozenCount    int    `json:"usdt_frozen_count"`
-	USDCFrozenCount    int    `json:"usdc_frozen_count"`
-	USDTDestroyedTotal string `json:"usdt_destroyed_total"` // whole USDT, 2 decimals
-	MEWCount           int    `json:"mew_darklist_count"`
+	OFACCount           int    `json:"ofac_count"`
+	USDTFrozenCount     int    `json:"usdt_frozen_count"`
+	USDCFrozenCount     int    `json:"usdc_frozen_count"`
+	TronUSDTFrozenCount int    `json:"tron_usdt_frozen_count"`
+	USDTDestroyedTotal  string `json:"usdt_destroyed_total"` // whole USDT, 2 decimals
+	MEWCount            int    `json:"mew_darklist_count"`
 }
 
 type riskTrendPoint struct {
@@ -62,7 +63,9 @@ type riskRecentEvent struct {
 
 type riskOverview struct {
 	Empty        bool                 `json:"empty"` // no freeze history synced yet
+	TronEmpty    bool                 `json:"tron_empty"`
 	Coverage     riskOverviewCoverage `json:"coverage"`
+	TronCoverage riskOverviewCoverage `json:"tron_coverage"`
 	KPIs         riskOverviewKPIs     `json:"kpis"`
 	Trend        riskTrend            `json:"trend"`
 	RecentEvents []riskRecentEvent    `json:"recent_events"`
@@ -176,11 +179,14 @@ func (s *riskStore) buildOverview(ctx context.Context) (*riskOverview, error) {
 		return nil, err
 	}
 	st := states[stablecoinSourceID]
+	tst := states[tronStablecoinSourceID]
 	ov := &riskOverview{
-		Empty:    st.Cursor == "",
-		Coverage: riskOverviewCoverage{CoverageFrom: st.CoverageFrom, Cursor: st.Cursor, Partial: st.Cursor != "" && st.CoverageFrom > stablecoinFirstDay},
-		KPIs:     riskOverviewKPIs{OFACCount: states["ofac"].RowCount, MEWCount: states["mew_darklist"].RowCount, USDTDestroyedTotal: "0.00"},
-		Trend:    riskTrend{Granularity: "day", Points: []riskTrendPoint{}},
+		Empty:        st.Cursor == "",
+		TronEmpty:    tst.Cursor == "",
+		Coverage:     riskOverviewCoverage{CoverageFrom: st.CoverageFrom, Cursor: st.Cursor, Partial: st.Cursor != "" && st.CoverageFrom > stablecoinFirstDay},
+		TronCoverage: riskOverviewCoverage{CoverageFrom: tst.CoverageFrom, Cursor: tst.Cursor, Partial: tst.Cursor != "" && tst.CoverageFrom > tronStablecoinFirstDay},
+		KPIs:         riskOverviewKPIs{OFACCount: states["ofac"].RowCount, MEWCount: states["mew_darklist"].RowCount, USDTDestroyedTotal: "0.00"},
+		Trend:        riskTrend{Granularity: "day", Points: []riskTrendPoint{}},
 	}
 	latest, err := s.stablecoinStates(ctx, "")
 	if err != nil {
@@ -194,6 +200,18 @@ func (s *riskStore) buildOverview(ctx context.Context) (*riskOverview, error) {
 			ov.KPIs.USDTFrozenCount++
 		} else {
 			ov.KPIs.USDCFrozenCount++
+		}
+	}
+	tronLatest, err := s.tronStablecoinStates(ctx, "")
+	if err != nil {
+		return nil, err
+	}
+	for _, l := range tronLatest {
+		if l.Action == "unfreeze" {
+			continue
+		}
+		if l.Token == "USDT" {
+			ov.KPIs.TronUSDTFrozenCount++
 		}
 	}
 	totals, err := s.destroyedTotals(ctx, "")

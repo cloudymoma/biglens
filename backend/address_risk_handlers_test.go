@@ -110,8 +110,12 @@ func TestAddressRiskSources(t *testing.T) {
 			if strings.Contains(body, "SECRET") {
 				t.Error("full RPC URL leaked")
 			}
-			if len(resp.Lists) != 3 {
-				t.Errorf("lists = %+v", resp.Lists)
+			var listIDs []string
+			for _, l := range resp.Lists {
+				listIDs = append(listIDs, l.ID)
+			}
+			if strings.Join(listIDs, ",") != "ofac,mew_darklist,stablecoin,tron_stablecoin,scam_lookalikes" {
+				t.Errorf("lists = %+v, want ofac,mew_darklist,stablecoin,tron_stablecoin,scam_lookalikes", resp.Lists)
 			}
 		})
 	}

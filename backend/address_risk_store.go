@@ -461,27 +461,62 @@ func (s *riskStore) riskPoolForAddresses(ctx context.Context, chain string, addr
 		return nil, err
 	}
 
-	if !slices.Contains(want, "stablecoin") {
-		return pool, nil
+	if slices.Contains(want, "stablecoin") {
+		stQuery := fmt.Sprintf(latestStablecoinStateSQL, inClause)
+		stRows, err := s.db.QueryContext(ctx, stQuery, args...)
+		if err != nil {
+			return nil, fmt.Errorf("stablecoin states subset: %w", err)
+		}
+		defer stRows.Close()
+		for stRows.Next() {
+			var st stablecoinState
+			if err := stRows.Scan(&st.Token, &st.Address, &st.Action, &st.TxHash, &st.BlockTime); err != nil {
+				return nil, fmt.Errorf("scan stablecoin state subset: %w", err)
+			}
+			if st.Action == "unfreeze" || slices.Contains(pool[st.Address], "stablecoin") {
+				continue
+			}
+			pool[st.Address] = append(pool[st.Address], "stablecoin")
+		}
+		if err := stRows.Err(); err != nil {
+			return nil, err
+		}
 	}
 
-	stQuery := fmt.Sprintf(latestStablecoinStateSQL, inClause)
-	stRows, err := s.db.QueryContext(ctx, stQuery, args...)
-	if err != nil {
-		return nil, fmt.Errorf("stablecoin states subset: %w", err)
-	}
-	defer stRows.Close()
-	for stRows.Next() {
-		var st stablecoinState
-		if err := stRows.Scan(&st.Token, &st.Address, &st.Action, &st.TxHash, &st.BlockTime); err != nil {
-			return nil, fmt.Errorf("scan stablecoin state subset: %w", err)
+	if slices.Contains(want, "tron_stablecoin") {
+		trQuery := fmt.Sprintf(latestTronStablecoinStateSQL, inClause)
+		trRows, err := s.db.QueryContext(ctx, trQuery, args...)
+		if err != nil {
+			return nil, fmt.Errorf("tron stablecoin states subset: %w", err)
 		}
-		if st.Action == "unfreeze" || slices.Contains(pool[st.Address], "stablecoin") {
-			continue
+		defer trRows.Close()
+		for trRows.Next() {
+			var st stablecoinState
+			if err := trRows.Scan(&st.Token, &st.Address, &st.Action, &st.TxHash, &st.BlockTime); err != nil {
+				return nil, fmt.Errorf("scan tron stablecoin state subset: %w", err)
+			}
+			if st.Action == "unfreeze" || slices.Contains(pool[st.Address], "tron_stablecoin") {
+				continue
+			}
+			pool[st.Address] = append(pool[st.Address], "tron_stablecoin")
 		}
-		pool[st.Address] = append(pool[st.Address], "stablecoin")
+		if err := trRows.Err(); err != nil {
+			return nil, err
+		}
 	}
-	return pool, stRows.Err()
+
+	if slices.Contains(want, "scam_lookalikes") {
+		lkHits, err := s.lookalikeHits(ctx, chain, addrs)
+		if err != nil {
+			return nil, err
+		}
+		for addr := range lkHits {
+			if !slices.Contains(pool[addr], "scam_lookalikes") {
+				pool[addr] = append(pool[addr], "scam_lookalikes")
+			}
+		}
+	}
+	return pool, nil
 }
 
 type backfillMeta struct {

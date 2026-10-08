@@ -29,6 +29,9 @@ const (
 	riskTitleUnfrozenFmt = "Previously frozen by %s contract (since unfrozen)"
 	riskDestroyedFmt     = "Tether destroyed %s USDT"
 	riskCoverageFmt      = "Freeze history covers %s–%s only."
+	riskTronCoverageFmt  = "TRON freeze history covers %s–%s only."
+
+	tronStablecoinFirstDay = "2019-04-16"
 
 	riskListStaleAfter = 12 * time.Hour
 
@@ -42,23 +45,25 @@ var riskSourceOrder = map[string]int{
 	"ofac":               0,
 	"mew_darklist":       1,
 	"stablecoin":         2,
-	"issuer_freeze":      3,
-	"chainalysis_oracle": 4,
-	"goplus":             5,
-	"blockscout":         6,
-	"etherscan":          7,
+	"tron_stablecoin":    3,
+	"scam_lookalikes":    4,
+	"issuer_freeze":      5,
+	"chainalysis_oracle": 6,
+	"goplus":             7,
+	"blockscout":         8,
+	"etherscan":          9,
 }
 
 func riskSourcesFor(chain string) []string {
 	switch chain {
 	case "eth":
-		return []string{"ofac", "mew_darklist", "stablecoin", "issuer_freeze", "chainalysis_oracle", "goplus", "blockscout", "etherscan"}
+		return []string{"ofac", "mew_darklist", "stablecoin", "scam_lookalikes", "issuer_freeze", "chainalysis_oracle", "goplus", "blockscout", "etherscan"}
 	case "arb", "op":
-		return []string{"ofac", "mew_darklist", "issuer_freeze", "chainalysis_oracle", "goplus", "blockscout"}
+		return []string{"ofac", "mew_darklist", "scam_lookalikes", "issuer_freeze", "chainalysis_oracle", "goplus", "blockscout"}
 	case "base":
-		return []string{"ofac", "mew_darklist", "issuer_freeze", "goplus", "blockscout"}
+		return []string{"ofac", "mew_darklist", "scam_lookalikes", "issuer_freeze", "goplus", "blockscout"}
 	case "tron":
-		return []string{"ofac", "issuer_freeze", "goplus"}
+		return []string{"ofac", "tron_stablecoin", "scam_lookalikes", "issuer_freeze", "goplus"}
 	case "btc":
 		return []string{"ofac"}
 	default:
@@ -159,14 +164,28 @@ func listSourceStatus(st syncState, now time.Time) string {
 // stablecoinSourceStatus: precedence stale > empty > partial > ok. Coverage
 // starting after the first USDT freeze means older freezes are not local.
 func stablecoinSourceStatus(st syncState, now time.Time) string {
+	return stablecoinSourceStatusFor(st, stablecoinFirstDay, now)
+}
+
+func stablecoinSourceStatusFor(st syncState, firstDay string, now time.Time) string {
 	if st.Cursor == "" {
 		return "empty"
 	}
 	if st.Cursor < civil.DateOf(now.UTC()).AddDays(-2).String() {
 		return "stale"
 	}
-	if st.CoverageFrom > stablecoinFirstDay {
+	if st.CoverageFrom > firstDay {
 		return "partial"
+	}
+	return "ok"
+}
+
+func scamLookalikeSourceStatus(st syncState, now time.Time) string {
+	if st.Cursor == "" {
+		return "empty"
+	}
+	if st.Cursor < civil.DateOf(now.UTC()).AddDays(-2).String() {
+		return "stale"
 	}
 	return "ok"
 }
@@ -175,11 +194,23 @@ func stablecoinSourceStatus(st syncState, now time.Time) string {
 // frozen (latest event freeze or destroy) is Critical, unfrozen is Info.
 // destroyed holds per-token destroy totals for this address.
 func stablecoinClues(states []stablecoinState, destroyed map[string]*big.Int, cursor string) []riskClue {
+	return stablecoinCluesForChain("eth", states, destroyed, cursor)
+}
+
+func stablecoinCluesForChain(chain string, states []stablecoinState, destroyed map[string]*big.Int, cursor string) []riskClue {
+	srcID := "stablecoin"
+	if chain == "tron" {
+		srcID = "tron_stablecoin"
+	}
 	var out []riskClue
 	for _, st := range states {
 		observed := st.BlockTime
-		c := riskClue{Source: "stablecoin", Token: st.Token, ObservedAt: &observed,
-			AsOf: cursor + "T23:59:59Z", RefURL: "https://etherscan.io/tx/" + st.TxHash}
+		refURL := "https://etherscan.io/tx/" + st.TxHash
+		if chain == "tron" {
+			refURL = fmt.Sprintf(chains["tron"].TxURL, strings.TrimPrefix(st.TxHash, "0x"))
+		}
+		c := riskClue{Source: srcID, Token: st.Token, ObservedAt: &observed,
+			AsOf: cursor + "T23:59:59Z", RefURL: refURL}
 		switch st.Action {
 		case "freeze", "destroy":
 			c.Severity, c.Code, c.Title = sevCritical, "stablecoin_frozen", fmt.Sprintf(riskTitleFrozenFmt, st.Token)
@@ -187,6 +218,10 @@ func stablecoinClues(states []stablecoinState, destroyed map[string]*big.Int, cu
 				c.Detail = fmt.Sprintf(riskDestroyedFmt, formatTokenAmount(n, 6))
 			}
 		case "unfreeze":
+			if chain == "tron" {
+				// Per Task 4 spec, an unfrozen TRON address does not emit a clue.
+				continue
+			}
 			c.Severity, c.Code, c.Title = sevInfo, "stablecoin_unfrozen", fmt.Sprintf(riskTitleUnfrozenFmt, st.Token)
 			if n := destroyed[st.Token]; n != nil && n.Sign() > 0 {
 				c.Severity = sevWarning
@@ -198,6 +233,57 @@ func stablecoinClues(states []stablecoinState, destroyed map[string]*big.Int, cu
 		out = append(out, c)
 	}
 	return out
+}
+
+func shortImitated(addr string) string {
+	s := strings.TrimSpace(addr)
+	if strings.HasPrefix(strings.ToLower(s), "0x") && len(s) >= 10 {
+		return s[:6] + "…" + s[len(s)-4:]
+	}
+	if len(s) >= 9 {
+		return s[:5] + "…" + s[len(s)-4:]
+	}
+	return s
+}
+
+func lookalikeClues(chain string, row lookalikeRow, cursor string) []riskClue {
+	if row.Lookalike == "" {
+		return nil
+	}
+	isL2 := chain == "arb" || chain == "op" || chain == "base"
+	title := fmt.Sprintf("Known address-poisoning sender — seen %s imitating %s since %s",
+		plural(row.Hits, "time"), shortImitated(row.Imitated), row.FirstSeen)
+	if isL2 {
+		title += " (seen on Ethereum)"
+	}
+	detail := fmt.Sprintf("Matched %s across %s (last seen %s; same-day pairing lower bound).",
+		plural(row.Hits, "transfer"), plural(row.Victims, "victim"), row.LastSeen)
+	if isL2 {
+		detail = "Detected in Ethereum mainnet USDT/USDC transfers (seen on Ethereum; EVM externally owned accounts share the same address across chains). " + detail
+	}
+	refChain := chain
+	if isL2 {
+		refChain = "eth"
+	}
+	var observed *string
+	if row.FirstSeen != "" {
+		f := row.FirstSeen
+		observed = &f
+	}
+	asOf := ""
+	if cursor != "" {
+		asOf = cursor + "T23:59:59Z"
+	}
+	return []riskClue{{
+		Severity:   sevWarning,
+		Source:     "scam_lookalikes",
+		Code:       "lookalike_known",
+		Title:      title,
+		Detail:     detail,
+		ObservedAt: observed,
+		AsOf:       asOf,
+		RefURL:     fmt.Sprintf(chains[refChain].AddressURL, row.Lookalike),
+	}}
 }
 
 func listClues(hits []listHit, states map[string]syncState) []riskClue {
@@ -260,6 +346,9 @@ func buildRiskSummary(clues []riskClue, sources []riskSource) riskSummary {
 	for _, src := range sources {
 		if src.ID == "stablecoin" && src.Status == "partial" {
 			coverage = fmt.Sprintf(riskCoverageFmt, src.CoverageFrom, src.Cursor)
+		}
+		if src.ID == "tron_stablecoin" && src.Status == "partial" {
+			coverage = fmt.Sprintf(riskTronCoverageFmt, src.CoverageFrom, src.Cursor)
 		}
 		switch src.Status {
 		case "ok":
@@ -549,12 +638,16 @@ func newAddressRiskService(store *riskStore, rpcURLs []string) *addressRiskServi
 }
 
 // riskLocalIDs are the sources answered from SQLite, in response order.
-var riskLocalIDs = []string{"ofac", "mew_darklist", "stablecoin"}
+var riskLocalIDs = []string{"ofac", "mew_darklist", "stablecoin", "tron_stablecoin", "scam_lookalikes"}
 
 // localSources builds the local sources' status from one sync_state read,
-// filtered to the local sources applicable to chain.
+// filtered to the local sources applicable to chain (or all local sources when
+// chain == "", used by /sources).
 func (s *addressRiskService) localSources(chain string, states map[string]syncState, err error) []riskSource {
-	want := riskSourcesFor(chain)
+	want := riskLocalIDs
+	if chain != "" {
+		want = riskSourcesFor(chain)
+	}
 	out := make([]riskSource, 0, len(riskLocalIDs))
 	now := s.now()
 	for _, id := range riskLocalIDs {
@@ -565,15 +658,28 @@ func (s *addressRiskService) localSources(chain string, states map[string]syncSt
 			out = append(out, riskSource{ID: id, Status: "error", Error: "unavailable"})
 			continue
 		}
-		if id == "stablecoin" {
+		switch id {
+		case "stablecoin":
 			st := states[stablecoinSourceID]
 			out = append(out, riskSource{ID: id, Status: stablecoinSourceStatus(st, now), LastOKAt: st.LastOKAt,
 				CoverageFrom: st.CoverageFrom, Cursor: st.Cursor, LastError: st.LastError})
-			continue
+		case "tron_stablecoin":
+			st := states[tronStablecoinSourceID]
+			out = append(out, riskSource{ID: id, Status: stablecoinSourceStatusFor(st, tronStablecoinFirstDay, now), LastOKAt: st.LastOKAt,
+				CoverageFrom: st.CoverageFrom, Cursor: st.Cursor, LastError: st.LastError})
+		case "scam_lookalikes":
+			syncID := scamEthSourceID
+			if chain == "tron" {
+				syncID = scamTronSourceID
+			}
+			st := states[syncID]
+			out = append(out, riskSource{ID: id, Status: scamLookalikeSourceStatus(st, now), LastOKAt: st.LastOKAt,
+				CoverageFrom: st.CoverageFrom, Cursor: st.Cursor, LastError: st.LastError})
+		default:
+			st := states[id]
+			out = append(out, riskSource{ID: id, Status: listSourceStatus(st, now),
+				LastOKAt: st.LastOKAt, UpstreamChangedAt: st.UpstreamChangedAt, LastError: st.LastError})
 		}
-		st := states[id]
-		out = append(out, riskSource{ID: id, Status: listSourceStatus(st, now),
-			LastOKAt: st.LastOKAt, UpstreamChangedAt: st.UpstreamChangedAt, LastError: st.LastError})
 	}
 	return out
 }
@@ -585,11 +691,10 @@ func (s *addressRiskService) readStates(ctx context.Context) (map[string]syncSta
 	return s.store.allSyncStates(ctx)
 }
 
-// listSources reports all local sources' status for /sources ("eth" is the
-// superset that includes every local source: ofac, mew_darklist, stablecoin).
+// listSources reports all local sources' status for /sources.
 func (s *addressRiskService) listSources(ctx context.Context) []riskSource {
 	states, err := s.readStates(ctx)
-	return s.localSources("eth", states, err)
+	return s.localSources("", states, err)
 }
 
 func (s *addressRiskService) localCheck(ctx context.Context, chain, addr string) ([]riskSource, []riskClue, []stablecoinState) {
@@ -608,12 +713,28 @@ func (s *addressRiskService) localCheck(ctx context.Context, chain, addr string)
 	}
 	var frozen []stablecoinState
 	var destroyed map[string]*big.Int
-	if chain == "eth" {
+	switch chain {
+	case "eth":
 		if err == nil {
 			frozen, err = s.store.stablecoinStates(ctx, addr)
 		}
 		if err == nil {
 			destroyed, err = s.store.destroyedTotals(ctx, addr)
+		}
+	case "tron":
+		if err == nil {
+			frozen, err = s.store.tronStablecoinStates(ctx, addr)
+		}
+		if err == nil {
+			destroyed, err = s.store.tronDestroyedTotals(ctx, addr)
+		}
+	}
+	var lookHit lookalikeRow
+	if err == nil && slices.Contains(want, "scam_lookalikes") {
+		var m map[string]lookalikeRow
+		m, err = s.store.lookalikeHits(ctx, chain, []string{addr})
+		if err == nil {
+			lookHit = m[normalizeScamAddr(chain, addr)]
 		}
 	}
 	if err != nil {
@@ -623,8 +744,18 @@ func (s *addressRiskService) localCheck(ctx context.Context, chain, addr string)
 		return sources, nil, nil
 	}
 	clues := listClues(hits, states)
-	if chain == "eth" {
-		clues = append(clues, stablecoinClues(frozen, destroyed, states[stablecoinSourceID].Cursor)...)
+	switch chain {
+	case "eth":
+		clues = append(clues, stablecoinCluesForChain("eth", frozen, destroyed, states[stablecoinSourceID].Cursor)...)
+	case "tron":
+		clues = append(clues, stablecoinCluesForChain("tron", frozen, destroyed, states[tronStablecoinSourceID].Cursor)...)
+	}
+	if slices.Contains(want, "scam_lookalikes") {
+		scamKey := scamEthSourceID
+		if chain == "tron" {
+			scamKey = scamTronSourceID
+		}
+		clues = append(clues, lookalikeClues(chain, lookHit, states[scamKey].Cursor)...)
 	}
 	sortClues(clues)
 	return sources, clues, frozen

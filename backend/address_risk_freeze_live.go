@@ -180,11 +180,11 @@ func checkIssuerFreeze(ctx context.Context, chain, addr, assetFilter string, rpc
 }
 
 // issuerFreezeClues converts live freeze states into critical clues,
-// deduplicating against local stablecoin freeze history on Ethereum when the
-// local database already records the same token as currently frozen.
+// deduplicating against local stablecoin freeze history on Ethereum and TRON
+// when the local database already records the same token as currently frozen.
 func issuerFreezeClues(chain string, live []issuerFreezeState, localStates []stablecoinState, asOf string) []riskClue {
 	localFrozen := map[string]bool{}
-	if chain == "eth" {
+	if chain == "eth" || chain == "tron" {
 		for _, st := range localStates {
 			if st.Action == "freeze" || st.Action == "destroy" {
 				localFrozen[st.Token] = true
@@ -197,7 +197,7 @@ func issuerFreezeClues(chain string, live []issuerFreezeState, localStates []sta
 		if !st.Frozen {
 			continue
 		}
-		if chain == "eth" && localFrozen[st.Token] {
+		if (chain == "eth" || chain == "tron") && localFrozen[st.Token] {
 			continue
 		}
 		out = append(out, riskClue{

@@ -196,12 +196,15 @@ func sourceByID(t *testing.T, srcs []riskSource, id string) riskSource {
 	return riskSource{}
 }
 
-// markStablecoinSynced gives the stablecoin source full coverage up to
-// yesterday, so tests about other sources see it as ok.
+// markStablecoinSynced gives the stablecoin and scam_lookalikes sources
+// coverage up to yesterday, so tests about other sources see them as ok.
 func markStablecoinSynced(t *testing.T, store *riskStore, events ...stablecoinEvent) {
 	t.Helper()
 	cursor := riskNow.AddDate(0, 0, -1).Format("2006-01-02")
 	if err := store.insertStablecoinEvents(context.Background(), events, stablecoinFirstDay, cursor, riskNow); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.applyScamBatch(context.Background(), scamEthSourceID, "eth", nil, "2026-08-27", cursor, riskNow); err != nil && err != errAlreadyApplied {
 		t.Fatal(err)
 	}
 }
@@ -223,7 +226,7 @@ func TestServiceLookupRoninLikeHit(t *testing.T) {
 	for _, c := range res.Clues {
 		codes = append(codes, c.Severity+":"+c.Code)
 	}
-	// Order: severity, then source order ofac, mew, stablecoin, issuer_freeze, oracle, goplus.
+	// Order: severity, then source order ofac, mew, stablecoin, scam_lookalikes, issuer_freeze, oracle, goplus.
 	want := "critical:ofac_listed,critical:stablecoin_frozen,critical:oracle_sanctioned,critical:goplus_flag,warning:goplus_flag"
 	if strings.Join(codes, ",") != want {
 		t.Errorf("clues = %v, want %s", codes, want)
@@ -235,7 +238,7 @@ func TestServiceLookupRoninLikeHit(t *testing.T) {
 	for _, s := range res.Sources {
 		ids = append(ids, s.ID+"="+s.Status)
 	}
-	if strings.Join(ids, ",") != "ofac=ok,mew_darklist=ok,stablecoin=ok,issuer_freeze=ok,chainalysis_oracle=ok,goplus=ok,etherscan=not_configured" {
+	if strings.Join(ids, ",") != "ofac=ok,mew_darklist=ok,stablecoin=ok,scam_lookalikes=ok,issuer_freeze=ok,chainalysis_oracle=ok,goplus=ok,etherscan=not_configured" {
 		t.Errorf("sources = %v", ids)
 	}
 	if res.Disclaimer != riskDisclaimer || res.QueriedAt != "2026-09-26T12:00:00Z" || res.Chain != "eth" {
@@ -250,7 +253,7 @@ func TestServiceLookupStoreUnavailableStillRunsLiveSources(t *testing.T) {
 	if !res.hasError() || up.goplusCalls.Load() != 1 {
 		t.Fatalf("hasError = %v, goplus calls = %d", res.hasError(), up.goplusCalls.Load())
 	}
-	for _, s := range res.Sources[:3] {
+	for _, s := range res.Sources[:4] {
 		if s.Status != "error" || s.Error != "unavailable" {
 			t.Errorf("local source %+v", s)
 		}
@@ -273,7 +276,7 @@ func TestServiceLookupGoPlusTimeout(t *testing.T) {
 	if gp.ID != "goplus" || gp.Status != "error" || gp.Error != "timeout" || !res.hasError() {
 		t.Errorf("goplus source = %+v", gp)
 	}
-	if res.Summary.Text != "Nothing found in 5 sources that completed; 1 could not be fully checked (see Sources)." {
+	if res.Summary.Text != "Nothing found in 6 sources that completed; 1 could not be fully checked (see Sources)." {
 		t.Errorf("text = %q", res.Summary.Text)
 	}
 }
@@ -377,6 +380,7 @@ func TestServiceLookupPartialCoverage(t *testing.T) {
 	store.replaceList(ctx, "ofac", []listEntry{{Address: "0x1111111111111111111111111111111111111111"}}, "h", riskNow)
 	store.replaceList(ctx, "mew_darklist", []listEntry{{Address: "0x2222222222222222222222222222222222222222"}}, "h", riskNow)
 	store.insertStablecoinEvents(ctx, nil, "2026-08-27", "2026-09-25", riskNow)
+	_ = store.applyScamBatch(ctx, scamEthSourceID, "eth", nil, "2026-08-27", "2026-09-25", riskNow)
 	svc := newAddressRiskService(store, []string{up.oracle.URL})
 	svc.now = func() time.Time { return riskNow }
 	res := svc.lookup(ctx, "eth", ronin)
@@ -672,11 +676,11 @@ func TestRiskSourcesForChain(t *testing.T) {
 		addr  string
 		want  string
 	}{
-		{"eth", "0x1111111111111111111111111111111111111111", "ofac,mew_darklist,stablecoin,issuer_freeze,chainalysis_oracle,goplus,blockscout,etherscan"},
-		{"arb", "0x1111111111111111111111111111111111111111", "ofac,mew_darklist,issuer_freeze,chainalysis_oracle,goplus,blockscout"},
-		{"op", "0x1111111111111111111111111111111111111111", "ofac,mew_darklist,issuer_freeze,chainalysis_oracle,goplus,blockscout"},
-		{"base", "0x1111111111111111111111111111111111111111", "ofac,mew_darklist,issuer_freeze,goplus,blockscout"},
-		{"tron", "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t", "ofac,issuer_freeze,goplus"},
+		{"eth", "0x1111111111111111111111111111111111111111", "ofac,mew_darklist,stablecoin,scam_lookalikes,issuer_freeze,chainalysis_oracle,goplus,blockscout,etherscan"},
+		{"arb", "0x1111111111111111111111111111111111111111", "ofac,mew_darklist,scam_lookalikes,issuer_freeze,chainalysis_oracle,goplus,blockscout"},
+		{"op", "0x1111111111111111111111111111111111111111", "ofac,mew_darklist,scam_lookalikes,issuer_freeze,chainalysis_oracle,goplus,blockscout"},
+		{"base", "0x1111111111111111111111111111111111111111", "ofac,mew_darklist,scam_lookalikes,issuer_freeze,goplus,blockscout"},
+		{"tron", "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t", "ofac,tron_stablecoin,scam_lookalikes,issuer_freeze,goplus"},
 		{"btc", "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", "ofac"},
 	}
 	for _, tt := range tests {
@@ -931,5 +935,99 @@ func TestCheckEtherscanKeylessHostsAreBlockscout(t *testing.T) {
 	wantHost := strings.Join(hostsOf(bsSrv.URL), ",")
 	if got := strings.Join(es.Hosts, ","); got != wantHost || strings.Contains(got, "etherscan") {
 		t.Errorf("keyless etherscan error hosts = %v, want [%s] (must not report api.etherscan.io)", es.Hosts, wantHost)
+	}
+}
+
+func TestLookupTronFreezeDedupAndUnfreeze(t *testing.T) {
+	up := newFakeUpstreams(t, `{"result":"`+oracleFalse+`"}`, `{"code":1,"result":{}}`, 0)
+	var liveFrozen atomic.Bool
+	liveFrozen.Store(true)
+	tronSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		val := oracleFalse[2:]
+		if liveFrozen.Load() {
+			val = oracleTrue[2:]
+		}
+		w.Write([]byte(`{"result":{"result":true},"constant_result":["` + val + `"]}`))
+	}))
+	defer tronSrv.Close()
+	origTron := tronGridBaseURL
+	tronGridBaseURL = tronSrv.URL
+	defer func() { tronGridBaseURL = origTron }()
+
+	const (
+		frozenTron   = "TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7"
+		unfrozenTron = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
+	)
+	store := newTestRiskStore(t)
+	ctx := context.Background()
+	store.replaceList(ctx, "ofac", []listEntry{{Address: ronin}}, "h", riskNow)
+	if err := store.insertTronStablecoinEvents(ctx, []stablecoinEvent{
+		{TxHash: "0xabcdef1234", LogIndex: 1, Token: "USDT", Action: "freeze", Address: frozenTron, BlockNumber: 100, BlockTime: "2026-09-20T10:00:00Z"},
+		{TxHash: "0x1111", LogIndex: 1, Token: "USDT", Action: "freeze", Address: unfrozenTron, BlockNumber: 90, BlockTime: "2026-09-10T10:00:00Z"},
+		{TxHash: "0x2222", LogIndex: 2, Token: "USDT", Action: "unfreeze", Address: unfrozenTron, BlockNumber: 95, BlockTime: "2026-09-15T10:00:00Z"},
+	}, "2026-08-27", "2026-09-25", riskNow); err != nil {
+		t.Fatal(err)
+	}
+	_ = store.applyScamBatch(ctx, scamTronSourceID, "tron", nil, "2026-08-27", "2026-09-25", riskNow)
+
+	svc := newAddressRiskService(store, []string{up.oracle.URL})
+	svc.now = func() time.Time { return riskNow }
+
+	// 1. Frozen TRON address: critical local clue with Tronscan link, deduplicated with live issuer_freeze.
+	res := svc.lookup(ctx, "tron", frozenTron)
+	if len(res.Clues) != 1 {
+		t.Fatalf("frozen TRON clues = %+v, want 1 deduplicated clue", res.Clues)
+	}
+	c := res.Clues[0]
+	if c.Severity != sevCritical || c.Source != "tron_stablecoin" || c.Code != "stablecoin_frozen" ||
+		!strings.Contains(c.RefURL, "tronscan.org/#/transaction/abcdef1234") {
+		t.Errorf("frozen TRON clue = %+v", c)
+	}
+
+	// 2. Unfrozen TRON address (live also false): no clues.
+	liveFrozen.Store(false)
+	resUn := svc.lookup(ctx, "tron", unfrozenTron)
+	if len(resUn.Clues) != 0 {
+		t.Errorf("unfrozen TRON clues = %+v, want empty", resUn.Clues)
+	}
+}
+
+func TestLookupArbHitsEthLookalikeCorpus(t *testing.T) {
+	up := newFakeUpstreams(t, `{"result":"`+oracleFalse+`"}`, `{"code":1,"result":{}}`, 0)
+	store := newTestRiskStore(t)
+	ctx := context.Background()
+	const (
+		poisoner = "0x123400000000000000000000000000000000abcd"
+		imitated = "0x123499999999999999999999999999999999abcd"
+	)
+	store.replaceList(ctx, "ofac", []listEntry{{Address: ronin}}, "h", riskNow)
+	store.replaceList(ctx, "mew_darklist", []listEntry{{Address: "0x2222222222222222222222222222222222222222"}}, "h", riskNow)
+	if err := store.applyScamBatch(ctx, scamEthSourceID, "eth", []scamDayBatch{{
+		Day: "2026-09-25",
+		Lookalikes: []lookalikeRow{
+			{Lookalike: poisoner, Imitated: imitated, Hits: 42, Victims: 19, FirstSeen: "2026-09-01", LastSeen: "2026-09-25"},
+		},
+	}}, "2026-08-27", "2026-09-25", riskNow); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := newAddressRiskService(store, []string{up.oracle.URL})
+	svc.now = func() time.Time { return riskNow }
+	svc.blockscoutURLs = map[string]string{"arb": ""}
+
+	res := svc.lookup(ctx, "arb", poisoner)
+	if len(res.Clues) != 1 {
+		t.Fatalf("arb lookalike clues = %+v, want 1 clue", res.Clues)
+	}
+	c := res.Clues[0]
+	if c.Severity != sevWarning || c.Source != "scam_lookalikes" {
+		t.Errorf("arb lookalike clue = %+v, want warning from scam_lookalikes", c)
+	}
+	combined := c.Title + " " + c.Detail
+	if !strings.Contains(c.Title, "Known address-poisoning sender") ||
+		!strings.Contains(c.Title, "seen 42 times") ||
+		!strings.Contains(c.Title, "2026-09-01") ||
+		!strings.Contains(combined, "seen on Ethereum") {
+		t.Errorf("arb lookalike text = (%q, %q), want Known address-poisoning sender + seen 42 times + 2026-09-01 + seen on Ethereum", c.Title, c.Detail)
 	}
 }
