@@ -31,6 +31,7 @@ type DirFilter = 'all' | 'in' | 'out';
 function shouldHideNoiseRow(tx: PaymentTx): boolean {
   const hasCriticalOrPoisonFlag =
     tx.flags.includes('lookalike') ||
+    tx.flags.includes('lookalike_known') ||
     tx.flags.includes('sent_to_lookalike') ||
     tx.flags.includes('counterfeit_token') ||
     tx.flags.includes('counterparty_listed') ||

@@ -185,9 +185,21 @@ func applyFlags(txs []payTx, asset string, fam chainFamily) {
 
 	trust := make(map[string]trustLevel)
 	tainted := make(map[string]bool)
+	knownPoisoners := make(map[string]bool)
+	for i := range txs {
+		cp := canonFlagAddr(txs[i].Counterparty, fam)
+		if cp == "" {
+			continue
+		}
+		if slices.Contains(txs[i].CounterpartyHits, "scam_lookalikes") || slices.Contains(txs[i].Flags, "lookalike_known") {
+			tainted[cp] = true
+			knownPoisoners[cp] = true
+		}
+	}
 
 	for _, idx := range order {
 		tx := &txs[idx]
+		hadListed := slices.Contains(tx.Flags, "counterparty_listed")
 		flags := []string{}
 
 		isOfficial := tx.TokenTier == tierNative || tx.TokenTier == tierBridged
@@ -225,10 +237,22 @@ func applyFlags(txs []payTx, asset string, fam chainFamily) {
 			}
 		}
 
+		if cp != "" && knownPoisoners[cp] {
+			if !slices.Contains(flags, "lookalike_known") {
+				flags = append(flags, "lookalike_known")
+			}
+			if tx.Direction == "out" && posVal && !slices.Contains(flags, "sent_to_lookalike") {
+				flags = append(flags, "sent_to_lookalike")
+			}
+		}
+		if hadListed && !slices.Contains(flags, "counterparty_listed") {
+			flags = append(flags, "counterparty_listed")
+		}
+
 		tx.Flags = flags
 
 		// Update trust set after evaluating flags for this row.
-		if isOfficial && !tx.Failed && posVal && !dustVal && cp != "" {
+		if isOfficial && !tx.Failed && posVal && !dustVal && cp != "" && !knownPoisoners[cp] {
 			switch tx.Direction {
 			case "in":
 				if !tainted[cp] && trust[cp] < trustLow {
@@ -244,12 +268,68 @@ func applyFlags(txs []payTx, asset string, fam chainFamily) {
 	}
 }
 
-// applyLocalHits queries local OFAC / MEW / Ethereum-freeze lists in a single
-// batch via store.riskPoolForAddresses and tags matching rows with
-// counterparty_listed (spec §5.5, Task 9).
+func hasListedCounterpartyHit(hits []string) bool {
+	for _, h := range hits {
+		switch h {
+		case "ofac", "mew_darklist", "stablecoin", "tron_stablecoin":
+			return true
+		}
+	}
+	return false
+}
+
+// applyFakeTokenSet re-tiers ETH token transfers whose contract is in the local
+// scam_fake_tokens corpus from tierOther to tierCounterfeit (spec P2.2 #2).
+func applyFakeTokenSet(ctx context.Context, store *riskStore, network string, txs []payTx) error {
+	if network != "eth" {
+		return nil
+	}
+	hasOther := false
+	for i := range txs {
+		if txs[i].TokenTier == tierOther && strings.TrimSpace(txs[i].TokenContract) != "" {
+			hasOther = true
+			break
+		}
+	}
+	if !hasOther {
+		return nil
+	}
+	if store == nil {
+		return errors.New("unavailable")
+	}
+	fakes, err := store.fakeTokenSet(ctx, "eth")
+	if err != nil {
+		return errors.New("unavailable")
+	}
+	for i := range txs {
+		if txs[i].TokenTier != tierOther {
+			continue
+		}
+		c := strings.ToLower(strings.TrimSpace(txs[i].TokenContract))
+		if c == "" || !fakes[c] {
+			continue
+		}
+		if _, isReg := lookupRegistryToken(network, c); isReg {
+			continue
+		}
+		txs[i].TokenTier = tierCounterfeit
+		if txs[i].Flags != nil && !slices.Contains(txs[i].Flags, "counterfeit_token") {
+			txs[i].Flags = append(txs[i].Flags, "counterfeit_token")
+		}
+	}
+	return nil
+}
+
+// applyLocalHits queries local OFAC / MEW / stablecoin-freeze / scam-lookalike
+// corpora in a single batch via store.riskPoolForAddresses, re-tiers ETH fake
+// tokens via scam_fake_tokens, and tags matching rows with counterparty_listed,
+// lookalike_known, and (for real outgoing to known poisoners) sent_to_lookalike.
 func applyLocalHits(ctx context.Context, store *riskStore, network string, txs []payTx) error {
 	if store == nil {
 		return errors.New("unavailable")
+	}
+	if err := applyFakeTokenSet(ctx, store, network, txs); err != nil {
+		return err
 	}
 	fam := chains[network].Family
 	seen := make(map[string]bool, len(txs))
@@ -276,8 +356,17 @@ func applyLocalHits(ctx context.Context, store *riskStore, network string, txs [
 			continue
 		}
 		txs[i].CounterpartyHits = slices.Clone(hits)
-		if !slices.Contains(txs[i].Flags, "counterparty_listed") {
+		if hasListedCounterpartyHit(hits) && !slices.Contains(txs[i].Flags, "counterparty_listed") {
 			txs[i].Flags = append(txs[i].Flags, "counterparty_listed")
+		}
+		if slices.Contains(hits, "scam_lookalikes") {
+			if !slices.Contains(txs[i].Flags, "lookalike_known") {
+				txs[i].Flags = append(txs[i].Flags, "lookalike_known")
+			}
+			isOfficial := txs[i].TokenTier == tierNative || txs[i].TokenTier == tierBridged
+			if txs[i].Direction == "out" && isOfficial && !txs[i].Failed && isPositiveAmount(txs[i].Amount) && !slices.Contains(txs[i].Flags, "sent_to_lookalike") {
+				txs[i].Flags = append(txs[i].Flags, "sent_to_lookalike")
+			}
 		}
 	}
 	return nil

@@ -253,6 +253,13 @@ export const FLAG_META: Record<string, FlagMeta> = {
     severity: 'critical',
     description: 'Transaction reverted or failed on-chain; no funds were transferred.',
   },
+  lookalike_known: {
+    id: 'lookalike_known',
+    label: 'known poisoner',
+    severity: 'warning',
+    description:
+      'Counterparty matches the local Scam Radar corpus of known address-poisoning senders observed on-chain.',
+  },
   lookalike: {
     id: 'lookalike',
     label: 'address poisoning / lookalike',
@@ -280,6 +287,7 @@ const FLAG_PRIORITY = [
   'sent_to_lookalike',
   'counterparty_listed',
   'failed',
+  'lookalike_known',
   'lookalike',
   'zero_value',
   'dust',

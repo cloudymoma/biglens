@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -1064,5 +1065,89 @@ func TestPaymentCheckLiveDedupesAlertPerTxHash(t *testing.T) {
 	}
 	if len(matching) != 1 || matching[0].Code != "counterfeit_received" || matching[0].Severity != "critical" {
 		t.Fatalf("Alerts for 0xfake_and_lookalike = %+v, want exactly 1 critical counterfeit_received alert", matching)
+	}
+}
+
+func TestLiveAlertForLookalikeKnown(t *testing.T) {
+	nowSec := time.Now().Unix()
+	rpcSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Method string            `json:"method"`
+			Params []json.RawMessage `json:"params"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		switch req.Method {
+		case "eth_getBlockByNumber":
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":1,"result":{"number":"0x64","timestamp":"0x%x"}}`, nowSec)
+		case "eth_call":
+			fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"result":"0x0000000000000000000000000000000000000000000000000000000000000000"}`)
+		case "eth_getLogs":
+			fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"result":[]}`)
+		}
+	}))
+	defer rpcSrv.Close()
+
+	h := newTestPaymentAPIHandler(t, map[string][]string{"eth": {rpcSrv.URL}}, nil)
+	const knownPoisoner = "0xdead00000000000000000000000000000000beef"
+	if err := h.risk.store.upsertLookalikes(context.Background(), "eth", []lookalikeRow{{
+		Lookalike: knownPoisoner,
+		Imitated:  handlerTestEVMPayer,
+		Hits:      10,
+		Victims:   5,
+	}}, "2026-10-06"); err != nil {
+		t.Fatalf("upsertLookalikes: %v", err)
+	}
+
+	// Seed history cache with:
+	// 1. Incoming 0-value transfer from knownPoisoner (no prior real counterparty in cache!) -> poisoning_received (warning)
+	// 2. Real outgoing transfer to knownPoisoner -> sent_to_lookalike (critical)
+	histKey := "pay:hist:eth:USDT:" + handlerTestEVMAddr
+	h.cache.SetWithTTL(histKey, &cachedPayHistory{
+		txs: []payTx{
+			{
+				TxHash:        "0xknown_poison_out",
+				Direction:     "out",
+				Timestamp:     time.Unix(nowSec-30, 0).UTC().Format(time.RFC3339),
+				Amount:        "200",
+				Symbol:        "USDT",
+				TokenContract: "0xdac17f958d2ee523a2206206994597c13d831ec7",
+				TokenTier:     tierNative,
+				Counterparty:  knownPoisoner,
+				Block:         96,
+				rawValue:      "200000000",
+			},
+			{
+				TxHash:        "0xknown_poison_in",
+				Direction:     "in",
+				Timestamp:     time.Unix(nowSec-60, 0).UTC().Format(time.RFC3339),
+				Amount:        "0",
+				Symbol:        "USDT",
+				TokenContract: "0xdac17f958d2ee523a2206206994597c13d831ec7",
+				TokenTier:     tierNative,
+				Counterparty:  knownPoisoner,
+				Block:         95,
+				rawValue:      "0",
+			},
+		},
+	}, payHistoryCacheTTL)
+
+	rec := httptest.NewRecorder()
+	h.PaymentCheckLive(rec, httptest.NewRequest(http.MethodGet, "/api/opendata/crypto/payment-check/live?asset=USDT&network=eth&address="+handlerTestEVMAddr, nil))
+
+	var resp payLiveResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	var gotIn, gotOut bool
+	for _, a := range resp.Alerts {
+		if a.TxHash == "0xknown_poison_in" && a.Code == "poisoning_received" && a.Severity == "warning" {
+			gotIn = true
+		}
+		if a.TxHash == "0xknown_poison_out" && a.Code == "sent_to_lookalike" && a.Severity == "critical" {
+			gotOut = true
+		}
+	}
+	if !gotIn || !gotOut {
+		t.Fatalf("Alerts = %+v, want poisoning_received (warning) on 0xknown_poison_in and sent_to_lookalike (critical) on 0xknown_poison_out", resp.Alerts)
 	}
 }

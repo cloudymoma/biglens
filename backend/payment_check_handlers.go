@@ -356,12 +356,12 @@ func (h *APIHandler) PaymentCheckLive(w http.ResponseWriter, r *http.Request) {
 
 	candidates := mergeTxs(unsettledTxs, recentTxs, histTxs)
 	classifyPayTxs(candidates, network, heads, now.Unix())
-	applyFlags(candidates, asset, chains[network].Family)
 	if len(candidates) > 0 {
 		if err := applyLocalHits(bgCtx, store, network, candidates); err != nil {
 			localErr = fmt.Errorf("unavailable")
 		}
 	}
+	applyFlags(candidates, asset, chains[network].Family)
 
 	var latest *payTx
 	for i := range candidates {
@@ -429,7 +429,7 @@ func (h *APIHandler) PaymentCheckLive(w http.ResponseWriter, r *http.Request) {
 					TxHash:   tx.TxHash,
 				},
 			}
-		case slices.Contains(tx.Flags, "lookalike"):
+		case slices.Contains(tx.Flags, "lookalike") || slices.Contains(tx.Flags, "lookalike_known"):
 			cand = txAlertCand{
 				prio: 1,
 				alert: payAlert{
@@ -627,8 +627,8 @@ func (h *APIHandler) PaymentCheckHistory(w http.ResponseWriter, r *http.Request)
 	}
 
 	classifyPayTxs(txs, network, heads, now.Unix())
-	applyFlags(txs, asset, chains[network].Family)
 	localErr := applyLocalHits(bgCtx, store, network, txs)
+	applyFlags(txs, asset, chains[network].Family)
 
 	var sources []riskSource
 	if network == "tron" {

@@ -680,3 +680,226 @@ func TestApplyLocalHits(t *testing.T) {
 		t.Fatalf("nil store must not tag txs, got %+v", nilTxs[0])
 	}
 }
+
+func TestFlagLookalikeKnownIncomingIsWarning(t *testing.T) {
+	ctx := context.Background()
+	store := newTestRiskStore(t)
+
+	if err := store.upsertLookalikes(ctx, "eth", []lookalikeRow{{
+		Lookalike: flagTestEVMMimic,
+		Imitated:  flagTestEVMReal,
+		Hits:      5,
+		Victims:   3,
+	}}, "2026-10-06"); err != nil {
+		t.Fatalf("upsertLookalikes: %v", err)
+	}
+
+	// Incoming transfer from a known poisoner (even without any earlier counterparty in the 7-day window)
+	txs := []payTx{
+		{
+			TxHash:       "0x01",
+			Direction:    "in",
+			Timestamp:    "2026-10-06T12:00:00Z",
+			Amount:       "0",
+			TokenTier:    tierNative,
+			Counterparty: flagTestEVMMimic,
+			Block:        100,
+		},
+	}
+
+	if err := applyLocalHits(ctx, store, "eth", txs); err != nil {
+		t.Fatalf("applyLocalHits: %v", err)
+	}
+	applyFlags(txs, "USDT", familyEVM)
+
+	if !slices.Contains(txs[0].Flags, "lookalike_known") {
+		t.Fatalf("incoming from known poisoner flags = %v, want lookalike_known", txs[0].Flags)
+	}
+	if slices.Contains(txs[0].Flags, "sent_to_lookalike") {
+		t.Fatalf("incoming from known poisoner must NOT be flagged sent_to_lookalike: %v", txs[0].Flags)
+	}
+	if slices.Contains(txs[0].Flags, "counterparty_listed") {
+		t.Fatalf("scam_lookalikes hit must NOT add critical counterparty_listed flag: %v", txs[0].Flags)
+	}
+	if !reflect.DeepEqual(txs[0].CounterpartyHits, []string{"scam_lookalikes"}) {
+		t.Fatalf("CounterpartyHits = %v, want [scam_lookalikes]", txs[0].CounterpartyHits)
+	}
+}
+
+func TestFlagRealOutgoingToKnownPoisonerIsCritical(t *testing.T) {
+	ctx := context.Background()
+	store := newTestRiskStore(t)
+
+	if err := store.upsertLookalikes(ctx, "eth", []lookalikeRow{{
+		Lookalike: flagTestEVMMimic,
+		Imitated:  flagTestEVMReal,
+		Hits:      12,
+		Victims:   4,
+	}}, "2026-10-06"); err != nil {
+		t.Fatalf("upsertLookalikes: %v", err)
+	}
+
+	txs := []payTx{
+		// 1. Forged 0-value outgoing to known poisoner: warning only (not signed by user)
+		{
+			TxHash:       "0xforged0",
+			Direction:    "out",
+			Timestamp:    "2026-10-06T12:00:00Z",
+			Amount:       "0",
+			TokenTier:    tierNative,
+			Counterparty: flagTestEVMMimic,
+			Block:        100,
+		},
+		// 2. Real positive outgoing to known poisoner (even without real counterparty in 7d window): critical sent_to_lookalike + lookalike_known
+		{
+			TxHash:       "0xrealout",
+			Direction:    "out",
+			Timestamp:    "2026-10-06T12:01:00Z",
+			Amount:       "250",
+			TokenTier:    tierNative,
+			Counterparty: flagTestEVMMimic,
+			Block:        101,
+		},
+	}
+
+	if err := applyLocalHits(ctx, store, "eth", txs); err != nil {
+		t.Fatalf("applyLocalHits: %v", err)
+	}
+	applyFlags(txs, "USDT", familyEVM)
+
+	if !slices.Contains(txs[0].Flags, "lookalike_known") || slices.Contains(txs[0].Flags, "sent_to_lookalike") {
+		t.Fatalf("forged 0-value outgoing to known poisoner flags = %v, want lookalike_known without sent_to_lookalike", txs[0].Flags)
+	}
+	if !slices.Contains(txs[1].Flags, "lookalike_known") || !slices.Contains(txs[1].Flags, "sent_to_lookalike") {
+		t.Fatalf("real outgoing to known poisoner flags = %v, want both lookalike_known and sent_to_lookalike", txs[1].Flags)
+	}
+}
+
+func TestLookalikeKnownNeverEntersTrust(t *testing.T) {
+	ctx := context.Background()
+	store := newTestRiskStore(t)
+
+	if err := store.upsertLookalikes(ctx, "eth", []lookalikeRow{{
+		Lookalike: flagTestEVMMimic,
+		Imitated:  flagTestEVMReal,
+		Hits:      8,
+		Victims:   2,
+	}}, "2026-10-06"); err != nil {
+		t.Fatalf("upsertLookalikes: %v", err)
+	}
+
+	// Known poisoner sends 100 USDT first (non-dust!), then user interacts with the real counterparty.
+	// Because the known poisoner is pre-tainted before applyFlags, it must never enter trust,
+	// so the real counterparty must NOT be flagged lookalike or sent_to_lookalike.
+	txs := []payTx{
+		{
+			TxHash:       "0x01",
+			Direction:    "in",
+			Timestamp:    "2026-10-06T12:00:00Z",
+			Amount:       "100",
+			TokenTier:    tierNative,
+			Counterparty: flagTestEVMMimic,
+			Block:        100,
+		},
+		{
+			TxHash:       "0x02",
+			Direction:    "in",
+			Timestamp:    "2026-10-06T12:01:00Z",
+			Amount:       "500",
+			TokenTier:    tierNative,
+			Counterparty: flagTestEVMReal,
+			Block:        101,
+		},
+		{
+			TxHash:       "0x03",
+			Direction:    "out",
+			Timestamp:    "2026-10-06T12:02:00Z",
+			Amount:       "500",
+			TokenTier:    tierNative,
+			Counterparty: flagTestEVMReal,
+			Block:        102,
+		},
+	}
+
+	if err := applyLocalHits(ctx, store, "eth", txs); err != nil {
+		t.Fatalf("applyLocalHits: %v", err)
+	}
+	applyFlags(txs, "USDT", familyEVM)
+
+	if !slices.Equal(txs[0].Flags, []string{"lookalike_known"}) {
+		t.Fatalf("known poisoner 100 USDT inbound flags = %v, want [lookalike_known]", txs[0].Flags)
+	}
+	if len(txs[1].Flags) != 0 {
+		t.Fatalf("real counterparty inbound after known poisoner flags = %v, want empty", txs[1].Flags)
+	}
+	if len(txs[2].Flags) != 0 {
+		t.Fatalf("real counterparty outbound after known poisoner flags = %v, want empty", txs[2].Flags)
+	}
+}
+
+func TestFakeTokenSetRetiersOtherToCounterfeitOnEthOnly(t *testing.T) {
+	ctx := context.Background()
+	store := newTestRiskStore(t)
+
+	const fakeContract = "0xdeadbeef0000000000000000000000000000cafe"
+	if err := store.upsertFakeTokens(ctx, "eth", []fakeTokenRow{{
+		Contract:   fakeContract,
+		Symbol:     "TETHER_BONUS",
+		Transfers:  100,
+		Recipients: 80,
+		FirstSeen:  "2026-10-05",
+		LastSeen:   "2026-10-06",
+	}}); err != nil {
+		t.Fatalf("upsertFakeTokens: %v", err)
+	}
+
+	// 1. On Ethereum: tierOther row with contract in scam_fake_tokens becomes tierCounterfeit and gets counterfeit_token flag.
+	ethTxs := []payTx{
+		{
+			TxHash:        "0xeth1",
+			Direction:     "in",
+			Timestamp:     "2026-10-06T12:00:00Z",
+			Amount:        "1000",
+			Symbol:        "TETHER_BONUS",
+			TokenContract: fakeContract,
+			TokenTier:     tierOther,
+			Counterparty:  flagTestEVMOther,
+			Block:         100,
+		},
+	}
+	if err := applyLocalHits(ctx, store, "eth", ethTxs); err != nil {
+		t.Fatalf("applyLocalHits(eth): %v", err)
+	}
+	applyFlags(ethTxs, "USDT", familyEVM)
+	if ethTxs[0].TokenTier != tierCounterfeit {
+		t.Fatalf("eth TokenTier = %q, want %q", ethTxs[0].TokenTier, tierCounterfeit)
+	}
+	if !slices.Contains(ethTxs[0].Flags, "counterfeit_token") {
+		t.Fatalf("eth Flags = %v, want counterfeit_token", ethTxs[0].Flags)
+	}
+
+	// 2. On Arbitrum (L2): scam_fake_tokens is ETH-only, so tierOther row must remain tierOther.
+	arbTxs := []payTx{
+		{
+			TxHash:        "0xarb1",
+			Direction:     "in",
+			Timestamp:     "2026-10-06T12:00:00Z",
+			Amount:        "1000",
+			Symbol:        "TETHER_BONUS",
+			TokenContract: fakeContract,
+			TokenTier:     tierOther,
+			Counterparty:  flagTestEVMOther,
+			Block:         100,
+		},
+	}
+	if err := applyLocalHits(ctx, store, "arb", arbTxs); err != nil {
+		t.Fatalf("applyLocalHits(arb): %v", err)
+	}
+	applyFlags(arbTxs, "USDT", familyEVM)
+	if arbTxs[0].TokenTier != tierOther {
+		t.Fatalf("arb TokenTier = %q, want %q (fake token corpus is ETH-only)", arbTxs[0].TokenTier, tierOther)
+	}
+	if slices.Contains(arbTxs[0].Flags, "counterfeit_token") {
+		t.Fatalf("arb Flags = %v, must not contain counterfeit_token", arbTxs[0].Flags)
+	}
+}
