@@ -370,14 +370,15 @@ Paste your own receiving address to verify incoming payments across **USDT** (`t
   `FINALIZED`) uses runtime-sampled `latest − safe` and `latest − finalized` block-timestamp lags rather than
   hardcoded confirmation counts, and `FINALIZED` stablecoin cards always note that issuer contracts (Tether / Circle)
   can still freeze tokens at the contract level.
-- **Token contract registry (`native` / `bridged` / `counterfeit` / `other`)** — every registered stablecoin contract
-  is verified on-chain via `symbol()` (`0x95d89b41`) and `totalSupply()` (`0x18160ddd`) (`backend/chain_registry.go`).
-  Bridged tokens (`USDC.e` on Arbitrum/Optimism, legacy bridged `USDT` on Optimism and Base) are shown with an explicit
-  warning; unrecognised contracts whose symbol normalised to `USDT`/`USDC`/`USD₮` are flagged as `counterfeit_token`.
+- **Token contract registry (`native` / `bridged` / `counterfeit` / `other`)** — hard-coded registry in
+  `backend/chain_registry.go`, verified on-chain via `symbol()` (`0x95d89b41`) and `totalSupply()` (`0x18160ddd`) on
+  2026-10-05. Bridged tokens (`USDC.e` on Arbitrum/Optimism, legacy bridged `USDT` on Optimism and Base) are shown with
+  an explicit warning; unrecognised contracts whose symbol normalises to `USDT`/`USDC`/`USD₮` are flagged as
+  `counterfeit_token`.
 - **7-day transfer history & poisoning detection** — merges recent RPC logs (`eth_getLogs` over registered contracts)
   with 7-day Blockscout / TronGrid history, scanning chronologically to flag `zero_value`, `dust`, `lookalike` (matching
   both first 4 and last 4 address characters of a trusted prior counterparty), `sent_to_lookalike`, `counterfeit_token`,
-  `failed` and `sanctioned_counterparty`. The default "Hide zero-value & unrelated tokens" filter hides benign noise
+  `failed` and `counterparty_listed`. The default "Hide zero-value & unrelated tokens" filter hides benign noise
   while always preserving any row that carries a risk flag.
 - **Independent payer screening** — when the latest incoming transfer's `tx_hash` changes, the payer address is
   checked once through Address Risk (`lookup`) without re-polling on every 5-second settlement tick. Queried
@@ -429,8 +430,8 @@ with mode 0600 (a hand-edited conf.yaml keeps its mode until the first save from
 are ever shown, and the key is never logged. Etherscan's API terms allow personal, non-commercial use only
 (https://etherscan.io/apiterms): configure a key only on an instance you use alone.
 
-In **Whales & Flow** (BTC & ETH), addresses on the local lists carry `OFAC` / `Frozen` / `MEW` badges (with a coverage note when local freeze history is partial), and clicking any
-address opens it in Address Risk on the matching chain.
+In **Whales & Flow** (BTC & ETH), addresses on the local lists carry `OFAC` / `Frozen` / `MEW` badges (with a coverage note when local freeze history is partial), and clicking an
+ETH address opens it in Address Risk.
 
 ### SEM Insights
 

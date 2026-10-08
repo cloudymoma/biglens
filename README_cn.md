@@ -312,8 +312,8 @@ GDELT 是*新闻报道*的索引，而非经核实事件的登记册。每行是
 粘贴你自己的收款地址，实时核验 **USDT**（`tron`、`eth`、`arb`、`op`、`base`）、**USDC**（`eth`、`arb`、`op`、`base`）、**ETH**（`eth`、`arb`、`op`、`base`）与 **TRX**（`tron`）的入账状态：
 
 - **三档终局水位与余额拆分** —— EVM 链并发读取 `finalized`、`safe` 与 `latest` 块高（做单调钳制，防止不同节点高度差导致顺序倒置），将余额拆分为 **Finalized**、**Safe, not final**（`safe − finalized`）与 **Latest only**（`latest − safe`）三列；TRON 读取 `/walletsolidity` 与 `/wallet`，展示 **Solidified** 与 **Unconfirmed**（`latest − solidified`）。结算进度（`DANGER` / `SOFT` / `SAFE` / `FINALIZED`）基于运行时采样的 `latest − safe` 与 `latest − finalized` 时间差中位数估算剩余时间，且稳定币达到 `FINALIZED` 时始终提示发行方（Tether / Circle）仍可在合约层冻结代币。
-- **代币合约注册表（`native` / `bridged` / `counterfeit` / `other`）** —— 注册表中的每个稳定币合约均通过链上 `symbol()`（`0x95d89b41`）与 `totalSupply()`（`0x18160ddd`）核实（见 `backend/chain_registry.go`）。桥接版本（Arbitrum / Optimism 上的 `USDC.e`、Optimism 与 Base 上的旧桥接 `USDT`）显式标注警告；未在注册表中但符号归一化后酷似 `USDT`/`USDC`/`USD₮` 的合约会被标记为 `counterfeit_token`（假币）。
-- **7 天转账历史与地址投毒检测** —— 合并近期 RPC 日志（按注册表合约过滤的 `eth_getLogs`）与 Blockscout / TronGrid 7 天历史，按时间从旧到新扫描并标记 `zero_value`、`dust`、`lookalike`（与历史可信对手方前 4 位和后 4 位同时相同）、`sent_to_lookalike`、`counterfeit_token`、`failed` 与 `sanctioned_counterparty`。默认开启的「隐藏 0 元与无关代币」筛选只隐藏噪音，任何带风险标记的行都绝不会被隐藏。
+- **代币合约注册表（`native` / `bridged` / `counterfeit` / `other`）** —— 写死在 `backend/chain_registry.go` 中的注册表，已于 2026-10-05 通过链上 `symbol()`（`0x95d89b41`）与 `totalSupply()`（`0x18160ddd`）人工核实。桥接版本（Arbitrum / Optimism 上的 `USDC.e`、Optimism 与 Base 上的旧桥接 `USDT`）显式标注警告；未在注册表中但符号归一化后酷似 `USDT`/`USDC`/`USD₮` 的合约会被标记为 `counterfeit_token`（假币）。
+- **7 天转账历史与地址投毒检测** —— 合并近期 RPC 日志（按注册表合约过滤的 `eth_getLogs`）与 Blockscout / TronGrid 7 天历史，按时间从旧到新扫描并标记 `zero_value`、`dust`、`lookalike`（与历史可信对手方前 4 位和后 4 位同时相同）、`sent_to_lookalike`、`counterfeit_token`、`failed` 与 `counterparty_listed`。默认开启的「隐藏 0 元与无关代币」筛选只隐藏噪音，任何带风险标记的行都绝不会被隐藏。
 - **独立的付款方风险筛查** —— 当最新入账的 `tx_hash` 发生变化时，对付款方地址执行一次 Address Risk 查询，不会随 5 秒结算轮询重复请求。查询过的收款地址仅保存在 URL hash（`#pay?asset=…&network=…&address=…`）与短时内存缓存中。
 
 #### Address Risk（多链地址风险线索）
@@ -344,7 +344,7 @@ cd /opt/biglens/backend && sudo -u biglens ./biglens-server --address-risk-backf
 
 **Etherscan key（可选）**。配置免费的 Etherscan API key（https://etherscan.io/myapikey）后，以太坊查询还会把该地址最近 1000 笔交易、代币转账（只统计 12 种白名单代币：USDT/USDC/DAI/WETH/WBTC/stETH/wstETH/USDS/USDe/PYUSD/FDUSD/cbBTC）和内部交易与本地名单比对，只看一跳（未配置 key 时自动回退至 Blockscout）。0 金额转账、失败的调用和仿冒代币都会被忽略（防地址投毒）。在 Address Risk 页面里填写 key：先经 Etherscan 校验，再保存到 `conf.yaml`，文件会以 0600 权限重写（手动编辑过的 conf.yaml 要等第一次在 UI 保存后才会变成 0600）。页面上只显示 key 的最后 4 位，日志里也不会出现 key。Etherscan 的 API 条款只允许个人非商业使用（https://etherscan.io/apiterms），只在你一个人用的部署上配置 key。
 
-在 **Whales & Flow**（BTC 与 ETH 模式）中，命中本地名单的地址会带 `OFAC` / `Frozen` / `MEW` 标记（若本地冻结历史尚未全量回填，表头会注明覆盖起始日期）；点击任意地址即可跳到对应链的 Address Risk 查询。
+在 **Whales & Flow**（BTC 与 ETH 模式）中，命中本地名单的地址会带 `OFAC` / `Frozen` / `MEW` 标记（若本地冻结历史尚未全量回填，表头会注明覆盖起始日期）；点击任意 ETH 地址即可跳到 Address Risk 查询。
 
 ### SEM Insights（搜索营销洞察）
 
