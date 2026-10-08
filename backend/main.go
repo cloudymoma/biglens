@@ -86,7 +86,19 @@ func main() {
 		lists.onChange = invalidate
 		stable := &stablecoinSyncer{store: rstore, src: bqStablecoinSource{client: bq.client}, now: time.Now,
 			initialDays: cfg.AddressRisk.initialSyncDays(), onChange: invalidate}
-		go runAddressRiskSync(ctx, time.Hour, lists.syncDue, stable.syncOnce)
+		syncJobs := []func(context.Context){lists.syncDue, stable.syncOnce}
+		for _, job := range newScamRadarJobs(bq.client) {
+			syncer := &dailyBQSyncer{
+				store:         rstore,
+				job:           job,
+				now:           time.Now,
+				initialDays:   cfg.AddressRisk.scamRadarInitialDays(),
+				retentionDays: cfg.AddressRisk.scamRadarRetentionDays(),
+				onChange:      invalidate,
+			}
+			syncJobs = append(syncJobs, syncer.syncOnce)
+		}
+		go runAddressRiskSync(ctx, time.Hour, syncJobs...)
 	}
 	gasCfg := cfg.CryptoGas.withDefaults()
 	api.risk = newAddressRiskService(rstore, cfg.AddressRisk.rpcURLs())

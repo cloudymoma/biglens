@@ -984,11 +984,16 @@ func TestLookupTronFreezeDedupAndUnfreeze(t *testing.T) {
 		t.Errorf("frozen TRON clue = %+v", c)
 	}
 
-	// 2. Unfrozen TRON address (live also false): no clues.
+	// 2. Unfrozen TRON address (live also false): emits an info clue like ETH.
 	liveFrozen.Store(false)
 	resUn := svc.lookup(ctx, "tron", unfrozenTron)
-	if len(resUn.Clues) != 0 {
-		t.Errorf("unfrozen TRON clues = %+v, want empty", resUn.Clues)
+	if len(resUn.Clues) != 1 {
+		t.Fatalf("unfrozen TRON clues = %+v, want 1 info clue", resUn.Clues)
+	}
+	u := resUn.Clues[0]
+	if u.Severity != sevInfo || u.Source != "tron_stablecoin" || u.Code != "stablecoin_unfrozen" ||
+		!strings.Contains(u.RefURL, "tronscan.org/#/transaction/2222") {
+		t.Errorf("unfrozen TRON clue = %+v, want info stablecoin_unfrozen with Tronscan tx 2222", u)
 	}
 }
 

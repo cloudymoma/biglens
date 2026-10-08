@@ -298,3 +298,29 @@ func TestDailySyncerStoreFailureKeepsCursorAndBacksOff(t *testing.T) {
 		t.Errorf("Store failure re-ran billed query after 1h: runCalls = %d", len(job.runCalls))
 	}
 }
+
+func TestScamRadarConfigDefaultsAndZeroDisable(t *testing.T) {
+	var cfg AddressRiskConfig
+	if got := cfg.scamRadarInitialDays(); got != 30 {
+		t.Errorf("default scamRadarInitialDays = %d, want 30", got)
+	}
+	if got := cfg.scamRadarRetentionDays(); got != 90 {
+		t.Errorf("default scamRadarRetentionDays = %d, want 90", got)
+	}
+
+	zero := 0
+	cfg.ScamRadar.InitialDays = &zero
+	if got := cfg.scamRadarInitialDays(); got != 0 {
+		t.Errorf("zero scamRadarInitialDays = %d, want 0", got)
+	}
+
+	forty := 40
+	cfg.ScamRadar.InitialDays = &forty
+	cfg.ScamRadar.RetentionDays = 120
+	if got := cfg.scamRadarInitialDays(); got != 31 {
+		t.Errorf("clamped scamRadarInitialDays = %d, want 31", got)
+	}
+	if got := cfg.scamRadarRetentionDays(); got != 120 {
+		t.Errorf("custom scamRadarRetentionDays = %d, want 120", got)
+	}
+}

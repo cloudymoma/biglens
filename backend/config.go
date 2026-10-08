@@ -64,6 +64,11 @@ func (c PaymentCheckConfig) blockscoutURL(chain string) string {
 	return ""
 }
 
+type ScamRadarConfig struct {
+	InitialDays   *int `yaml:"initial_days,omitempty"`   // default 30; 0 = disabled (spec P2.0 Q2)
+	RetentionDays int  `yaml:"retention_days,omitempty"` // default 90 (spec P2.0 Q3)
+}
+
 // AddressRiskConfig configures the Crypto Pulse "Address Risk" tab. Every
 // field has a code default because VMs provisioned before this feature have
 // no address_risk section in their generated conf.yaml.
@@ -75,7 +80,8 @@ type AddressRiskConfig struct {
 	InitialSyncDays *int `yaml:"initial_sync_days,omitempty"`
 	// EtherscanAPIKey is optional; set and cleared from the UI via
 	// UpdateConfig. Never returned by any endpoint or logged.
-	EtherscanAPIKey string `yaml:"etherscan_api_key,omitempty"`
+	EtherscanAPIKey string          `yaml:"etherscan_api_key,omitempty"`
+	ScamRadar       ScamRadarConfig `yaml:"scam_radar,omitempty"`
 }
 
 // defaultRiskRPCURLs are keyless public Ethereum RPCs, tried in order for
@@ -96,6 +102,20 @@ func (c AddressRiskConfig) initialSyncDays() int {
 		return 30
 	}
 	return min(max(*c.InitialSyncDays, 0), 31)
+}
+
+func (c AddressRiskConfig) scamRadarInitialDays() int {
+	if c.ScamRadar.InitialDays == nil {
+		return 30
+	}
+	return min(max(*c.ScamRadar.InitialDays, 0), 31)
+}
+
+func (c AddressRiskConfig) scamRadarRetentionDays() int {
+	if c.ScamRadar.RetentionDays <= 0 {
+		return 90
+	}
+	return c.ScamRadar.RetentionDays
 }
 
 func (c AddressRiskConfig) rpcURLs() []string {

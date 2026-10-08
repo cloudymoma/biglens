@@ -284,7 +284,7 @@ GDELT 是*新闻报道*的索引，而非经核实事件的登记册。每行是
 | **代币经济** | Top 25 代币合约（按 Transfer 事件数，含 ERC-20 与 ERC-721）、代币 vs 原生交易活跃度、新合约部署、代币流动 Treemap |
 | **挖矿经济** | 全网算力（7 日均值 + 单日隐含值）、矿工收入、每 TH/s 收益、最新一日矿机经济性、各矿机关机币价（可调电价、PUE、矿池费率、BTC 价格、自定义矿机） |
 | **收款核验（Payment Check）** | 面向收款地址的实时入账核验，支持 USDT、USDC、ETH、TRX 在 Ethereum、Arbitrum、Optimism、Base 与 TRON 上的三档终局余额、最新入账结算进度（`SOFT` → `SAFE` → `FINALIZED`）、官方/桥接/仿冒代币识别、7 天转账历史（防地址投毒检测）与付款方独立风险筛查，详见下文 [Payment Check](#payment-check收款地址入账核验) |
-| **地址风险（Address Risk）** | 多链地址风险线索查询（Ethereum、Arbitrum、Optimism、Base、TRON、Bitcoin）、发行方实时冻结检查、冻结历史概览与数据源表，详见下文 [Address Risk](#address-risk多链地址风险线索) |
+| **地址风险（Address Risk）** | 多链地址风险线索查询（Ethereum、Arbitrum、Optimism、Base、TRON、Bitcoin）、发行方实时冻结检查、冻结历史概览、**Scam Radar（诈骗雷达）**（30 天 ETH/TRON 地址投毒与假币趋势、Top 10 活跃假币合约、BTC 显式 RBF 占比）与数据源表，详见下文 [Address Risk](#address-risk多链地址风险线索) |
 
 区间：各页支持 7/30/90 天，轻量聚合趋势（网络脉搏、手续费、挖矿）另支持 1 年；
 代币查询上限 30 天。日级接口对齐至已结算的完整 UTC 日（带午夜后 20 分钟入库缓冲），
@@ -312,8 +312,8 @@ GDELT 是*新闻报道*的索引，而非经核实事件的登记册。每行是
 粘贴你自己的收款地址，实时核验 **USDT**（`tron`、`eth`、`arb`、`op`、`base`）、**USDC**（`eth`、`arb`、`op`、`base`）、**ETH**（`eth`、`arb`、`op`、`base`）与 **TRX**（`tron`）的入账状态：
 
 - **三档终局水位与余额拆分** —— EVM 链并发读取 `finalized`、`safe` 与 `latest` 块高（做单调钳制，防止不同节点高度差导致顺序倒置），将余额拆分为 **Finalized**、**Safe, not final**（`safe − finalized`）与 **Latest only**（`latest − safe`）三列；TRON 读取 `/walletsolidity` 与 `/wallet`，展示 **Solidified** 与 **Unconfirmed**（`latest − solidified`）。结算进度（`DANGER` / `SOFT` / `SAFE` / `FINALIZED`）基于运行时采样的 `latest − safe` 与 `latest − finalized` 时间差中位数估算剩余时间，且稳定币达到 `FINALIZED` 时始终提示发行方（Tether / Circle）仍可在合约层冻结代币。
-- **代币合约注册表（`native` / `bridged` / `counterfeit` / `other`）** —— 写死在 `backend/chain_registry.go` 中的注册表，已于 2026-10-05 通过链上 `symbol()`（`0x95d89b41`）与 `totalSupply()`（`0x18160ddd`）人工核实。桥接版本（Arbitrum / Optimism 上的 `USDC.e`、Optimism 与 Base 上的旧桥接 `USDT`）显式标注警告；未在注册表中但符号归一化后酷似 `USDT`/`USDC`/`USD₮` 的合约会被标记为 `counterfeit_token`（假币）。
-- **7 天转账历史与地址投毒检测** —— 合并近期 RPC 日志（按注册表合约过滤的 `eth_getLogs`）与 Blockscout / TronGrid 7 天历史，按时间从旧到新扫描并标记 `zero_value`、`dust`、`lookalike`（与历史可信对手方前 4 位和后 4 位同时相同）、`sent_to_lookalike`、`counterfeit_token`、`failed` 与 `counterparty_listed`。默认开启的「隐藏 0 元与无关代币」筛选只隐藏噪音，任何带风险标记的行都绝不会被隐藏。
+- **代币合约注册表（`native` / `bridged` / `counterfeit` / `other`）** —— 写死在 `backend/chain_registry.go` 中的注册表，已于 2026-10-05 通过链上 `symbol()`（`0x95d89b41`）与 `totalSupply()`（`0x18160ddd`）人工核实。桥接版本（Arbitrum / Optimism 上的 `USDC.e`、Optimism 与 Base 上的旧桥接 `USDT`）显式标注警告；未在注册表中但符号归一化后酷似 `USDT`/`USDC`/`USD₮`（或在以太坊本地 `scam_fake_tokens` 假币库中命中）的合约会被标记为 `counterfeit_token`（假币）。
+- **7 天转账历史与地址投毒检测** —— 合并近期 RPC 日志（按注册表合约过滤的 `eth_getLogs`）与 Blockscout / TronGrid 7 天历史，按时间从旧到新扫描并标记 `zero_value`、`dust`、`lookalike`（与历史可信对手方前 4 位和后 4 位同时相同）、`lookalike_known`（命中本地 `scam_lookalikes` 已知投毒地址库，即使首次出现也会标出且永不进入可信对手方集合）、`sent_to_lookalike`、`counterfeit_token`、`failed` 与 `counterparty_listed`。默认开启的「隐藏 0 元与无关代币」筛选只隐藏噪音，任何带风险标记的行都绝不会被隐藏。
 - **独立的付款方风险筛查** —— 当最新入账的 `tx_hash` 发生变化时，对付款方地址执行一次 Address Risk 查询，不会随 5 秒结算轮询重复请求。查询过的收款地址仅保存在 URL hash（`#pay?asset=…&network=…&address=…`）与短时内存缓存中。
 
 #### Address Risk（多链地址风险线索）
@@ -325,6 +325,8 @@ GDELT 是*新闻报道*的索引，而非经核实事件的登记册。每行是
 | OFAC SDN（经 [0xB10C](https://github.com/0xB10C/ofac-sanctioned-digital-currency-addresses) 提取，MIT） | ETH、Arb、OP、Base、TRON、BTC | 每 6 小时同步到本地 SQLite（含 `ETH`、`TRX`、`XBT` 以及 `USDT` 文件中的 TRON 地址） | 否 |
 | [MEW darklist](https://github.com/MyEtherWallet/ethereum-lists)（MIT；历史名单，2020-11 起未更新） | ETH、Arb、OP、Base | 每 6 小时同步到本地 SQLite | 否 |
 | USDT / USDC 冻结、解冻、销毁事件（`crypto_ethereum.logs`） | ETH | 按完整 UTC 日从 BigQuery 同步 | 否 |
+| TRON USDT 冻结、解冻、销毁事件（`goog_blockchain_tron_mainnet_us.logs`） | TRON | 按完整 UTC 日从 BigQuery 同步（`tron_stablecoin`） | 否 |
+| 已知尾号投毒仿冒地址库（`scam_lookalikes`） | ETH、Arb、OP、Base、TRON | 按完整 UTC 日从 BigQuery 同步（ETH 0 元投毒 + TRON 灰尘投毒；EVM 外部账户跨 L1/L2 共享） | 否 |
 | **发行方冻结实时检查（`issuer_freeze`）**（`isBlackListed` / `isBlacklisted` / `isBlocked`） | ETH、Arb、OP、Base、TRON | 对注册表中的 USDT / USDC 合约发起实时 `eth_call` 或 TronGrid `triggerconstantcontract` | 是，发给 RPC / TronGrid 服务商 |
 | Chainalysis 链上制裁预言机（`isSanctioned`） | ETH、Arb、OP | 通过公共 RPC 实时 `eth_call`（Base 未部署） | 是，发给 RPC 服务商 |
 | [GoPlus](https://gopluslabs.io) 地址安全接口 | ETH、Arb、OP、Base、TRON | 实时，免 key（`chain_id` `1` / `42161` / `10` / `8453` / `tron`） | 是，发给 GoPlus |
@@ -333,7 +335,7 @@ GDELT 是*新闻报道*的索引，而非经核实事件的登记册。每行是
 
 本地数据存放在 `data/security.db`（相对于工作目录，可用 `address_risk.db_path` 修改）。文件打不开时服务照常启动，查询结果会标明本地名单不可用。查询过的地址只保存在 10 分钟的内存缓存里，不写磁盘，也不写日志。
 
-**冻结历史（BigQuery）**。服务首次启动时同步最近 30 天的以太坊 USDT/USDC 冻结事件（扫描约 110–130 GB，一次性约 $0.6–$0.8），之后每天增量同步一天（`logs` 表扫描约 3.5–4.5 GB + 分区完整性检查约 25 MB，每天约 $0.02–$0.03）。`address_risk.initial_sync_days` 可修改天数（0 关闭，最大 31）。全量回填之前，查询结果会注明 "Freeze history covers … only"。除本地以太坊历史事件外，ETH、Arbitrum、Optimism、Base 与 TRON 的每次查询都会执行实时 `issuer_freeze` 合约调用，因此在回填完成前也能查出当前冻结状态。回填时服务可以继续运行：
+**冻结历史（BigQuery）**。服务首次启动时同步最近 30 天的以太坊 USDT/USDC 冻结事件（扫描约 110–130 GB，一次性约 $0.6–$0.8），之后每天增量同步一天（`logs` 表扫描约 3.5–4.5 GB + 分区完整性检查约 25 MB，每天约 $0.02–$0.03）。`address_risk.initial_sync_days` 可修改天数（0 关闭，最大 31）。全量回填之前，查询结果会注明 "Freeze history covers … only"。除本地以太坊与 TRON 历史事件外，ETH、Arbitrum、Optimism、Base 与 TRON 的每次查询都会执行实时 `issuer_freeze` 合约调用，因此在回填完成前也能查出当前冻结状态。以太坊全量回填时服务可以继续运行：
 
 ```bash
 cd /opt/biglens/backend && sudo -u biglens ./biglens-server --address-risk-backfill        # 只做 dry-run：打印每年的预估费用（仅运行约 25 MB 的区块水位检查，不跑回填批次）
@@ -342,9 +344,18 @@ cd /opt/biglens/backend && sudo -u biglens ./biglens-server --address-risk-backf
 
 必须先 `cd`（conf.yaml、`logs/`、`data/` 都按工作目录解析），也必须用 `sudo -u biglens`（否则数据库文件归 root 所有，服务写不进去）。`--since YYYY-MM-DD` 限定起始日期；`--since-days N` 只供开发环境使用。中途失败可以直接重跑，从断点继续。
 
+**Scam Radar（BigQuery 每日链上反诈情报）**。在 Address Risk 概览页的冻结 KPI 下方，**Scam Radar** 每日从 BigQuery 同步四路反诈情报，并将结果同时用于概览看板、Address Risk 单地址查询、Payment Check 与 Whales & Flow：
+
+- **ETH 0 元尾号投毒（`scam_eth` / R1）** —— 扫描 `goog_blockchain_ethereum_mainnet_us.token_transfers` 中官方 USDT 与 USDC 的 0 元转账，将其与同一受害者在**同一 UTC 日**内的真实收款方比对（前 4 位与后 4 位十六进制字符同时相同）。
+- **ETH 假冒 USDT/USDC 合约（`scam_eth` / R2）** —— 将 `token_transfers` 与 `crypto_ethereum.tokens` 关联，找出符号匹配 `^(USDT|USDC|USD₮)[^A-Z0-9]?$` 的非官方合约，展示近 7 天最活跃的 Top 10 假币合约，并写入 `scam_fake_tokens` 供 Payment Check 识别假币。
+- **TRON USDT 灰尘投毒（`scam_tron` / R3）** —— 扫描 `goog_blockchain_tron_mainnet_us.logs` 中官方 TRON USDT（`TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t`）的小额转账（`< 0x100000` 最小单位，约 1.05 USDT，含仿冒地址转入与伪造的转出两个分支），与同一受害者**同一 UTC 日**的真实转账配对，并在 BigQuery 内直接完成 Base58Check 前 4 位 + 后 4 位比对。
+- **TRON USDT 冻结事件（`tron_stablecoin_logs` / R4）** —— 同步 TRON USDT 的 `AddedBlackList`、`RemovedBlackList` 与 `DestroyedBlackFunds` 日志至 `tron_stablecoin_events`，驱动概览页的 **USDT frozen now (TRON)** KPI 卡片与 `tron_stablecoin` 查询来源。
+- **BTC 显式 RBF 占比（`scam_btc` / R5）** —— 从 `crypto_bitcoin.inputs` 统计每日至少有一个输入开启 BIP-125 显式费用替换（`sequence < 0xfffffffe`）的比特币交易占比，直观说明为何 0 确认 BTC 交易绝不能视为已到账。
+- **下限口径与成本** —— 由于 R1 与 R3 只和**同一 UTC 日**内的真实转账配对，跨天投毒（先正常转账、数日后再投毒）不会被计入，因此看板与线索中的投毒命中数均为**下限（lower bound）**。Scam Radar 默认开启（`address_risk.scam_radar.initial_days: 30`、`retention_days: 90`；设 `initial_days: 0` 关闭）。首次启动扫描 30 天约 150–160 GB（一次性约 $0.95–$1.00，`crypto_ethereum.tokens` 全窗口只扫一次），之后每日增量约 5.3 GB/天（约 $0.033/天，按 $6.25/TiB 折算约 $1/月）。
+
 **Etherscan key（可选）**。配置免费的 Etherscan API key（https://etherscan.io/myapikey）后，以太坊查询还会把该地址最近 1000 笔交易、代币转账（只统计 12 种白名单代币：USDT/USDC/DAI/WETH/WBTC/stETH/wstETH/USDS/USDe/PYUSD/FDUSD/cbBTC）和内部交易与本地名单比对，只看一跳（未配置 key 时自动回退至 Blockscout）。0 金额转账、失败的调用和仿冒代币都会被忽略（防地址投毒）。在 Address Risk 页面里填写 key：先经 Etherscan 校验，再保存到 `conf.yaml`，文件会以 0600 权限重写（手动编辑过的 conf.yaml 要等第一次在 UI 保存后才会变成 0600）。页面上只显示 key 的最后 4 位，日志里也不会出现 key。Etherscan 的 API 条款只允许个人非商业使用（https://etherscan.io/apiterms），只在你一个人用的部署上配置 key。
 
-在 **Whales & Flow**（BTC 与 ETH 模式）中，命中本地名单的地址会带 `OFAC` / `Frozen` / `MEW` 标记（若本地冻结历史尚未全量回填，表头会注明覆盖起始日期）；点击任意 ETH 地址即可跳到 Address Risk 查询。
+在 **Whales & Flow**（BTC 与 ETH 模式）中，命中本地名单的地址会带 `OFAC` / `Frozen` / `MEW` / `Lookalike` 标记（若本地冻结历史尚未全量回填，表头会注明覆盖起始日期）；点击任意 ETH 地址即可跳到 Address Risk 查询。
 
 ### SEM Insights（搜索营销洞察）
 

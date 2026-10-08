@@ -30,6 +30,9 @@ func NewBQClient(ctx context.Context, cfg *Config) (*BQClient, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create bigquery client: %w", err)
 	}
+	if err := client.EnableStorageReadClient(ctx, opts...); err != nil {
+		slog.Warn("bigquery storage read client unavailable, using REST pagination", "error", err)
+	}
 
 	// Same credentials and scope as the client above, which builds on this
 	// REST service too but does not expose it.

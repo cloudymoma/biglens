@@ -218,10 +218,6 @@ func stablecoinCluesForChain(chain string, states []stablecoinState, destroyed m
 				c.Detail = fmt.Sprintf(riskDestroyedFmt, formatTokenAmount(n, 6))
 			}
 		case "unfreeze":
-			if chain == "tron" {
-				// Per Task 4 spec, an unfrozen TRON address does not emit a clue.
-				continue
-			}
 			c.Severity, c.Code, c.Title = sevInfo, "stablecoin_unfrozen", fmt.Sprintf(riskTitleUnfrozenFmt, st.Token)
 			if n := destroyed[st.Token]; n != nil && n.Sign() > 0 {
 				c.Severity = sevWarning

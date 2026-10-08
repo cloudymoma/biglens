@@ -204,51 +204,89 @@ export default function ScamRadarPanel({ onInspect }: { onInspect: (address: str
             )}
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <div className="rounded-md border border-zinc-800/80 bg-zinc-900/30 p-3">
-                <div className="flex items-baseline justify-between mb-2">
+              <div className="rounded-md border border-zinc-800/80 bg-zinc-900/30 p-3 space-y-2">
+                <div className="flex items-baseline justify-between">
                   <span className="text-xs font-medium text-zinc-200">30-day poisoning &amp; fake-token trend</span>
-                  <span className="text-[11px] text-zinc-500">complete UTC days · lower bound</span>
+                  <span className="text-[11px] text-zinc-500">complete UTC days · dual scale · lower bound</span>
                 </div>
                 <ReactECharts
-                  style={{ height: 220 }}
+                  style={{ height: 165 }}
                   option={{
                     tooltip: { trigger: 'axis', ...CHART_TOOLTIP },
                     legend: { textStyle: { color: '#a1a1aa', fontSize: 11 }, top: 0 },
-                    grid: { left: 48, right: 16, top: 32, bottom: 24 },
+                    grid: { left: 48, right: 48, top: 28, bottom: 20 },
                     xAxis: {
                       type: 'category',
                       data: data.trend.map(p => p.day.slice(5)),
                       axisLabel: AXIS_LABEL,
                     },
-                    yAxis: { type: 'value', minInterval: 1, axisLabel: AXIS_LABEL, splitLine: SPLIT_LINE },
+                    yAxis: [
+                      {
+                        type: 'value',
+                        minInterval: 1,
+                        axisLabel: { ...AXIS_LABEL, color: ETH_COLOR },
+                        splitLine: SPLIT_LINE,
+                      },
+                      {
+                        type: 'value',
+                        minInterval: 1,
+                        axisLabel: { ...AXIS_LABEL, color: TRON_COLOR },
+                        splitLine: { show: false },
+                      },
+                    ],
                     series: [
                       {
-                        name: 'ETH poisoning hits',
+                        name: 'ETH poisoning hits (L)',
                         type: 'line',
+                        yAxisIndex: 0,
                         showSymbol: false,
                         data: data.trend.map(p => seriesPoint(ethSrc, p.day, p.eth_poison_hits)),
                         lineStyle: { color: ETH_COLOR, width: 2 },
                         itemStyle: { color: ETH_COLOR },
                       },
                       {
-                        name: 'TRON poisoning hits',
+                        name: 'TRON poisoning hits (R)',
                         type: 'line',
+                        yAxisIndex: 1,
                         showSymbol: false,
                         data: data.trend.map(p => seriesPoint(tronSrc, p.day, p.tron_poison_hits)),
                         lineStyle: { color: TRON_COLOR, width: 2 },
                         itemStyle: { color: TRON_COLOR },
                       },
-                      {
-                        name: 'ETH fake token txs',
-                        type: 'line',
-                        showSymbol: false,
-                        data: data.trend.map(p => seriesPoint(ethSrc, p.day, p.eth_fake_transfers)),
-                        lineStyle: { color: FAKE_COLOR, width: 1.5, type: 'dashed' },
-                        itemStyle: { color: FAKE_COLOR },
-                      },
                     ],
                   }}
                 />
+                <div className="border-t border-zinc-800/60 pt-1.5">
+                  <ReactECharts
+                    style={{ height: 120 }}
+                    option={{
+                      tooltip: { trigger: 'axis', ...CHART_TOOLTIP },
+                      legend: { textStyle: { color: '#a1a1aa', fontSize: 11 }, top: 0 },
+                      grid: { left: 48, right: 48, top: 26, bottom: 20 },
+                      xAxis: {
+                        type: 'category',
+                        data: data.trend.map(p => p.day.slice(5)),
+                        axisLabel: AXIS_LABEL,
+                      },
+                      yAxis: {
+                        type: 'value',
+                        minInterval: 1,
+                        axisLabel: { ...AXIS_LABEL, color: FAKE_COLOR },
+                        splitLine: SPLIT_LINE,
+                      },
+                      series: [
+                        {
+                          name: 'ETH fake token txs',
+                          type: 'line',
+                          showSymbol: false,
+                          data: data.trend.map(p => seriesPoint(ethSrc, p.day, p.eth_fake_transfers)),
+                          lineStyle: { color: FAKE_COLOR, width: 1.8 },
+                          itemStyle: { color: FAKE_COLOR },
+                        },
+                      ],
+                    }}
+                  />
+                </div>
               </div>
 
               <div className="rounded-md border border-zinc-800/80 bg-zinc-900/30 p-3">

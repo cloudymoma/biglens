@@ -327,7 +327,7 @@ RPCs and indexers. Seven lazily-loaded tabs:
 | **Token Economy** | Top 25 token contracts by Transfer event count (ERC-20 & ERC-721), token vs native activity, new contract deployments, token movement treemap |
 | **Mining Economics** | Network hashrate (7d avg + 1d implied), miner revenue, yield per TH/s, rig economics for the latest day, shutdown price by rig (editable electricity, PUE, pool fee, BTC price, custom rig) |
 | **Payment Check** | Live receiving-address verification for USDT, USDC, ETH and TRX across Ethereum, Arbitrum, Optimism, Base and TRON — finality-graded balances, latest incoming settlement progress (`SOFT` → `SAFE` → `FINALIZED`), official vs. bridged/counterfeit token verification, 7-day transfer history with address-poisoning detection, and independent payer risk screening — see [Payment Check](#payment-check-receiving-address-verification) below |
-| **Address Risk** | Multi-chain address risk-clue lookup (Ethereum, Arbitrum, Optimism, Base, TRON, Bitcoin), live issuer freeze checks, freeze-history overview and sources table — see [Address Risk](#address-risk-multi-chain-address-risk-clues) below |
+| **Address Risk** | Multi-chain address risk-clue lookup (Ethereum, Arbitrum, Optimism, Base, TRON, Bitcoin), live issuer freeze checks, freeze-history overview, **Scam Radar** (30-day ETH/TRON address-poisoning & fake-token intelligence, top counterfeit contracts, BTC explicit RBF share), and sources table — see [Address Risk](#address-risk-multi-chain-address-risk-clues) below |
 
 Ranges: 7/30/90 days everywhere, plus 1 year for the slim aggregate trends
 (pulse, fees, mining); token queries cap at 30 days. Daily endpoints align their
@@ -373,13 +373,14 @@ Paste your own receiving address to verify incoming payments across **USDT** (`t
 - **Token contract registry (`native` / `bridged` / `counterfeit` / `other`)** — hard-coded registry in
   `backend/chain_registry.go`, verified on-chain via `symbol()` (`0x95d89b41`) and `totalSupply()` (`0x18160ddd`) on
   2026-10-05. Bridged tokens (`USDC.e` on Arbitrum/Optimism, legacy bridged `USDT` on Optimism and Base) are shown with
-  an explicit warning; unrecognised contracts whose symbol normalises to `USDT`/`USDC`/`USD₮` are flagged as
-  `counterfeit_token`.
+  an explicit warning; unrecognised contracts whose symbol normalises to `USDT`/`USDC`/`USD₮` (or whose contract address
+  is in the local `scam_fake_tokens` database on Ethereum) are flagged as `counterfeit_token`.
 - **7-day transfer history & poisoning detection** — merges recent RPC logs (`eth_getLogs` over registered contracts)
   with 7-day Blockscout / TronGrid history, scanning chronologically to flag `zero_value`, `dust`, `lookalike` (matching
-  both first 4 and last 4 address characters of a trusted prior counterparty), `sent_to_lookalike`, `counterfeit_token`,
-  `failed` and `counterparty_listed`. The default "Hide zero-value & unrelated tokens" filter hides benign noise
-  while always preserving any row that carries a risk flag.
+  both first 4 and last 4 address characters of a trusted prior counterparty), `lookalike_known` (matching the local
+  `scam_lookalikes` corpus even on a first encounter — known poisoning addresses can never enter the trusted set),
+  `sent_to_lookalike`, `counterfeit_token`, `failed` and `counterparty_listed`. The default "Hide zero-value & unrelated
+  tokens" filter hides benign noise while always preserving any row that carries a risk flag.
 - **Independent payer screening** — when the latest incoming transfer's `tx_hash` changes, the payer address is
   checked once through Address Risk (`lookup`) without re-polling on every 5-second settlement tick. Queried
   receiving addresses stay in the URL hash (`#pay?asset=…&network=…&address=…`) and short-lived in-memory caches only.
@@ -395,6 +396,8 @@ nothing is found it says how many sources were checked and which could not be.
 | OFAC SDN (via [0xB10C](https://github.com/0xB10C/ofac-sanctioned-digital-currency-addresses), MIT) | ETH, Arb, OP, Base, TRON, BTC | synced every 6 h into local SQLite (`ETH`, `TRX`, `XBT`, plus TRON entries in `USDT`) | No |
 | [MEW darklist](https://github.com/MyEtherWallet/ethereum-lists) (MIT; historical list, frozen since 2020-11) | ETH, Arb, OP, Base | synced every 6 h into local SQLite | No |
 | USDT / USDC freeze, unfreeze and destroy events (`crypto_ethereum.logs`) | ETH | synced from BigQuery by complete UTC day | No |
+| TRON USDT freeze, unfreeze and destroy events (`goog_blockchain_tron_mainnet_us.logs`) | TRON | synced from BigQuery by complete UTC day (`tron_stablecoin`) | No |
+| Known address-poisoning lookalike corpus (`scam_lookalikes`) | ETH, Arb, OP, Base, TRON | synced from BigQuery by complete UTC day (ETH zero-value + TRON dust poisoning; EVM EOAs shared across L1/L2) | No |
 | **Issuer freeze (live)** (`isBlackListed` / `isBlacklisted` / `isBlocked`) | ETH, Arb, OP, Base, TRON | live `eth_call` / TronGrid `triggerconstantcontract` against registered USDT / USDC contracts | Yes — the RPC / TronGrid provider |
 | Chainalysis sanctions oracle (on-chain `isSanctioned`) | ETH, Arb, OP | live `eth_call` via public RPCs (not deployed on Base) | Yes — the RPC provider |
 | [GoPlus](https://gopluslabs.io) address security | ETH, Arb, OP, Base, TRON | live, keyless (`chain_id` `1` / `42161` / `10` / `8453` / `tron`) | Yes — GoPlus |
@@ -409,9 +412,9 @@ Looked-up addresses are kept only in the 10-minute in-memory cache — never wri
 (~110–130 GB scanned, ~$0.6–$0.8 once), then one new day per day (~3.5–4.5 GB for the logs scan plus ~25 MB for the
 partitioned completeness check, ~$0.02–$0.03/day). `address_risk.initial_sync_days`
 changes the window (0 disables it, max 31). Until the full history is backfilled, lookups say
-"Freeze history covers … only". In addition to the local Ethereum event history, every lookup on ETH, Arbitrum,
+"Freeze history covers … only". In addition to the local Ethereum and TRON event histories, every lookup on ETH, Arbitrum,
 Optimism, Base and TRON runs a live `issuer_freeze` contract call so current freeze state is checked even before
-backfill completes. The backfill is safe to run while the server runs:
+backfill completes. The Ethereum backfill is safe to run while the server runs:
 
 ```bash
 cd /opt/biglens/backend && sudo -u biglens ./biglens-server --address-risk-backfill        # dry run: per-year cost (~25 MB watermark check, no backfill batches run)
@@ -422,6 +425,32 @@ cd /opt/biglens/backend && sudo -u biglens ./biglens-server --address-risk-backf
 `sudo -u biglens` (otherwise the database files become root-owned and the service cannot write them).
 `--since YYYY-MM-DD` limits the range; `--since-days N` is for development only. A failed run resumes where it stopped.
 
+**Scam Radar (BigQuery daily intelligence).** Below the freeze-history KPIs in the Address Risk overview, **Scam Radar**
+tracks four daily BigQuery intelligence feeds and feeds them back into Address Risk lookups, Payment Check, and Whales & Flow:
+
+- **ETH zero-value address poisoning (`scam_eth` / R1)** — scans `goog_blockchain_ethereum_mainnet_us.token_transfers` on
+  official USDT and USDC for zero-value transfers whose recipient matches the first 4 and last 4 hex characters of a
+  real recipient that the same victim paid on the **same UTC day**.
+- **ETH counterfeit USDT/USDC contracts (`scam_eth` / R2)** — joins `token_transfers` against `crypto_ethereum.tokens`
+  for non-official contracts whose symbol matches `^(USDT|USDC|USD₮)[^A-Z0-9]?$`, ranking the top 10 most active fake
+  contracts over the last 7 days and feeding `scam_fake_tokens` into Payment Check.
+- **TRON USDT dust poisoning (`scam_tron` / R3)** — scans `goog_blockchain_tron_mainnet_us.logs` on official TRON USDT
+  (`TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t`) for dust transfers (`< 0x100000` smallest units, ~1.05 USDT — both incoming dust
+  from a lookalike and forged/dust outgoing transfers to a lookalike) paired with real transfers on the **same UTC day**,
+  computing Base58Check 4+4 prefix/suffix matches directly inside BigQuery.
+- **TRON USDT freeze events (`tron_stablecoin_logs` / R4)** — syncs `AddedBlackList`, `RemovedBlackList` and
+  `DestroyedBlackFunds` logs on TRON USDT into `tron_stablecoin_events`, powering the **USDT frozen now (TRON)** KPI card
+  and the `tron_stablecoin` lookup source.
+- **BTC explicit RBF share (`scam_btc` / R5)** — computes the daily share of Bitcoin transactions with at least one input
+  signaling BIP-125 Replace-By-Fee (`sequence < 0xfffffffe`) from `crypto_bitcoin.inputs`, reinforcing why 0-confirmation
+  BTC transfers are never treated as settled.
+- **Lower-bound methodology & cost** — because R1 and R3 only pair zero-value/dust transfers against real transfers within
+  the **same UTC day**, cross-day poisoning (where a victim transacts on day $T$ and is poisoned days later) is not
+  counted; reported poisoning hits and lookalike counts are therefore a **lower bound**. Scam Radar is enabled by default
+  (`address_risk.scam_radar.initial_days: 30`, `retention_days: 90`; set `initial_days: 0` to disable). The 30-day cold
+  start scans ~150–160 GB (~$0.95–$1.00 once, with `crypto_ethereum.tokens` scanned once across the window), and
+  subsequent daily syncs scan ~5.3 GB/day (~$0.033/day, ~$1/month at $6.25/TiB).
+
 **Etherscan key (optional).** With a free Etherscan API key (https://etherscan.io/myapikey) an Ethereum lookup also checks the
 address's newest 1000 transactions, token transfers (12 allowlisted tokens: USDT/USDC/DAI/WETH/WBTC/stETH/wstETH/USDS/USDe/PYUSD/FDUSD/cbBTC) and internal transfers against the
 local lists, one hop deep (falling back to Blockscout when no key is configured). Zero-value transfers, failed calls and counterfeit tokens are ignored (address poisoning).
@@ -430,7 +459,7 @@ with mode 0600 (a hand-edited conf.yaml keeps its mode until the first save from
 are ever shown, and the key is never logged. Etherscan's API terms allow personal, non-commercial use only
 (https://etherscan.io/apiterms): configure a key only on an instance you use alone.
 
-In **Whales & Flow** (BTC & ETH), addresses on the local lists carry `OFAC` / `Frozen` / `MEW` badges (with a coverage note when local freeze history is partial), and clicking an
+In **Whales & Flow** (BTC & ETH), addresses on the local lists carry `OFAC` / `Frozen` / `MEW` / `Lookalike` badges (with a coverage note when local freeze history is partial), and clicking an
 ETH address opens it in Address Risk.
 
 ### SEM Insights
