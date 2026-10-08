@@ -65,6 +65,45 @@ CREATE TABLE IF NOT EXISTS backfill_meta (
   completed_at   TEXT NOT NULL DEFAULT '',
   progress_label TEXT NOT NULL DEFAULT '',
   last_error     TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS tron_stablecoin_events (
+  tx_hash      TEXT NOT NULL,
+  log_index    INTEGER NOT NULL,
+  token        TEXT NOT NULL,
+  action       TEXT NOT NULL,
+  address      TEXT NOT NULL,
+  amount       TEXT NOT NULL DEFAULT '',
+  block_number INTEGER NOT NULL,
+  block_time   TEXT NOT NULL,
+  PRIMARY KEY (tx_hash, log_index)
+);
+CREATE INDEX IF NOT EXISTS idx_tse_address ON tron_stablecoin_events(address);
+CREATE TABLE IF NOT EXISTS scam_lookalikes (
+  chain      TEXT NOT NULL,
+  lookalike  TEXT NOT NULL,
+  imitated   TEXT NOT NULL,
+  hits       INTEGER NOT NULL,
+  victims    INTEGER NOT NULL,
+  first_seen TEXT NOT NULL,
+  last_seen  TEXT NOT NULL,
+  PRIMARY KEY (chain, lookalike)
+);
+CREATE INDEX IF NOT EXISTS idx_sl_lookalike ON scam_lookalikes(lookalike);
+CREATE TABLE IF NOT EXISTS scam_fake_tokens (
+  chain      TEXT NOT NULL,
+  contract   TEXT NOT NULL,
+  symbol     TEXT NOT NULL,
+  transfers  INTEGER NOT NULL,
+  recipients INTEGER NOT NULL,
+  first_seen TEXT NOT NULL,
+  last_seen  TEXT NOT NULL,
+  PRIMARY KEY (chain, contract)
+);
+CREATE TABLE IF NOT EXISTS scam_daily_stats (
+  day    TEXT NOT NULL,
+  metric TEXT NOT NULL,
+  value  REAL NOT NULL,
+  PRIMARY KEY (day, metric)
 );`
 
 type riskStore struct{ db *sql.DB }
