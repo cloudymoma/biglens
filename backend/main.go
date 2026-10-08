@@ -77,7 +77,7 @@ func main() {
 	// Address Risk (Crypto Pulse). A store failure must not stop the server:
 	// lookups then report local lists as unavailable and still run live checks.
 	var rstore *riskStore
-	invalidate := func() { api.cache.Delete(riskOverviewCacheKey) }
+	invalidate := func() { invalidateAddressRiskCaches(api.cache) }
 	if s, err := openRiskStore(cfg.AddressRisk.dbPath()); err != nil {
 		slog.Error("address risk store unavailable", "path", cfg.AddressRisk.dbPath(), "error", err)
 	} else {
@@ -190,6 +190,7 @@ func main() {
 	mux.Handle("/api/opendata/crypto/address-risk/lookup", h(api.AddressRiskLookup))
 	mux.Handle("/api/opendata/crypto/address-risk/sources", h(api.AddressRiskSources))
 	mux.Handle("/api/opendata/crypto/address-risk/overview", h(api.AddressRiskOverview))
+	mux.Handle("/api/opendata/crypto/address-risk/scam-radar", h(api.AddressRiskScamRadar))
 	mux.Handle("/api/opendata/crypto/address-risk/keys", logMW(addressRiskKeysHandler(api)))
 	mux.Handle("/api/opendata/crypto/address-risk/backfill", logMW(addressRiskBackfillHandler(api)))
 	mux.Handle("/api/opendata/crypto/payment-check/live", h(api.PaymentCheckLive))
