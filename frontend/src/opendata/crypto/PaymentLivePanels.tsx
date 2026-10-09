@@ -46,7 +46,9 @@ export function PaymentAlertsBanner({
         const txUrl = a.tx_hash
           ? network === 'tron'
             ? `https://tronscan.org/#/transaction/${a.tx_hash}`
-            : `${netOpt.addrExplorer('').replace('/address/', '/tx/')}${a.tx_hash}`
+            : network === 'sol'
+              ? `https://solscan.io/tx/${a.tx_hash}`
+              : `${netOpt.addrExplorer('').replace('/address/', '/tx/')}${a.tx_hash}`
           : '';
         return (
           <div
@@ -93,7 +95,11 @@ export function PaymentBalancePanel({ live }: { live: PaymentLiveResponse }) {
     live.heads.latest > 0
       ? isTron
         ? `solidified #${live.heads.finalized.toLocaleString('en')} · latest #${live.heads.latest.toLocaleString('en')}`
-        : `finalized #${live.heads.finalized.toLocaleString('en')} · safe #${live.heads.safe.toLocaleString('en')} · latest #${live.heads.latest.toLocaleString('en')}`
+        : live.network === 'btc'
+          ? `finalized (≥6 conf) #${live.heads.finalized.toLocaleString('en')} · safe (3 conf) #${live.heads.safe.toLocaleString('en')} · latest #${live.heads.latest.toLocaleString('en')}`
+          : live.network === 'sol'
+            ? `finalized slot #${live.heads.finalized.toLocaleString('en')} · confirmed slot #${live.heads.safe.toLocaleString('en')} · processed slot #${live.heads.latest.toLocaleString('en')}`
+            : `finalized #${live.heads.finalized.toLocaleString('en')} · safe #${live.heads.safe.toLocaleString('en')} · latest #${live.heads.latest.toLocaleString('en')}`
       : `updated ${fmtAsOf(live.as_of)}`;
 
   return (
@@ -244,7 +250,15 @@ function LatestSettlementBody({
   const colors = levelColors(tx.level);
   const tierInfo = tierBadgeInfo(tx.token_tier);
   const confirmations =
-    tx.block > 0 && live.heads.latest >= tx.block ? live.heads.latest - tx.block + 1 : null;
+    live.network === 'sol'
+      ? null
+      : tx.block > 0
+        ? live.heads.latest >= tx.block
+          ? live.heads.latest - tx.block + 1
+          : 1
+        : live.network === 'btc'
+          ? 0
+          : null;
 
   return (
     <div className="space-y-3">
@@ -259,7 +273,9 @@ function LatestSettlementBody({
             </span>
             {confirmations !== null && (
               <span className="font-mono text-xs text-zinc-400">
-                {confirmations.toLocaleString('en')} confirmation{confirmations === 1 ? '' : 's'}
+                {confirmations === 0
+                  ? '0 confirmations (unconfirmed in mempool)'
+                  : `${confirmations.toLocaleString('en')} confirmation${confirmations === 1 ? '' : 's'}`}
               </span>
             )}
             {tx.level !== 'FINALIZED' && tx.est_sec_left > 0 && (
@@ -276,10 +292,10 @@ function LatestSettlementBody({
                 rel="noopener noreferrer"
                 className="hover:text-zinc-200 inline-flex items-center gap-1"
               >
-                block #{tx.block.toLocaleString('en')} <ExternalLink size={11} />
+                {live.network === 'sol' ? 'slot' : 'block'} #{tx.block.toLocaleString('en')} <ExternalLink size={11} />
               </a>
             ) : (
-              <span>block pending</span>
+              <span>{live.network === 'btc' ? 'unconfirmed (mempool)' : 'block pending'}</span>
             )}
             <a
               href={tx.explorer_url}
@@ -299,7 +315,9 @@ function LatestSettlementBody({
           />
         </div>
 
-        <p className="text-xs text-zinc-300">{levelCopy(tx.level, tx.est_sec_left)}</p>
+        <p className="text-xs text-zinc-300">
+          {levelCopy(tx.level, tx.est_sec_left, live.network, tx.block)}
+        </p>
       </div>
 
       {/* Amount, token tier, payer, and flags */}

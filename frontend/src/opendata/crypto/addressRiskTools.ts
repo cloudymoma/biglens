@@ -5,7 +5,7 @@
 
 import type { AddressRiskChain, AddressRiskSource } from '../../types';
 
-export type AddressFamily = 'evm' | 'tron' | 'btc';
+export type AddressFamily = 'evm' | 'tron' | 'btc' | 'sol';
 
 export interface RiskChainOption {
   id: AddressRiskChain;
@@ -23,16 +23,47 @@ export const RISK_CHAINS: RiskChainOption[] = [
   { id: 'base', label: 'Base', family: 'evm', placeholder: '0x… address', formatHint: 'Enter a 0x address (42 characters). ENS names are not supported.', localSources: ['ofac', 'mew_darklist', 'scam_lookalikes'] },
   { id: 'tron', label: 'TRON', family: 'tron', placeholder: 'T… address', formatHint: 'Enter a TRON address starting with T (34 base58 characters).', localSources: ['ofac', 'tron_stablecoin', 'scam_lookalikes'] },
   { id: 'btc', label: 'Bitcoin', family: 'btc', placeholder: '1…, 3…, or bc1… address', formatHint: 'Enter a Bitcoin mainnet address (1…, 3…, or bc1…).', localSources: ['ofac'] },
+  { id: 'sol', label: 'Solana', family: 'sol', placeholder: 'Solana address (32–44 base58 characters)', formatHint: 'Enter a Solana address (32–44 base58 characters).', localSources: ['ofac'] },
 ];
 
 const EVM_ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
 const TRON_ADDRESS_RE = /^T[1-9A-HJ-NP-Za-km-z]{33}$/;
 const BTC_ADDRESS_RE = /^(?:[13][1-9A-HJ-NP-Za-km-z]{25,33}|(?:bc1|BC1)[02-9ac-hj-np-zAC-HJ-NP-Z]{6,87})$/;
+const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+
+// Decodes raw Base58 and checks whether the decoded byte length is strictly 32
+// (matching backend S7 so 25-byte Base58Check BTC/TRON addresses are never misclassified as Solana,
+// while valid 32-byte Solana addresses starting with 1, 3, or T are accurately recognized).
+export function isSolanaAddress(raw: string): boolean {
+  if (raw.length < 32 || raw.length > 44) return false;
+  const digits: number[] = [];
+  for (let i = 0; i < raw.length; i++) {
+    const val = BASE58_ALPHABET.indexOf(raw[i]);
+    if (val < 0) return false;
+    let carry = val;
+    for (let j = 0; j < digits.length; j++) {
+      carry += digits[j] * 58;
+      digits[j] = carry & 0xff;
+      carry >>= 8;
+    }
+    while (carry > 0) {
+      digits.push(carry & 0xff);
+      carry >>= 8;
+    }
+  }
+  let leadingZeros = 0;
+  while (leadingZeros < raw.length && raw[leadingZeros] === '1') {
+    leadingZeros++;
+  }
+  return leadingZeros + digits.length === 32;
+}
 
 export function detectAddressFamily(raw: string): AddressFamily | null {
   const s = raw.trim();
   if (!s) return null;
   if (EVM_ADDRESS_RE.test(s)) return 'evm';
+  if (s.toLowerCase().startsWith('bc1') && BTC_ADDRESS_RE.test(s)) return 'btc';
+  if (isSolanaAddress(s)) return 'sol';
   if (TRON_ADDRESS_RE.test(s)) return 'tron';
   if (BTC_ADDRESS_RE.test(s)) return 'btc';
   return null;
@@ -59,6 +90,7 @@ const EXPLORER_URL: Record<AddressRiskChain, (addr: string) => string> = {
   base: a => `https://basescan.org/address/${a}`,
   tron: a => `https://tronscan.org/#/address/${a}`,
   btc: a => `https://mempool.space/address/${a}`,
+  sol: a => `https://solscan.io/account/${a}`,
 };
 
 const METASLEUTH_SLUG: Record<AddressRiskChain, string> = {
@@ -68,6 +100,7 @@ const METASLEUTH_SLUG: Record<AddressRiskChain, string> = {
   base: 'base',
   tron: 'tron',
   btc: 'btc',
+  sol: 'solana',
 };
 
 const OKLINK_SLUG: Record<AddressRiskChain, string> = {
@@ -77,6 +110,7 @@ const OKLINK_SLUG: Record<AddressRiskChain, string> = {
   base: 'base',
   tron: 'tron',
   btc: 'bitcoin',
+  sol: 'sol',
 };
 
 const BLOCKSCOUT_HOST: Record<AddressRiskChain, string> = {
@@ -86,6 +120,7 @@ const BLOCKSCOUT_HOST: Record<AddressRiskChain, string> = {
   base: 'https://base.blockscout.com',
   tron: 'https://eth.blockscout.com',
   btc: 'https://eth.blockscout.com',
+  sol: 'https://solscan.io',
 };
 
 export const RISK_TOOLS: RiskTool[] = [
@@ -99,18 +134,19 @@ export const RISK_TOOLS: RiskTool[] = [
       base: 'Basescan',
       tron: 'Tronscan',
       btc: 'mempool.space',
+      sol: 'Solscan',
     },
     hint: 'public name tags & warnings',
-    chains: ['eth', 'arb', 'op', 'base', 'tron', 'btc'],
+    chains: ['eth', 'arb', 'op', 'base', 'tron', 'btc', 'sol'],
     url: (a, c = 'eth') => EXPLORER_URL[c](a),
   },
   {
     id: 'misttrack',
     label: 'MistTrack',
     hint: 'third-party risk score — not endorsed by BigLens',
-    chains: ['eth', 'arb', 'op', 'base', 'tron', 'btc'],
+    chains: ['eth', 'arb', 'op', 'base', 'tron', 'btc', 'sol'],
     url: (a, c = 'eth') => {
-      const coin = c === 'tron' ? 'TRX' : c === 'btc' ? 'BTC' : 'ETH';
+      const coin = c === 'tron' ? 'TRX' : c === 'btc' ? 'BTC' : c === 'sol' ? 'SOL' : 'ETH';
       return `https://misttrack.io/aml_risks/${coin}/${a}`;
     },
   },
@@ -118,28 +154,28 @@ export const RISK_TOOLS: RiskTool[] = [
     id: 'chainabuse',
     label: 'Chainabuse',
     hint: 'community reports, not independently checked',
-    chains: ['eth', 'arb', 'op', 'base', 'tron', 'btc'],
+    chains: ['eth', 'arb', 'op', 'base', 'tron', 'btc', 'sol'],
     url: a => `https://chainabuse.com/address/${a}`,
   },
   {
     id: 'arkham',
     label: 'Arkham',
     hint: 'entity attribution; may require free login',
-    chains: ['eth', 'arb', 'op', 'base', 'tron', 'btc'],
+    chains: ['eth', 'arb', 'op', 'base', 'tron', 'btc', 'sol'],
     url: a => `https://arkm.com/explorer/address/${a}`,
   },
   {
     id: 'metasleuth',
     label: 'MetaSleuth',
     hint: 'multi-hop fund-flow graph',
-    chains: ['eth', 'arb', 'op', 'base', 'tron', 'btc'],
+    chains: ['eth', 'arb', 'op', 'base', 'tron', 'btc', 'sol'],
     url: (a, c = 'eth') => `https://metasleuth.io/result/${METASLEUTH_SLUG[c]}/${a}`,
   },
   {
     id: 'oklink',
     label: 'OKLink',
     hint: 'second-opinion labels',
-    chains: ['eth', 'arb', 'op', 'base', 'tron', 'btc'],
+    chains: ['eth', 'arb', 'op', 'base', 'tron', 'btc', 'sol'],
     url: (a, c = 'eth') => `https://www.oklink.com/${OKLINK_SLUG[c]}/address/${a}`,
   },
   {
@@ -185,6 +221,8 @@ export const RISK_SOURCE_LABELS: Record<string, string> = {
   goplus: 'GoPlus',
   blockscout: 'Blockscout',
   etherscan: 'Etherscan / Blockscout',
+  mempool: 'Esplora (mempool / blockstream)',
+  solana_rpc: 'Solana RPC',
 };
 
 const ERROR_TEXT: Record<string, string> = {

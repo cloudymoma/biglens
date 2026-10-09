@@ -986,7 +986,7 @@ export interface CryptoSpotData {
 
 // --- Crypto Pulse: Address Risk (field names mirror backend/address_risk_lookup.go) ---
 
-export type AddressRiskChain = 'eth' | 'arb' | 'op' | 'base' | 'tron' | 'btc';
+export type AddressRiskChain = 'eth' | 'arb' | 'op' | 'base' | 'tron' | 'btc' | 'sol';
 export type AddressRiskStatus = 'ok' | 'partial' | 'stale' | 'empty' | 'error' | 'not_configured';
 export type AddressRiskSeverity = 'critical' | 'warning' | 'association' | 'info';
 
@@ -1804,8 +1804,8 @@ export interface GasLiveData {
 
 // --- Crypto Pulse: Payment Check (field names mirror backend/payment_check_*.go) ---
 
-export type PaymentAsset = 'USDT' | 'USDC' | 'ETH' | 'TRX';
-export type PaymentNetwork = 'tron' | 'eth' | 'arb' | 'op' | 'base';
+export type PaymentAsset = 'USDT' | 'USDC' | 'ETH' | 'TRX' | 'BTC' | 'SOL';
+export type PaymentNetwork = 'tron' | 'eth' | 'arb' | 'op' | 'base' | 'btc' | 'sol';
 export type PaymentTokenTier = 'native' | 'bridged' | 'counterfeit' | 'other';
 export type PaymentFinalityLevel = 'DANGER' | 'SOFT' | 'SAFE' | 'FINALIZED';
 
@@ -1867,6 +1867,7 @@ export interface PaymentHistoryScope {
   tokentx: number;
   txlistinternal: number;
   trc20: number;
+  transactions?: number;
   truncated: boolean;
 }
 

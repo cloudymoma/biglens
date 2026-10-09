@@ -283,8 +283,8 @@ GDELT 是*新闻报道*的索引，而非经核实事件的登记册。每行是
 | **巨鲸与资金流** | Top 50 大额转账（区块浏览器链接）、巨鲸交易趋势（≥100 BTC / ≥1,000 ETH）、Top 收款地址、Top 1% 金额集中度（仅统计有转账金额的交易） |
 | **代币经济** | Top 25 代币合约（按 Transfer 事件数，含 ERC-20 与 ERC-721）、代币 vs 原生交易活跃度、新合约部署、代币流动 Treemap |
 | **挖矿经济** | 全网算力（7 日均值 + 单日隐含值）、矿工收入、每 TH/s 收益、最新一日矿机经济性、各矿机关机币价（可调电价、PUE、矿池费率、BTC 价格、自定义矿机） |
-| **收款核验（Payment Check）** | 面向收款地址的实时入账核验，支持 USDT、USDC、ETH、TRX 在 Ethereum、Arbitrum、Optimism、Base 与 TRON 上的三档终局余额、最新入账结算进度（`SOFT` → `SAFE` → `FINALIZED`）、官方/桥接/仿冒代币识别、7 天转账历史（防地址投毒检测）与付款方独立风险筛查，详见下文 [Payment Check](#payment-check收款地址入账核验) |
-| **地址风险（Address Risk）** | 多链地址风险线索查询（Ethereum、Arbitrum、Optimism、Base、TRON、Bitcoin）、发行方实时冻结检查、冻结历史概览、**Scam Radar（诈骗雷达）**（30 天 ETH/TRON 地址投毒与假币趋势、Top 10 活跃假币合约、BTC 显式 RBF 占比）与数据源表，详见下文 [Address Risk](#address-risk多链地址风险线索) |
+| **收款核验（Payment Check）** | 面向收款地址的实时入账核验，支持 USDT、USDC、ETH、TRX、BTC、SOL 在 Ethereum、Arbitrum、Optimism、Base、TRON、Bitcoin 与 Solana 上的三档终局余额、最新入账结算进度（`DANGER` / `SOFT` / `SAFE` → `FINALIZED`）、官方/桥接/仿冒代币识别、7 天转账历史（防地址投毒与 BIP-125 RBF 检测）与付款方独立风险筛查，详见下文 [Payment Check](#payment-check收款地址入账核验) |
+| **地址风险（Address Risk）** | 多链地址风险线索查询（Ethereum、Arbitrum、Optimism、Base、TRON、Bitcoin、Solana）、发行方与 SPL 实时冻结检查、冻结历史概览、**Scam Radar（诈骗雷达）**（30 天 ETH/TRON 地址投毒与假币趋势、Top 10 活跃假币合约、BTC 显式 RBF 占比）与数据源表，详见下文 [Address Risk](#address-risk多链地址风险线索) |
 
 区间：各页支持 7/30/90 天，轻量聚合趋势（网络脉搏、手续费、挖矿）另支持 1 年；
 代币查询上限 30 天。日级接口对齐至已结算的完整 UTC 日（带午夜后 20 分钟入库缓冲），
@@ -309,27 +309,27 @@ GDELT 是*新闻报道*的索引，而非经核实事件的登记册。每行是
 
 #### Payment Check（收款地址入账核验）
 
-粘贴你自己的收款地址，实时核验 **USDT**（`tron`、`eth`、`arb`、`op`、`base`）、**USDC**（`eth`、`arb`、`op`、`base`）、**ETH**（`eth`、`arb`、`op`、`base`）与 **TRX**（`tron`）的入账状态：
+粘贴你自己的收款地址，实时核验 **USDT**（`tron`、`eth`、`arb`、`op`、`base`、`sol`）、**USDC**（`eth`、`arb`、`op`、`base`、`sol`）、**ETH**（`eth`、`arb`、`op`、`base`）、**TRX**（`tron`）、**BTC**（`btc`）与 **SOL**（`sol`）的入账状态：
 
-- **三档终局水位与余额拆分** —— EVM 链并发读取 `finalized`、`safe` 与 `latest` 块高（做单调钳制，防止不同节点高度差导致顺序倒置），将余额拆分为 **Finalized**、**Safe, not final**（`safe − finalized`）与 **Latest only**（`latest − safe`）三列；TRON 读取 `/walletsolidity` 与 `/wallet`，展示 **Solidified** 与 **Unconfirmed**（`latest − solidified`）。结算进度（`DANGER` / `SOFT` / `SAFE` / `FINALIZED`）基于运行时采样的 `latest − safe` 与 `latest − finalized` 时间差中位数估算剩余时间，且稳定币达到 `FINALIZED` 时始终提示发行方（Tether / Circle）仍可在合约层冻结代币。
-- **代币合约注册表（`native` / `bridged` / `counterfeit` / `other`）** —— 写死在 `backend/chain_registry.go` 中的注册表，已于 2026-10-05 通过链上 `symbol()`（`0x95d89b41`）与 `totalSupply()`（`0x18160ddd`）人工核实。桥接版本（Arbitrum / Optimism 上的 `USDC.e`、Optimism 与 Base 上的旧桥接 `USDT`）显式标注警告；未在注册表中但符号归一化后酷似 `USDT`/`USDC`/`USD₮`（或在以太坊本地 `scam_fake_tokens` 假币库中命中）的合约会被标记为 `counterfeit_token`（假币）。
-- **7 天转账历史与地址投毒检测** —— 合并近期 RPC 日志（按注册表合约过滤的 `eth_getLogs`）与 Blockscout / TronGrid 7 天历史，按时间从旧到新扫描并标记 `zero_value`、`dust`、`lookalike`（与历史可信对手方前 4 位和后 4 位同时相同）、`lookalike_known`（命中本地 `scam_lookalikes` 已知投毒地址库，即使首次出现也会标出且永不进入可信对手方集合）、`sent_to_lookalike`、`counterfeit_token`、`failed` 与 `counterparty_listed`。默认开启的「隐藏 0 元与无关代币」筛选只隐藏噪音，任何带风险标记的行都绝不会被隐藏。
+- **三档终局水位与余额拆分** —— EVM 链并发读取 `finalized`、`safe` 与 `latest` 块高（做单调钳制，防止不同节点高度差导致顺序倒置），将余额拆分为 **Finalized**、**Safe, not final**（`safe − finalized`）与 **Latest only**（`latest − safe`）三列；Bitcoin 读取 Esplora 最新高度（`mempool.space` 主源 + `blockstream.info` 回退），将内存池 0 确认交易判为 `DANGER`（提示 full-RBF 替换双花风险与显式 BIP-125 `rbf_signaled`）、`1–2 确认` 判为 `SOFT`、`3–5 确认` 判为 `SAFE`、`≥6 确认` 判为 `FINALIZED`；Solana 按 `finalized`、`confirmed` 与 `processed` 三档 commitment 读取 slot 水位与原生/SPL 余额（单请求并发，不发 JSON-RPC batch）；TRON 读取 `/walletsolidity` 与 `/wallet`，展示 **Solidified** 与 **Unconfirmed**（`latest − solidified`）。稳定币达到 `FINALIZED` 时始终提示发行方（Tether / Circle）仍可在合约或 SPL Token 账户层冻结资产。
+- **代币合约与 Mint 注册表（`native` / `bridged` / `counterfeit` / `other`）** —— `backend/chain_registry.go` 涵盖 EVM、TRON 与 Solana 官方铸币地址（USDT `Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB`、USDC `EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`）。桥接版本（Arbitrum / Optimism 上的 `USDC.e`、Optimism 与 Base 上的旧桥接 `USDT`）显式标注警告；未在注册表中但 EVM/TRON 合约符号或 Solana Metaplex 元数据符号归一化后酷似 `USDT`/`USDC`/`USD₮`（或在以太坊本地 `scam_fake_tokens` 假币库中命中）的代币会被标记为 `counterfeit_token`（假币）。
+- **7 天转账历史、UTXO/ATA 归属还原与地址投毒检测** —— 合并近期 RPC 日志、Esplora UTXO 分页（`mempool.space`）或 Solana `getSignaturesForAddress` + `maxSupportedTransactionVersion: 1` 交易解析（将 SPL 关联代币账户 ATA 还原为 owner 钱包地址，确保 0 元投毒识别攻击者钱包而非代币子账户）。按时间从旧到新扫描（0 确认内存池交易排在最后扫描，绝不进入历史可信对手方集合），标记 `zero_value`、`dust`、`rbf_signaled`、`lookalike`（剥离 EVM `0x` 与 SegWit/Taproot `bc1q`/`bc1p` 固定前缀后比对前 4 位 + 后 4 位）、`lookalike_known`、`sent_to_lookalike`、`counterfeit_token`、`failed` 与 `counterparty_listed`。默认开启的「隐藏 0 元与无关代币」筛选只隐藏噪音，绝不隐藏 `DANGER`、`rbf_signaled` 或任何带风险标记的行。
 - **独立的付款方风险筛查** —— 当最新入账的 `tx_hash` 发生变化时，对付款方地址执行一次 Address Risk 查询，不会随 5 秒结算轮询重复请求。查询过的收款地址仅保存在 URL hash（`#pay?asset=…&network=…&address=…`）与短时内存缓存中。
 
 #### Address Risk（多链地址风险线索）
 
-选择链（**Ethereum**、**Arbitrum**、**Optimism**、**Base**、**TRON** 或 **Bitcoin**）并输入地址，查看按 Critical / Warning / Association / Info 分级的**风险线索**。BigLens 从不把地址标为"安全"：没有发现记录时，会说明查询了几个来源、哪些来源没能完成查询。
+选择链（**Ethereum**、**Arbitrum**、**Optimism**、**Base**、**TRON**、**Bitcoin** 或 **Solana**）并输入地址，查看按 Critical / Warning / Association / Info 分级的**风险线索**。BigLens 从不把地址标为"安全"：没有发现记录时，会说明查询了几个来源、哪些来源没能完成查询。
 
 | 来源 | 覆盖的链 | 方式 | 会把地址发给第三方？ |
 |---|---|---|---|
-| OFAC SDN（经 [0xB10C](https://github.com/0xB10C/ofac-sanctioned-digital-currency-addresses) 提取，MIT） | ETH、Arb、OP、Base、TRON、BTC | 每 6 小时同步到本地 SQLite（含 `ETH`、`TRX`、`XBT` 以及 `USDT` 文件中的 TRON 地址） | 否 |
+| OFAC SDN（经 [0xB10C](https://github.com/0xB10C/ofac-sanctioned-digital-currency-addresses) 提取，MIT） | ETH、Arb、OP、Base、TRON、BTC、SOL | 每 6 小时同步到本地 SQLite（含 `ETH`、`TRX`、`XBT`、`SOL` 以及 `USDT`/`USDC` 文件中的 TRON 与 Solana 地址） | 否 |
 | [MEW darklist](https://github.com/MyEtherWallet/ethereum-lists)（MIT；历史名单，2020-11 起未更新） | ETH、Arb、OP、Base | 每 6 小时同步到本地 SQLite | 否 |
 | USDT / USDC 冻结、解冻、销毁事件（`crypto_ethereum.logs`） | ETH | 按完整 UTC 日从 BigQuery 同步 | 否 |
 | TRON USDT 冻结、解冻、销毁事件（`goog_blockchain_tron_mainnet_us.logs`） | TRON | 按完整 UTC 日从 BigQuery 同步（`tron_stablecoin`） | 否 |
 | 已知尾号投毒仿冒地址库（`scam_lookalikes`） | ETH、Arb、OP、Base、TRON | 按完整 UTC 日从 BigQuery 同步（ETH 0 元投毒 + TRON 灰尘投毒；EVM 外部账户跨 L1/L2 共享） | 否 |
-| **发行方冻结实时检查（`issuer_freeze`）**（`isBlackListed` / `isBlacklisted` / `isBlocked`） | ETH、Arb、OP、Base、TRON | 对注册表中的 USDT / USDC 合约发起实时 `eth_call` 或 TronGrid `triggerconstantcontract` | 是，发给 RPC / TronGrid 服务商 |
+| **发行方冻结实时检查（`issuer_freeze`）**（`isBlackListed` / `isBlacklisted` / `isBlocked` / SPL 账户冻结状态） | ETH、Arb、OP、Base、TRON、SOL | 对注册表中的 USDT / USDC 合约或 Solana ATA 发起实时 `eth_call`、TronGrid `triggerconstantcontract` 或 Solana `getMultipleAccounts` | 是，发给 RPC / TronGrid / Solana RPC 服务商 |
 | Chainalysis 链上制裁预言机（`isSanctioned`） | ETH、Arb、OP | 通过公共 RPC 实时 `eth_call`（Base 未部署） | 是，发给 RPC 服务商 |
-| [GoPlus](https://gopluslabs.io) 地址安全接口 | ETH、Arb、OP、Base、TRON | 实时，免 key（`chain_id` `1` / `42161` / `10` / `8453` / `tron`） | 是，发给 GoPlus |
+| [GoPlus](https://gopluslabs.io) 地址安全接口 | ETH、Arb、OP、Base、TRON、SOL | 实时，免 key（`chain_id` `1` / `42161` / `10` / `8453` / `tron` / `solana`） | 是，发给 GoPlus |
 | Blockscout 公开标签与诈骗标记 | ETH、Arb、OP、Base | 实时，免 key（对应各链 Blockscout 实例） | 是，发给 Blockscout |
 | Etherscan / Blockscout 关联分析（ETH 可选免费 key） | ETH | 实时查询 `txlist` / `tokentx` / `txlistinternal`，一跳，带防投毒过滤 | 是，发给 Etherscan（带你的 key）或 Blockscout |
 

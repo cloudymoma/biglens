@@ -27,14 +27,18 @@ type DirFilter = 'all' | 'in' | 'out';
 
 // Returns true when a row should be hidden by the "Hide zero-value & unrelated tokens"
 // toggle (spec Task 13: hides `other` tier, standalone `dust`, and standalone `zero_value`,
-// but NEVER hides poisoning evidence like `zero_value + lookalike` or `dust + lookalike`).
+// but NEVER hides poisoning evidence, `rbf_signaled`, or any `DANGER` row).
 function shouldHideNoiseRow(tx: PaymentTx): boolean {
+  if (tx.level === 'DANGER') {
+    return false;
+  }
   const hasCriticalOrPoisonFlag =
     tx.flags.includes('lookalike') ||
     tx.flags.includes('lookalike_known') ||
     tx.flags.includes('sent_to_lookalike') ||
     tx.flags.includes('counterfeit_token') ||
     tx.flags.includes('counterparty_listed') ||
+    tx.flags.includes('rbf_signaled') ||
     tx.flags.includes('failed');
   if (hasCriticalOrPoisonFlag) {
     return false;
@@ -114,6 +118,9 @@ export default function PaymentHistory({
   if (history.scope.txlist > 0) scopeParts.push(`txlist: ${history.scope.txlist}`);
   if (history.scope.txlistinternal > 0) scopeParts.push(`internal: ${history.scope.txlistinternal}`);
   if (history.scope.trc20 > 0) scopeParts.push(`trc20: ${history.scope.trc20}`);
+  if (history.scope.transactions && history.scope.transactions > 0) {
+    scopeParts.push(`transactions: ${history.scope.transactions}`);
+  }
 
   const note = historyUnavailableEmpty
     ? `since ${history.since.slice(0, 10)} · history unavailable · updated ${fmtAsOf(history.as_of)}`
@@ -187,7 +194,9 @@ export default function PaymentHistory({
                       <th className="py-2 px-2 font-medium">Dir</th>
                       <th className="py-2 px-3 font-medium">Amount</th>
                       <th className="py-2 px-3 font-medium">Counterparty</th>
-                      <th className="py-2 px-3 font-medium">Block · Tx ↗</th>
+                      <th className="py-2 px-3 font-medium">
+                        {history.network === 'sol' ? 'Slot · Tx ↗' : 'Block · Tx ↗'}
+                      </th>
                       <th className="py-2 pl-3 font-medium">Status</th>
                     </tr>
                   </thead>
@@ -211,7 +220,7 @@ export default function PaymentHistory({
                                 {isOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
                                 {tx.timestamp
                                   ? tx.timestamp.slice(5, 19).replace('T', ' ')
-                                  : 'pending'}
+                                  : '0 conf'}
                               </span>
                             </td>
                             <td className="py-2 px-2 whitespace-nowrap">
@@ -265,7 +274,7 @@ export default function PaymentHistory({
                             </td>
                             <td className="py-2 px-3 whitespace-nowrap text-zinc-400">
                               <span className="mr-2">
-                                {tx.block > 0 ? `#${tx.block.toLocaleString('en')}` : 'pending'}
+                                {tx.block > 0 ? `#${tx.block.toLocaleString('en')}` : '0 conf (mempool)'}
                               </span>
                               <a
                                 href={tx.explorer_url}

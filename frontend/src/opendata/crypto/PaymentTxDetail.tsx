@@ -61,10 +61,18 @@ export default function PaymentTxDetail({
   };
 
   const headRelation = (() => {
-    const blockLabel = tx.block > 0 ? `block #${tx.block.toLocaleString('en')}` : 'block pending';
+    const blockLabel =
+      tx.block > 0
+        ? network === 'sol'
+          ? `slot #${tx.block.toLocaleString('en')}`
+          : `block #${tx.block.toLocaleString('en')}`
+        : '0 confirmations (unconfirmed in mempool)';
     if (!heads || heads.latest === 0) return blockLabel;
     if (network === 'tron') {
       return `${blockLabel} · solidified at #${heads.finalized.toLocaleString('en')} · latest #${heads.latest.toLocaleString('en')}`;
+    }
+    if (network === 'sol') {
+      return `${blockLabel} · finalized slot #${heads.finalized.toLocaleString('en')} · confirmed slot #${heads.safe.toLocaleString('en')} · processed slot #${heads.latest.toLocaleString('en')}`;
     }
     return `${blockLabel} · finalized at #${heads.finalized.toLocaleString('en')} · safe at #${heads.safe.toLocaleString('en')} · latest #${heads.latest.toLocaleString('en')}`;
   })();
@@ -89,7 +97,7 @@ export default function PaymentTxDetail({
             />
           </div>
           <p className="font-mono text-[11px] text-zinc-400">{headRelation}</p>
-          <p className="text-zinc-300">{levelCopy(tx.level, tx.est_sec_left)}</p>
+          <p className="text-zinc-300">{levelCopy(tx.level, tx.est_sec_left, network, tx.block)}</p>
           {tx.failed && (
             <p className="text-red-300 font-medium">
               Transaction failed / reverted on-chain — no funds were transferred.

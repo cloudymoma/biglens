@@ -62,6 +62,8 @@ function buildThirdPartyNote(
   switch (chain) {
     case 'btc':
       return 'Lookups on Bitcoin do not send this address to any third party. OFAC checks run on this server.';
+    case 'sol':
+      return `Lookups on Solana send this address to configured Solana RPCs (SPL freeze check) and ${goplusHost}. OFAC checks run on this server.`;
     case 'tron':
       return `Lookups on TRON send this address to TronGrid (issuer freeze) and ${goplusHost}. OFAC checks run on this server.`;
     case 'base':
@@ -354,7 +356,7 @@ export default function AddressRiskTab({
         </div>
       )}
 
-      <Panel title="Address risk clues" note="Ethereum, Arbitrum, Optimism, Base, TRON · Bitcoin: OFAC only">
+      <Panel title="Address risk clues" note="Ethereum, Arbitrum, Optimism, Base, TRON, Solana · Bitcoin: OFAC only">
         <div className="mb-2.5 flex flex-wrap items-center gap-1.5" role="group" aria-label="Chain">
           {RISK_CHAINS.map(c => {
             const active = chain === c.id;
@@ -417,6 +419,18 @@ export default function AddressRiskTab({
               className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-200 border border-amber-500/30 hover:bg-amber-500/30"
             >
               Switch to Bitcoin
+            </button>
+          </div>
+        )}
+        {familyMismatch === 'sol' && (
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-amber-300">
+            <span>This looks like a Solana address — switch to Solana?</span>
+            <button
+              type="button"
+              onClick={() => selectChain('sol')}
+              className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-200 border border-amber-500/30 hover:bg-amber-500/30"
+            >
+              Switch to Solana
             </button>
           </div>
         )}

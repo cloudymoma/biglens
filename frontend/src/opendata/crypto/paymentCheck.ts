@@ -13,7 +13,7 @@ import {
 export { detectAddressFamily, isValidAddressForChain, type AddressFamily };
 
 export interface PayAssetOption {
-  id: PaymentAsset | 'BTC' | 'SOL';
+  id: PaymentAsset;
   label: string;
   enabled: boolean;
   note?: string;
@@ -24,17 +24,19 @@ export const PAY_ASSETS: PayAssetOption[] = [
   { id: 'USDC', label: 'USDC', enabled: true },
   { id: 'ETH', label: 'ETH', enabled: true },
   { id: 'TRX', label: 'TRX', enabled: true },
-  { id: 'BTC', label: 'BTC', enabled: false, note: 'coming later' },
-  { id: 'SOL', label: 'SOL', enabled: false, note: 'coming later' },
+  { id: 'BTC', label: 'BTC', enabled: true },
+  { id: 'SOL', label: 'SOL', enabled: true },
 ];
 
 // Asset -> supported networks table.
 // Must stay in sync with payAssets in backend/chain_registry.go.
 export const PAY_ASSET_NETWORKS: Record<PaymentAsset, PaymentNetwork[]> = {
-  USDT: ['tron', 'eth', 'arb', 'op', 'base'],
-  USDC: ['eth', 'arb', 'op', 'base'],
+  USDT: ['tron', 'eth', 'arb', 'op', 'base', 'sol'],
+  USDC: ['eth', 'arb', 'op', 'base', 'sol'],
   ETH: ['eth', 'arb', 'op', 'base'],
   TRX: ['tron'],
+  BTC: ['btc'],
+  SOL: ['sol'],
 };
 
 export interface PayNetworkOption {
@@ -93,6 +95,24 @@ export const PAY_NETWORKS: Record<PaymentNetwork, PayNetworkOption> = {
     addrExplorer: a => `https://basescan.org/address/${a}`,
     blockExplorer: b => `https://basescan.org/block/${b}`,
   },
+  btc: {
+    id: 'btc',
+    label: 'Bitcoin',
+    family: 'btc',
+    placeholder: 'bc1…, 1…, or 3… receiving address',
+    formatHint: 'Enter a Bitcoin mainnet address (bc1…, 1…, or 3…).',
+    addrExplorer: a => `https://mempool.space/address/${a}`,
+    blockExplorer: b => `https://mempool.space/block/${b}`,
+  },
+  sol: {
+    id: 'sol',
+    label: 'Solana',
+    family: 'sol',
+    placeholder: 'Solana receiving address (32–44 base58 characters)',
+    formatHint: 'Enter a Solana address (32–44 base58 characters).',
+    addrExplorer: a => `https://solscan.io/account/${a}`,
+    blockExplorer: b => `https://solscan.io/block/${b}`,
+  },
 };
 
 // Official contracts per (asset, network), mirroring tokenRegistry in backend/chain_registry.go.
@@ -105,6 +125,7 @@ export const OFFICIAL_CONTRACTS: Record<string, { label: string; contract: strin
     { label: 'USDT (bridged)', contract: '0x94b008aa00579c1307b0ef2c499ad98a8ce58e58', tier: 'bridged' },
   ],
   'USDT:base': [{ label: 'USDT (bridged)', contract: '0xfde4c96c8593536e31f229ea8f37b2ada2699bb2', tier: 'bridged' }],
+  'USDT:sol': [{ label: 'USDT', contract: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', tier: 'native' }],
   'USDC:eth': [{ label: 'USDC', contract: '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48', tier: 'native' }],
   'USDC:arb': [
     { label: 'USDC', contract: '0xaf88d065e77c8cc2239327c5edb3a432268e5831', tier: 'native' },
@@ -115,6 +136,7 @@ export const OFFICIAL_CONTRACTS: Record<string, { label: string; contract: strin
     { label: 'USDC.e (bridged)', contract: '0x7f5c764cbc14f9669b88837ca1490cca17c31607', tier: 'bridged' },
   ],
   'USDC:base': [{ label: 'USDC', contract: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913', tier: 'native' }],
+  'USDC:sol': [{ label: 'USDC', contract: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', tier: 'native' }],
 };
 
 export function networksForAssetAndFamily(asset: PaymentAsset, family: AddressFamily): PaymentNetwork[] {
@@ -129,10 +151,18 @@ export function fmtDurationSec(sec: number): string {
   return rem > 0 ? `${m}m ${rem}s` : `${m}m`;
 }
 
-// Settlement level copy (spec §5.2).
-export function levelCopy(level: PaymentFinalityLevel, estSecLeft: number): string {
+// Settlement level copy (spec §5.2 & Phase 3 B3).
+export function levelCopy(
+  level: PaymentFinalityLevel,
+  estSecLeft: number,
+  network?: PaymentNetwork,
+  block?: number,
+): string {
   switch (level) {
     case 'DANGER':
+      if (network === 'btc' && block === 0) {
+        return 'Unconfirmed in mempool (0 confirmations) — sender can still replace or double-spend (full-RBF default).';
+      }
       return 'Failed / not genuine. Do not treat this as received.';
     case 'SOFT': {
       const eta = estSecLeft > 0 ? ` ~${fmtDurationSec(estSecLeft)} to final.` : '';
@@ -245,7 +275,7 @@ export const FLAG_META: Record<string, FlagMeta> = {
     label: 'counterparty listed',
     severity: 'critical',
     description:
-      'Counterparty address matches local OFAC SDN, MEW darklist, or Ethereum USDT/USDC freeze lists.',
+      'Counterparty address matches local OFAC SDN, MEW darklist, or stablecoin freeze lists.',
   },
   failed: {
     id: 'failed',
@@ -274,11 +304,19 @@ export const FLAG_META: Record<string, FlagMeta> = {
     description:
       'Zero-value transfer on an official token contract — commonly used to plant lookalike addresses in transaction history without the owner’s signature.',
   },
+  rbf_signaled: {
+    id: 'rbf_signaled',
+    label: 'RBF signaled',
+    severity: 'warning',
+    description:
+      'Explicit BIP-125 Replace-By-Fee enabled — sender can replace or cancel before confirmation.',
+  },
   dust: {
     id: 'dust',
     label: 'dust',
     severity: 'info',
-    description: 'Incoming transfer below the dust threshold (1 USDT/USDC, 0.0001 ETH, 1 TRX).',
+    description:
+      'Incoming transfer below the dust threshold (1 USDT/USDC, 0.0001 ETH, 1 TRX, 0.00001 BTC, 0.001 SOL).',
   },
 };
 
@@ -290,6 +328,7 @@ const FLAG_PRIORITY = [
   'lookalike_known',
   'lookalike',
   'zero_value',
+  'rbf_signaled',
   'dust',
 ];
 
@@ -342,6 +381,8 @@ export const PAY_SOURCE_LABELS: Record<string, string> = {
   rpc: 'Chain RPC',
   trongrid: 'TronGrid',
   blockscout: 'Blockscout',
+  mempool: 'Esplora (mempool / blockstream)',
+  solana_rpc: 'Solana RPC',
   issuer_freeze: 'Issuer freeze (live)',
   local: 'Local lists (OFAC / MEW / freezes)',
 };
@@ -371,12 +412,16 @@ export function formatTokenAmount(raw: string): string {
 }
 
 export function recentTransferSourceId(network: PaymentNetwork, asset: PaymentAsset): string {
+  if (network === 'btc') return 'mempool';
+  if (network === 'sol') return 'solana_rpc';
   if (network === 'tron') return 'trongrid';
   if (asset === 'ETH') return 'blockscout';
   return 'rpc';
 }
 
 export function historySourceId(network: PaymentNetwork): string {
+  if (network === 'btc') return 'mempool';
+  if (network === 'sol') return 'solana_rpc';
   return network === 'tron' ? 'trongrid' : 'blockscout';
 }
 
@@ -385,8 +430,8 @@ export function fmtAsOf(iso: string): string {
   return `${iso.slice(11, 19)} UTC`;
 }
 
-const VALID_ASSETS = new Set<PaymentAsset>(['USDT', 'USDC', 'ETH', 'TRX']);
-const VALID_NETWORKS = new Set<PaymentNetwork>(['tron', 'eth', 'arb', 'op', 'base']);
+const VALID_ASSETS = new Set<PaymentAsset>(['USDT', 'USDC', 'ETH', 'TRX', 'BTC', 'SOL']);
+const VALID_NETWORKS = new Set<PaymentNetwork>(['tron', 'eth', 'arb', 'op', 'base', 'btc', 'sol']);
 
 export function parsePaymentHash(): {
   hasPayHash: boolean;

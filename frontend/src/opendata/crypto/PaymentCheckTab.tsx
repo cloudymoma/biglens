@@ -32,10 +32,11 @@ import PaymentHistory from './PaymentHistory';
 const FAST_POLL_MS = 5_000;
 const SLOW_POLL_MS = 30_000;
 
-const FAMILY_LABELS: Record<'evm' | 'tron' | 'btc', string> = {
+const FAMILY_LABELS: Record<'evm' | 'tron' | 'btc' | 'sol', string> = {
   evm: 'an EVM',
   tron: 'a TRON',
   btc: 'a Bitcoin',
+  sol: 'a Solana',
 };
 
 export default function PaymentCheckTab({

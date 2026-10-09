@@ -326,8 +326,8 @@ RPCs and indexers. Seven lazily-loaded tabs:
 | **Whales & Flow** | Top 50 largest transfers (explorer links), whale-sized tx trend (≥100 BTC / ≥1,000 ETH), top receiving addresses, top-1% value concentration (among value-bearing txs) |
 | **Token Economy** | Top 25 token contracts by Transfer event count (ERC-20 & ERC-721), token vs native activity, new contract deployments, token movement treemap |
 | **Mining Economics** | Network hashrate (7d avg + 1d implied), miner revenue, yield per TH/s, rig economics for the latest day, shutdown price by rig (editable electricity, PUE, pool fee, BTC price, custom rig) |
-| **Payment Check** | Live receiving-address verification for USDT, USDC, ETH and TRX across Ethereum, Arbitrum, Optimism, Base and TRON — finality-graded balances, latest incoming settlement progress (`SOFT` → `SAFE` → `FINALIZED`), official vs. bridged/counterfeit token verification, 7-day transfer history with address-poisoning detection, and independent payer risk screening — see [Payment Check](#payment-check-receiving-address-verification) below |
-| **Address Risk** | Multi-chain address risk-clue lookup (Ethereum, Arbitrum, Optimism, Base, TRON, Bitcoin), live issuer freeze checks, freeze-history overview, **Scam Radar** (30-day ETH/TRON address-poisoning & fake-token intelligence, top counterfeit contracts, BTC explicit RBF share), and sources table — see [Address Risk](#address-risk-multi-chain-address-risk-clues) below |
+| **Payment Check** | Live receiving-address verification for USDT, USDC, ETH, TRX, BTC and SOL across Ethereum, Arbitrum, Optimism, Base, TRON, Bitcoin and Solana — finality-graded balances, latest incoming settlement progress (`DANGER` / `SOFT` / `SAFE` → `FINALIZED`), official vs. bridged/counterfeit token verification, 7-day transfer history with address-poisoning & BIP-125 RBF detection, and independent payer risk screening — see [Payment Check](#payment-check-receiving-address-verification) below |
+| **Address Risk** | Multi-chain address risk-clue lookup (Ethereum, Arbitrum, Optimism, Base, TRON, Bitcoin, Solana), live issuer & SPL freeze checks, freeze-history overview, **Scam Radar** (30-day ETH/TRON address-poisoning & fake-token intelligence, top counterfeit contracts, BTC explicit RBF share), and sources table — see [Address Risk](#address-risk-multi-chain-address-risk-clues) below |
 
 Ranges: 7/30/90 days everywhere, plus 1 year for the slim aggregate trends
 (pulse, fees, mining); token queries cap at 30 days. Daily endpoints align their
@@ -360,47 +360,53 @@ reported in native units (BTC, ETH, gwei) or counts:
 
 #### Payment Check (receiving address verification)
 
-Paste your own receiving address to verify incoming payments across **USDT** (`tron`, `eth`, `arb`, `op`, `base`),
-**USDC** (`eth`, `arb`, `op`, `base`), **ETH** (`eth`, `arb`, `op`, `base`) and **TRX** (`tron`):
+Paste your own receiving address to verify incoming payments across **USDT** (`tron`, `eth`, `arb`, `op`, `base`, `sol`),
+**USDC** (`eth`, `arb`, `op`, `base`, `sol`), **ETH** (`eth`, `arb`, `op`, `base`), **TRX** (`tron`), **BTC** (`btc`),
+and **SOL** (`sol`):
 
 - **Three-tier finality & balance breakdown** — EVM chains read `finalized`, `safe` and `latest` heads concurrently
   (clamped monotonically so node skew never inverts order) and report balances as **Finalized**, **Safe, not final**
-  (`safe − finalized`) and **Latest only** (`latest − safe`). TRON reads `/walletsolidity` vs `/wallet` and reports
-  **Solidified** and **Unconfirmed** (`latest − solidified`). Settlement progress (`DANGER` / `SOFT` / `SAFE` /
-  `FINALIZED`) uses runtime-sampled `latest − safe` and `latest − finalized` block-timestamp lags rather than
-  hardcoded confirmation counts, and `FINALIZED` stablecoin cards always note that issuer contracts (Tether / Circle)
-  can still freeze tokens at the contract level.
-- **Token contract registry (`native` / `bridged` / `counterfeit` / `other`)** — hard-coded registry in
-  `backend/chain_registry.go`, verified on-chain via `symbol()` (`0x95d89b41`) and `totalSupply()` (`0x18160ddd`) on
-  2026-10-05. Bridged tokens (`USDC.e` on Arbitrum/Optimism, legacy bridged `USDT` on Optimism and Base) are shown with
-  an explicit warning; unrecognised contracts whose symbol normalises to `USDT`/`USDC`/`USD₮` (or whose contract address
-  is in the local `scam_fake_tokens` database on Ethereum) are flagged as `counterfeit_token`.
-- **7-day transfer history & poisoning detection** — merges recent RPC logs (`eth_getLogs` over registered contracts)
-  with 7-day Blockscout / TronGrid history, scanning chronologically to flag `zero_value`, `dust`, `lookalike` (matching
-  both first 4 and last 4 address characters of a trusted prior counterparty), `lookalike_known` (matching the local
-  `scam_lookalikes` corpus even on a first encounter — known poisoning addresses can never enter the trusted set),
+  (`safe − finalized`) and **Latest only** (`latest − safe`). Bitcoin reads Esplora tip height (`mempool.space` with
+  `blockstream.info` fallback), classifies unconfirmed mempool outputs (`0 confirmations`) as `DANGER` (highlighting
+  full-RBF double-spend risk and explicit BIP-125 `rbf_signaled`), `1–2 conf` as `SOFT`, `3–5 conf` as `SAFE`, and
+  `≥6 conf` as `FINALIZED`. Solana samples `finalized`, `confirmed` and `processed` slots plus native/SPL balances at
+  each commitment level without batch RPC calls. TRON reads `/walletsolidity` vs `/wallet` and reports **Solidified** and
+  **Unconfirmed** (`latest − solidified`). `FINALIZED` stablecoin cards always note that issuer contracts / freeze
+  authorities (Tether / Circle) can still freeze tokens on-chain.
+- **Token contract & mint registry (`native` / `bridged` / `counterfeit` / `other`)** — hard-coded registry in
+  `backend/chain_registry.go` covering EVM, TRON and Solana (`Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB` for USDT,
+  `EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v` for USDC). Bridged tokens (`USDC.e` on Arbitrum/Optimism, legacy bridged
+  `USDT` on Optimism and Base) are shown with an explicit warning; unrecognised EVM/TRON contracts or Solana Metaplex
+  mints whose symbol normalises to `USDT`/`USDC`/`USD₮` (or whose contract address is in the local `scam_fake_tokens`
+  database on Ethereum) are flagged as `counterfeit_token`.
+- **7-day transfer history, UTXO/ATA owner resolution & poisoning detection** — merges recent RPC logs, Esplora UTXO
+  pages (`mempool.space`), or Solana `getSignaturesForAddress` + `maxSupportedTransactionVersion: 1` transaction parses
+  (resolving SPL Associated Token Accounts back to wallet owners so 0-value poisoning transfers attribute the attacker's
+  wallet rather than token account). Scans chronologically (with 0-confirmation mempool transfers ordered last so they
+  never enter trusted counterparty history) to flag `zero_value`, `dust`, `rbf_signaled`, `lookalike` (matching both first
+  4 and last 4 characters — stripping `0x` on EVM and `bc1q`/`bc1p` on SegWit/Taproot BTC), `lookalike_known`,
   `sent_to_lookalike`, `counterfeit_token`, `failed` and `counterparty_listed`. The default "Hide zero-value & unrelated
-  tokens" filter hides benign noise while always preserving any row that carries a risk flag.
+  tokens" filter hides benign noise while never hiding `DANGER`, `rbf_signaled`, or any row carrying a risk flag.
 - **Independent payer screening** — when the latest incoming transfer's `tx_hash` changes, the payer address is
   checked once through Address Risk (`lookup`) without re-polling on every 5-second settlement tick. Queried
   receiving addresses stay in the URL hash (`#pay?asset=…&network=…&address=…`) and short-lived in-memory caches only.
 
 #### Address Risk (multi-chain address risk clues)
 
-Select a chain (**Ethereum**, **Arbitrum**, **Optimism**, **Base**, **TRON**, or **Bitcoin**) and paste an address to
-see **risk clues** grouped as Critical / Warning / Association / Info. BigLens never labels an address "safe": when
-nothing is found it says how many sources were checked and which could not be.
+Select a chain (**Ethereum**, **Arbitrum**, **Optimism**, **Base**, **TRON**, **Bitcoin**, or **Solana**) and paste an
+address to see **risk clues** grouped as Critical / Warning / Association / Info. BigLens never labels an address "safe":
+when nothing is found it says how many sources were checked and which could not be.
 
 | Source | Chains covered | How | Sends the address to a third party? |
 |---|---|---|---|
-| OFAC SDN (via [0xB10C](https://github.com/0xB10C/ofac-sanctioned-digital-currency-addresses), MIT) | ETH, Arb, OP, Base, TRON, BTC | synced every 6 h into local SQLite (`ETH`, `TRX`, `XBT`, plus TRON entries in `USDT`) | No |
+| OFAC SDN (via [0xB10C](https://github.com/0xB10C/ofac-sanctioned-digital-currency-addresses), MIT) | ETH, Arb, OP, Base, TRON, BTC, SOL | synced every 6 h into local SQLite (`ETH`, `TRX`, `XBT`, `SOL`, plus TRON/Solana entries in `USDT`/`USDC`) | No |
 | [MEW darklist](https://github.com/MyEtherWallet/ethereum-lists) (MIT; historical list, frozen since 2020-11) | ETH, Arb, OP, Base | synced every 6 h into local SQLite | No |
 | USDT / USDC freeze, unfreeze and destroy events (`crypto_ethereum.logs`) | ETH | synced from BigQuery by complete UTC day | No |
 | TRON USDT freeze, unfreeze and destroy events (`goog_blockchain_tron_mainnet_us.logs`) | TRON | synced from BigQuery by complete UTC day (`tron_stablecoin`) | No |
 | Known address-poisoning lookalike corpus (`scam_lookalikes`) | ETH, Arb, OP, Base, TRON | synced from BigQuery by complete UTC day (ETH zero-value + TRON dust poisoning; EVM EOAs shared across L1/L2) | No |
-| **Issuer freeze (live)** (`isBlackListed` / `isBlacklisted` / `isBlocked`) | ETH, Arb, OP, Base, TRON | live `eth_call` / TronGrid `triggerconstantcontract` against registered USDT / USDC contracts | Yes — the RPC / TronGrid provider |
+| **Issuer freeze (live)** (`isBlackListed` / `isBlacklisted` / `isBlocked` / SPL account freeze state) | ETH, Arb, OP, Base, TRON, SOL | live `eth_call` / TronGrid `triggerconstantcontract` / Solana `getMultipleAccounts` against registered USDT / USDC contracts & ATAs | Yes — the RPC / TronGrid / Solana RPC provider |
 | Chainalysis sanctions oracle (on-chain `isSanctioned`) | ETH, Arb, OP | live `eth_call` via public RPCs (not deployed on Base) | Yes — the RPC provider |
-| [GoPlus](https://gopluslabs.io) address security | ETH, Arb, OP, Base, TRON | live, keyless (`chain_id` `1` / `42161` / `10` / `8453` / `tron`) | Yes — GoPlus |
+| [GoPlus](https://gopluslabs.io) address security | ETH, Arb, OP, Base, TRON, SOL | live, keyless (`chain_id` `1` / `42161` / `10` / `8453` / `tron` / `solana`) | Yes — GoPlus |
 | Blockscout public tags & scam badge | ETH, Arb, OP, Base | live, keyless (`eth` / `arbitrum` / `optimism` / `base` Blockscout instances) | Yes — Blockscout |
 | Etherscan / Blockscout association analysis (optional free key on ETH) | ETH | live `txlist` / `tokentx` / `txlistinternal`, 1 hop, poisoning-filtered | Yes — Etherscan (with your key) or Blockscout |
 
