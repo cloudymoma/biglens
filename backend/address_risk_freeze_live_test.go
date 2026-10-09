@@ -389,6 +389,10 @@ func TestLookupSolanaSources(t *testing.T) {
 		t.Fatalf("default SolanaRPCURLs = %v", defaults.SolanaRPCURLs)
 	}
 
+	if got := strings.Join(riskSourcesFor("sol"), ","); got != "ofac,issuer_freeze" {
+		t.Fatalf("riskSourcesFor(sol) = %q, want ofac,issuer_freeze (must not include goplus)", got)
+	}
+
 	const addr = "42RLPACwZPx3vYYmxSueqsogfynBDqXK298EDsNoyoHi"
 	store := newTestRiskStore(t)
 	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
@@ -403,12 +407,11 @@ func TestLookupSolanaSources(t *testing.T) {
 	}))
 	defer solRPC.Close()
 
+	var gpCalls atomic.Int32
 	origGoPlus := goplusBaseURL
 	gpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/address_security/"+addr || r.URL.Query().Get("chain_id") != "solana" {
-			t.Errorf("unexpected goplus request: %s", r.URL.String())
-		}
-		w.Write([]byte(`{"code":1,"message":"OK","result":{"phishing_activities":"1"}}`))
+		gpCalls.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	goplusBaseURL = gpSrv.URL + "/api/v1/address_security/"
 	defer func() {
@@ -421,13 +424,20 @@ func TestLookupSolanaSources(t *testing.T) {
 	svc.chainRPCs = map[string][]string{"sol": {solRPC.URL}}
 
 	res := svc.lookup(context.Background(), "sol", addr)
-	if len(res.Sources) != 3 ||
+	if len(res.Sources) != 2 ||
 		res.Sources[0].ID != "ofac" || res.Sources[0].Status != "ok" ||
-		res.Sources[1].ID != "issuer_freeze" || res.Sources[1].Status != "ok" ||
-		res.Sources[2].ID != "goplus" || res.Sources[2].Status != "ok" {
-		t.Fatalf("sol sources = %+v, want [ofac, issuer_freeze, goplus] all ok", res.Sources)
+		res.Sources[1].ID != "issuer_freeze" || res.Sources[1].Status != "ok" {
+		t.Fatalf("sol sources = %+v, want [ofac, issuer_freeze] all ok (no goplus)", res.Sources)
 	}
-	if res.Summary.Counts.Critical != 2 || res.Summary.Counts.Warning != 1 {
+	for _, s := range res.Sources {
+		if s.ID == "goplus" {
+			t.Errorf("sol sources must not contain goplus: %+v", res.Sources)
+		}
+	}
+	if gpCalls.Load() != 0 {
+		t.Errorf("sol lookup made %d GoPlus HTTP calls, want 0", gpCalls.Load())
+	}
+	if res.Summary.Counts.Critical != 2 || res.Summary.Counts.Warning != 0 {
 		t.Fatalf("sol summary counts = %+v, clues = %+v", res.Summary.Counts, res.Clues)
 	}
 

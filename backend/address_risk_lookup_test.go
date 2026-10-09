@@ -652,6 +652,11 @@ func TestRiskSourcesForChain(t *testing.T) {
 	}))
 	defer tronSrv.Close()
 
+	solSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"context":{"slot":454804650},"value":[null,null]}}`))
+	}))
+	defer solSrv.Close()
+
 	origTron := tronGridBaseURL
 	tronGridBaseURL = tronSrv.URL
 	defer func() { tronGridBaseURL = origTron }()
@@ -664,6 +669,7 @@ func TestRiskSourcesForChain(t *testing.T) {
 
 	svc := newAddressRiskService(store, []string{up.oracle.URL})
 	svc.now = func() time.Time { return riskNow }
+	svc.chainRPCs = map[string][]string{"sol": {solSrv.URL}}
 	svc.blockscoutURLs = map[string]string{
 		"eth":  bsSrv.URL,
 		"arb":  bsSrv.URL,
@@ -682,6 +688,7 @@ func TestRiskSourcesForChain(t *testing.T) {
 		{"base", "0x1111111111111111111111111111111111111111", "ofac,mew_darklist,scam_lookalikes,issuer_freeze,goplus,blockscout"},
 		{"tron", "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t", "ofac,tron_stablecoin,scam_lookalikes,issuer_freeze,goplus"},
 		{"btc", "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", "ofac"},
+		{"sol", "depMwrdSqn5y9fDkdotP4iGxTdxSaEHVE6QjnbcEmjN", "ofac,issuer_freeze"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.chain, func(t *testing.T) {

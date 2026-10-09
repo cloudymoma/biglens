@@ -19,7 +19,7 @@ type chainInfo struct {
 	ID            string // eth | arb | op | base | tron | btc | sol
 	Label         string // "Ethereum", "Arbitrum One", "Optimism", "Base", "TRON", "Bitcoin", "Solana"
 	Family        chainFamily
-	GoPlusChainID string // "1","42161","10","8453","tron","solana"; "" = not covered by GoPlus
+	GoPlusChainID string // "1","42161","10","8453","tron"; "" = not covered by GoPlus
 	HasOracle     bool   // Chainalysis sanctions oracle deployed (eth/arb/op; base=false, verified 2026-10-05)
 	TxURL         string // fmt template, e.g. "https://arbiscan.io/tx/%s"
 	AddressURL    string // fmt template
@@ -84,7 +84,7 @@ var chains = map[string]chainInfo{
 		ID:            "sol",
 		Label:         "Solana",
 		Family:        familySol,
-		GoPlusChainID: "solana",
+		GoPlusChainID: "",
 		HasOracle:     false,
 		TxURL:         "https://solscan.io/tx/%s",
 		AddressURL:    "https://solscan.io/account/%s",

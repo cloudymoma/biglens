@@ -459,7 +459,13 @@ function PayerCleanlinessSection({
       <p className="text-[11px] text-zinc-500">
         {sentHosts.length > 0
           ? `Payer screening sends the payer's address to: ${sentHosts.join(', ')}.`
-          : `Payer screening sends the payer's address to configured ${PAY_NETWORKS[network].label} risk sources (GoPlus, RPCs, Blockscout).`}
+          : network === 'btc'
+            ? "Payer screening checks the local OFAC SDN list on this server — the payer's address is not sent to any third party."
+            : network === 'sol'
+              ? "Payer screening sends the payer's address to configured Solana RPCs (SPL freeze check); OFAC checks run on this server."
+              : network === 'tron'
+                ? "Payer screening sends the payer's address to configured TRON risk sources (TronGrid, GoPlus); OFAC and TRON freeze history checks run on this server."
+                : `Payer screening sends the payer's address to configured ${PAY_NETWORKS[network].label} risk sources (GoPlus, RPCs, Blockscout).`}
       </p>
 
       {loading ? (

@@ -63,7 +63,7 @@ function buildThirdPartyNote(
     case 'btc':
       return 'Lookups on Bitcoin do not send this address to any third party. OFAC checks run on this server.';
     case 'sol':
-      return `Lookups on Solana send this address to configured Solana RPCs (SPL freeze check) and ${goplusHost}. OFAC checks run on this server.`;
+      return 'Lookups on Solana send this address to configured Solana RPCs (SPL freeze check). OFAC checks run on this server.';
     case 'tron':
       return `Lookups on TRON send this address to TronGrid (issuer freeze) and ${goplusHost}. OFAC checks run on this server.`;
     case 'base':

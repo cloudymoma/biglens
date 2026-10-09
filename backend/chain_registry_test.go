@@ -31,7 +31,7 @@ func TestRegistryInvariants(t *testing.T) {
 	if chains["btc"].GoPlusChainID != "" {
 		t.Errorf("btc GoPlusChainID = %q, want empty", chains["btc"].GoPlusChainID)
 	}
-	if chains["sol"].GoPlusChainID != "solana" || chains["sol"].HasOracle {
+	if chains["sol"].GoPlusChainID != "" || chains["sol"].HasOracle {
 		t.Errorf("sol metadata mismatch: %+v", chains["sol"])
 	}
 

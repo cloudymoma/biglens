@@ -406,7 +406,7 @@ when nothing is found it says how many sources were checked and which could not 
 | Known address-poisoning lookalike corpus (`scam_lookalikes`) | ETH, Arb, OP, Base, TRON | synced from BigQuery by complete UTC day (ETH zero-value + TRON dust poisoning; EVM EOAs shared across L1/L2) | No |
 | **Issuer freeze (live)** (`isBlackListed` / `isBlacklisted` / `isBlocked` / SPL account freeze state) | ETH, Arb, OP, Base, TRON, SOL | live `eth_call` / TronGrid `triggerconstantcontract` / Solana `getMultipleAccounts` against registered USDT / USDC contracts & ATAs | Yes — the RPC / TronGrid / Solana RPC provider |
 | Chainalysis sanctions oracle (on-chain `isSanctioned`) | ETH, Arb, OP | live `eth_call` via public RPCs (not deployed on Base) | Yes — the RPC provider |
-| [GoPlus](https://gopluslabs.io) address security | ETH, Arb, OP, Base, TRON, SOL | live, keyless (`chain_id` `1` / `42161` / `10` / `8453` / `tron` / `solana`) | Yes — GoPlus |
+| [GoPlus](https://gopluslabs.io) address security | ETH, Arb, OP, Base, TRON | live, keyless (`chain_id` `1` / `42161` / `10` / `8453` / `tron`) | Yes — GoPlus |
 | Blockscout public tags & scam badge | ETH, Arb, OP, Base | live, keyless (`eth` / `arbitrum` / `optimism` / `base` Blockscout instances) | Yes — Blockscout |
 | Etherscan / Blockscout association analysis (optional free key on ETH) | ETH | live `txlist` / `tokentx` / `txlistinternal`, 1 hop, poisoning-filtered | Yes — Etherscan (with your key) or Blockscout |
 

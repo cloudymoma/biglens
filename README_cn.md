@@ -329,7 +329,7 @@ GDELT 是*新闻报道*的索引，而非经核实事件的登记册。每行是
 | 已知尾号投毒仿冒地址库（`scam_lookalikes`） | ETH、Arb、OP、Base、TRON | 按完整 UTC 日从 BigQuery 同步（ETH 0 元投毒 + TRON 灰尘投毒；EVM 外部账户跨 L1/L2 共享） | 否 |
 | **发行方冻结实时检查（`issuer_freeze`）**（`isBlackListed` / `isBlacklisted` / `isBlocked` / SPL 账户冻结状态） | ETH、Arb、OP、Base、TRON、SOL | 对注册表中的 USDT / USDC 合约或 Solana ATA 发起实时 `eth_call`、TronGrid `triggerconstantcontract` 或 Solana `getMultipleAccounts` | 是，发给 RPC / TronGrid / Solana RPC 服务商 |
 | Chainalysis 链上制裁预言机（`isSanctioned`） | ETH、Arb、OP | 通过公共 RPC 实时 `eth_call`（Base 未部署） | 是，发给 RPC 服务商 |
-| [GoPlus](https://gopluslabs.io) 地址安全接口 | ETH、Arb、OP、Base、TRON、SOL | 实时，免 key（`chain_id` `1` / `42161` / `10` / `8453` / `tron` / `solana`） | 是，发给 GoPlus |
+| [GoPlus](https://gopluslabs.io) 地址安全接口 | ETH、Arb、OP、Base、TRON | 实时，免 key（`chain_id` `1` / `42161` / `10` / `8453` / `tron`） | 是，发给 GoPlus |
 | Blockscout 公开标签与诈骗标记 | ETH、Arb、OP、Base | 实时，免 key（对应各链 Blockscout 实例） | 是，发给 Blockscout |
 | Etherscan / Blockscout 关联分析（ETH 可选免费 key） | ETH | 实时查询 `txlist` / `tokentx` / `txlistinternal`，一跳，带防投毒过滤 | 是，发给 Etherscan（带你的 key）或 Blockscout |
 
