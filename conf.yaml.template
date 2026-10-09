@@ -34,3 +34,10 @@ catalog:
 #     base: "https://base.blockscout.com"
 #   logs_max_span: 10000                  # eth_getLogs max block span per chunk
 
+# Crypto Pulse → RPC / Esplora endpoints (all optional; defaults shown)
+# crypto_gas:
+#   solana_rpc_urls:
+#     - "https://solana-rpc.publicnode.com"
+#     - "https://api.mainnet-beta.solana.com"
+#   mempool_base_url: "https://mempool.space"
+

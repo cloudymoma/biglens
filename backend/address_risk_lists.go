@@ -26,7 +26,7 @@ func normalizeEVMListAddress(s string) (string, bool) {
 // value across EVM (lowercase hex), TRON (exact-case base58), and Bitcoin
 // (lowercase bech32/bech32m or exact-case base58).
 func normalizeListAddress(s string) (string, bool) {
-	for _, chain := range []string{"eth", "tron", "btc"} {
+	for _, chain := range []string{"eth", "tron", "btc", "sol"} {
 		if a, _, err := parseChainAddress(chain, s); err == nil {
 			return a, true
 		}

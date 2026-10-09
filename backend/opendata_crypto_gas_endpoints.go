@@ -6,9 +6,14 @@ package main
 
 import "strings"
 
+const defaultMempoolBaseURL = "https://mempool.space"
+
+var mempoolBaseURL = defaultMempoolBaseURL
+
 func applyCryptoGasConfig(c CryptoGasConfig) {
 	c = c.withDefaults()
 	mempool := strings.TrimRight(c.MempoolBaseURL, "/")
+	mempoolBaseURL = mempool
 	mempoolFeesURL = mempool + "/api/v1/fees/precise"
 	mempoolStatsURL = mempool + "/api/mempool"
 	mempoolProjectedURL = mempool + "/api/v1/fees/mempool-blocks"

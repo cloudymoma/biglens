@@ -174,6 +174,46 @@ func checkIssuerFreeze(ctx context.Context, chain, addr, assetFilter string, rpc
 		}
 		return states, ""
 
+	case familySol:
+		if len(rpcs) == 0 {
+			return nil, "unavailable"
+		}
+		atas := make([]string, len(toks))
+		for i, tok := range toks {
+			ata, err := deriveSolanaATA(addr, tok.Contract)
+			if err != nil {
+				return nil, "bad_request"
+			}
+			atas[i] = ata
+		}
+		res, c := solanaRPCFailover(ctx, rpcs, "getMultipleAccounts", atas, map[string]string{
+			"encoding":   "jsonParsed",
+			"commitment": "confirmed",
+		})
+		if c != "" {
+			return nil, c
+		}
+		var parsed struct {
+			Value []*struct {
+				Data struct {
+					Parsed struct {
+						Info struct {
+							State string `json:"state"`
+						} `json:"info"`
+					} `json:"parsed"`
+				} `json:"data"`
+			} `json:"value"`
+		}
+		if err := json.Unmarshal(res, &parsed); err != nil || len(parsed.Value) != len(toks) {
+			return nil, "bad_response"
+		}
+		states := make([]issuerFreezeState, len(toks))
+		for i, tok := range toks {
+			frozen := parsed.Value[i] != nil && parsed.Value[i].Data.Parsed.Info.State == "frozen"
+			states[i] = issuerFreezeState{Token: tok.Label, Contract: tok.Contract, Frozen: frozen}
+		}
+		return states, ""
+
 	default:
 		return nil, ""
 	}

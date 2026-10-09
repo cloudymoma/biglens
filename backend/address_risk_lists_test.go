@@ -77,6 +77,26 @@ func TestParseOFACTextMixedFamilies(t *testing.T) {
 	}
 }
 
+func TestParseOFACTextWithSolana(t *testing.T) {
+	body := []byte(
+		"42RLPACwZPx3vYYmxSueqsogfynBDqXK298EDsNoyoHi\n" +
+			"  depMwrdSqn5y9fDkdotP4iGxTdxSaEHVE6QjnbcEmjN  \n" +
+			"# comment\n" +
+			"not-a-solana-addr\n",
+	)
+	got, skipped := parseOFACText(body, "tagged SOL")
+	want := []listEntry{
+		{Address: "42RLPACwZPx3vYYmxSueqsogfynBDqXK298EDsNoyoHi", Label: "tagged SOL"},
+		{Address: "depMwrdSqn5y9fDkdotP4iGxTdxSaEHVE6QjnbcEmjN", Label: "tagged SOL"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got = %+v, want %+v", got, want)
+	}
+	if skipped != 1 {
+		t.Errorf("skipped = %d, want 1", skipped)
+	}
+}
+
 func TestParseMEWDarklistRejectsNonEVM(t *testing.T) {
 	body := []byte(`[
 	 {"address":"0x098B716B8Aaf21512996dC57EB0615e2383E2f96","comment":"evm ok","date":"2020-01-02"},

@@ -247,8 +247,8 @@ func TestOFACSourceFiles(t *testing.T) {
 	if ofac == nil {
 		t.Fatal("missing ofac source")
 	}
-	if len(ofac.Files) != 5 {
-		t.Fatalf("len(ofac.Files) = %d, want 5: %+v", len(ofac.Files), ofac.Files)
+	if len(ofac.Files) != 6 {
+		t.Fatalf("len(ofac.Files) = %d, want 6: %+v", len(ofac.Files), ofac.Files)
 	}
 	const prefix = "https://raw.githubusercontent.com/0xB10C/ofac-sanctioned-digital-currency-addresses/lists/sanctioned_addresses_"
 	wantLabels := map[string]string{
@@ -257,6 +257,7 @@ func TestOFACSourceFiles(t *testing.T) {
 		prefix + "XBT.txt":  "tagged XBT",
 		prefix + "USDT.txt": "tagged USDT",
 		prefix + "USDC.txt": "tagged USDC",
+		prefix + "SOL.txt":  "tagged SOL",
 	}
 	for _, f := range ofac.Files {
 		wantLabel, ok := wantLabels[f.URL]

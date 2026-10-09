@@ -132,6 +132,7 @@ type CryptoGasConfig struct {
 	ArbitrumRPCURLs []string `yaml:"arbitrum_rpc_urls,omitempty"`
 	OptimismRPCURLs []string `yaml:"optimism_rpc_urls,omitempty"`
 	BaseRPCURLs     []string `yaml:"base_rpc_urls,omitempty"`
+	SolanaRPCURLs   []string `yaml:"solana_rpc_urls,omitempty"`
 	MempoolBaseURL  string   `yaml:"mempool_base_url,omitempty"`
 	TronGridBaseURL string   `yaml:"trongrid_base_url,omitempty"`
 	CoinbaseBaseURL string   `yaml:"coinbase_base_url,omitempty"`
@@ -157,7 +158,8 @@ func (c CryptoGasConfig) withDefaults() CryptoGasConfig {
 		ArbitrumRPCURLs: orList(c.ArbitrumRPCURLs, []string{"https://arb1.arbitrum.io/rpc"}),
 		OptimismRPCURLs: orList(c.OptimismRPCURLs, []string{"https://mainnet.optimism.io"}),
 		BaseRPCURLs:     orList(c.BaseRPCURLs, []string{"https://mainnet.base.org"}),
-		MempoolBaseURL:  orStr(c.MempoolBaseURL, "https://mempool.space"),
+		SolanaRPCURLs:   orList(c.SolanaRPCURLs, []string{"https://solana-rpc.publicnode.com", "https://api.mainnet-beta.solana.com"}),
+		MempoolBaseURL:  orStr(c.MempoolBaseURL, defaultMempoolBaseURL),
 		TronGridBaseURL: orStr(c.TronGridBaseURL, "https://api.trongrid.io"),
 		CoinbaseBaseURL: orStr(c.CoinbaseBaseURL, "https://api.coinbase.com"),
 	}

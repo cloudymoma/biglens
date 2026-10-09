@@ -313,3 +313,129 @@ func TestIssuerFreezeDedupWithLocal(t *testing.T) {
 		t.Errorf("unexpected clue: %+v", c)
 	}
 }
+
+func TestCheckIssuerFreezeSolana(t *testing.T) {
+	const holder = "depMwrdSqn5y9fDkdotP4iGxTdxSaEHVE6QjnbcEmjN"
+	usdtATA, err := deriveSolanaATA(holder, "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB")
+	if err != nil {
+		t.Fatal(err)
+	}
+	usdcATA, err := deriveSolanaATA(holder, "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("uninitialized USDT null + frozen USDC ATA via single getMultipleAccounts", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var req struct {
+				Method string            `json:"method"`
+				Params []json.RawMessage `json:"params"`
+			}
+			b, _ := io.ReadAll(r.Body)
+			if err := json.Unmarshal(b, &req); err != nil {
+				t.Fatalf("unmarshal rpc req: %v", err)
+			}
+			if req.Method != "getMultipleAccounts" || len(req.Params) != 2 {
+				t.Fatalf("unexpected RPC method/params: %s", b)
+			}
+			var keys []string
+			json.Unmarshal(req.Params[0], &keys)
+			if len(keys) != 2 || keys[0] != usdtATA || keys[1] != usdcATA {
+				t.Fatalf("keys = %v, want [%s, %s]", keys, usdtATA, usdcATA)
+			}
+			var cfg map[string]string
+			json.Unmarshal(req.Params[1], &cfg)
+			if cfg["encoding"] != "jsonParsed" || cfg["commitment"] != "confirmed" {
+				t.Fatalf("cfg = %v, want encoding=jsonParsed commitment=confirmed", cfg)
+			}
+			w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"context":{"slot":454804650},"value":[null,{"data":{"parsed":{"info":{"state":"frozen"},"type":"account"},"program":"spl-token","space":165}}]}}`))
+		}))
+		defer srv.Close()
+
+		states, code := checkIssuerFreeze(context.Background(), "sol", holder, "", []string{srv.URL})
+		if code != "" || len(states) != 2 {
+			t.Fatalf("got (%+v, %q), want 2 states and empty error code", states, code)
+		}
+		if states[0].Token != "USDT" || states[0].Frozen {
+			t.Errorf("USDT state = %+v, want unfrozen", states[0])
+		}
+		if states[1].Token != "USDC" || !states[1].Frozen {
+			t.Errorf("USDC state = %+v, want frozen", states[1])
+		}
+	})
+
+	t.Run("RPC failover on HTTP error", func(t *testing.T) {
+		bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusBadGateway)
+		}))
+		defer bad.Close()
+		good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"context":{"slot":454804650},"value":[{"data":{"parsed":{"info":{"state":"initialized"}}}}]}}`))
+		}))
+		defer good.Close()
+
+		states, code := checkIssuerFreeze(context.Background(), "sol", holder, "USDC", []string{bad.URL, good.URL})
+		if code != "" || len(states) != 1 || states[0].Frozen {
+			t.Fatalf("failover got (%+v, %q), want 1 unfrozen state", states, code)
+		}
+	})
+}
+
+func TestLookupSolanaSources(t *testing.T) {
+	defaults := (CryptoGasConfig{}).withDefaults()
+	if len(defaults.SolanaRPCURLs) != 2 ||
+		defaults.SolanaRPCURLs[0] != "https://solana-rpc.publicnode.com" ||
+		defaults.SolanaRPCURLs[1] != "https://api.mainnet-beta.solana.com" {
+		t.Fatalf("default SolanaRPCURLs = %v", defaults.SolanaRPCURLs)
+	}
+
+	const addr = "42RLPACwZPx3vYYmxSueqsogfynBDqXK298EDsNoyoHi"
+	store := newTestRiskStore(t)
+	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	if err := store.replaceList(context.Background(), "ofac", []listEntry{
+		{Address: addr, Label: "tagged SOL"},
+	}, "hash-sol", now.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	solRPC := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"context":{"slot":454804650},"value":[null,{"data":{"parsed":{"info":{"state":"frozen"}}}}]}}`))
+	}))
+	defer solRPC.Close()
+
+	origGoPlus := goplusBaseURL
+	gpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/address_security/"+addr || r.URL.Query().Get("chain_id") != "solana" {
+			t.Errorf("unexpected goplus request: %s", r.URL.String())
+		}
+		w.Write([]byte(`{"code":1,"message":"OK","result":{"phishing_activities":"1"}}`))
+	}))
+	goplusBaseURL = gpSrv.URL + "/api/v1/address_security/"
+	defer func() {
+		goplusBaseURL = origGoPlus
+		gpSrv.Close()
+	}()
+
+	svc := newAddressRiskService(store, nil)
+	svc.now = func() time.Time { return now }
+	svc.chainRPCs = map[string][]string{"sol": {solRPC.URL}}
+
+	res := svc.lookup(context.Background(), "sol", addr)
+	if len(res.Sources) != 3 ||
+		res.Sources[0].ID != "ofac" || res.Sources[0].Status != "ok" ||
+		res.Sources[1].ID != "issuer_freeze" || res.Sources[1].Status != "ok" ||
+		res.Sources[2].ID != "goplus" || res.Sources[2].Status != "ok" {
+		t.Fatalf("sol sources = %+v, want [ofac, issuer_freeze, goplus] all ok", res.Sources)
+	}
+	if res.Summary.Counts.Critical != 2 || res.Summary.Counts.Warning != 1 {
+		t.Fatalf("sol summary counts = %+v, clues = %+v", res.Summary.Counts, res.Clues)
+	}
+
+	pool, err := store.riskPoolForAddresses(context.Background(), "sol", []string{addr})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pool[addr]) != 1 || pool[addr][0] != "ofac" {
+		t.Errorf("riskPoolForAddresses(sol) = %+v, want [ofac]", pool)
+	}
+}

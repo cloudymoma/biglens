@@ -66,6 +66,8 @@ func riskSourcesFor(chain string) []string {
 		return []string{"ofac", "tron_stablecoin", "scam_lookalikes", "issuer_freeze", "goplus"}
 	case "btc":
 		return []string{"ofac"}
+	case "sol":
+		return []string{"ofac", "issuer_freeze", "goplus"}
 	default:
 		return nil
 	}

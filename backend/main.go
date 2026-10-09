@@ -107,6 +107,7 @@ func main() {
 		"arb":  gasCfg.ArbitrumRPCURLs,
 		"op":   gasCfg.OptimismRPCURLs,
 		"base": gasCfg.BaseRPCURLs,
+		"sol":  gasCfg.SolanaRPCURLs,
 	}
 	api.risk.blockscoutURLs = cfg.PaymentCheck.BlockscoutURLs
 	if cfg.PaymentCheck.LogsMaxSpan > 0 {

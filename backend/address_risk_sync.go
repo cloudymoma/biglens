@@ -62,6 +62,7 @@ var riskListSources = []riskListSource{
 		{URL: "https://raw.githubusercontent.com/0xB10C/ofac-sanctioned-digital-currency-addresses/lists/sanctioned_addresses_XBT.txt", Label: "tagged XBT"},
 		{URL: "https://raw.githubusercontent.com/0xB10C/ofac-sanctioned-digital-currency-addresses/lists/sanctioned_addresses_USDT.txt", Label: "tagged USDT"},
 		{URL: "https://raw.githubusercontent.com/0xB10C/ofac-sanctioned-digital-currency-addresses/lists/sanctioned_addresses_USDC.txt", Label: "tagged USDC"},
+		{URL: "https://raw.githubusercontent.com/0xB10C/ofac-sanctioned-digital-currency-addresses/lists/sanctioned_addresses_SOL.txt", Label: "tagged SOL"},
 	}},
 	{ID: "mew_darklist", Parse: parseMEWBody, Files: []riskListFile{
 		{URL: "https://raw.githubusercontent.com/MyEtherWallet/ethereum-lists/master/src/addresses/addresses-darklist.json"},

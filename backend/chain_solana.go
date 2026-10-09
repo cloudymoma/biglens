@@ -1,11 +1,17 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"math/big"
+	"net/http"
 	"strings"
+	"time"
 )
 
 const (
@@ -169,4 +175,79 @@ func parseMetaplexSymbol(raw []byte) string {
 	}
 	sym := strings.TrimRight(string(raw[pos:pos+symLen]), "\x00")
 	return strings.TrimSpace(sym)
+}
+
+var solanaHTTPClient = &http.Client{Timeout: 8 * time.Second}
+
+func solanaRPC(ctx context.Context, rpcURL, method string, params ...any) (json.RawMessage, string) {
+	reqPayload := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  method,
+	}
+	if len(params) > 0 {
+		reqPayload["params"] = params
+	}
+	bodyBytes, err := json.Marshal(reqPayload)
+	if err != nil {
+		return nil, "bad_request"
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rpcURL, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return nil, "bad_request"
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "biglens/1.0")
+	resp, err := solanaHTTPClient.Do(req)
+	if err != nil {
+		return nil, evmRPCErrCode(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return nil, "rate_limited"
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Sprintf("upstream_http_%d", resp.StatusCode)
+	}
+	respBytes, err := readCapped(resp.Body, 4<<20)
+	if err != nil {
+		return nil, "bad_response"
+	}
+	var envelope struct {
+		Result json.RawMessage `json:"result"`
+		Error  json.RawMessage `json:"error"`
+	}
+	if err := json.Unmarshal(respBytes, &envelope); err != nil {
+		return nil, "bad_response"
+	}
+	if len(envelope.Error) > 0 && string(envelope.Error) != "null" {
+		return nil, "bad_response"
+	}
+	return envelope.Result, ""
+}
+
+func solanaRPCFailover(ctx context.Context, rpcs []string, method string, params ...any) (json.RawMessage, string) {
+	if len(rpcs) == 0 {
+		return nil, "unavailable"
+	}
+	deadline, hasDeadline := ctx.Deadline()
+	code := "unavailable"
+	for i, u := range rpcs {
+		actx := ctx
+		var acancel context.CancelFunc = func() {}
+		if hasDeadline {
+			per := time.Until(deadline) / time.Duration(len(rpcs)-i)
+			actx, acancel = context.WithTimeout(ctx, per)
+		}
+		res, c := solanaRPC(actx, u, method, params...)
+		acancel()
+		if c == "" {
+			return res, ""
+		}
+		code = c
+		if ctx.Err() != nil {
+			return nil, "timeout"
+		}
+	}
+	return nil, code
 }
