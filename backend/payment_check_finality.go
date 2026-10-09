@@ -377,3 +377,231 @@ func fetchTronHeads(ctx context.Context) (payHeads, error) {
 	h.FinalLagSec = max(1, lag)
 	return h, nil
 }
+
+const btcAvgBlockSec = 600
+
+var (
+	esploraFallbackAPI           = "https://blockstream.info/api"
+	defaultMempoolURLForFailover = defaultMempoolBaseURL
+)
+
+func esploraAPIBases() []string {
+	primary := strings.TrimSuffix(strings.TrimRight(mempoolBaseURL, "/"), "/api") + "/api"
+	bases := []string{primary}
+	if strings.TrimRight(mempoolBaseURL, "/") == strings.TrimRight(defaultMempoolURLForFailover, "/") && esploraFallbackAPI != "" {
+		bases = append(bases, strings.TrimRight(esploraFallbackAPI, "/"))
+	}
+	return bases
+}
+
+func esploraGet(ctx context.Context, path string) ([]byte, string) {
+	bases := esploraAPIBases()
+	deadline := time.Now().Add(payUpstreamTimeout)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	lastCode := "unavailable"
+	for i, base := range bases {
+		rem := time.Until(deadline)
+		if rem <= 0 {
+			return nil, "timeout"
+		}
+		tryCtx, cancel := context.WithTimeout(ctx, rem/time.Duration(len(bases)-i))
+		req, err := http.NewRequestWithContext(tryCtx, http.MethodGet, base+path, nil)
+		if err != nil {
+			cancel()
+			return nil, "bad_request"
+		}
+		req.Header.Set("User-Agent", "biglens/1.0")
+		resp, err := mempoolHTTPClient.Do(req)
+		if err != nil {
+			cancel()
+			lastCode = upstreamErrCode(err)
+			if ctx.Err() != nil {
+				return nil, "timeout"
+			}
+			continue
+		}
+		if resp.StatusCode == http.StatusTooManyRequests {
+			resp.Body.Close()
+			cancel()
+			lastCode = "rate_limited"
+			continue
+		}
+		if resp.StatusCode != http.StatusOK {
+			code := fmt.Sprintf("upstream_http_%d", resp.StatusCode)
+			resp.Body.Close()
+			cancel()
+			lastCode = code
+			continue
+		}
+		raw, err := readCapped(resp.Body, 8<<20)
+		resp.Body.Close()
+		cancel()
+		if err != nil {
+			lastCode = "bad_response"
+			continue
+		}
+		return raw, ""
+	}
+	return nil, lastCode
+}
+
+// classifyBTC computes settlement level, progress percentage, and estimated
+// seconds remaining for a Bitcoin transaction using monotonically clamped heads
+// (spec P3.1 §2, review B2 & S9).
+func classifyBTC(block uint64, h payHeads) (payLevel, int, int) {
+	if block == 0 {
+		return levelDanger, 0, 6 * btcAvgBlockSec
+	}
+	if block <= h.Finalized {
+		return levelFinalized, 100, 0
+	}
+	confs := uint64(1)
+	if h.Latest >= block {
+		confs = h.Latest - block + 1
+	}
+	eta := max(1, 6-int(confs)) * btcAvgBlockSec
+	if block <= h.Safe {
+		prog := min(90, max(70, 70+10*int(confs-3)))
+		return levelSafe, prog, eta
+	}
+	prog := min(40, max(20, 20+20*int(confs-1)))
+	return levelSoft, prog, eta
+}
+
+func fetchBTCHeads(ctx context.Context) (payHeads, error) {
+	raw, code := esploraGet(ctx, "/blocks")
+	if code != "" {
+		return payHeads{}, errors.New(code)
+	}
+	var blocks []struct {
+		Height    uint64 `json:"height"`
+		Timestamp int64  `json:"timestamp"`
+	}
+	if err := json.Unmarshal(raw, &blocks); err != nil || len(blocks) < 6 || blocks[0].Height == 0 {
+		return payHeads{}, errors.New("bad_response")
+	}
+	h := clampHeads(payHeads{
+		Latest:     blocks[0].Height,
+		Safe:       blocks[2].Height,
+		Finalized:  blocks[5].Height,
+		LatestTime: blocks[0].Timestamp,
+		SafeTime:   blocks[2].Timestamp,
+		FinalTime:  blocks[5].Timestamp,
+	}, false)
+	h.SafeLagSec = max(1, int(h.LatestTime-h.SafeTime))
+	h.FinalLagSec = max(1, int(h.LatestTime-h.FinalTime))
+	return h, nil
+}
+
+// classifySolana computes settlement level, progress percentage, and estimated
+// seconds remaining for a Solana transaction using slot watermarks (spec P3.1 §2).
+func classifySolana(slot uint64, blockTime int64, failed bool, h payHeads, now int64) (payLevel, int, int) {
+	if failed {
+		return levelDanger, 0, 0
+	}
+	if slot == 0 {
+		return levelSoft, 0, max(1, h.FinalLagSec)
+	}
+	if slot <= h.Finalized {
+		return levelFinalized, 100, 0
+	}
+	if slot > h.Safe {
+		return levelSoft, 25, max(1, h.FinalLagSec)
+	}
+	var age int64
+	if blockTime > 0 {
+		age = max(int64(0), now-blockTime)
+	}
+	eta := max(1, h.FinalLagSec-int(age))
+	denom := max(uint64(1), h.Safe-h.Finalized)
+	ratio := float64(h.Safe-slot) / float64(denom)
+	prog := min(95, max(85, 85+int(math.Round(10*ratio))))
+	return levelSafe, prog, eta
+}
+
+func fetchSolanaSlot(ctx context.Context, rpcs []string, commitment string) (uint64, string) {
+	res, code := solanaRPCFailover(ctx, rpcs, "getSlot", map[string]string{"commitment": commitment})
+	if code != "" {
+		return 0, code
+	}
+	var slot uint64
+	if err := json.Unmarshal(res, &slot); err != nil || slot == 0 {
+		return 0, "bad_response"
+	}
+	return slot, ""
+}
+
+func fetchSolanaBlockTimeBestEffort(ctx context.Context, rpcs []string, slot uint64) int64 {
+	res, code := solanaRPCFailover(ctx, rpcs, "getBlockTime", slot)
+	if code != "" || len(res) == 0 || string(res) == "null" {
+		return 0
+	}
+	var ts *int64
+	if err := json.Unmarshal(res, &ts); err != nil || ts == nil || *ts <= 0 {
+		return 0
+	}
+	return *ts
+}
+
+// fetchSolanaHeads fetches processed, confirmed, and finalized slot watermarks,
+// and queries getBlockTime on confirmed and finalized slots best-effort (S2).
+func fetchSolanaHeads(ctx context.Context, rpcs []string) (payHeads, error) {
+	if len(rpcs) == 0 {
+		return payHeads{}, errors.New("not_configured")
+	}
+	ctx, cancel := context.WithTimeout(ctx, payUpstreamTimeout)
+	defer cancel()
+
+	commitments := [3]string{"processed", "confirmed", "finalized"}
+	var slots [3]uint64
+	var codes [3]string
+	var wg sync.WaitGroup
+	for i, c := range commitments {
+		wg.Add(1)
+		go func(i int, c string) {
+			defer wg.Done()
+			slots[i], codes[i] = fetchSolanaSlot(ctx, rpcs, c)
+		}(i, c)
+	}
+	wg.Wait()
+	for _, c := range codes {
+		if c != "" {
+			return payHeads{}, errors.New(c)
+		}
+	}
+
+	var confTime, finTime int64
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		confTime = fetchSolanaBlockTimeBestEffort(ctx, rpcs, slots[1])
+	}()
+	go func() {
+		defer wg.Done()
+		finTime = fetchSolanaBlockTimeBestEffort(ctx, rpcs, slots[2])
+	}()
+	wg.Wait()
+
+	h := clampHeads(payHeads{
+		Latest:     slots[0],
+		Safe:       slots[1],
+		Finalized:  slots[2],
+		LatestTime: confTime,
+		SafeTime:   confTime,
+		FinalTime:  finTime,
+	}, false)
+
+	finalLag := 0
+	if h.SafeTime > 0 && h.FinalTime > 0 && h.SafeTime >= h.FinalTime {
+		finalLag = int(h.SafeTime - h.FinalTime)
+	}
+	if finalLag <= 0 && h.Safe > h.Finalized {
+		// ~400ms per Solana slot fallback when getBlockTime returns null (S2).
+		finalLag = int((h.Safe-h.Finalized)*2) / 5
+	}
+	h.SafeLagSec = 1
+	h.FinalLagSec = max(1, finalLag)
+	return h, nil
+}

@@ -332,3 +332,168 @@ func TestFetchTronHeads(t *testing.T) {
 		t.Errorf("tron heads = %+v", h)
 	}
 }
+
+func TestClassifyBTCZeroToSixConfirmations(t *testing.T) {
+	h := payHeads{
+		Latest:    970600,
+		Safe:      970598, // 3 confirmations
+		Finalized: 970595, // 6 confirmations
+	}
+
+	cases := []struct {
+		name     string
+		block    uint64
+		wantLvl  payLevel
+		wantProg int
+		wantETA  int
+	}{
+		{"0 conf mempool", 0, levelDanger, 0, 6 * btcAvgBlockSec},
+		{"block ahead of cached Latest (B2 underflow guard)", 970601, levelSoft, 20, 5 * btcAvgBlockSec},
+		{"1 conf (Latest)", 970600, levelSoft, 20, 5 * btcAvgBlockSec},
+		{"2 conf", 970599, levelSoft, 40, 4 * btcAvgBlockSec},
+		{"3 conf (Safe)", 970598, levelSafe, 70, 3 * btcAvgBlockSec},
+		{"4 conf", 970597, levelSafe, 80, 2 * btcAvgBlockSec},
+		{"5 conf", 970596, levelSafe, 90, 1 * btcAvgBlockSec},
+		{"6 conf (Finalized)", 970595, levelFinalized, 100, 0},
+		{"10 conf (>6)", 970591, levelFinalized, 100, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			lvl, prog, eta := classifyBTC(tc.block, h)
+			if lvl != tc.wantLvl || prog != tc.wantProg || eta != tc.wantETA {
+				t.Errorf("classifyBTC(%d) = (%s, %d, %d), want (%s, %d, %d)",
+					tc.block, lvl, prog, eta, tc.wantLvl, tc.wantProg, tc.wantETA)
+			}
+		})
+	}
+}
+
+func TestFetchBTCHeadsFailoverAndPrivacy(t *testing.T) {
+	origMempool, origFallback := mempoolBaseURL, esploraFallbackAPI
+	defer func() {
+		mempoolBaseURL = origMempool
+		esploraFallbackAPI = origFallback
+	}()
+
+	var fallbackHits atomic.Int32
+	fallbackSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fallbackHits.Add(1)
+		if r.URL.Path != "/blocks" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Write([]byte(`[
+			{"height":970600,"timestamp":1760003600},
+			{"height":970599,"timestamp":1760003000},
+			{"height":970598,"timestamp":1760002400},
+			{"height":970597,"timestamp":1760001800},
+			{"height":970596,"timestamp":1760001200},
+			{"height":970595,"timestamp":1760000600}
+		]`))
+	}))
+	defer fallbackSrv.Close()
+	esploraFallbackAPI = fallbackSrv.URL
+
+	brokenPrimary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer brokenPrimary.Close()
+
+	// 1. Custom self-hosted mempoolBaseURL MUST NOT leak requests to fallback (S10).
+	mempoolBaseURL = brokenPrimary.URL
+	if _, err := fetchBTCHeads(context.Background()); err == nil {
+		t.Fatal("expected error when custom mempoolBaseURL fails without third-party fallback")
+	}
+	if fallbackHits.Load() != 0 {
+		t.Fatalf("custom mempoolBaseURL leaked %d request(s) to fallback", fallbackHits.Load())
+	}
+
+	// 2. Default public mempoolBaseURL (simulated via esploraDefaultURLForTest or default flag)
+	// fails over cleanly to esploraFallbackAPI.
+	origDefault := defaultMempoolURLForFailover
+	defaultMempoolURLForFailover = brokenPrimary.URL
+	defer func() { defaultMempoolURLForFailover = origDefault }()
+
+	h, err := fetchBTCHeads(context.Background())
+	if err != nil {
+		t.Fatalf("fetchBTCHeads failover error = %v", err)
+	}
+	if h.Latest != 970600 || h.Safe != 970598 || h.Finalized != 970595 {
+		t.Fatalf("btc heads = %+v, want Latest=970600 Safe=970598 Finalized=970595", h)
+	}
+	if h.SafeLagSec != 1200 || h.FinalLagSec != 3000 {
+		t.Errorf("btc lags = (%d, %d), want (1200, 3000)", h.SafeLagSec, h.FinalLagSec)
+	}
+}
+
+func TestClassifySolanaSlotLevels(t *testing.T) {
+	h := payHeads{
+		Latest:      454804685,
+		Safe:        454804680,
+		Finalized:   454804650,
+		SafeTime:    1760000100,
+		FinalTime:   1760000088,
+		FinalLagSec: 12,
+	}
+	now := int64(1760000102)
+
+	if lvl, prog, eta := classifySolana(454804660, 1760000095, true, h, now); lvl != levelDanger || prog != 0 || eta != 0 {
+		t.Errorf("failed solana = (%s, %d, %d), want (DANGER, 0, 0)", lvl, prog, eta)
+	}
+	if lvl, prog, eta := classifySolana(0, 0, false, h, now); lvl != levelSoft || prog != 0 || eta != 12 {
+		t.Errorf("slot=0 = (%s, %d, %d), want (SOFT, 0, 12)", lvl, prog, eta)
+	}
+	if lvl, prog, eta := classifySolana(454804682, 0, false, h, now); lvl != levelSoft || prog != 25 || eta != 12 {
+		t.Errorf("slot>Safe = (%s, %d, %d), want (SOFT, 25, 12)", lvl, prog, eta)
+	}
+	lvlSafe, progSafe, etaSafe := classifySolana(454804665, 1760000098, false, h, now)
+	if lvlSafe != levelSafe || progSafe != 90 || etaSafe != 8 {
+		t.Errorf("confirmed slot = (%s, %d, %d), want (SAFE, 90, 8)", lvlSafe, progSafe, etaSafe)
+	}
+	if lvl, prog, eta := classifySolana(454804650, 1760000088, false, h, now); lvl != levelFinalized || prog != 100 || eta != 0 {
+		t.Errorf("finalized slot = (%s, %d, %d), want (FINALIZED, 100, 0)", lvl, prog, eta)
+	}
+}
+
+func TestFetchSolanaHeadsToleratesMissingBlockTime(t *testing.T) {
+	var blockTimeCalls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Method string            `json:"method"`
+			Params []json.RawMessage `json:"params"`
+		}
+		b, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(b, &req)
+		switch req.Method {
+		case "getSlot":
+			var cfg map[string]string
+			_ = json.Unmarshal(req.Params[0], &cfg)
+			switch cfg["commitment"] {
+			case "processed":
+				w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":454804685}`))
+			case "confirmed":
+				w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":454804680}`))
+			case "finalized":
+				w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":454804650}`))
+			}
+		case "getBlockTime":
+			blockTimeCalls.Add(1)
+			// Return JSON null (skipped/pruned slot) — MUST NOT fail fetchSolanaHeads (S2).
+			w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":null}`))
+		default:
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	}))
+	defer srv.Close()
+
+	h, err := fetchSolanaHeads(context.Background(), []string{srv.URL})
+	if err != nil {
+		t.Fatalf("fetchSolanaHeads error = %v", err)
+	}
+	if blockTimeCalls.Load() != 2 {
+		t.Errorf("getBlockTime calls = %d, want 2 (only confirmed & finalized, S2)", blockTimeCalls.Load())
+	}
+	if h.Latest != 454804685 || h.Safe != 454804680 || h.Finalized != 454804650 || h.FinalLagSec <= 0 {
+		t.Errorf("solana heads = %+v", h)
+	}
+}
