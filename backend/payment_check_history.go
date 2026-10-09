@@ -495,6 +495,11 @@ func sortPayTxsDesc(txs []payTx) {
 		}
 	}
 	sort.SliceStable(txs, func(i, j int) bool {
+		iUnconf := txs[i].Block == 0 && txs[i].Timestamp == ""
+		jUnconf := txs[j].Block == 0 && txs[j].Timestamp == ""
+		if iUnconf != jUnconf {
+			return iUnconf
+		}
 		if allHaveBlock {
 			if txs[i].Block != txs[j].Block {
 				return txs[i].Block > txs[j].Block
