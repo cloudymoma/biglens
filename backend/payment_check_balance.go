@@ -367,3 +367,285 @@ func fetchTronBalances(ctx context.Context, asset, addr string) []payBalanceRow 
 	}
 	return rows
 }
+
+const payBTCBalanceMaxPages = 4
+
+type btcBalanceTx struct {
+	TxID   string `json:"txid"`
+	Status struct {
+		Confirmed   bool   `json:"confirmed"`
+		BlockHeight uint64 `json:"block_height"`
+	} `json:"status"`
+	Vin []struct {
+		Prevout *struct {
+			ScriptpubkeyAddress string `json:"scriptpubkey_address"`
+			Value               int64  `json:"value"`
+		} `json:"prevout"`
+	} `json:"vin"`
+	Vout []struct {
+		ScriptpubkeyAddress string `json:"scriptpubkey_address"`
+		Value               int64  `json:"value"`
+	} `json:"vout"`
+}
+
+func btcTxNetForAddr(tx btcBalanceTx, addr string) int64 {
+	var net int64
+	for _, out := range tx.Vout {
+		if out.ScriptpubkeyAddress == addr {
+			net += out.Value
+		}
+	}
+	for _, in := range tx.Vin {
+		if in.Prevout != nil && in.Prevout.ScriptpubkeyAddress == addr {
+			net -= in.Prevout.Value
+		}
+	}
+	return net
+}
+
+// fetchBTCBalances computes finalized (>=6 conf), safe_delta (1-5 conf), and
+// latest_delta (0 conf mempool) balances in BTC using Esplora address stats and
+// recent chain transactions. Fails loud (Error="unavailable") if 1-5 conf txs
+// span more than payBTCBalanceMaxPages pages or if computed finalized < 0 (B4).
+func fetchBTCBalances(ctx context.Context, addr string, heads payHeads) []payBalanceRow {
+	ctx, cancel := context.WithTimeout(ctx, payUpstreamTimeout)
+	defer cancel()
+
+	row := payBalanceRow{Label: "BTC", Contract: "", Tier: tierNative}
+
+	var (
+		addrRaw, txsRaw   []byte
+		addrCode, txsCode string
+		wg                sync.WaitGroup
+	)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		addrRaw, addrCode = esploraGet(ctx, "/address/"+addr)
+	}()
+	go func() {
+		defer wg.Done()
+		txsRaw, txsCode = esploraGet(ctx, "/address/"+addr+"/txs")
+	}()
+	wg.Wait()
+
+	if addrCode != "" {
+		row.Error = addrCode
+		return []payBalanceRow{row}
+	}
+	if txsCode != "" {
+		row.Error = txsCode
+		return []payBalanceRow{row}
+	}
+
+	var addrInfo struct {
+		ChainStats struct {
+			FundedTxoSum int64 `json:"funded_txo_sum"`
+			SpentTxoSum  int64 `json:"spent_txo_sum"`
+		} `json:"chain_stats"`
+		MempoolStats struct {
+			FundedTxoSum int64 `json:"funded_txo_sum"`
+			SpentTxoSum  int64 `json:"spent_txo_sum"`
+		} `json:"mempool_stats"`
+	}
+	if err := json.Unmarshal(addrRaw, &addrInfo); err != nil {
+		row.Error = "bad_response"
+		return []payBalanceRow{row}
+	}
+
+	var pageTxs []btcBalanceTx
+	if err := json.Unmarshal(txsRaw, &pageTxs); err != nil {
+		row.Error = "bad_response"
+		return []payBalanceRow{row}
+	}
+
+	var pendingConfirmedSats int64
+	crossedFinalized := false
+
+	for page := 1; page <= payBTCBalanceMaxPages; page++ {
+		var oldestConfirmedHeight uint64
+		var lastTxID string
+		hasConfirmed := false
+
+		for _, tx := range pageTxs {
+			if !tx.Status.Confirmed {
+				continue
+			}
+			hasConfirmed = true
+			oldestConfirmedHeight = tx.Status.BlockHeight
+			lastTxID = tx.TxID
+			if tx.Status.BlockHeight > heads.Finalized {
+				pendingConfirmedSats += btcTxNetForAddr(tx, addr)
+			}
+		}
+
+		if !hasConfirmed || oldestConfirmedHeight <= heads.Finalized {
+			crossedFinalized = true
+			break
+		}
+		if page == payBTCBalanceMaxPages || lastTxID == "" {
+			break
+		}
+
+		nextRaw, nextCode := esploraGet(ctx, "/address/"+addr+"/txs/chain/"+lastTxID)
+		if nextCode != "" {
+			row.Error = nextCode
+			return []payBalanceRow{row}
+		}
+		pageTxs = nil
+		if err := json.Unmarshal(nextRaw, &pageTxs); err != nil {
+			row.Error = "bad_response"
+			return []payBalanceRow{row}
+		}
+	}
+
+	confirmedNet := addrInfo.ChainStats.FundedTxoSum - addrInfo.ChainStats.SpentTxoSum
+	mempoolNet := addrInfo.MempoolStats.FundedTxoSum - addrInfo.MempoolStats.SpentTxoSum
+	finalizedSats := confirmedNet - pendingConfirmedSats
+
+	if !crossedFinalized || finalizedSats < 0 {
+		row.Error = "unavailable"
+		return []payBalanceRow{row}
+	}
+
+	row.Finalized = formatUnits(big.NewInt(finalizedSats), 8)
+	row.SafeDelta = formatSignedUnits(big.NewInt(pendingConfirmedSats), 8)
+	row.LatestDelta = formatSignedUnits(big.NewInt(mempoolNet), 8)
+	return []payBalanceRow{row}
+}
+
+func fetchSolanaNativeBalanceOnce(ctx context.Context, rpcs []string, addr, commitment string) (*big.Int, string) {
+	res, code := solanaRPCFailover(ctx, rpcs, "getBalance", addr, map[string]string{"commitment": commitment})
+	if code != "" {
+		return nil, code
+	}
+	var out struct {
+		Value *uint64 `json:"value"`
+	}
+	if err := json.Unmarshal(res, &out); err != nil || out.Value == nil {
+		return nil, "bad_response"
+	}
+	return new(big.Int).SetUint64(*out.Value), ""
+}
+
+func fetchSolanaSPLBalanceOnce(ctx context.Context, rpcs []string, ata, commitment string) (*big.Int, string) {
+	res, code := solanaRPCFailover(ctx, rpcs, "getAccountInfo", ata, map[string]any{
+		"encoding":   "jsonParsed",
+		"commitment": commitment,
+	})
+	if code != "" {
+		return nil, code
+	}
+	var out struct {
+		Value *struct {
+			Data struct {
+				Parsed struct {
+					Info struct {
+						TokenAmount struct {
+							Amount string `json:"amount"`
+						} `json:"tokenAmount"`
+					} `json:"info"`
+				} `json:"parsed"`
+			} `json:"data"`
+		} `json:"value"`
+	}
+	if err := json.Unmarshal(res, &out); err != nil {
+		return nil, "bad_response"
+	}
+	if out.Value == nil {
+		return big.NewInt(0), ""
+	}
+	n, ok := new(big.Int).SetString(strings.TrimSpace(out.Value.Data.Parsed.Info.TokenAmount.Amount), 10)
+	if !ok {
+		return nil, "bad_response"
+	}
+	return n, ""
+}
+
+// fetchSolanaBalances queries processed, confirmed, and finalized balances for
+// native SOL or canonical ATA of registry SPL tokens (USDT, USDC).
+func fetchSolanaBalances(ctx context.Context, rpcs []string, asset, addr string) []payBalanceRow {
+	ctx, cancel := context.WithTimeout(ctx, payUpstreamTimeout)
+	defer cancel()
+
+	commitments := [3]string{"processed", "confirmed", "finalized"}
+
+	if asset == "SOL" {
+		row := payBalanceRow{Label: "SOL", Contract: "", Tier: tierNative}
+		if len(rpcs) == 0 {
+			row.Error = "not_configured"
+			return []payBalanceRow{row}
+		}
+		var vals [3]*big.Int
+		var codes [3]string
+		var wg sync.WaitGroup
+		for i, c := range commitments {
+			wg.Add(1)
+			go func(i int, c string) {
+				defer wg.Done()
+				vals[i], codes[i] = fetchSolanaNativeBalanceOnce(ctx, rpcs, addr, c)
+			}(i, c)
+		}
+		wg.Wait()
+		for _, c := range codes {
+			if c != "" {
+				row.Error = c
+				return []payBalanceRow{row}
+			}
+		}
+		procVal, confVal, finVal := vals[0], vals[1], vals[2]
+		row.Finalized = formatUnits(finVal, 9)
+		row.SafeDelta = formatSignedUnits(new(big.Int).Sub(confVal, finVal), 9)
+		row.LatestDelta = formatSignedUnits(new(big.Int).Sub(procVal, confVal), 9)
+		return []payBalanceRow{row}
+	}
+
+	toks := tokensFor(asset, "sol")
+	if len(toks) == 0 {
+		return nil
+	}
+	rows := make([]payBalanceRow, len(toks))
+	for idx, tok := range toks {
+		row := payBalanceRow{Label: tok.Label, Contract: tok.Contract, Tier: tok.Tier}
+		if len(rpcs) == 0 {
+			row.Error = "not_configured"
+			rows[idx] = row
+			continue
+		}
+		ata, err := deriveSolanaATA(addr, tok.Contract)
+		if err != nil {
+			row.Error = "bad_request"
+			rows[idx] = row
+			continue
+		}
+		var vals [3]*big.Int
+		var codes [3]string
+		var wg sync.WaitGroup
+		for i, c := range commitments {
+			wg.Add(1)
+			go func(i int, c string) {
+				defer wg.Done()
+				vals[i], codes[i] = fetchSolanaSPLBalanceOnce(ctx, rpcs, ata, c)
+			}(i, c)
+		}
+		wg.Wait()
+		var errCode string
+		for _, c := range codes {
+			if c != "" {
+				errCode = c
+				break
+			}
+		}
+		if errCode != "" {
+			row.Error = errCode
+			rows[idx] = row
+			continue
+		}
+		procVal, confVal, finVal := vals[0], vals[1], vals[2]
+		row.Finalized = formatUnits(finVal, tok.Decimals)
+		row.SafeDelta = formatSignedUnits(new(big.Int).Sub(confVal, finVal), tok.Decimals)
+		row.LatestDelta = formatSignedUnits(new(big.Int).Sub(procVal, confVal), tok.Decimals)
+		rows[idx] = row
+	}
+	return rows
+}

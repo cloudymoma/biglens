@@ -209,3 +209,134 @@ func TestFetchBalancesAllRowsFail(t *testing.T) {
 		}
 	}
 }
+
+func TestFetchBTCBalancesThreeTiers(t *testing.T) {
+	const btcAddr = "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"
+	origMempool, origDefault := mempoolBaseURL, defaultMempoolURLForFailover
+	defer func() {
+		mempoolBaseURL = origMempool
+		defaultMempoolURLForFailover = origDefault
+	}()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/address/" + btcAddr:
+			// Confirmed net = 250_000_000 - 50_000_000 = 200_000_000 sats (2.0 BTC).
+			// Mempool net = 0 - 10_000_000 = -10_000_000 sats (-0.1 BTC).
+			w.Write([]byte(`{
+				"chain_stats":{"funded_txo_sum":250000000,"spent_txo_sum":50000000},
+				"mempool_stats":{"funded_txo_sum":0,"spent_txo_sum":10000000}
+			}`))
+		case "/api/address/" + btcAddr + "/txs":
+			// 1 tx at height 970598 (3 conf, > Finalized 970595): +50_000_000 sats (0.5 BTC),
+			// 1 tx at height 970590 (>=6 conf, <= Finalized 970595): +150_000_000 sats (1.5 BTC).
+			w.Write([]byte(`[
+				{"txid":"tx_safe","status":{"confirmed":true,"block_height":970598},"vin":[],"vout":[{"scriptpubkey_address":"` + btcAddr + `","value":50000000}]},
+				{"txid":"tx_fin","status":{"confirmed":true,"block_height":970590},"vin":[],"vout":[{"scriptpubkey_address":"` + btcAddr + `","value":150000000}]}
+			]`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	mempoolBaseURL = srv.URL
+	defaultMempoolURLForFailover = "https://mempool.space"
+
+	rows := fetchBTCBalances(context.Background(), btcAddr, payHeads{Latest: 970600, Safe: 970598, Finalized: 970595})
+	if len(rows) != 1 {
+		t.Fatalf("btc rows = %+v, want 1 row", rows)
+	}
+	got := rows[0]
+	if got.Error != "" || got.Tier != tierNative || got.Finalized != "1.5" || got.SafeDelta != "+0.5" || got.LatestDelta != "-0.1" {
+		t.Fatalf("btc balance row = %+v, want Finalized=1.5 SafeDelta=+0.5 LatestDelta=-0.1", got)
+	}
+}
+
+func TestFetchBTCBalancesPaginatesAndFailsLoudAboveCap(t *testing.T) {
+	const btcAddr = "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"
+	origMempool, origDefault := mempoolBaseURL, defaultMempoolURLForFailover
+	defer func() {
+		mempoolBaseURL = origMempool
+		defaultMempoolURLForFailover = origDefault
+	}()
+
+	// All 4 pages return txs with block_height 970599 > Finalized 970595 (never crossing Finalized).
+	var chainCalls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/address/"+btcAddr:
+			w.Write([]byte(`{
+				"chain_stats":{"funded_txo_sum":500000000,"spent_txo_sum":0},
+				"mempool_stats":{"funded_txo_sum":0,"spent_txo_sum":0}
+			}`))
+		case strings.HasPrefix(r.URL.Path, "/api/address/"+btcAddr+"/txs"):
+			n := chainCalls.Add(1)
+			txid := "tx_page_" + string(rune('0'+n))
+			w.Write([]byte(`[{"txid":"` + txid + `","status":{"confirmed":true,"block_height":970599},"vin":[],"vout":[{"scriptpubkey_address":"` + btcAddr + `","value":10000000}]}]`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	mempoolBaseURL = srv.URL
+	defaultMempoolURLForFailover = "https://mempool.space"
+
+	rows := fetchBTCBalances(context.Background(), btcAddr, payHeads{Latest: 970600, Safe: 970598, Finalized: 970595})
+	if len(rows) != 1 || rows[0].Error != "unavailable" || rows[0].Finalized != "" {
+		t.Fatalf("expected fail-loud row.Error=unavailable (B4), got %+v", rows)
+	}
+	if chainCalls.Load() != 4 {
+		t.Errorf("tx page calls = %d, want 4 (payBTCBalanceMaxPages)", chainCalls.Load())
+	}
+}
+
+func TestFetchSolanaBalancesNativeAndSPL(t *testing.T) {
+	const solAddr = "depMwrdSqn5y9fDkdotP4iGxTdxSaEHVE6QjnbcEmjN"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Method string            `json:"method"`
+			Params []json.RawMessage `json:"params"`
+		}
+		b, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(b, &req)
+		var cfg map[string]string
+		_ = json.Unmarshal(req.Params[len(req.Params)-1], &cfg)
+
+		switch req.Method {
+		case "getBalance":
+			switch cfg["commitment"] {
+			case "finalized":
+				w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"context":{"slot":454804650},"value":1000000000}}`)) // 1.0 SOL
+			case "confirmed":
+				w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"context":{"slot":454804680},"value":1500000000}}`)) // 1.5 SOL (+0.5)
+			case "processed":
+				w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"context":{"slot":454804685},"value":1400000000}}`)) // 1.4 SOL (-0.1)
+			}
+		case "getAccountInfo":
+			switch cfg["commitment"] {
+			case "finalized":
+				// Uninitialized ATA at finalized -> 0 USDC
+				w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"context":{"slot":454804650},"value":null}}`))
+			case "confirmed":
+				w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"context":{"slot":454804680},"value":{"data":{"parsed":{"info":{"tokenAmount":{"amount":"25000000","decimals":6}}}}}}}`))
+			case "processed":
+				w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"context":{"slot":454804685},"value":{"data":{"parsed":{"info":{"tokenAmount":{"amount":"30500000","decimals":6}}}}}}}`))
+			}
+		default:
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	}))
+	defer srv.Close()
+
+	solRows := fetchSolanaBalances(context.Background(), []string{srv.URL}, "SOL", solAddr)
+	if len(solRows) != 1 || solRows[0].Error != "" || solRows[0].Tier != tierNative ||
+		solRows[0].Finalized != "1" || solRows[0].SafeDelta != "+0.5" || solRows[0].LatestDelta != "-0.1" {
+		t.Fatalf("SOL balance row = %+v, want Finalized=1 SafeDelta=+0.5 LatestDelta=-0.1", solRows)
+	}
+
+	usdcRows := fetchSolanaBalances(context.Background(), []string{srv.URL}, "USDC", solAddr)
+	if len(usdcRows) != 1 || usdcRows[0].Error != "" || usdcRows[0].Tier != tierNative ||
+		usdcRows[0].Finalized != "0" || usdcRows[0].SafeDelta != "+25" || usdcRows[0].LatestDelta != "+5.5" {
+		t.Fatalf("Solana USDC balance row = %+v, want Finalized=0 SafeDelta=+25 LatestDelta=+5.5", usdcRows)
+	}
+}
