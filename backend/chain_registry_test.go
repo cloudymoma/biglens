@@ -6,7 +6,7 @@ import (
 )
 
 func TestRegistryInvariants(t *testing.T) {
-	wantChains := []string{"eth", "arb", "op", "base", "tron", "btc"}
+	wantChains := []string{"eth", "arb", "op", "base", "tron", "btc", "sol"}
 	if len(chains) != len(wantChains) {
 		t.Fatalf("len(chains) = %d, want %d", len(chains), len(wantChains))
 	}
@@ -31,6 +31,9 @@ func TestRegistryInvariants(t *testing.T) {
 	if chains["btc"].GoPlusChainID != "" {
 		t.Errorf("btc GoPlusChainID = %q, want empty", chains["btc"].GoPlusChainID)
 	}
+	if chains["sol"].GoPlusChainID != "solana" || chains["sol"].HasOracle {
+		t.Errorf("sol metadata mismatch: %+v", chains["sol"])
+	}
 
 	// Every non-native-coin (asset, network) pair in payAssets must have tokensFor results.
 	for asset, nets := range payAssets {
@@ -38,7 +41,7 @@ func TestRegistryInvariants(t *testing.T) {
 			if !validPair(asset, net) {
 				t.Errorf("validPair(%q, %q) = false, want true", asset, net)
 			}
-			if asset == "ETH" || asset == "TRX" {
+			if asset == "ETH" || asset == "TRX" || asset == "BTC" || asset == "SOL" {
 				continue
 			}
 			toks := tokensFor(asset, net)
@@ -55,6 +58,11 @@ func TestRegistryInvariants(t *testing.T) {
 					t.Errorf("tokensFor(%q, %q) has native after bridged: %+v", asset, net, toks)
 				}
 			}
+		}
+	}
+	for _, must := range [][2]string{{"BTC", "btc"}, {"SOL", "sol"}, {"USDT", "sol"}, {"USDC", "sol"}} {
+		if !validPair(must[0], must[1]) {
+			t.Errorf("validPair(%q, %q) = false, want true", must[0], must[1])
 		}
 	}
 	if validPair("USDC", "tron") {
@@ -98,7 +106,7 @@ func TestRegistryInvariants(t *testing.T) {
 			}
 		}
 	}
-	for _, net := range []string{"eth", "arb", "op", "base", "tron"} {
+	for _, net := range []string{"eth", "arb", "op", "base", "tron", "sol"} {
 		if nativeByNet[net] == 0 {
 			t.Errorf("network %q has no native tier token in registryTokens", net)
 		}

@@ -12,13 +12,14 @@ const (
 	familyEVM  chainFamily = "evm"
 	familyTron chainFamily = "tron"
 	familyBTC  chainFamily = "btc"
+	familySol  chainFamily = "sol"
 )
 
 type chainInfo struct {
-	ID            string // eth | arb | op | base | tron | btc
-	Label         string // "Ethereum", "Arbitrum One", "Optimism", "Base", "TRON", "Bitcoin"
+	ID            string // eth | arb | op | base | tron | btc | sol
+	Label         string // "Ethereum", "Arbitrum One", "Optimism", "Base", "TRON", "Bitcoin", "Solana"
 	Family        chainFamily
-	GoPlusChainID string // "1","42161","10","8453","tron"; "" = not covered by GoPlus
+	GoPlusChainID string // "1","42161","10","8453","tron","solana"; "" = not covered by GoPlus
 	HasOracle     bool   // Chainalysis sanctions oracle deployed (eth/arb/op; base=false, verified 2026-10-05)
 	TxURL         string // fmt template, e.g. "https://arbiscan.io/tx/%s"
 	AddressURL    string // fmt template
@@ -79,6 +80,15 @@ var chains = map[string]chainInfo{
 		TxURL:         "https://mempool.space/tx/%s",
 		AddressURL:    "https://mempool.space/address/%s",
 	},
+	"sol": {
+		ID:            "sol",
+		Label:         "Solana",
+		Family:        familySol,
+		GoPlusChainID: "solana",
+		HasOracle:     false,
+		TxURL:         "https://solscan.io/tx/%s",
+		AddressURL:    "https://solscan.io/account/%s",
+	},
 }
 
 type tokenTier string
@@ -93,15 +103,16 @@ const (
 type registryToken struct {
 	Asset     string // USDT | USDC
 	Network   string // chain ID
-	Contract  string // EVM lowercase hex; TRON base58
+	Contract  string // EVM lowercase hex; TRON/Solana base58
 	Decimals  int
 	Tier      tokenTier // native | bridged
 	Label     string    // "USD₮0", "USDC.e", "Bridged USDT" …
-	FreezeSel string    // "e47d6060" isBlackListed | "fe575a87" isBlacklisted | "fbac3951" isBlocked | "" (no freeze function)
+	FreezeSel string    // "e47d6060" isBlackListed | "fe575a87" isBlacklisted | "fbac3951" isBlocked | "spl-account-state" | ""
 }
 
 // registryTokens is the canonical, code-only token registry (verified on-chain
-// via symbol(), totalSupply(), and blacklist selector calls on 2026-10-05).
+// via symbol(), totalSupply(), and blacklist selector calls on 2026-10-05 /
+// Solana mint & ATA state verified on 2026-10-09).
 // Never expose this table in conf.yaml.
 var registryTokens = []registryToken{
 	// USDT
@@ -111,6 +122,7 @@ var registryTokens = []registryToken{
 	{Asset: "USDT", Network: "op", Contract: "0x01bff41798a0bcf287b996046ca68b395dbc1071", Decimals: 6, Tier: tierNative, Label: "USD₮0", FreezeSel: "fbac3951"},
 	{Asset: "USDT", Network: "op", Contract: "0x94b008aa00579c1307b0ef2c499ad98a8ce58e58", Decimals: 6, Tier: tierBridged, Label: "Bridged USDT", FreezeSel: ""},
 	{Asset: "USDT", Network: "base", Contract: "0xfde4c96c8593536e31f229ea8f37b2ada2699bb2", Decimals: 6, Tier: tierBridged, Label: "Bridged USDT", FreezeSel: ""},
+	{Asset: "USDT", Network: "sol", Contract: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB", Decimals: 6, Tier: tierNative, Label: "USDT", FreezeSel: "spl-account-state"},
 
 	// USDC
 	{Asset: "USDC", Network: "eth", Contract: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", Decimals: 6, Tier: tierNative, Label: "USDC", FreezeSel: "fe575a87"},
@@ -119,13 +131,16 @@ var registryTokens = []registryToken{
 	{Asset: "USDC", Network: "op", Contract: "0x0b2c639c533813f4aa9d7837caf62653d097ff85", Decimals: 6, Tier: tierNative, Label: "USDC", FreezeSel: "fe575a87"},
 	{Asset: "USDC", Network: "op", Contract: "0x7f5c764cbc14f9669b88837ca1490cca17c31607", Decimals: 6, Tier: tierBridged, Label: "USDC.e", FreezeSel: "fe575a87"},
 	{Asset: "USDC", Network: "base", Contract: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", Decimals: 6, Tier: tierNative, Label: "USDC", FreezeSel: "fe575a87"},
+	{Asset: "USDC", Network: "sol", Contract: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", Decimals: 6, Tier: tierNative, Label: "USDC", FreezeSel: "spl-account-state"},
 }
 
 var payAssets = map[string][]string{
-	"USDT": {"tron", "eth", "arb", "op", "base"},
-	"USDC": {"eth", "arb", "op", "base"},
+	"USDT": {"tron", "eth", "arb", "op", "base", "sol"},
+	"USDC": {"eth", "arb", "op", "base", "sol"},
 	"ETH":  {"eth", "arb", "op", "base"},
 	"TRX":  {"tron"},
+	"BTC":  {"btc"},
+	"SOL":  {"sol"},
 }
 
 func tokensFor(asset, network string) []registryToken {

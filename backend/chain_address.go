@@ -13,16 +13,18 @@ import (
 var (
 	errBadTronAddress = errors.New("enter a TRON address (T…, 34 characters)")
 	errBadBTCAddress  = errors.New("enter a Bitcoin address (bc1…, 1… or 3…)")
+	errBadSolAddress  = errors.New("enter a Solana address (32–44 base58 characters)")
 	errUnknownChain   = errors.New("unknown chain")
 
 	tronShapeRe = regexp.MustCompile(`^T[1-9A-HJ-NP-Za-km-z]{33}$`)
 	btcShapeRe  = regexp.MustCompile(`^(?:[13][1-9A-HJ-NP-Za-km-z]{24,33}|[bB][cC]1[0-9a-zA-Z]{6,87})$`)
+	solShapeRe  = regexp.MustCompile(`^[1-9A-HJ-NP-Za-km-z]{32,44}$`)
 )
 
 // parseChainAddress validates raw for chain and returns its canonical form:
 // EVM lowercase hex (mixed-case with bad EIP-55 checksum still succeeds with
 // warn=true, matching parseEthAddress), TRON exact-case base58, BTC lowercase
-// bech32/bech32m or exact-case base58.
+// bech32/bech32m or exact-case base58, Solana exact-case 32-byte base58.
 func parseChainAddress(chain, raw string) (addr string, warn bool, err error) {
 	info, ok := chains[chain]
 	if !ok {
@@ -83,21 +85,57 @@ func parseChainAddress(chain, raw string) (addr string, warn bool, err error) {
 			}
 		}
 		return "", false, errBadBTCAddress
+
+	case familySol:
+		if len(s) < 32 || len(s) > 44 {
+			return "", false, errBadSolAddress
+		}
+		b, err := base58Decode(s)
+		if err != nil || len(b) != 32 {
+			return "", false, errBadSolAddress
+		}
+		return s, false, nil
 	}
 	return "", false, errUnknownChain
 }
 
-// detectFamily inspects only the shape of raw (no checksum verification) for
-// wrong-chain hints.
+// detectFamily inspects the shape and decoded Base58 byte length of raw (no
+// checksum verification) for wrong-chain hints.
 func detectFamily(raw string) (chainFamily, bool) {
 	s := strings.TrimSpace(raw)
-	switch {
-	case ethAddressRe.MatchString(s):
+	if s == "" {
+		return "", false
+	}
+	if ethAddressRe.MatchString(s) {
 		return familyEVM, true
+	}
+	if strings.HasPrefix(strings.ToLower(s), "bc1") && btcShapeRe.MatchString(s) {
+		return familyBTC, true
+	}
+	if len(s) >= 25 && len(s) <= 44 {
+		if decoded, err := base58Decode(s); err == nil {
+			switch len(decoded) {
+			case 32:
+				if len(s) >= 32 {
+					return familySol, true
+				}
+			case 25:
+				switch s[0] {
+				case 'T':
+					return familyTron, true
+				case '1', '3':
+					return familyBTC, true
+				}
+			}
+		}
+	}
+	switch {
 	case tronShapeRe.MatchString(s):
 		return familyTron, true
 	case btcShapeRe.MatchString(s):
 		return familyBTC, true
+	case solShapeRe.MatchString(s):
+		return familySol, true
 	default:
 		return "", false
 	}
@@ -116,9 +154,9 @@ var base58Index = func() [256]int8 {
 	return t
 }()
 
-func base58CheckDecode(s string) (version byte, payload []byte, err error) {
+func base58Decode(s string) ([]byte, error) {
 	if s == "" {
-		return 0, nil, errors.New("empty base58")
+		return nil, errors.New("empty base58")
 	}
 	zeros := 0
 	for zeros < len(s) && s[zeros] == '1' {
@@ -130,7 +168,7 @@ func base58CheckDecode(s string) (version byte, payload []byte, err error) {
 	for i := 0; i < len(s); i++ {
 		c := s[i]
 		if int(c) >= len(base58Index) || base58Index[c] < 0 {
-			return 0, nil, errors.New("invalid base58 character")
+			return nil, errors.New("invalid base58 character")
 		}
 		digit.SetInt64(int64(base58Index[c]))
 		n.Mul(n, radix)
@@ -139,6 +177,36 @@ func base58CheckDecode(s string) (version byte, payload []byte, err error) {
 	b := n.Bytes()
 	raw := make([]byte, zeros+len(b))
 	copy(raw[zeros:], b)
+	return raw, nil
+}
+
+func base58Encode(b []byte) string {
+	zeros := 0
+	for zeros < len(b) && b[zeros] == 0 {
+		zeros++
+	}
+	n := new(big.Int).SetBytes(b)
+	radix := big.NewInt(58)
+	mod := new(big.Int)
+	var chars []byte
+	for n.Sign() > 0 {
+		n.DivMod(n, radix, mod)
+		chars = append(chars, base58Alphabet[mod.Int64()])
+	}
+	for i := 0; i < zeros; i++ {
+		chars = append(chars, '1')
+	}
+	for i, j := 0, len(chars)-1; i < j; i, j = i+1, j-1 {
+		chars[i], chars[j] = chars[j], chars[i]
+	}
+	return string(chars)
+}
+
+func base58CheckDecode(s string) (version byte, payload []byte, err error) {
+	raw, err := base58Decode(s)
+	if err != nil {
+		return 0, nil, err
+	}
 	if len(raw) < 5 {
 		return 0, nil, errors.New("base58check too short")
 	}
@@ -158,26 +226,7 @@ func base58CheckEncode(version byte, payload []byte) string {
 	h1 := sha256.Sum256(body[:1+len(payload)])
 	h2 := sha256.Sum256(h1[:])
 	copy(body[1+len(payload):], h2[:4])
-
-	zeros := 0
-	for zeros < len(body) && body[zeros] == 0 {
-		zeros++
-	}
-	n := new(big.Int).SetBytes(body)
-	radix := big.NewInt(58)
-	mod := new(big.Int)
-	var chars []byte
-	for n.Sign() > 0 {
-		n.DivMod(n, radix, mod)
-		chars = append(chars, base58Alphabet[mod.Int64()])
-	}
-	for i := 0; i < zeros; i++ {
-		chars = append(chars, '1')
-	}
-	for i, j := 0, len(chars)-1; i < j; i, j = i+1, j-1 {
-		chars[i], chars[j] = chars[j], chars[i]
-	}
-	return string(chars)
+	return base58Encode(body)
 }
 
 // tronHexToBase58 converts a 20-byte hex address (with optional "0x" or "41"
