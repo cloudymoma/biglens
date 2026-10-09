@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -384,7 +385,7 @@ func parseSolTxTransfers(sig string, tx *solTxResult, asset, addr string) []rawS
 	}
 
 	if tx.Meta != nil {
-		for _, tb := range append(tx.Meta.PreTokenBalances, tx.Meta.PostTokenBalances...) {
+		for _, tb := range slices.Concat(tx.Meta.PreTokenBalances, tx.Meta.PostTokenBalances) {
 			if tb.AccountIndex >= 0 && tb.AccountIndex < len(keys) {
 				acct := keys[tb.AccountIndex]
 				if tb.Owner != "" {

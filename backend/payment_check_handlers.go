@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -597,19 +598,20 @@ func (h *APIHandler) PaymentCheckHistory(w http.ResponseWriter, r *http.Request)
 	store := h.payRiskStore()
 	histKey := "pay:hist:" + network + ":" + asset + ":" + addr
 
-	heads, headsErr := h.getPayHeads(bgCtx, network)
-
 	var (
 		histEntry *cachedPayHistory
 		histErr   error
+		heads     payHeads
+		headsErr  error
 	)
 
-	if h.cache != nil {
-		if cached, ok := h.cache.Get(histKey); ok {
-			histEntry = cached.(*cachedPayHistory)
+	fetchHist := func() {
+		if h.cache != nil {
+			if cached, ok := h.cache.Get(histKey); ok {
+				histEntry = cached.(*cachedPayHistory)
+				return
+			}
 		}
-	}
-	if histEntry == nil {
 		v, err, _ := h.sf.Do(histKey, func() (any, error) {
 			if h.cache != nil {
 				if cached, ok := h.cache.Get(histKey); ok {
@@ -652,6 +654,24 @@ func (h *APIHandler) PaymentCheckHistory(w http.ResponseWriter, r *http.Request)
 			histEntry = v.(*cachedPayHistory)
 		}
 		histErr = err
+	}
+
+	if network == "sol" {
+		// Solana fetches heads first so finalized slot cache TTL (S1) applies to getTransaction calls.
+		heads, headsErr = h.getPayHeads(bgCtx, network)
+		fetchHist()
+	} else {
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			fetchHist()
+		}()
+		go func() {
+			defer wg.Done()
+			heads, headsErr = h.getPayHeads(bgCtx, network)
+		}()
+		wg.Wait()
 	}
 
 	var (

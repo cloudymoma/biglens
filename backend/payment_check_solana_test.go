@@ -419,3 +419,68 @@ func jsonNumber(n uint64) string {
 	b, _ := json.Marshal(n)
 	return string(b)
 }
+
+func TestSolanaConcurrentParseCachedTxNoRace(t *testing.T) {
+	const (
+		userAddr = "depMwrdSqn5y9fDkdotP4iGxTdxSaEHVE6QjnbcEmjN"
+		peerAddr = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM"
+		userATA  = "ERbwSojYctddRjySVYiBw9TXgqAWw2nTeA2zQR9oB95i"
+		peerATA  = "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1"
+		usdcMint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+	)
+
+	// PreTokenBalances intentionally has len=2, cap=4 so append(PreTokenBalances, PostTokenBalances...)
+	// writes into shared backing storage if not cloned via slices.Concat!
+	pre := make([]solTokenBalance, 2, 4)
+	pre[0] = solTokenBalance{AccountIndex: 1, Mint: usdcMint, Owner: peerAddr}
+	pre[1] = solTokenBalance{AccountIndex: 2, Mint: usdcMint, Owner: userAddr}
+	post := []solTokenBalance{
+		{AccountIndex: 1, Mint: usdcMint, Owner: peerAddr},
+		{AccountIndex: 2, Mint: usdcMint, Owner: userAddr},
+	}
+
+	var tx solTxResult
+	tx.Slot = 454800100
+	bt := int64(1791446400)
+	tx.BlockTime = &bt
+	tx.Transaction.Message.AccountKeys = []solAccountKey{peerAddr, peerATA, userATA, solanaTokenProgramID}
+	tx.Transaction.Message.Instructions = []solInstruction{{
+		Program: "spl-token",
+		Parsed:  json.RawMessage(`{"type":"transferChecked","info":{"source":"` + peerATA + `","destination":"` + userATA + `","authority":"` + peerAddr + `","mint":"` + usdcMint + `","tokenAmount":{"amount":"1000000","decimals":6}}}`),
+	}}
+	tx.Meta = &struct {
+		Err               any               `json:"err"`
+		Fee               uint64            `json:"fee"`
+		PreBalances       []uint64          `json:"preBalances"`
+		PostBalances      []uint64          `json:"postBalances"`
+		PreTokenBalances  []solTokenBalance `json:"preTokenBalances"`
+		PostTokenBalances []solTokenBalance `json:"postTokenBalances"`
+		InnerInstructions []struct {
+			Index        int              `json:"index"`
+			Instructions []solInstruction `json:"instructions"`
+		} `json:"innerInstructions"`
+		LoadedAddresses *struct {
+			Writable []string `json:"writable"`
+			Readonly []string `json:"readonly"`
+		} `json:"loadedAddresses"`
+	}{
+		PreTokenBalances:  pre,
+		PostTokenBalances: post,
+	}
+
+	var wg sync.WaitGroup
+	for g := 0; g < 8; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 50; i++ {
+				cp := tx // shallow struct copy just like cache retrieval
+				rows := parseSolTxTransfers("sig_race", &cp, "USDC", userAddr)
+				if len(rows) != 1 || rows[0].counterparty != peerAddr {
+					t.Errorf("unexpected rows: %+v", rows)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+}
