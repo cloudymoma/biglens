@@ -1151,3 +1151,156 @@ func TestLiveAlertForLookalikeKnown(t *testing.T) {
 		t.Fatalf("Alerts = %+v, want poisoning_received (warning) on 0xknown_poison_in and sent_to_lookalike (critical) on 0xknown_poison_out", resp.Alerts)
 	}
 }
+
+func TestHandlePaymentCheckLiveAndHistoryBTCAndSolana(t *testing.T) {
+	const (
+		btcSelf   = "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"
+		btcSender = "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh"
+		solSelf   = "depMwrdSqn5y9fDkdotP4iGxTdxSaEHVE6QjnbcEmjN"
+		solSender = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM"
+	)
+	nowSec := time.Now().Unix()
+
+	origMempool, origDefault := mempoolBaseURL, defaultMempoolURLForFailover
+	defer func() {
+		mempoolBaseURL = origMempool
+		defaultMempoolURLForFailover = origDefault
+	}()
+
+	// Mock Esplora server as BOTH mempoolBaseURL and defaultMempoolURLForFailover so default failover host list is active!
+	btcSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/blocks":
+			w.Write([]byte(`[
+				{"height":970600,"timestamp":` + fmt.Sprintf("%d", nowSec) + `},
+				{"height":970599,"timestamp":` + fmt.Sprintf("%d", nowSec-600) + `},
+				{"height":970598,"timestamp":` + fmt.Sprintf("%d", nowSec-1200) + `},
+				{"height":970597,"timestamp":` + fmt.Sprintf("%d", nowSec-1800) + `},
+				{"height":970596,"timestamp":` + fmt.Sprintf("%d", nowSec-2400) + `},
+				{"height":970595,"timestamp":` + fmt.Sprintf("%d", nowSec-3000) + `}
+			]`))
+		case "/api/address/" + btcSelf:
+			w.Write([]byte(`{
+				"chain_stats":{"funded_txo_sum":100000000,"spent_txo_sum":0},
+				"mempool_stats":{"funded_txo_sum":25000000,"spent_txo_sum":0}
+			}`))
+		case "/api/address/" + btcSelf + "/txs":
+			// 0-conf incoming with RBF + 6-conf incoming
+			w.Write([]byte(`[
+				{"txid":"tx_0conf","status":{"confirmed":false},"vin":[{"sequence":4294967293,"prevout":{"scriptpubkey_address":"` + btcSender + `","value":25000000}}],"vout":[{"scriptpubkey_address":"` + btcSelf + `","value":25000000}]},
+				{"txid":"tx_6conf","status":{"confirmed":true,"block_height":970595,"block_time":` + fmt.Sprintf("%d", nowSec-3000) + `},"vin":[{"sequence":4294967295,"prevout":{"scriptpubkey_address":"` + btcSender + `","value":100000000}}],"vout":[{"scriptpubkey_address":"` + btcSelf + `","value":100000000}]}
+			]`))
+		default:
+			w.Write([]byte(`[]`))
+		}
+	}))
+	defer btcSrv.Close()
+	mempoolBaseURL = btcSrv.URL
+	defaultMempoolURLForFailover = btcSrv.URL
+
+	// Mock Solana JSON-RPC server serving SOL + frozen USDC ATA + recent system transfer
+	solSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Method string            `json:"method"`
+			Params []json.RawMessage `json:"params"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		switch req.Method {
+		case "getSlot":
+			w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":454805000}`))
+		case "getBlockTime":
+			w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":` + fmt.Sprintf("%d", nowSec) + `}`))
+		case "getBalance":
+			w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"context":{"slot":454805000},"value":2000000000}}`))
+		case "getAccountInfo":
+			w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"context":{"slot":454805000},"value":{"data":{"parsed":{"info":{"tokenAmount":{"amount":"50000000","decimals":6}}}}}}}`))
+		case "getMultipleAccounts":
+			w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"context":{"slot":454805000},"value":[{"data":{"parsed":{"info":{"state":"frozen"}}}}]}}`))
+		case "getSignaturesForAddress":
+			w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":[{"signature":"sol_sig_1","slot":454804999,"blockTime":` + fmt.Sprintf("%d", nowSec-10) + `,"err":null}]}`))
+		case "getTransaction":
+			w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{
+				"slot":454804999,
+				"blockTime":` + fmt.Sprintf("%d", nowSec-10) + `,
+				"transaction":{"message":{
+					"accountKeys":["` + solSender + `","` + solSelf + `","` + solanaSystemProgramID + `"],
+					"instructions":[{"program":"system","parsed":{"type":"transfer","info":{"source":"` + solSender + `","destination":"` + solSelf + `","lamports":2000000000}}}]
+				}},
+				"meta":{"err":null}
+			}}`))
+		default:
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	}))
+	defer solSrv.Close()
+
+	h := newTestPaymentAPIHandler(t, map[string][]string{"sol": {solSrv.URL}}, nil)
+
+	// 1. BTC /live: Latest selects unconfirmed 0-conf incoming (DANGER, rbf_signaled), Balance = Finalized 1, SafeDelta 0, LatestDelta +0.25
+	recBTCLive := httptest.NewRecorder()
+	h.PaymentCheckLive(recBTCLive, httptest.NewRequest(http.MethodGet, "/api/opendata/crypto/payment-check/live?asset=BTC&network=btc&address="+btcSelf, nil))
+	if recBTCLive.Code != http.StatusOK {
+		t.Fatalf("BTC /live code = %d, body = %s", recBTCLive.Code, recBTCLive.Body.String())
+	}
+	var btcLive payLiveResponse
+	if err := json.Unmarshal(recBTCLive.Body.Bytes(), &btcLive); err != nil {
+		t.Fatalf("unmarshal BTC /live: %v", err)
+	}
+	if btcLive.Latest == nil || btcLive.Latest.TxHash != "tx_0conf" || btcLive.Latest.Level != levelDanger || btcLive.Latest.TokenTier != tierNative {
+		t.Fatalf("BTC Latest = %+v, want tx_0conf DANGER tierNative (S5)", btcLive.Latest)
+	}
+
+	// 2. BTC /history on default mempool URL: Scope.Hosts and Sources[0].Hosts must BOTH include blockstream.info!
+	recBTCHist := httptest.NewRecorder()
+	h.PaymentCheckHistory(recBTCHist, httptest.NewRequest(http.MethodGet, "/api/opendata/crypto/payment-check/history?asset=BTC&network=btc&address="+btcSelf, nil))
+	if recBTCHist.Code != http.StatusOK {
+		t.Fatalf("BTC /history code = %d, body = %s", recBTCHist.Code, recBTCHist.Body.String())
+	}
+	var btcHist payHistoryResponse
+	if err := json.Unmarshal(recBTCHist.Body.Bytes(), &btcHist); err != nil {
+		t.Fatalf("unmarshal BTC /history: %v", err)
+	}
+	hasBlockstream := false
+	for _, host := range btcHist.Scope.Hosts {
+		if host == "blockstream.info" {
+			hasBlockstream = true
+		}
+	}
+	if !hasBlockstream {
+		t.Fatalf("BTC /history Scope.Hosts = %v, want blockstream.info included on default mempool config", btcHist.Scope.Hosts)
+	}
+
+	// 3. Solana SOL /live: Latest selects native SOL transfer (SAFE)
+	recSOLLive := httptest.NewRecorder()
+	h.PaymentCheckLive(recSOLLive, httptest.NewRequest(http.MethodGet, "/api/opendata/crypto/payment-check/live?asset=SOL&network=sol&address="+solSelf, nil))
+	if recSOLLive.Code != http.StatusOK {
+		t.Fatalf("SOL /live code = %d, body = %s", recSOLLive.Code, recSOLLive.Body.String())
+	}
+	var solLive payLiveResponse
+	if err := json.Unmarshal(recSOLLive.Body.Bytes(), &solLive); err != nil {
+		t.Fatalf("unmarshal SOL /live: %v", err)
+	}
+	if solLive.Latest == nil || solLive.Latest.TxHash != "sol_sig_1" || solLive.Latest.Amount != "2" || solLive.Latest.TokenTier != tierNative {
+		t.Fatalf("SOL Latest = %+v, want sol_sig_1 (2 SOL native)", solLive.Latest)
+	}
+
+	// 4. Solana USDC /live: frozen ATA triggers critical own_address_frozen alert!
+	recUSDCLive := httptest.NewRecorder()
+	h.PaymentCheckLive(recUSDCLive, httptest.NewRequest(http.MethodGet, "/api/opendata/crypto/payment-check/live?asset=USDC&network=sol&address="+solSelf, nil))
+	if recUSDCLive.Code != http.StatusOK {
+		t.Fatalf("Solana USDC /live code = %d, body = %s", recUSDCLive.Code, recUSDCLive.Body.String())
+	}
+	var usdcLive payLiveResponse
+	if err := json.Unmarshal(recUSDCLive.Body.Bytes(), &usdcLive); err != nil {
+		t.Fatalf("unmarshal Solana USDC /live: %v", err)
+	}
+	foundFrozen := false
+	for _, a := range usdcLive.Alerts {
+		if a.Code == "own_address_frozen" && a.Severity == "critical" {
+			foundFrozen = true
+		}
+	}
+	if !foundFrozen {
+		t.Fatalf("Solana USDC Alerts = %+v, expected critical own_address_frozen alert", usdcLive.Alerts)
+	}
+}

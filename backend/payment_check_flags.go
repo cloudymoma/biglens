@@ -24,6 +24,8 @@ var dustBelow = map[string]string{
 	"USDC": "1",
 	"ETH":  "0.0001",
 	"TRX":  "1",
+	"BTC":  "0.00001",
+	"SOL":  "0.001",
 }
 
 var mimicHomoglyphs = map[rune]rune{
@@ -76,7 +78,7 @@ func normalizeMimicSymbol(s string) string {
 
 // lookalike reports whether addresses a and b are distinct addresses that share
 // the same first 4 and last 4 characters after the chain prefix (0x for EVM,
-// case-insensitive; T for TRON, case-sensitive; spec §5.5).
+// T for TRON, bc1q/bc1p/1/3 stripped for BTC, full string for Solana; spec §5.5, P3.1).
 func lookalike(a, b string, fam chainFamily) bool {
 	a = strings.TrimSpace(a)
 	b = strings.TrimSpace(b)
@@ -87,6 +89,22 @@ func lookalike(a, b string, fam chainFamily) bool {
 	case familyTron:
 		a = strings.TrimPrefix(a, "T")
 		b = strings.TrimPrefix(b, "T")
+	case familyBTC:
+		al, bl := strings.ToLower(a), strings.ToLower(b)
+		switch {
+		case strings.HasPrefix(al, "bc1q") && strings.HasPrefix(bl, "bc1q"):
+			a, b = al[4:], bl[4:]
+		case strings.HasPrefix(al, "bc1p") && strings.HasPrefix(bl, "bc1p"):
+			a, b = al[4:], bl[4:]
+		case strings.HasPrefix(a, "1") && strings.HasPrefix(b, "1"):
+			a, b = a[1:], b[1:]
+		case strings.HasPrefix(a, "3") && strings.HasPrefix(b, "3"):
+			a, b = a[1:], b[1:]
+		default:
+			return false
+		}
+	case familySol:
+		// Full base58 address, case-sensitive.
 	default:
 		return false
 	}
@@ -98,8 +116,13 @@ func lookalike(a, b string, fam chainFamily) bool {
 
 func canonFlagAddr(addr string, fam chainFamily) string {
 	s := strings.TrimSpace(addr)
-	if fam == familyEVM {
+	switch fam {
+	case familyEVM:
 		return strings.ToLower(s)
+	case familyBTC:
+		if strings.HasPrefix(strings.ToLower(s), "bc1") {
+			return strings.ToLower(s)
+		}
 	}
 	return s
 }
@@ -151,8 +174,8 @@ func hasHighTrustLookalike(cp string, trust map[string]trustLevel, fam chainFami
 }
 
 // applyFlags scans txs in chronological order (oldest -> newest; tie-breaking
-// by block and tx_hash) to populate txs[i].Flags in place without mutating the
-// order of txs (spec §5.5, Task 9).
+// by block and tx_hash, with unconfirmed mempool rows scanned last) to populate
+// txs[i].Flags in place without mutating the order of txs (spec §5.5, P3.1).
 func applyFlags(txs []payTx, asset string, fam chainFamily) {
 	order := make([]int, len(txs))
 	parsedTime := make([]int64, len(txs))
@@ -165,6 +188,11 @@ func applyFlags(txs []payTx, asset string, fam chainFamily) {
 
 	sort.SliceStable(order, func(a, b int) bool {
 		ia, ib := order[a], order[b]
+		iaUnconf := txs[ia].Block == 0 && txs[ia].Timestamp == ""
+		ibUnconf := txs[ib].Block == 0 && txs[ib].Timestamp == ""
+		if iaUnconf != ibUnconf {
+			return !iaUnconf
+		}
 		if fam == familyEVM {
 			if txs[ia].Block != txs[ib].Block {
 				return txs[ia].Block < txs[ib].Block
@@ -200,6 +228,7 @@ func applyFlags(txs []payTx, asset string, fam chainFamily) {
 	for _, idx := range order {
 		tx := &txs[idx]
 		hadListed := slices.Contains(tx.Flags, "counterparty_listed")
+		hadRBF := slices.Contains(tx.Flags, "rbf_signaled")
 		flags := []string{}
 
 		isOfficial := tx.TokenTier == tierNative || tx.TokenTier == tierBridged
@@ -247,6 +276,9 @@ func applyFlags(txs []payTx, asset string, fam chainFamily) {
 		}
 		if hadListed && !slices.Contains(flags, "counterparty_listed") {
 			flags = append(flags, "counterparty_listed")
+		}
+		if hadRBF && !slices.Contains(flags, "rbf_signaled") {
+			flags = append(flags, "rbf_signaled")
 		}
 
 		tx.Flags = flags

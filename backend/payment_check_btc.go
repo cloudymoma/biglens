@@ -198,7 +198,7 @@ func fetchBTCHistory(ctx context.Context, addr string, since time.Time) ([]payTx
 	defer cancel()
 
 	bases := esploraAPIBases()
-	scope := payHistoryScope{Hosts: hostsOf(bases[0])}
+	scope := payHistoryScope{Hosts: hostsOf(bases...)}
 	sinceSec := since.Unix()
 
 	var (

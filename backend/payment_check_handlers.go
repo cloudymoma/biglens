@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -26,6 +25,8 @@ var payLagSamplers = map[string]*lagSampler{
 	"op":   {},
 	"base": {},
 	"tron": {},
+	"btc":  {},
+	"sol":  {},
 }
 
 type payLiveResponse struct {
@@ -119,9 +120,14 @@ func (h *APIHandler) fetchAndSampleHeads(ctx context.Context, network string) (p
 		heads payHeads
 		err   error
 	)
-	if network == "tron" {
+	switch network {
+	case "btc":
+		heads, err = fetchBTCHeads(ctx)
+	case "sol":
+		heads, err = fetchSolanaHeads(ctx, h.payRPCs("sol"))
+	case "tron":
 		heads, err = fetchTronHeads(ctx)
-	} else {
+	default:
 		heads, err = fetchEVMHeads(ctx, h.payRPCs(network))
 	}
 	if err != nil {
@@ -156,7 +162,7 @@ func (h *APIHandler) getPayHeads(ctx context.Context, network string) (payHeads,
 	return h.fetchAndSampleHeads(ctx, network)
 }
 
-func (h *APIHandler) getPayRecent(ctx context.Context, blockscoutURL, asset, network, addr string) ([]payTx, error) {
+func (h *APIHandler) getPayRecent(ctx context.Context, blockscoutURL, asset, network, addr string, heads payHeads) ([]payTx, error) {
 	key := "pay:recent:" + network + ":" + asset + ":" + addr
 	if h.cache != nil {
 		if cached, ok := h.cache.Get(key); ok {
@@ -173,9 +179,14 @@ func (h *APIHandler) getPayRecent(ctx context.Context, blockscoutURL, asset, net
 			txs []payTx
 			err error
 		)
-		if network == "tron" {
+		switch network {
+		case "btc":
+			txs, err = fetchBTCRecent(ctx, addr)
+		case "sol":
+			txs, err = fetchSolanaRecent(ctx, h.cache, h.payRPCs("sol"), asset, addr, heads)
+		case "tron":
 			txs, err = fetchTronRecent(ctx, asset, addr)
-		} else {
+		default:
 			txs, err = fetchEVMRecent(ctx, blockscoutURL, asset, network, addr)
 		}
 		if err != nil {
@@ -200,9 +211,14 @@ func classifyPayTxs(txs []payTx, network string, heads payHeads, nowUnix int64) 
 				blockTime = t.Unix()
 			}
 		}
-		if network == "tron" {
+		switch network {
+		case "btc":
+			txs[i].Level, txs[i].Progress, txs[i].EstSecLeft = classifyBTC(txs[i].Block, heads)
+		case "sol":
+			txs[i].Level, txs[i].Progress, txs[i].EstSecLeft = classifySolana(txs[i].Block, blockTime, txs[i].Failed, heads, nowUnix)
+		case "tron":
 			txs[i].Level, txs[i].Progress, txs[i].EstSecLeft = classifyTron(txs[i].Block, blockTime, txs[i].Failed, heads)
-		} else {
+		default:
 			txs[i].Level, txs[i].Progress, txs[i].EstSecLeft = classifyEVM(txs[i].Block, blockTime, txs[i].Failed, heads, nowUnix)
 		}
 	}
@@ -219,7 +235,7 @@ func hasAssetFreezeSupport(asset, network string) bool {
 
 func isWithinAlertWindow(ts string, now time.Time) bool {
 	if ts == "" {
-		// Unsettled RPC log in (finalized-50, latest] without blockTimestamp is fresh.
+		// Unsettled RPC log in (finalized-50, latest] or 0-conf BTC mempool tx without timestamp is fresh.
 		return true
 	}
 	t, err := time.Parse(time.RFC3339, ts)
@@ -284,21 +300,26 @@ func (h *APIHandler) PaymentCheckLive(w http.ResponseWriter, r *http.Request) {
 	g.Go(func() error {
 		balCtx, balCancel := context.WithTimeout(ctx, payUpstreamTimeout)
 		defer balCancel()
-		if network == "tron" {
+		switch network {
+		case "btc":
+			balanceRows = fetchBTCBalances(balCtx, addr, heads)
+		case "sol":
+			balanceRows = fetchSolanaBalances(balCtx, rpcs, asset, addr)
+		case "tron":
 			balanceRows = fetchTronBalances(balCtx, asset, addr)
-		} else {
+		default:
 			balanceRows = fetchEVMBalances(balCtx, rpcs, asset, network, addr)
 		}
 		return nil
 	})
 
-	// 2. Unsettled logs (EVM stablecoins) OR lightweight recent txs (TRON and EVM native ETH)
+	// 2. Unsettled logs (EVM stablecoins) OR lightweight recent txs (BTC, Solana, TRON, EVM native ETH)
 	g.Go(func() error {
 		switch {
-		case network == "tron":
-			recentTxs, recentErr = h.getPayRecent(ctx, "", asset, network, addr)
+		case network == "btc" || network == "sol" || network == "tron":
+			recentTxs, recentErr = h.getPayRecent(ctx, "", asset, network, addr, heads)
 		case asset == "ETH":
-			recentTxs, recentErr = h.getPayRecent(ctx, bsURL, asset, network, addr)
+			recentTxs, recentErr = h.getPayRecent(ctx, bsURL, asset, network, addr, heads)
 		default:
 			if heads.Latest > 0 {
 				fromBlock := uint64(1)
@@ -455,7 +476,33 @@ func (h *APIHandler) PaymentCheckLive(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var sources []riskSource
-	if network == "tron" {
+	switch network {
+	case "btc":
+		btcHosts := hostsOf(esploraAPIBases()...)
+		src := riskSource{ID: "mempool", Status: "ok", Hosts: btcHosts}
+		if headsErr != nil {
+			src.Status, src.Error = "error", headsErr.Error()
+		} else if recentErr != nil {
+			src.Status, src.Error = "error", recentErr.Error()
+		}
+		sources = append(sources, src)
+	case "sol":
+		solHosts := hostsOf(rpcs...)
+		src := riskSource{ID: "solana_rpc", Status: "ok", Hosts: solHosts}
+		if headsErr != nil {
+			src.Status, src.Error = "error", headsErr.Error()
+		} else if recentErr != nil {
+			src.Status, src.Error = "error", recentErr.Error()
+		}
+		sources = append(sources, src)
+		if checkFreeze {
+			fSrc := riskSource{ID: "issuer_freeze", Status: "ok", Hosts: solHosts}
+			if freezeErrCode != "" {
+				fSrc.Status, fSrc.Error = "error", freezeErrCode
+			}
+			sources = append(sources, fSrc)
+		}
+	case "tron":
 		tronHosts := hostsOf(tronGridBaseURL)
 		src := riskSource{ID: "trongrid", Status: "ok", Hosts: tronHosts}
 		if headsErr != nil {
@@ -471,7 +518,7 @@ func (h *APIHandler) PaymentCheckLive(w http.ResponseWriter, r *http.Request) {
 			}
 			sources = append(sources, fSrc)
 		}
-	} else {
+	default:
 		rpcHosts := hostsOf(rpcs...)
 		src := riskSource{ID: "rpc", Status: "ok", Hosts: rpcHosts}
 		if headsErr != nil {
@@ -550,23 +597,19 @@ func (h *APIHandler) PaymentCheckHistory(w http.ResponseWriter, r *http.Request)
 	store := h.payRiskStore()
 	histKey := "pay:hist:" + network + ":" + asset + ":" + addr
 
+	heads, headsErr := h.getPayHeads(bgCtx, network)
+
 	var (
 		histEntry *cachedPayHistory
 		histErr   error
-		heads     payHeads
-		headsErr  error
-		wg        sync.WaitGroup
 	)
 
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		if h.cache != nil {
-			if cached, ok := h.cache.Get(histKey); ok {
-				histEntry = cached.(*cachedPayHistory)
-				return
-			}
+	if h.cache != nil {
+		if cached, ok := h.cache.Get(histKey); ok {
+			histEntry = cached.(*cachedPayHistory)
 		}
+	}
+	if histEntry == nil {
 		v, err, _ := h.sf.Do(histKey, func() (any, error) {
 			if h.cache != nil {
 				if cached, ok := h.cache.Get(histKey); ok {
@@ -578,9 +621,14 @@ func (h *APIHandler) PaymentCheckHistory(w http.ResponseWriter, r *http.Request)
 				scope  payHistoryScope
 				err    error
 			)
-			if network == "tron" {
+			switch network {
+			case "btc":
+				rawTxs, scope, err = fetchBTCHistory(bgCtx, addr, since)
+			case "sol":
+				rawTxs, scope, err = fetchSolanaHistory(bgCtx, h.cache, rpcs, asset, addr, since, heads)
+			case "tron":
 				rawTxs, scope, err = fetchTronHistory(bgCtx, asset, addr, since)
-			} else {
+			default:
 				rawTxs, scope, err = fetchEVMHistory(bgCtx, bsURL, asset, network, addr, since)
 			}
 			if err != nil {
@@ -604,12 +652,7 @@ func (h *APIHandler) PaymentCheckHistory(w http.ResponseWriter, r *http.Request)
 			histEntry = v.(*cachedPayHistory)
 		}
 		histErr = err
-	}()
-	go func() {
-		defer wg.Done()
-		heads, headsErr = h.getPayHeads(bgCtx, network)
-	}()
-	wg.Wait()
+	}
 
 	var (
 		txs      []payTx
@@ -631,7 +674,24 @@ func (h *APIHandler) PaymentCheckHistory(w http.ResponseWriter, r *http.Request)
 	applyFlags(txs, asset, chains[network].Family)
 
 	var sources []riskSource
-	if network == "tron" {
+	switch network {
+	case "btc":
+		src := riskSource{ID: "mempool", Status: "ok", Hosts: hostsOf(esploraAPIBases()...)}
+		if histErr != nil {
+			src.Status, src.Error = "error", histErr.Error()
+		} else if headsErr != nil {
+			src.Status, src.Error = "error", headsErr.Error()
+		}
+		sources = append(sources, src)
+	case "sol":
+		src := riskSource{ID: "solana_rpc", Status: "ok", Hosts: hostsOf(rpcs...)}
+		if histErr != nil {
+			src.Status, src.Error = "error", histErr.Error()
+		} else if headsErr != nil {
+			src.Status, src.Error = "error", headsErr.Error()
+		}
+		sources = append(sources, src)
+	case "tron":
 		src := riskSource{ID: "trongrid", Status: "ok", Hosts: hostsOf(tronGridBaseURL)}
 		if histErr != nil {
 			src.Status, src.Error = "error", histErr.Error()
@@ -639,7 +699,7 @@ func (h *APIHandler) PaymentCheckHistory(w http.ResponseWriter, r *http.Request)
 			src.Status, src.Error = "error", headsErr.Error()
 		}
 		sources = append(sources, src)
-	} else {
+	default:
 		bSrc := riskSource{ID: "blockscout", Status: "ok", Hosts: hostsOf(bsURL)}
 		if histErr != nil {
 			bSrc.Status, bSrc.Error = "error", histErr.Error()

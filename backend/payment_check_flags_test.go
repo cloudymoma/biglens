@@ -903,3 +903,82 @@ func TestFakeTokenSetRetiersOtherToCounterfeitOnEthOnly(t *testing.T) {
 		t.Fatalf("arb Flags = %v, must not contain counterfeit_token", arbTxs[0].Flags)
 	}
 }
+
+func TestLookalikeBTCStripsSegWitPrefix(t *testing.T) {
+	// Different payload right after bc1q (w508 vs xy2k) MUST NOT match even though both share "bc1q"!
+	if lookalike("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4", "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfj8f3t4", familyBTC) {
+		t.Fatalf("two distinct bc1q addresses with only shared bc1q prefix + suffix must NOT match")
+	}
+	// Matching 4 chars after bc1q ("w508") + matching 4 suffix chars ("f3t4"), case-insensitive:
+	if !lookalike("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4", "BC1QW5081111111111111111111111111111F3T4", familyBTC) {
+		t.Fatalf("expected bc1q lookalike after stripping bc1q prefix")
+	}
+	// Taproot bc1p vs SegWit bc1q must never match even with same body chars:
+	if lookalike("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4", "bc1pw5081111111111111111111111111111f3t4", familyBTC) {
+		t.Fatalf("bc1q vs bc1p must NOT match")
+	}
+	// Legacy P2PKH (1...): strips leading '1', compares next 4 + last 4 case-sensitively:
+	if !lookalike("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", "1A1zP9999999999999999999999999vfNa", familyBTC) {
+		t.Fatalf("expected legacy 1... lookalike match")
+	}
+	if lookalike("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", "1a1zp9999999999999999999999999vfNa", familyBTC) {
+		t.Fatalf("legacy 1... lookalike must be case-sensitive")
+	}
+}
+
+func TestLookalikeSolanaCaseSensitive(t *testing.T) {
+	realSol := "depMwrdSqn5y9fDkdotP4iGxTdxSaEHVE6QjnbcEmjN"
+	mimicSol := "depM11111111111111111111111111111111111EmjN"
+	wrongCase := "DEPM11111111111111111111111111111111111EmjN"
+	if !lookalike(realSol, mimicSol, familySol) {
+		t.Fatalf("expected Solana 4+4 case-sensitive match")
+	}
+	if lookalike(realSol, wrongCase, familySol) {
+		t.Fatalf("expected Solana lookalike to be case-sensitive")
+	}
+}
+
+func TestApplyFlagsPreservesRBFAndOrdersUnconfirmedLast(t *testing.T) {
+	realBTC := "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"
+	mimicBTC := "bc1qw5081111111111111111111111111111f3t4"
+
+	// Unconfirmed 0-conf mempool dust from mimic is at index 0 (Timestamp == "", Block == 0),
+	// while confirmed transfer from realBTC is at index 1.
+	// applyFlags MUST scan confirmed txs first and unconfirmed mempool txs last, AND keep rbf_signaled!
+	txs := []payTx{
+		{
+			TxHash:       "mempool_0conf_dust",
+			Direction:    "in",
+			Timestamp:    "",
+			Amount:       "0.000005", // < 0.00001 BTC dust threshold
+			Symbol:       "BTC",
+			TokenTier:    tierNative,
+			Counterparty: mimicBTC,
+			Block:        0,
+			Flags:        []string{"rbf_signaled"},
+		},
+		{
+			TxHash:       "confirmed_real_in",
+			Direction:    "in",
+			Timestamp:    "2026-10-08T12:00:00Z",
+			Amount:       "0.5",
+			Symbol:       "BTC",
+			TokenTier:    tierNative,
+			Counterparty: realBTC,
+			Block:        970598,
+			Flags:        []string{},
+		},
+	}
+
+	applyFlags(txs, "BTC", familyBTC)
+
+	if !slices.Contains(txs[0].Flags, "rbf_signaled") {
+		t.Fatalf("txs[0] lost rbf_signaled flag: %v", txs[0].Flags)
+	}
+	if !slices.Contains(txs[0].Flags, "dust") || !slices.Contains(txs[0].Flags, "lookalike") {
+		t.Fatalf("txs[0] (mempool 0-conf dust from mimic) flags = %v, want dust + lookalike + rbf_signaled", txs[0].Flags)
+	}
+	if len(txs[1].Flags) != 0 {
+		t.Fatalf("txs[1] (confirmed real transfer) flags = %v, want empty", txs[1].Flags)
+	}
+}
