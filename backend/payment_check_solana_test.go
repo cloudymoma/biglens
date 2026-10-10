@@ -484,3 +484,57 @@ func TestSolanaConcurrentParseCachedTxNoRace(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// A lagging node behind a load balancer can return null for a signature that
+// another node already confirmed; the incoming payment must not vanish from
+// /live just because the first RPC was behind.
+func TestSolanaTxDetailsRetriesNullOnNextRPC(t *testing.T) {
+	const (
+		userAddr = "depMwrdSqn5y9fDkdotP4iGxTdxSaEHVE6QjnbcEmjN"
+		peerAddr = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM"
+	)
+	sigsBody := `{"jsonrpc":"2.0","id":1,"result":[{"signature":"sig_new","slot":454801050,"blockTime":1791449100,"err":null}]}`
+	rpcMethod := func(r *http.Request) string {
+		var req struct {
+			Method string `json:"method"`
+		}
+		b, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(b, &req)
+		return req.Method
+	}
+	lagging := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch rpcMethod(r) {
+		case "getSignaturesForAddress":
+			w.Write([]byte(sigsBody))
+		case "getTransaction":
+			w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":null}`))
+		default:
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	}))
+	defer lagging.Close()
+	synced := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if rpcMethod(r) != "getTransaction" {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{
+			"slot":454801050,"blockTime":1791449100,
+			"transaction":{"message":{
+				"accountKeys":["` + peerAddr + `","` + userAddr + `","` + solanaSystemProgramID + `"],
+				"instructions":[{"program":"system","parsed":{"type":"transfer","info":{"source":"` + peerAddr + `","destination":"` + userAddr + `","lamports":1000000}}}]
+			}},
+			"meta":{"err":null}
+		}}`))
+	}))
+	defer synced.Close()
+
+	heads := payHeads{Latest: 454801060, Safe: 454801055, Finalized: 454801000}
+	txs, err := fetchSolanaRecent(context.Background(), NewCache(time.Minute), []string{lagging.URL, synced.URL}, "SOL", userAddr, heads)
+	if err != nil {
+		t.Fatalf("fetchSolanaRecent error: %v", err)
+	}
+	if len(txs) != 1 || txs[0].TxHash != "sig_new" || txs[0].Direction != "in" || txs[0].Amount != "0.001" {
+		t.Fatalf("txs = %+v, want the incoming sig_new transfer fetched from the second RPC", txs)
+	}
+}

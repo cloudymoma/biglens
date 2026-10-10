@@ -261,13 +261,21 @@ func fetchSolanaTxDetails(ctx context.Context, cache *Cache, rpcs []string, sigs
 			}
 		}
 		g.Go(func() error {
-			res, code := solanaRPCFailover(ctx, rpcs, "getTransaction", sigRow.Signature, map[string]any{
+			txCfg := map[string]any{
 				"encoding":                       "jsonParsed",
 				"maxSupportedTransactionVersion": 1,
 				"commitment":                     "confirmed",
-			})
+			}
+			res, code := solanaRPCFailover(ctx, rpcs, "getTransaction", sigRow.Signature, txCfg)
 			if code != "" {
 				return errors.New(code)
+			}
+			// A lagging node behind a load balancer can return null for a signature
+			// another node already confirmed; ask the remaining RPCs once each.
+			for i := 1; i < len(rpcs) && (len(res) == 0 || string(res) == "null"); i++ {
+				if r, c := solanaRPC(ctx, rpcs[i], "getTransaction", sigRow.Signature, txCfg); c == "" {
+					res = r
+				}
 			}
 			if len(res) == 0 || string(res) == "null" {
 				return nil
