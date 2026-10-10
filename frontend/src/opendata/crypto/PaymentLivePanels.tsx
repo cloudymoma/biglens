@@ -29,6 +29,7 @@ import {
   shortAddr,
   tierBadgeInfo,
 } from './paymentCheck';
+import { ChainIcon, TokenIcon } from './CryptoIcons';
 
 export function PaymentAlertsBanner({
   alerts,
@@ -103,7 +104,18 @@ export function PaymentBalancePanel({ live }: { live: PaymentLiveResponse }) {
       : `updated ${fmtAsOf(live.as_of)}`;
 
   return (
-    <Panel title={`Balance · ${live.asset} on ${live.network_label}`} note={headsNote}>
+    <Panel
+      title={
+        <span className="inline-flex items-center gap-1.5">
+          <span>Balance ·</span>
+          <TokenIcon symbol={live.asset} size={15} />
+          <span>{live.asset} on</span>
+          <ChainIcon chain={live.network} size={15} />
+          <span>{live.network_label}</span>
+        </span>
+      }
+      note={headsNote}
+    >
       {live.balance_error ? (
         <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
           Balance unavailable ({formatPayError(live.balance_error)})
@@ -130,6 +142,7 @@ export function PaymentBalancePanel({ live }: { live: PaymentLiveResponse }) {
                   <tr key={`${row.label}-${row.contract}`}>
                     <td className="py-2 pr-3 font-sans">
                       <div className="flex flex-wrap items-center gap-1.5">
+                        <TokenIcon symbol={row.label} size={15} />
                         <span className="font-mono font-semibold text-zinc-100">{row.label}</span>
                         <span
                           className={`rounded border px-1.5 py-0.5 text-[10px] font-medium ${tierInfo.className}`}
@@ -205,7 +218,16 @@ export function PaymentLatestCard({
   const recentErrReason = recentSrc?.status === 'error' ? formatPayError(recentSrc.error) : '';
 
   return (
-    <Panel title={`Latest incoming · ${live.asset}`} note={note}>
+    <Panel
+      title={
+        <span className="inline-flex items-center gap-1.5">
+          <span>Latest incoming ·</span>
+          <TokenIcon symbol={live.asset} size={15} />
+          <span>{live.asset}</span>
+        </span>
+      }
+      note={note}
+    >
       {!tx ? (
         recentErrReason ? (
           <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
@@ -324,8 +346,9 @@ function LatestSettlementBody({
       <div className="rounded-xl border border-zinc-800/70 bg-zinc-900/40 p-3 space-y-2 text-xs">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-base font-mono font-semibold text-white">
-              +{formatTokenAmount(tx.amount)} {tx.symbol}
+            <span className="inline-flex items-center gap-1.5 text-base font-mono font-semibold text-white">
+              <TokenIcon symbol={tx.symbol} size={16} />
+              <span>+{formatTokenAmount(tx.amount)} {tx.symbol}</span>
             </span>
             <span className={`rounded border px-1.5 py-0.5 text-[10px] font-medium ${tierInfo.className}`}>
               {tierInfo.label}

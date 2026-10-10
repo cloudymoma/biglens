@@ -23,7 +23,7 @@ export const fmtNum = (n: number): string =>
 export const shortHash = (h: string): string => (h.length > 16 ? `${h.slice(0, 8)}…${h.slice(-6)}` : h);
 
 export function Panel({ title, note, children }: {
-  title: string; note?: string; children: React.ReactNode;
+  title: React.ReactNode; note?: string; children: React.ReactNode;
 }) {
   return (
     <div className="rounded-2xl border border-zinc-800/50 p-5" style={{ background: '#111114' }}>

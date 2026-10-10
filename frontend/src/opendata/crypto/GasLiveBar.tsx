@@ -4,6 +4,7 @@ import { fetchGasLive } from '../../api';
 import { ErrorBanner } from '../../dashboards/shared';
 import { Panel } from './shared';
 import { fmtGas } from './gasPulse';
+import { ChainIcon, TokenIcon } from './CryptoIcons';
 
 const LIVE_POLL_MS = 30_000;
 
@@ -62,7 +63,15 @@ export default function GasLiveBar({ chain, highlight }: { chain: 'btc' | 'tron'
   const note = `updated ${fmtAsOf(data.as_of)} · refreshes every 30s`;
   if (chain === 'btc') {
     return (
-      <Panel title="Bitcoin live · mempool.space" note={note}>
+      <Panel
+        title={
+          <span className="inline-flex items-center gap-1.5">
+            <ChainIcon chain="btc" size={16} />
+            <span>Bitcoin live · mempool.space</span>
+          </span>
+        }
+        note={note}
+      >
         {data.btc ? <BtcLiveBody live={data.btc} asOf={data.as_of} /> : <ErrorBanner message={data.btc_error || 'unavailable'} />}
       </Panel>
     );
@@ -75,7 +84,16 @@ export default function GasLiveBar({ chain, highlight }: { chain: 'btc' | 'tron'
     );
   }
   return (
-    <Panel title="TRON live · USDT transfer burn cost" note={note}>
+    <Panel
+      title={
+        <span className="inline-flex items-center gap-1.5">
+          <ChainIcon chain="tron" size={16} />
+          <TokenIcon symbol="USDT" size={16} />
+          <span>TRON live · USDT transfer burn cost</span>
+        </span>
+      }
+      note={note}
+    >
       {data.tron ? <TronLiveBody live={data.tron} calibration={data.calibration} /> : <ErrorBanner message={data.tron_error || 'unavailable'} />}
     </Panel>
   );
@@ -132,9 +150,12 @@ function TronLiveBody({ live, calibration }: { live: TronLive; calibration: GasC
         {live.costs.map(c => (
           <div key={c.label} className="rounded-xl border border-zinc-800/50 px-3 py-2" style={{ background: '#0c0c0f' }}>
             <div className="text-[11px] text-zinc-500">{c.label}</div>
-            <div className="text-lg font-mono text-zinc-100">
-              {c.burn_trx.toFixed(2)} <span className="text-xs text-zinc-500">TRX</span>
-              {c.burn_usd != null && <span className="text-xs text-zinc-500"> · {fmtUSD(c.burn_usd)}</span>}
+            <div className="flex items-center gap-1.5 text-lg font-mono text-zinc-100">
+              <TokenIcon symbol="TRX" size={14} />
+              <span>
+                {c.burn_trx.toFixed(2)} <span className="text-xs text-zinc-500">TRX</span>
+                {c.burn_usd != null && <span className="text-xs text-zinc-500"> · {fmtUSD(c.burn_usd)}</span>}
+              </span>
             </div>
             <div className="text-[11px] font-mono text-zinc-500">
               {c.energy.toLocaleString('en')} energy + {c.bandwidth} bandwidth · {c.share_pct.toFixed(0)}% of the two modal transfer types
@@ -195,7 +216,11 @@ function L2LadderBody({ ladder, highlight }: { ladder: L2Ladder; highlight?: str
             <th className="py-1 font-normal">Gas price</th>
             {labels.map(a => (
               <th key={a.label} className="py-1 font-normal" title={a.source}>
-                {a.label} <span className="text-zinc-600">({a.gas.toLocaleString('en')} gas)</span>
+                <span className="inline-flex items-center gap-1.5">
+                  <TokenIcon symbol={a.label.toUpperCase().includes('USDC') ? 'USDC' : 'ETH'} size={13} />
+                  <span>{a.label}</span>
+                  <span className="text-zinc-600">({a.gas.toLocaleString('en')} gas)</span>
+                </span>
               </th>
             ))}
           </tr>
@@ -203,7 +228,12 @@ function L2LadderBody({ ladder, highlight }: { ladder: L2Ladder; highlight?: str
         <tbody>
           {ladder.rows.map(r => (
             <tr key={r.id} className="border-t border-zinc-800/60" style={r.id === highlight ? { background: '#18181b' } : undefined}>
-              <td className="py-1.5 text-zinc-200">{r.name}</td>
+              <td className="py-1.5 text-zinc-200">
+                <span className="inline-flex items-center gap-1.5">
+                  <ChainIcon chain={r.id} size={14} />
+                  <span>{r.name}</span>
+                </span>
+              </td>
               {r.error ? (
                 <td colSpan={1 + labels.length} className="py-1.5 text-red-400/80">{r.error}</td>
               ) : (

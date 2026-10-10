@@ -21,6 +21,7 @@ import {
   shortAddr,
   tierBadgeInfo,
 } from './paymentCheck';
+import { ChainIcon, TokenIcon } from './CryptoIcons';
 import PaymentTxDetail from './PaymentTxDetail';
 
 type DirFilter = 'all' | 'in' | 'out';
@@ -127,7 +128,18 @@ export default function PaymentHistory({
     : `since ${history.since.slice(0, 10)} · ${filtered.length} shown of ${history.txs.length} · updated ${fmtAsOf(history.as_of)}`;
 
   return (
-    <Panel title={`History (7 days) · ${history.asset} on ${netOpt.label}`} note={note}>
+    <Panel
+      title={
+        <span className="inline-flex items-center gap-1.5">
+          <span>History (7 days) ·</span>
+          <TokenIcon symbol={history.asset} size={15} />
+          <span>{history.asset} on</span>
+          <ChainIcon chain={history.network} size={15} />
+          <span>{netOpt.label}</span>
+        </span>
+      }
+      note={note}
+    >
       <div className="space-y-3">
         {histErrReason && (
           <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
@@ -235,17 +247,20 @@ export default function PaymentHistory({
                               </span>
                             </td>
                             <td className="py-2 px-3 whitespace-nowrap">
-                              <span
-                                className={
-                                  isCounterfeit
-                                    ? 'line-through text-red-400'
-                                    : tx.direction === 'in'
-                                      ? 'text-zinc-100'
-                                      : 'text-zinc-300'
-                                }
-                              >
-                                {tx.direction === 'in' ? '+' : '-'}
-                                {formatTokenAmount(tx.amount)} {tx.symbol}
+                              <span className="inline-flex items-center gap-1.5">
+                                <TokenIcon symbol={tx.symbol} size={13} />
+                                <span
+                                  className={
+                                    isCounterfeit
+                                      ? 'line-through text-red-400'
+                                      : tx.direction === 'in'
+                                        ? 'text-zinc-100'
+                                        : 'text-zinc-300'
+                                  }
+                                >
+                                  {tx.direction === 'in' ? '+' : '-'}
+                                  {formatTokenAmount(tx.amount)} {tx.symbol}
+                                </span>
                               </span>
                               {tx.token_tier !== 'native' && (
                                 <span

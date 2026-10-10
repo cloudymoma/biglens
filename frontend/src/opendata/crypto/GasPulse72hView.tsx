@@ -9,6 +9,7 @@ import {
   GAS_CHAIN_COLORS, TONE_COLOR, buildGasPulseOption, fmtAllTime, fmtGas, fmtWhen,
   percentileTone, shortHour,
 } from './gasPulse';
+import { ChainIcon } from './CryptoIcons';
 import GasLiveBar from './GasLiveBar';
 
 export default function GasPulse72hView() {
@@ -55,7 +56,15 @@ export default function GasPulse72hView() {
         <>
           <StatCards chain={chain} />
           {liveChain && <GasLiveBar key={liveChain} chain={liveChain} highlight={chain.meta.id} />}
-          <Panel title={`${chain.meta.name} · ${chain.meta.primary_label}`} note={chain.meta.note}>
+          <Panel
+            title={
+              <span className="inline-flex items-center gap-1.5">
+                <ChainIcon chain={chain.meta.id} size={16} />
+                <span>{chain.meta.name} · {chain.meta.primary_label}</span>
+              </span>
+            }
+            note={chain.meta.note}
+          >
             <ReactECharts option={buildGasPulseOption(chain)} style={{ height: 380 }} notMerge />
           </Panel>
         </>
@@ -81,7 +90,10 @@ function ChainStrip({ chains, selected, onSelect }: {
             }`}
             style={{ background: active ? '#18181b' : '#111114' }}
           >
-            <div className="text-[11px] font-medium" style={{ color: GAS_CHAIN_COLORS[c.meta.id] }}>{c.meta.name}</div>
+            <div className="flex items-center gap-1.5 text-[11px] font-medium" style={{ color: GAS_CHAIN_COLORS[c.meta.id] }}>
+              <ChainIcon chain={c.meta.id} size={14} />
+              <span>{c.meta.name}</span>
+            </div>
             <div className="text-sm text-zinc-200 font-mono mt-0.5 truncate">
               {ok ? `${fmtGas(c.stats.latest)} ${c.meta.primary_unit}` : '—'}
             </div>

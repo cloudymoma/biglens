@@ -8,6 +8,7 @@ import {
   BTC_COLOR, ETH_COLOR, CHART_TOOLTIP, AXIS_LABEL, SPLIT_LINE,
   fmtNum, Panel, DaysPicker, mergeDates, seriesByDate,
 } from './shared';
+import { ChainIcon } from './CryptoIcons';
 import GasPulse72hView from './GasPulse72hView';
 
 const DAY_OPTIONS = [7, 30, 90, 365];
@@ -59,10 +60,10 @@ function DailyFeesView() {
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <MetricCard label="BTC Median Fee" value={latestBtc ? `${latestBtc.median_fee_vb} sat/vB` : '—'} icon={<Gauge size={15} />} detail={latestBtc?.date || 'no data'} accentColor={BTC_COLOR} />
-        <MetricCard label="BTC Total Fees" value={latestBtc ? `${fmtNum(latestBtc.total_fees_btc)} BTC` : '—'} icon={<Pickaxe size={15} />} detail={`subsidy ${fmtNum(latestBtc?.subsidy_btc ?? 0)} BTC`} accentColor={BTC_COLOR} />
-        <MetricCard label="ETH Avg Gas Price" value={latestEth ? `${latestEth.avg_gas_gwei} gwei` : '—'} icon={<Gauge size={15} />} detail={latestEth?.date || 'no data'} accentColor={ETH_COLOR} />
-        <MetricCard label="ETH Burned" value={latestEth ? `${fmtNum(latestEth.burned_eth)} ETH` : '—'} icon={<Flame size={15} />} detail={`tips ${fmtNum(latestEth?.tips_eth ?? 0)} ETH`} accentColor={ETH_COLOR} />
+        <MetricCard label="BTC Median Fee" value={latestBtc ? `${latestBtc.median_fee_vb} sat/vB` : '—'} icon={<span className="inline-flex items-center gap-1"><ChainIcon chain="btc" size={14} /><Gauge size={14} /></span>} detail={latestBtc?.date || 'no data'} accentColor={BTC_COLOR} />
+        <MetricCard label="BTC Total Fees" value={latestBtc ? `${fmtNum(latestBtc.total_fees_btc)} BTC` : '—'} icon={<span className="inline-flex items-center gap-1"><ChainIcon chain="btc" size={14} /><Pickaxe size={14} /></span>} detail={`subsidy ${fmtNum(latestBtc?.subsidy_btc ?? 0)} BTC`} accentColor={BTC_COLOR} />
+        <MetricCard label="ETH Avg Gas Price" value={latestEth ? `${latestEth.avg_gas_gwei} gwei` : '—'} icon={<span className="inline-flex items-center gap-1"><ChainIcon chain="eth" size={14} /><Gauge size={14} /></span>} detail={latestEth?.date || 'no data'} accentColor={ETH_COLOR} />
+        <MetricCard label="ETH Burned" value={latestEth ? `${fmtNum(latestEth.burned_eth)} ETH` : '—'} icon={<span className="inline-flex items-center gap-1"><ChainIcon chain="eth" size={14} /><Flame size={14} /></span>} detail={`tips ${fmtNum(latestEth?.tips_eth ?? 0)} ETH`} accentColor={ETH_COLOR} />
       </div>
 
       <Panel title="Fee Trend" note="BTC median sat/vB (left) vs ETH gas-weighted avg gwei (right)">
@@ -86,7 +87,15 @@ function DailyFeesView() {
       </Panel>
 
       <div className="grid lg:grid-cols-2 gap-4">
-        <Panel title="BTC Miner Revenue" note="daily coinbase split: block subsidy vs transaction fees (BTC)">
+        <Panel
+          title={
+            <span className="inline-flex items-center gap-1.5">
+              <ChainIcon chain="btc" size={16} />
+              <span>BTC Miner Revenue</span>
+            </span>
+          }
+          note="daily coinbase split: block subsidy vs transaction fees (BTC)"
+        >
           <ReactECharts
             style={{ height: 260 }}
             option={{
@@ -102,7 +111,15 @@ function DailyFeesView() {
             }}
           />
         </Panel>
-        <Panel title="ETH Burned vs Tips" note="EIP-1559 base + EIP-4844 blob fees burned vs validator priority tips (ETH)">
+        <Panel
+          title={
+            <span className="inline-flex items-center gap-1.5">
+              <ChainIcon chain="eth" size={16} />
+              <span>ETH Burned vs Tips</span>
+            </span>
+          }
+          note="EIP-1559 base + EIP-4844 blob fees burned vs validator priority tips (ETH)"
+        >
           <ReactECharts
             style={{ height: 260 }}
             option={{

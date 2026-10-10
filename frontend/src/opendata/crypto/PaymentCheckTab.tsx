@@ -27,6 +27,7 @@ import {
   PaymentLatestCard,
   PaymentSourcesFooter,
 } from './PaymentLivePanels';
+import { ChainIcon, TokenIcon } from './CryptoIcons';
 import PaymentHistory from './PaymentHistory';
 
 const FAST_POLL_MS = 5_000;
@@ -125,21 +126,23 @@ export default function PaymentCheckTab({
                     key={a.id}
                     type="button"
                     onClick={() => selectAsset(a.id as PaymentAsset)}
-                    className={`rounded-lg px-2.5 py-1 text-xs font-medium transition-colors ${
+                    className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-colors ${
                       asset === a.id
                         ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
                         : 'bg-zinc-900 text-zinc-400 border border-zinc-800 hover:text-zinc-200'
                     }`}
                   >
-                    {a.label}
+                    <TokenIcon symbol={a.id} size={14} />
+                    <span>{a.label}</span>
                   </button>
                 ) : (
                   <span
                     key={a.id}
                     title={`${a.label} Payment Check is ${a.note}`}
-                    className="rounded-lg px-2.5 py-1 text-xs font-medium bg-zinc-900/50 text-zinc-600 border border-zinc-800/60 cursor-not-allowed select-none"
+                    className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium bg-zinc-900/50 text-zinc-600 border border-zinc-800/60 cursor-not-allowed select-none"
                   >
-                    {a.label}{' '}
+                    <TokenIcon symbol={a.id} size={14} className="opacity-45" />
+                    <span>{a.label}</span>{' '}
                     <span className="text-[10px] font-normal text-zinc-600">({a.note})</span>
                   </span>
                 ),
@@ -159,15 +162,16 @@ export default function PaymentCheckTab({
                     key={netId}
                     type="button"
                     onClick={() => selectNetwork(netId)}
-                    className={`rounded-lg px-2.5 py-1 text-xs font-medium transition-colors ${
+                    className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium transition-colors ${
                       network === netId
                         ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
                         : 'bg-zinc-900 text-zinc-400 border border-zinc-800 hover:text-zinc-200'
                     }`}
                   >
-                    {netOpt.label}
+                    <ChainIcon chain={netId} size={14} />
+                    <span>{netOpt.label}</span>
                     {isBaseBridgedUsdt && (
-                      <span className="ml-1 text-[10px] text-amber-300">⚠ bridged USDT only</span>
+                      <span className="ml-0.5 text-[10px] text-amber-300">⚠ bridged USDT only</span>
                     )}
                   </button>
                 );
@@ -231,9 +235,10 @@ export default function PaymentCheckTab({
                         setInputError('');
                         submitCheck(netId, input);
                       }}
-                      className="rounded border border-amber-400/40 bg-amber-500/20 px-2 py-0.5 text-[11px] font-medium text-amber-100 hover:bg-amber-500/30"
+                      className="inline-flex items-center gap-1 rounded border border-amber-400/40 bg-amber-500/20 px-2 py-0.5 text-[11px] font-medium text-amber-100 hover:bg-amber-500/30"
                     >
-                      {PAY_NETWORKS[netId].label}
+                      <ChainIcon chain={netId} size={13} />
+                      <span>{PAY_NETWORKS[netId].label}</span>
                     </button>
                   ))}
                 </div>

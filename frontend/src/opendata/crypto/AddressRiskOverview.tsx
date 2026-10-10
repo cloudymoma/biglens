@@ -6,6 +6,7 @@ import { fetchAddressRiskOverview } from '../../api';
 import { ErrorBanner, MetricCard } from '../../dashboards/shared';
 import { AXIS_LABEL, CHART_TOOLTIP, Panel, SPLIT_LINE, fmtNum, shortHash } from './shared';
 import { BACKFILL_COMMAND, RISK_SOURCE_LABELS, RISK_SOURCE_META } from './addressRiskTools';
+import { ChainIcon, TokenIcon } from './CryptoIcons';
 import ScamRadarPanel from './ScamRadarPanel';
 
 // Categorical colors only: red/orange are reserved for severity.
@@ -84,10 +85,10 @@ export default function AddressRiskOverview({ sources, onInspect }: {
     <div className="space-y-4">
       <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
         <MetricCard label="OFAC addresses" value={fmtNum(data.kpis.ofac_count)} icon={<Landmark size={15} />} detail="OFAC-listed addresses (EVM, TRON, Bitcoin, Solana)" accentColor="#71717a" />
-        <MetricCard label="USDT frozen now" value={data.empty ? '—' : fmtNum(data.kpis.usdt_frozen_count)} icon={<Snowflake size={15} />} detail={data.empty ? 'not synced' : since} accentColor={USDT_COLOR} />
-        <MetricCard label="USDC frozen now" value={data.empty ? '—' : fmtNum(data.kpis.usdc_frozen_count)} icon={<Snowflake size={15} />} detail={data.empty ? 'not synced' : since} accentColor={USDC_COLOR} />
-        <MetricCard label="USDT frozen now (TRON)" value={tronErr || tronEmpty ? '—' : fmtNum(data.kpis.tron_usdt_frozen_count ?? 0)} icon={<Snowflake size={15} />} detail={tronErr ? `sync error: ${tronErr}` : tronEmpty ? 'not synced' : tronSince} accentColor={USDT_COLOR} />
-        <MetricCard label="USDT destroyed" value={data.empty ? '—' : fmtCompactUSD(data.kpis.usdt_destroyed_total)} valueTitle={data.empty ? undefined : fmtExactUSD(data.kpis.usdt_destroyed_total)} icon={<Flame size={15} />} detail={data.empty ? 'not synced' : `USDT · ${since}`} accentColor={USDT_COLOR} />
+        <MetricCard label="USDT frozen now" value={data.empty ? '—' : fmtNum(data.kpis.usdt_frozen_count)} icon={<span className="inline-flex items-center gap-1"><TokenIcon symbol="USDT" size={14} /><Snowflake size={13} /></span>} detail={data.empty ? 'not synced' : since} accentColor={USDT_COLOR} />
+        <MetricCard label="USDC frozen now" value={data.empty ? '—' : fmtNum(data.kpis.usdc_frozen_count)} icon={<span className="inline-flex items-center gap-1"><TokenIcon symbol="USDC" size={14} /><Snowflake size={13} /></span>} detail={data.empty ? 'not synced' : since} accentColor={USDC_COLOR} />
+        <MetricCard label="USDT frozen now (TRON)" value={tronErr || tronEmpty ? '—' : fmtNum(data.kpis.tron_usdt_frozen_count ?? 0)} icon={<span className="inline-flex items-center gap-1"><ChainIcon chain="tron" size={14} /><TokenIcon symbol="USDT" size={14} /></span>} detail={tronErr ? `sync error: ${tronErr}` : tronEmpty ? 'not synced' : tronSince} accentColor={USDT_COLOR} />
+        <MetricCard label="USDT destroyed" value={data.empty ? '—' : fmtCompactUSD(data.kpis.usdt_destroyed_total)} valueTitle={data.empty ? undefined : fmtExactUSD(data.kpis.usdt_destroyed_total)} icon={<span className="inline-flex items-center gap-1"><TokenIcon symbol="USDT" size={14} /><Flame size={13} /></span>} detail={data.empty ? 'not synced' : `USDT · ${since}`} accentColor={USDT_COLOR} />
         <MetricCard label="MEW darklist" value={fmtNum(data.kpis.mew_darklist_count)} icon={<ListX size={15} />} detail="historical list, frozen since 2020-11" accentColor="#71717a" />
       </div>
 
@@ -100,7 +101,16 @@ export default function AddressRiskOverview({ sources, onInspect }: {
       )}
 
       {!data.empty && (
-        <Panel title="Stablecoin freezes" note={`per ${data.trend.granularity} · complete UTC days to ${data.coverage.cursor}`}>
+        <Panel
+          title={
+            <span className="inline-flex items-center gap-2">
+              <TokenIcon symbol="USDT" size={15} />
+              <TokenIcon symbol="USDC" size={15} />
+              <span>Stablecoin freezes</span>
+            </span>
+          }
+          note={`per ${data.trend.granularity} · complete UTC days to ${data.coverage.cursor}`}
+        >
           <ReactECharts
             style={{ height: 240 }}
             option={{
@@ -130,7 +140,12 @@ export default function AddressRiskOverview({ sources, onInspect }: {
                 {data.recent_events.map((e, i) => (
                   <tr key={`${e.tx_hash}-${e.token}-${e.action}-${e.address}-${i}`} className="border-t border-zinc-800/60">
                     <td className="py-1 pr-3 font-mono text-zinc-400">{e.block_time.slice(0, 16).replace('T', ' ')}</td>
-                    <td className="pr-3">{e.token}</td>
+                    <td className="pr-3">
+                      <span className="inline-flex items-center gap-1.5">
+                        <TokenIcon symbol={e.token} size={13} />
+                        <span>{e.token}</span>
+                      </span>
+                    </td>
                     <td className="pr-3">{ACTION_LABELS[e.action] ?? e.action}</td>
                     <td className="pr-3">
                       <button type="button" onClick={() => onInspect(e.address)} title={e.address}

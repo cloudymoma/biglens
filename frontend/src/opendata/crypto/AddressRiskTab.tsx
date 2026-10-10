@@ -22,6 +22,7 @@ import {
   sourceState,
 } from './addressRiskTools';
 import AddressRiskOverview from './AddressRiskOverview';
+import { ChainIcon, TokenIcon } from './CryptoIcons';
 import EtherscanKeyPanel from './EtherscanKeyPanel';
 import RiskResultView from './RiskResultView';
 
@@ -236,7 +237,11 @@ export default function AddressRiskTab({
         <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-xs">
           <div className="space-y-0.5">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="font-semibold text-zinc-200">USDT / USDC Freeze History Backfill</span>
+              <span className="inline-flex items-center gap-1.5 font-semibold text-zinc-200">
+                <TokenIcon symbol="USDT" size={14} />
+                <TokenIcon symbol="USDC" size={14} />
+                <span>USDT / USDC Freeze History Backfill</span>
+              </span>
               {backfill.running ? (
                 <span className="rounded px-1.5 py-0.5 text-[10px] font-medium bg-amber-500/15 text-amber-300 border border-amber-500/30">
                   Running · {backfill.progress_label || 'in progress'}
@@ -365,13 +370,14 @@ export default function AddressRiskTab({
                 key={c.id}
                 type="button"
                 onClick={() => selectChain(c.id)}
-                className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors border ${
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors border ${
                   active
                     ? 'bg-zinc-800 text-white border-zinc-700'
                     : 'bg-zinc-900/50 text-zinc-400 border-zinc-800/80 hover:text-zinc-200 hover:border-zinc-700'
                 }`}
               >
-                {c.label}{active ? ' ✓' : ''}
+                <ChainIcon chain={c.id} size={14} />
+                <span>{c.label}{active ? ' ✓' : ''}</span>
               </button>
             );
           })}
@@ -404,9 +410,10 @@ export default function AddressRiskTab({
             <button
               type="button"
               onClick={() => selectChain('tron')}
-              className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-200 border border-amber-500/30 hover:bg-amber-500/30"
+              className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-amber-500/20 text-amber-200 border border-amber-500/30 hover:bg-amber-500/30"
             >
-              Switch to TRON
+              <ChainIcon chain="tron" size={13} />
+              <span>Switch to TRON</span>
             </button>
           </div>
         )}
@@ -416,9 +423,10 @@ export default function AddressRiskTab({
             <button
               type="button"
               onClick={() => selectChain('btc')}
-              className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-200 border border-amber-500/30 hover:bg-amber-500/30"
+              className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-amber-500/20 text-amber-200 border border-amber-500/30 hover:bg-amber-500/30"
             >
-              Switch to Bitcoin
+              <ChainIcon chain="btc" size={13} />
+              <span>Switch to Bitcoin</span>
             </button>
           </div>
         )}
@@ -428,9 +436,10 @@ export default function AddressRiskTab({
             <button
               type="button"
               onClick={() => selectChain('sol')}
-              className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-200 border border-amber-500/30 hover:bg-amber-500/30"
+              className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-amber-500/20 text-amber-200 border border-amber-500/30 hover:bg-amber-500/30"
             >
-              Switch to Solana
+              <ChainIcon chain="sol" size={13} />
+              <span>Switch to Solana</span>
             </button>
           </div>
         )}
@@ -442,9 +451,10 @@ export default function AddressRiskTab({
                 key={c.id}
                 type="button"
                 onClick={() => selectChain(c.id)}
-                className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-200 border border-amber-500/30 hover:bg-amber-500/30"
+                className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-amber-500/20 text-amber-200 border border-amber-500/30 hover:bg-amber-500/30"
               >
-                Switch to {c.label}
+                <ChainIcon chain={c.id} size={13} />
+                <span>Switch to {c.label}</span>
               </button>
             ))}
           </div>

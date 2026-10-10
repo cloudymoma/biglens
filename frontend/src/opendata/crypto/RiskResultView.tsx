@@ -6,6 +6,7 @@ import type {
   AddressRiskScope,
   AddressRiskSeverity,
 } from '../../types';
+import { ChainIcon, TokenIcon } from './CryptoIcons';
 import { Panel } from './shared';
 import {
   ago,
@@ -92,8 +93,9 @@ export default function RiskResultView({
     return (
       <div className="space-y-2">
         <p role="status" className="text-xs text-zinc-200">
-          <span className="mr-1.5 rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] font-medium text-zinc-300">
-            {chainLabel}
+          <span className="mr-1.5 inline-flex items-center gap-1 rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] font-medium text-zinc-300 align-middle">
+            <ChainIcon chain={chain} size={12} />
+            <span>{chainLabel}</span>
           </span>
           {result.summary.text}
         </p>
@@ -109,8 +111,10 @@ export default function RiskResultView({
                 {clues.map((c, i) => (
                   <li key={`${c.source}-${c.flag}-${i}`} className="rounded-lg border border-zinc-800 p-2.5 text-xs">
                     <div className="flex items-start justify-between gap-3">
-                      <span className="text-zinc-200">
-                        <span className="text-zinc-500">{g.label} · </span>{c.title}
+                      <span className="inline-flex items-center gap-1.5 flex-wrap text-zinc-200">
+                        <span className="text-zinc-500">{g.label} ·</span>
+                        {c.token && <TokenIcon symbol={c.token} size={13} />}
+                        <span>{c.title}</span>
                       </span>
                       {c.ref_url && (
                         <a
@@ -136,7 +140,15 @@ export default function RiskResultView({
   }
 
   return (
-    <Panel title={`Result · ${chainLabel}`} note={`checked ${ago(result.queried_at)}`}>
+    <Panel
+      title={
+        <span className="inline-flex items-center gap-2">
+          <ChainIcon chain={chain} size={16} />
+          <span>{`Result · ${chainLabel}`}</span>
+        </span>
+      }
+      note={`checked ${ago(result.queried_at)}`}
+    >
       <h4 ref={headingRef} tabIndex={-1} className="font-mono text-sm text-white break-all outline-none">
         {result.address}
       </h4>
@@ -175,8 +187,10 @@ export default function RiskResultView({
                 {clues.map((c, i) => (
                   <li key={`${c.source}-${c.flag}-${i}`} className="rounded-lg border border-zinc-800 p-3 text-xs">
                     <div className="flex items-start justify-between gap-3">
-                      <span className="text-zinc-200">
-                        <span className="text-zinc-500">{g.label} · </span>{c.title}
+                      <span className="inline-flex items-center gap-1.5 flex-wrap text-zinc-200">
+                        <span className="text-zinc-500">{g.label} ·</span>
+                        {c.token && <TokenIcon symbol={c.token} size={13} />}
+                        <span>{c.title}</span>
                       </span>
                       {c.ref_url && (
                         <a href={c.ref_url} target="_blank" rel="noopener noreferrer"

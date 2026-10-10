@@ -4,6 +4,7 @@ import { AlertTriangle, Coins, ExternalLink, Radar, Repeat, ShieldAlert, Snowfla
 import type { AddressRiskSource, ScamRadarResponse } from '../../types';
 import { fetchAddressRiskScamRadar } from '../../api';
 import { ErrorBanner, MetricCard } from '../../dashboards/shared';
+import { ChainIcon, TokenIcon } from './CryptoIcons';
 import { AXIS_LABEL, CHART_TOOLTIP, Panel, SPLIT_LINE, fmtNum, shortHash } from './shared';
 
 const ETH_COLOR = '#60a5fa';
@@ -137,35 +138,35 @@ export default function ScamRadarPanel({ onInspect }: { onInspect: (address: str
           <MetricCard
             label="ETH poisoning (1d)"
             value={ethPoisonVal}
-            icon={<Radar size={15} />}
+            icon={<span className="inline-flex items-center gap-1"><ChainIcon chain="eth" size={14} /><Radar size={13} /></span>}
             detail={ethPoisonDetail}
             accentColor={ETH_COLOR}
           />
           <MetricCard
             label="TRON poisoning (1d)"
             value={tronPoisonVal}
-            icon={<Radar size={15} />}
+            icon={<span className="inline-flex items-center gap-1"><ChainIcon chain="tron" size={14} /><Radar size={13} /></span>}
             detail={tronPoisonDetail}
             accentColor={TRON_COLOR}
           />
           <MetricCard
             label="Fake stablecoin txs (1d)"
             value={fakeTransferVal}
-            icon={<Coins size={15} />}
+            icon={<span className="inline-flex items-center gap-1"><TokenIcon symbol="USDT" size={14} /><Coins size={13} /></span>}
             detail={fakeTransferDetail}
             accentColor={FAKE_COLOR}
           />
           <MetricCard
             label="TRON USDT freezes (30d)"
             value={tronFreezeVal}
-            icon={<Snowflake size={15} />}
+            icon={<span className="inline-flex items-center gap-1"><ChainIcon chain="tron" size={14} /><Snowflake size={13} /></span>}
             detail={tronFreezeDetail}
             accentColor={ETH_COLOR}
           />
           <MetricCard
             label="BTC explicit RBF (1d)"
             value={btcRbfVal}
-            icon={<Repeat size={15} />}
+            icon={<span className="inline-flex items-center gap-1"><ChainIcon chain="btc" size={14} /><Repeat size={13} /></span>}
             detail={btcRbfDetail}
             accentColor={BTC_COLOR}
           />
@@ -195,6 +196,7 @@ export default function ScamRadarPanel({ onInspect }: { onInspect: (address: str
           <>
             {btcOk && data.btc_rbf && (
               <div className="rounded-md border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-xs text-zinc-200 flex items-center gap-2">
+                <ChainIcon chain="btc" size={15} />
                 <ShieldAlert size={15} className="text-amber-400 shrink-0" />
                 <span>
                   <span className="font-semibold text-white">{data.btc_rbf.percent.toFixed(1)}%</span> of Bitcoin
@@ -206,7 +208,11 @@ export default function ScamRadarPanel({ onInspect }: { onInspect: (address: str
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               <div className="rounded-md border border-zinc-800/80 bg-zinc-900/30 p-3 space-y-2">
                 <div className="flex items-baseline justify-between">
-                  <span className="text-xs font-medium text-zinc-200">30-day poisoning &amp; fake-token trend</span>
+                  <span className="inline-flex items-center gap-1.5 text-xs font-medium text-zinc-200">
+                    <ChainIcon chain="eth" size={13} />
+                    <ChainIcon chain="tron" size={13} />
+                    <span>30-day poisoning &amp; fake-token trend</span>
+                  </span>
                   <span className="text-[11px] text-zinc-500">complete UTC days · dual scale · lower bound</span>
                 </div>
                 <ReactECharts
@@ -291,7 +297,10 @@ export default function ScamRadarPanel({ onInspect }: { onInspect: (address: str
 
               <div className="rounded-md border border-zinc-800/80 bg-zinc-900/30 p-3">
                 <div className="flex items-baseline justify-between mb-2">
-                  <span className="text-xs font-medium text-zinc-200">Top fake stablecoin contracts (last 7d, ETH)</span>
+                  <span className="inline-flex items-center gap-1.5 text-xs font-medium text-zinc-200">
+                    <ChainIcon chain="eth" size={13} />
+                    <span>Top fake stablecoin contracts (last 7d, ETH)</span>
+                  </span>
                   <span className="text-[11px] text-zinc-500">non-official contracts using USDT/USDC symbols</span>
                 </div>
                 {ethErr ? (
@@ -336,7 +345,12 @@ export default function ScamRadarPanel({ onInspect }: { onInspect: (address: str
                                 </a>
                               </div>
                             </td>
-                            <td className="pr-3 font-mono text-zinc-300">{t.symbol}</td>
+                            <td className="pr-3 font-mono text-zinc-300">
+                              <span className="inline-flex items-center gap-1.5">
+                                <TokenIcon symbol={t.symbol} size={13} />
+                                <span>{t.symbol}</span>
+                              </span>
+                            </td>
                             <td className="pr-3 font-mono text-right">{fmtNum(t.transfers)}</td>
                             <td className="pr-3 font-mono text-right">{fmtNum(t.recipients)}</td>
                             <td className="font-mono text-zinc-400 text-right">{t.last_seen}</td>
