@@ -325,7 +325,7 @@ func TestCheckIssuerFreezeSolana(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	t.Run("uninitialized USDT null + frozen USDC ATA via single getMultipleAccounts", func(t *testing.T) {
+	t.Run("indexed call refused (publicnode 403) falls back to canonical ATAs via one getMultipleAccounts", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var req struct {
 				Method string            `json:"method"`
@@ -334,6 +334,11 @@ func TestCheckIssuerFreezeSolana(t *testing.T) {
 			b, _ := io.ReadAll(r.Body)
 			if err := json.Unmarshal(b, &req); err != nil {
 				t.Fatalf("unmarshal rpc req: %v", err)
+			}
+			if req.Method == "getTokenAccountsByOwner" {
+				w.WriteHeader(http.StatusForbidden)
+				w.Write([]byte(`{"jsonrpc":"2.0","error":{"code":-32602,"message":"Indexed requests require a personal token."},"id":1}`))
+				return
 			}
 			if req.Method != "getMultipleAccounts" || len(req.Params) != 2 {
 				t.Fatalf("unexpected RPC method/params: %s", b)
@@ -361,6 +366,55 @@ func TestCheckIssuerFreezeSolana(t *testing.T) {
 		}
 		if states[1].Token != "USDC" || !states[1].Frozen {
 			t.Errorf("USDC state = %+v, want frozen", states[1])
+		}
+	})
+
+	// A wallet can hold USDC in a token account that is not its canonical ATA;
+	// a freeze on that account must still be reported (issuers freeze accounts,
+	// not owners).
+	t.Run("frozen non-canonical token account found via getTokenAccountsByOwner", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var req struct {
+				Method string            `json:"method"`
+				Params []json.RawMessage `json:"params"`
+			}
+			b, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(b, &req)
+			if req.Method != "getTokenAccountsByOwner" || len(req.Params) != 3 {
+				t.Errorf("unexpected RPC call: %s", b)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			var owner string
+			var filter map[string]string
+			_ = json.Unmarshal(req.Params[0], &owner)
+			_ = json.Unmarshal(req.Params[1], &filter)
+			if owner != holder {
+				t.Errorf("owner = %q, want %q", owner, holder)
+			}
+			switch filter["mint"] {
+			case "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB":
+				w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"context":{"slot":1},"value":[]}}`))
+			case "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v":
+				w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"context":{"slot":1},"value":[
+					{"pubkey":"` + usdcATA + `","account":{"data":{"program":"spl-token","parsed":{"type":"account","info":{"state":"initialized"}}}}},
+					{"pubkey":"9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM","account":{"data":{"program":"spl-token","parsed":{"type":"account","info":{"state":"frozen"}}}}}
+				]}}`))
+			default:
+				t.Errorf("unexpected mint filter %v", filter)
+			}
+		}))
+		defer srv.Close()
+
+		states, code := checkIssuerFreeze(context.Background(), "sol", holder, "", []string{srv.URL})
+		if code != "" || len(states) != 2 {
+			t.Fatalf("got (%+v, %q), want 2 states and empty error code", states, code)
+		}
+		if states[0].Token != "USDT" || states[0].Frozen {
+			t.Errorf("USDT state = %+v, want unfrozen (no accounts)", states[0])
+		}
+		if states[1].Token != "USDC" || !states[1].Frozen {
+			t.Errorf("USDC state = %+v, want frozen via the non-canonical account", states[1])
 		}
 	})
 
@@ -403,7 +457,12 @@ func TestLookupSolanaSources(t *testing.T) {
 	}
 
 	solRPC := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"context":{"slot":454804650},"value":[null,{"data":{"parsed":{"info":{"state":"frozen"}}}}]}}`))
+		b, _ := io.ReadAll(r.Body)
+		if !strings.Contains(string(b), "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v") {
+			w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"context":{"slot":454804650},"value":[]}}`))
+			return
+		}
+		w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"context":{"slot":454804650},"value":[{"pubkey":"x","account":{"data":{"parsed":{"info":{"state":"frozen"}}}}}]}}`))
 	}))
 	defer solRPC.Close()
 

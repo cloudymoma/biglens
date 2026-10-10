@@ -178,6 +178,14 @@ func checkIssuerFreeze(ctx context.Context, chain, addr, assetFilter string, rpc
 		if len(rpcs) == 0 {
 			return nil, "unavailable"
 		}
+		// Issuers freeze token accounts, not owners, and a wallet may hold the
+		// token outside its canonical ATA. getTokenAccountsByOwner sees every
+		// account but is an indexed call some public nodes refuse (publicnode
+		// returns 403), so it gets half the budget and the canonical-ATA check
+		// below remains the fallback.
+		if states, ok := checkSolanaFreezeAllAccounts(ctx, rpcs, addr, toks); ok {
+			return states, ""
+		}
 		atas := make([]string, len(toks))
 		for i, tok := range toks {
 			ata, err := deriveSolanaATA(addr, tok.Contract)
@@ -251,4 +259,62 @@ func issuerFreezeClues(chain string, live []issuerFreezeState, localStates []sta
 		})
 	}
 	return out
+}
+
+// checkSolanaFreezeAllAccounts reports a token as frozen when any of addr's
+// token accounts for its mint is frozen. ok is false when any lookup failed.
+func checkSolanaFreezeAllAccounts(ctx context.Context, rpcs []string, addr string, toks []registryToken) ([]issuerFreezeState, bool) {
+	budget := riskSourceTimeout / 2
+	if d, has := ctx.Deadline(); has {
+		budget = time.Until(d) / 2
+	}
+	ctx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+
+	states := make([]issuerFreezeState, len(toks))
+	oks := make([]bool, len(toks))
+	var wg sync.WaitGroup
+	for i, tok := range toks {
+		wg.Add(1)
+		go func(i int, tok registryToken) {
+			defer wg.Done()
+			res, code := solanaRPCFailover(ctx, rpcs, "getTokenAccountsByOwner", addr,
+				map[string]string{"mint": tok.Contract},
+				map[string]string{"encoding": "jsonParsed", "commitment": "confirmed"})
+			if code != "" {
+				return
+			}
+			var parsed struct {
+				Value []struct {
+					Account struct {
+						Data struct {
+							Parsed struct {
+								Info struct {
+									State string `json:"state"`
+								} `json:"info"`
+							} `json:"parsed"`
+						} `json:"data"`
+					} `json:"account"`
+				} `json:"value"`
+			}
+			if json.Unmarshal(res, &parsed) != nil {
+				return
+			}
+			frozen := false
+			for _, v := range parsed.Value {
+				if v.Account.Data.Parsed.Info.State == "frozen" {
+					frozen = true
+				}
+			}
+			states[i] = issuerFreezeState{Token: tok.Label, Contract: tok.Contract, Frozen: frozen}
+			oks[i] = true
+		}(i, tok)
+	}
+	wg.Wait()
+	for _, ok := range oks {
+		if !ok {
+			return nil, false
+		}
+	}
+	return states, true
 }
