@@ -638,6 +638,7 @@ func resolveSolanaUnknownMintSymbols(ctx context.Context, cache *Cache, rpcs []s
 		return symbols
 	}
 
+	var noMetaplex []string
 	for i, mint := range uncachedMints {
 		var sym string
 		if i < len(out.Value) && out.Value[i] != nil && len(out.Value[i].Data) >= 1 {
@@ -646,11 +647,78 @@ func resolveSolanaUnknownMintSymbols(ctx context.Context, cache *Cache, rpcs []s
 			}
 		}
 		symbols[mint] = sym
+		if sym == "" {
+			noMetaplex = append(noMetaplex, mint)
+		}
+	}
+
+	// Token-2022 mints keep their symbol in the mint's tokenMetadata extension
+	// instead of a Metaplex PDA. On RPC failure leave them uncached so the next
+	// request retries.
+	inline, ok := fetchSolanaToken2022Symbols(ctx, rpcs, noMetaplex)
+	for _, mint := range uncachedMints {
+		if sym := inline[mint]; sym != "" {
+			symbols[mint] = sym
+		}
+		if symbols[mint] == "" && !ok {
+			continue
+		}
 		if cache != nil {
-			cache.SetWithTTL("sol:mintmeta:"+mint, sym, paySolMintMetaTTL)
+			cache.SetWithTTL("sol:mintmeta:"+mint, symbols[mint], paySolMintMetaTTL)
 		}
 	}
 	return symbols
+}
+
+// fetchSolanaToken2022Symbols reads the tokenMetadata extension symbol of each
+// mint with one getMultipleAccounts call. ok is false when the call failed.
+func fetchSolanaToken2022Symbols(ctx context.Context, rpcs []string, mints []string) (map[string]string, bool) {
+	if len(mints) == 0 {
+		return nil, true
+	}
+	res, code := solanaRPCFailover(ctx, rpcs, "getMultipleAccounts", mints, map[string]any{
+		"encoding":   "jsonParsed",
+		"commitment": "confirmed",
+	})
+	if code != "" {
+		return nil, false
+	}
+	var out struct {
+		Value []*struct {
+			Data json.RawMessage `json:"data"`
+		} `json:"value"`
+	}
+	if err := json.Unmarshal(res, &out); err != nil {
+		return nil, false
+	}
+	symbols := make(map[string]string, len(mints))
+	for i, mint := range mints {
+		if i >= len(out.Value) || out.Value[i] == nil {
+			continue
+		}
+		// Non-parsable accounts come back as a ["<base64>", "base64"] array.
+		var data struct {
+			Parsed struct {
+				Info struct {
+					Extensions []struct {
+						Extension string `json:"extension"`
+						State     struct {
+							Symbol string `json:"symbol"`
+						} `json:"state"`
+					} `json:"extensions"`
+				} `json:"info"`
+			} `json:"parsed"`
+		}
+		if json.Unmarshal(out.Value[i].Data, &data) != nil {
+			continue
+		}
+		for _, ext := range data.Parsed.Info.Extensions {
+			if ext.Extension == "tokenMetadata" {
+				symbols[mint] = strings.TrimSpace(strings.TrimRight(ext.State.Symbol, "\x00"))
+			}
+		}
+	}
+	return symbols, true
 }
 
 func finalizeSolanaPayTxs(ctx context.Context, cache *Cache, rpcs []string, raw []rawSolTransfer, asset string) []payTx {

@@ -538,3 +538,89 @@ func TestSolanaTxDetailsRetriesNullOnNextRPC(t *testing.T) {
 		t.Fatalf("txs = %+v, want the incoming sig_new transfer fetched from the second RPC", txs)
 	}
 }
+
+// Token-2022 mints keep name/symbol in the mint's tokenMetadata extension
+// instead of a Metaplex PDA; a fake "USD₮" minted that way must still be
+// flagged as counterfeit rather than filed under unrelated tokens.
+func TestSolanaCounterfeitDetectionViaToken2022Metadata(t *testing.T) {
+	const (
+		userAddr     = "depMwrdSqn5y9fDkdotP4iGxTdxSaEHVE6QjnbcEmjN"
+		attackerAddr = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM"
+		fakeMint     = "7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs"
+		attackerATA  = "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1"
+		userFakeATA  = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU"
+	)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Method string            `json:"method"`
+			Params []json.RawMessage `json:"params"`
+		}
+		b, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(b, &req)
+		switch req.Method {
+		case "getSignaturesForAddress":
+			var target string
+			_ = json.Unmarshal(req.Params[0], &target)
+			if target == userAddr {
+				w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":[{"signature":"sig_fake_usdt","slot":454800700,"blockTime":1791448500,"err":null}]}`))
+			} else {
+				w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":[]}`))
+			}
+		case "getTransaction":
+			w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{
+				"slot":454800700,
+				"blockTime":1791448500,
+				"transaction":{"message":{
+					"accountKeys":["` + attackerAddr + `","` + attackerATA + `","` + userFakeATA + `","` + solanaTokenProgramID + `"],
+					"instructions":[{
+						"program":"spl-token",
+						"parsed":{"type":"transferChecked","info":{
+							"source":"` + attackerATA + `",
+							"destination":"` + userFakeATA + `",
+							"authority":"` + attackerAddr + `",
+							"mint":"` + fakeMint + `",
+							"tokenAmount":{"amount":"5000000000","decimals":6}
+						}}
+					}]
+				}},
+				"meta":{
+					"err":null,
+					"preTokenBalances":[
+						{"accountIndex":1,"mint":"` + fakeMint + `","owner":"` + attackerAddr + `","uiTokenAmount":{"amount":"5000000000","decimals":6}},
+						{"accountIndex":2,"mint":"` + fakeMint + `","owner":"` + userAddr + `","uiTokenAmount":{"amount":"0","decimals":6}}
+					],
+					"postTokenBalances":[
+						{"accountIndex":1,"mint":"` + fakeMint + `","owner":"` + attackerAddr + `","uiTokenAmount":{"amount":"0","decimals":6}},
+						{"accountIndex":2,"mint":"` + fakeMint + `","owner":"` + userAddr + `","uiTokenAmount":{"amount":"5000000000","decimals":6}}
+					]
+				}
+			}}`))
+		case "getMultipleAccounts":
+			var cfg struct {
+				Encoding string `json:"encoding"`
+			}
+			_ = json.Unmarshal(req.Params[1], &cfg)
+			if cfg.Encoding == "base64" {
+				// No Metaplex metadata PDA: the mint stores its symbol inline (Token-2022).
+				w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"context":{"slot":454800800},"value":[null]}}`))
+				return
+			}
+			w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"context":{"slot":454800800},"value":[{"owner":"` + solanaToken2022ProgramID + `","data":{"program":"spl-token-2022","parsed":{"type":"mint","info":{"decimals":6,"extensions":[
+				{"extension":"metadataPointer","state":{}},
+				{"extension":"tokenMetadata","state":{"name":"Tether USD","symbol":"USD₮"}}
+			]}}}}]}}`))
+		default:
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	}))
+	defer srv.Close()
+
+	txs, err := fetchSolanaRecent(context.Background(), NewCache(time.Minute), []string{srv.URL}, "USDT", userAddr, payHeads{Finalized: 454800800})
+	if err != nil {
+		t.Fatalf("fetchSolanaRecent Token-2022 fake token error: %v", err)
+	}
+	if len(txs) != 1 || txs[0].TokenTier != tierCounterfeit || txs[0].Amount != "5000" || txs[0].Counterparty != attackerAddr {
+		t.Fatalf("fake token row = %+v, want tierCounterfeit 5000 from %s", txs, attackerAddr)
+	}
+}
