@@ -233,4 +233,16 @@ func TestMergeRollingGasHours(t *testing.T) {
 	if gotMap["2026-10-01 10:00"].Primary.Float64 != 2 || gotMap["2026-10-04 08:00"].Primary.Float64 != 30 || gotMap["2026-10-04 09:00"].Primary.Float64 != 40 {
 		t.Errorf("unexpected merged hours: %+v", gotMap)
 	}
+
+	effEnd, complete := rollingEffectiveEnd(gotMap, start, end)
+	if !complete || !effEnd.Equal(end) {
+		t.Errorf("rollingEffectiveEnd(complete) = (%v, %v), want (%v, true)", effEnd, complete, end)
+	}
+
+	delete(gotMap, "2026-10-04 09:00")
+	effEnd, complete = rollingEffectiveEnd(gotMap, start, end)
+	wantEff := time.Date(2026, 10, 4, 9, 0, 0, 0, time.UTC)
+	if complete || !effEnd.Equal(wantEff) {
+		t.Errorf("rollingEffectiveEnd(missing latest hour) = (%v, %v), want (%v, false)", effEnd, complete, wantEff)
+	}
 }

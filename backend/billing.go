@@ -204,6 +204,17 @@ func billingWhere(f BillingFilter) (string, []bigquery.QueryParameter) {
 	return strings.Join(conds, "\n\t\t  AND "), params
 }
 
+// billingStandardCols lists the exact columns referenced by standard-export and
+// metadata queries. Projecting an explicit column list in each UNION ALL branch
+// avoids BigQuery schema-mismatch errors when multiple billing accounts have
+// export tables created at different times (with different column order or
+// optional schema additions), while BigQuery still prunes any column not
+// referenced by the outer SELECT.
+const (
+	billingStandardCols = "billing_account_id, service, sku, usage_start_time, usage_end_time, project, labels, cost, currency, usage, credits, invoice, cost_type"
+	billingResourceCols = billingStandardCols + ", resource"
+)
+
 // billingSource returns a parenthesized FROM-clause subquery unioning the
 // given export tables with all filters applied inside each branch (so
 // partition pruning still works), plus the query parameters.
@@ -211,7 +222,11 @@ func billingSource(project, dataset string, tables []string, f BillingFilter) (s
 	where, params := billingWhere(f)
 	parts := make([]string, len(tables))
 	for i, tbl := range tables {
-		parts[i] = fmt.Sprintf("SELECT * FROM `%s.%s.%s` WHERE %s", project, dataset, tbl, where)
+		cols := billingStandardCols
+		if strings.HasPrefix(tbl, billingResourcePrefix) {
+			cols = billingResourceCols
+		}
+		parts[i] = fmt.Sprintf("SELECT %s FROM `%s.%s.%s` WHERE %s", cols, project, dataset, tbl, where)
 	}
 	return "(" + strings.Join(parts, "\n\t\tUNION ALL\n\t\t") + ")", params
 }
@@ -226,7 +241,7 @@ func billingMetaPartitionSource(project, dataset string, tables []string, start,
 	}
 	parts := make([]string, len(tables))
 	for i, tbl := range tables {
-		parts[i] = fmt.Sprintf("SELECT * FROM `%s.%s.%s` WHERE %s", project, dataset, tbl, where)
+		parts[i] = fmt.Sprintf("SELECT %s FROM `%s.%s.%s` WHERE %s", billingStandardCols, project, dataset, tbl, where)
 	}
 	return "(" + strings.Join(parts, "\n\t\tUNION ALL\n\t\t") + ")", params
 }

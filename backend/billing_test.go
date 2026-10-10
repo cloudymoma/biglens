@@ -181,6 +181,25 @@ func TestBillingSourceUnionsTables(t *testing.T) {
 	if !strings.HasPrefix(src, "(") || !strings.HasSuffix(src, ")") {
 		t.Errorf("source must be a parenthesized subquery:\n%s", src)
 	}
+	if strings.Contains(src, "SELECT *") {
+		t.Errorf("standard source must project explicit columns instead of SELECT *:\n%s", src)
+	}
+	if !strings.Contains(src, "SELECT "+billingStandardCols+" FROM") {
+		t.Errorf("standard source missing billingStandardCols:\n%s", src)
+	}
+
+	resSrc, _ := billingSource("my-project", "billing_ds",
+		[]string{"gcp_billing_export_resource_v1_A"}, testFilter())
+	if !strings.Contains(resSrc, "SELECT "+billingResourceCols+" FROM") {
+		t.Errorf("resource source missing billingResourceCols (with resource column):\n%s", resSrc)
+	}
+
+	metaSrc, _ := billingMetaPartitionSource("my-project", "billing_ds",
+		[]string{"gcp_billing_export_v1_A", "gcp_billing_export_v1_B"},
+		civil.Date{Year: 2026, Month: 7, Day: 1}, civil.Date{Year: 2026, Month: 8, Day: 1})
+	if strings.Contains(metaSrc, "SELECT *") {
+		t.Errorf("meta source must project explicit columns instead of SELECT *:\n%s", metaSrc)
+	}
 }
 
 // Credits must be summed via nested subquery; LEFT JOIN UNNEST(credits)

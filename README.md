@@ -191,9 +191,9 @@ different things, so they don't move together:
   all sub-regions/DMAs with `NULL` treated as `0` and rounds to the nearest
   integer (`CAST(ROUND(COALESCE(AVG(IFNULL(score, 0)), 0)) AS INT64)`). The
   inline bar next to each leaderboard row visualizes this value.
-- **Gain (%)** — for rising terms only: the week-over-week percentage increase
-  in search volume (`percent_gain`). A brand-new breakout query can show gains
-  of several thousand percent.
+- **Gain (%)** — for rising terms only: the percentage increase in search
+  volume vs. the baseline period (`percent_gain`). A brand-new breakout query
+  can show gains of several thousand percent.
 
 Because rank reflects *absolute daily volume* while score reflects *interest
 relative to the term's own 5-year history*, a #14 term can score 100 (it just
@@ -415,8 +415,8 @@ If the file cannot be opened the server still starts and lookups report the loca
 Looked-up addresses are kept only in the 10-minute in-memory cache — never written to disk or logs.
 
 **Freeze history (BigQuery).** On first start the server syncs the last 30 days of Ethereum USDT/USDC freeze events
-(~110–130 GB scanned, ~$0.6–$0.8 once), then one new day per day (~3.5–4.5 GB for the logs scan plus ~25 MB for the
-partitioned completeness check, ~$0.02–$0.03/day). `address_risk.initial_sync_days`
+(~92 GB / 86 GiB billed, ~$0.54 once), then one new day per day (~3.4–3.6 GB/day billed, ~4.4 GB dry-run upper bound,
+plus ~25 MB for the partitioned completeness check, ~$0.02/day). `address_risk.initial_sync_days`
 changes the window (0 disables it, max 31). Until the full history is backfilled, lookups say
 "Freeze history covers … only". In addition to the local Ethereum and TRON event histories, every lookup on ETH, Arbitrum,
 Optimism, Base and TRON runs a live `issuer_freeze` contract call so current freeze state is checked even before
@@ -483,7 +483,7 @@ hasn't repriced it and CPCs are still low. That window is the arbitrage.
 
 | Widget | Description |
 |---|---|
-| **Breakout Keyword Matrix** | Bubble chart of rising terms: velocity (week-over-week gain, log scale) vs mainstream volume rank. The far-left **Unranked** band + amber bubbles are the arbitrage zone. Click a bubble to drill down |
+| **Breakout Keyword Matrix** | Bubble chart of rising terms: velocity (breakout `% gain`, log scale) vs mainstream volume rank. The far-left **Unranked** band + amber bubbles are the arbitrage zone. Click a bubble to drill down |
 | **Geo Interest** | The selected term's score in each of the 210 US DMAs (or a country's regions) for the snapshot's latest complete week — indexed to each geo's own 5-year peak, so not comparable across geos; geos without a reported score show as *insufficient data* |
 | **Brand Safety & Tone Radar** | 14 days of GDELT news tone + conflict-event share for the market, rolled into a 🟢/🟡/🔴 banner with a plain-language SEM action |
 | **Keyword Opportunities** | The actionable table — respects all filters, exports one-click Google Ads Editor CSVs (keywords + checked-row negatives) |
@@ -500,9 +500,10 @@ brand-safety overlay toggle.
 Each column measures a different thing; the interesting keywords are the ones
 where the columns *disagree* (high gain, no rank):
 
-- **Gain (%)** — week-over-week growth in search volume (`percent_gain`,
-  rising tables only). Brand-new breakouts routinely show +1,000% or more.
-  This is the momentum axis of the matrix and the default sort of the table.
+- **Gain (%)** — percentage growth in search volume vs. the baseline period
+  (`percent_gain`, rising tables only). Brand-new breakouts routinely show
+  +1,000% or more. This is the momentum axis of the matrix and the default sort
+  of the table.
 - **Volume rank** — the term's position in the same snapshot's top-25 chart.
   **UNRANKED** means it is not charting anywhere in the selected geo's top 25
   — that is the buy signal, not missing data: demand is accelerating but has
@@ -540,7 +541,8 @@ where the columns *disagree* (high gain, no rank):
 - **CSV exports** — Google Ads Editor import format. Keywords CSV ships every
   visible row with Campaign `SEM-Trends-{date}`, Ad group = the selected geo,
   match type Phrase, and Max CPC left blank (that decision stays yours);
-  Negatives CSV ships only the rows you checked.
+  Negatives CSV ships only the rows you checked with `Criterion Type = Campaign
+  Negative Phrase`.
 
 A practical pass: pick market + geo → scan the matrix top-left (unranked,
 high-gain, sizable bubbles) → click one to check its geo interest and

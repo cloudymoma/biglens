@@ -195,8 +195,8 @@ export default function SemDashboard() {
   function exportNegatives() {
     const campaign = `SEM-Trends-${refreshDate}`;
     downloadCsv(`sem-negatives-${refreshDate}.csv`, [
-      ['Campaign', 'Keyword', 'Match type'],
-      ...checkedRows.map(r => [campaign, r.term, 'Phrase']),
+      ['Campaign', 'Keyword', 'Criterion Type'],
+      ...checkedRows.map(r => [campaign, r.term, 'Campaign Negative Phrase']),
     ]);
   }
 
@@ -300,7 +300,7 @@ export default function SemDashboard() {
             <div className="rounded-2xl border border-zinc-800/50 p-6" style={{ background: '#111114' }}>
               <h3 className="text-sm font-semibold text-white mb-1">Breakout Keyword Matrix</h3>
               <p className="text-xs text-zinc-500 mb-4">
-                Momentum (week-over-week gain, log scale) vs mainstream volume rank in {geoLabel}.
+                Momentum (breakout % gain, log scale) vs mainstream volume rank in {geoLabel}.
                 {market === 'us' && geo && ' Note: in US DMA mode, velocity and volume rank reflect the national chart while score and active DMAs reflect the selected metro.'}{' '}
                 Left = not in top 25 yet (most rising-25 breakouts sit here) · bubble size = search score · amber = arbitrage zone.
                 Click a bubble to drill down.
@@ -482,7 +482,7 @@ function matrixOption(rows: SemMatrixRow[], overlayLevel: SafetyLevel | null) {
   const tooltipFormatter = (params: { data: MatrixDatum }) => {
     const r = params.data.row;
     return `<div style="font-weight:600;color:#f4f4f5;font-size:12px;margin-bottom:4px">${r.term}</div>
-      <div style="color:#fbbf24">+${r.percent_gain.toLocaleString()}% week-over-week</div>
+      <div style="color:#fbbf24">+${r.percent_gain.toLocaleString()}% gain</div>
       <div style="color:#a1a1aa">Volume rank: ${r.volume_rank > 0 ? `#${r.volume_rank}` : 'not in top 25'}</div>
       <div style="color:#a1a1aa">Score: ${r.score > 0 ? `${r.score}/100` : 'no measurable score this week'}</div>
       <div style="color:#a1a1aa">Active in ${r.geo_spread} geo${r.geo_spread === 1 ? '' : 's'}</div>`;

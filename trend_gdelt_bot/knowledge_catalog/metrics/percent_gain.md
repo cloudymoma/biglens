@@ -1,7 +1,7 @@
 ---
 type: Metric
 title: Search Percent Gain (%)
-description: Week-over-week percentage growth rate for surging / breakout queries.
+description: National percentage growth reported by Google Trends for surging / breakout queries relative to the baseline period.
 tags:
   - metric
   - search_trends
@@ -10,10 +10,10 @@ tags:
 
 # Definition
 
-Calculated as:
-$$\text{Percent Gain} = \frac{\text{Current Week Search Volume} - \text{Previous Week Volume}}{\text{Previous Week Volume}} \times 100$$
+`percent_gain` is the national percentage increase in search interest reported directly by the Google Trends rising-terms tables (`international_top_rising_terms`, `top_rising_terms`, `top_rising_terms_hourly`) relative to Google Trends' preceding baseline period.
 
-Breakout terms with zero baseline in the prior week can exceed several thousand percent.
+In sub-national tables (regions or US Nielsen DMAs), `percent_gain` is a country-level value repeated across every sub-region row for the same `(refresh_date, term)` — sub-regions are differentiated by their own `score` (0–100), not by `percent_gain`. Breakout terms emerging from a near-zero baseline routinely exceed `+1,000%`.
 
 # Related Concepts
 - Used in: [vw_search_trends_rising](/views/vw_search_trends_rising)
+

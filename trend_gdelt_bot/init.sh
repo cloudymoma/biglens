@@ -134,19 +134,22 @@ echo -e "${GREEN}✓ BigQuery semantic layer deployed successfully.${NC}\n"
 # -----------------------------------------------------------------------------
 echo -e "${BLUE}${BOLD}[2/3] Registering Knowledge Catalog scope...${NC}"
 
+printf 'scope: bq-dataset.%s.%s\n' "${PROJECT_ID}" "${DATASET_ID}" > knowledge_catalog/catalog.yaml
+
 if command -v kcmd >/dev/null 2>&1; then
   echo -e "  → 'kcmd' detected. Registering catalog scope for dataset ${PROJECT_ID}.${DATASET_ID}..."
   (
     cd knowledge_catalog
     if kcmd init --bigquery-dataset "${PROJECT_ID}.${DATASET_ID}"; then
+      printf 'scope: bq-dataset.%s.%s\n' "${PROJECT_ID}" "${DATASET_ID}" > catalog.yaml
       echo -e "${GREEN}✓ Knowledge Catalog scope registered (catalog.yaml). Dataplex entries auto-sync from BigQuery.${NC}"
     else
-      echo -e "  ${YELLOW}Warning: 'kcmd init' failed (see output above). The local OKF bundle in${NC}"
-      echo -e "  ${YELLOW}'knowledge_catalog/' remains usable directly for agent grounding.${NC}"
+      echo -e "  ${YELLOW}Warning: 'kcmd init' failed (see output above). 'knowledge_catalog/catalog.yaml' has been updated directly for ${PROJECT_ID}.${DATASET_ID}.${NC}"
     fi
   )
   echo ""
 else
+  echo -e "  ${GREEN}✓ Updated 'knowledge_catalog/catalog.yaml' scope to bq-dataset.${PROJECT_ID}.${DATASET_ID}.${NC}"
   echo -e "  ${YELLOW}Notice: 'kcmd' CLI not found on PATH. Dataplex entries still auto-sync from BigQuery; the local OKF markdown bundle in 'knowledge_catalog/' is ready for direct manual or agent use.${NC}\n"
 fi
 

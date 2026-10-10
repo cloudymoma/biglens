@@ -303,7 +303,7 @@ export default function GoogleTrendsDashboard() {
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <div className="rounded-2xl border border-zinc-800/50 p-6" style={{ background: '#111114' }}>
               <h3 className="text-sm font-semibold text-white mb-1">Surging Terms</h3>
-              <p className="text-xs text-zinc-500 mb-4">Top 10 by week-over-week growth</p>
+              <p className="text-xs text-zinc-500 mb-4">Top 10 by breakout growth (% gain)</p>
               {risingTerms.length > 0 ? (
                 <div className="h-[340px]">
                   <ReactECharts

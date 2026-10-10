@@ -18,14 +18,15 @@ import (
 )
 
 const (
-	gasSeriesTTL     = time.Hour
-	gasSolSeriesTTL  = 4 * time.Hour
-	gasRollingTTL    = 2 * time.Hour
-	gasAllTimeTTL    = 24 * time.Hour
-	gasAllTimeKey    = "opendata:crypto:gaspulse:alltime"
-	gasTronKey       = "opendata:crypto:gaspulse:tron_energy"
-	gasSeriesKeyFm   = "opendata:crypto:gaspulse:72h:%s:%s"
-	gasRollingKeyFm  = "opendata:crypto:gaspulse:rolling:%s"
+	gasSeriesTTL           = time.Hour
+	gasSolSeriesTTL        = 4 * time.Hour
+	gasSeriesIncompleteTTL = 5 * time.Minute
+	gasRollingTTL          = 2 * time.Hour
+	gasAllTimeTTL          = 24 * time.Hour
+	gasAllTimeKey          = "opendata:crypto:gaspulse:alltime"
+	gasTronKey             = "opendata:crypto:gaspulse:tron_energy"
+	gasSeriesKeyFm         = "opendata:crypto:gaspulse:72h:%s:%s"
+	gasRollingKeyFm        = "opendata:crypto:gaspulse:rolling:%s"
 	// gasFetchTimeout bounds one shared fetch.
 	gasFetchTimeout = 2 * time.Minute
 )
@@ -56,6 +57,23 @@ func mergeRollingGasHours(prev map[string]GasHourRow, delta []GasHourRow, start,
 		out = append(out, r)
 	}
 	return next, out
+}
+
+// rollingEffectiveEnd checks whether the newest expected hour bucket (end - 1h)
+// has landed in byHr with a valid primary metric. If a chain's BigQuery export
+// ever lags past gasIngestLag (15m), it returns complete=false and pins effEnd
+// to the latest populated hour so the next rolling refresh backfills the gap.
+func rollingEffectiveEnd(byHr map[string]GasHourRow, start, end time.Time) (effEnd time.Time, complete bool) {
+	lastHr := end.Add(-time.Hour).UTC().Format(gasHourLayout)
+	if r, ok := byHr[lastHr]; ok && r.Primary.Valid {
+		return end, true
+	}
+	for t := end.Add(-2 * time.Hour); !t.Before(start); t = t.Add(-time.Hour) {
+		if r, ok := byHr[t.UTC().Format(gasHourLayout)]; ok && r.Primary.Valid {
+			return t.Add(time.Hour), false
+		}
+	}
+	return start, false
 }
 
 // gasFetchContext detaches a shared fetch from the request that started it:
@@ -163,13 +181,23 @@ func (h *APIHandler) gasSeries(r *http.Request, chain string, start, end time.Ti
 	if chain == gasChainSol {
 		solBucket := end.Truncate(gasSolSeriesTTL).Format("2006010215")
 		key := fmt.Sprintf(gasSeriesKeyFm, chain, solBucket)
-		v, err := h.cachedFetch(key, gasSolSeriesTTL, func() (any, error) {
+		if cached, ok := h.cache.Get(key); ok {
+			return cached.([]GasHourRow), nil
+		}
+		v, err, _ := cryptoFlight.Do(key, func() (any, error) {
 			ctx, cancel := gasFetchContext(r)
 			defer cancel()
 			rows, err := h.bq.GetGasHourly(ctx, chain, start, end)
 			if err != nil {
 				return nil, fmt.Errorf("%s 72h query: %w", chain, err)
 			}
+			_, mergedRows := mergeRollingGasHours(nil, rows, start, end)
+			byHr, _ := mergeRollingGasHours(nil, mergedRows, start, end)
+			ttl := gasSolSeriesTTL
+			if _, complete := rollingEffectiveEnd(byHr, start, end); !complete {
+				ttl = gasSeriesIncompleteTTL
+			}
+			h.cache.SetWithTTL(key, rows, ttl)
 			return rows, nil
 		})
 		if err != nil {
@@ -179,7 +207,10 @@ func (h *APIHandler) gasSeries(r *http.Request, chain string, start, end time.Ti
 	}
 
 	key := fmt.Sprintf(gasSeriesKeyFm, chain, end.Format("2006010215"))
-	v, err := h.cachedFetch(key, gasSeriesTTL, func() (any, error) {
+	if cached, ok := h.cache.Get(key); ok {
+		return cached.([]GasHourRow), nil
+	}
+	v, err, _ := cryptoFlight.Do(key, func() (any, error) {
 		ctx, cancel := gasFetchContext(r)
 		defer cancel()
 		rollingKey := fmt.Sprintf(gasRollingKeyFm, chain)
@@ -200,7 +231,13 @@ func (h *APIHandler) gasSeries(r *http.Request, chain string, start, end time.Ti
 			return nil, fmt.Errorf("%s 72h query: %w", chain, err)
 		}
 		mergedMap, mergedRows := mergeRollingGasHours(prevMap, rows, start, end)
-		h.cache.SetWithTTL(rollingKey, gasRollingSeries{end: end, byHr: mergedMap}, gasRollingTTL)
+		effEnd, complete := rollingEffectiveEnd(mergedMap, start, end)
+		h.cache.SetWithTTL(rollingKey, gasRollingSeries{end: effEnd, byHr: mergedMap}, gasRollingTTL)
+		ttl := gasSeriesTTL
+		if !complete {
+			ttl = gasSeriesIncompleteTTL
+		}
+		h.cache.SetWithTTL(key, mergedRows, ttl)
 		return mergedRows, nil
 	})
 	if err != nil {
