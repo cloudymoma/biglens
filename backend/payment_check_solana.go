@@ -19,12 +19,14 @@ import (
 const (
 	solanaSystemProgramID = "11111111111111111111111111111111"
 
-	paySolRecentMaxTxs   = 15
-	paySolHistoryMaxTxs  = 40
-	paySolSigPageSize    = 50
-	paySolTxConcurrency  = 6
-	paySolFinalizedTxTTL = 10 * time.Minute
-	paySolMintMetaTTL    = 1 * time.Hour
+	paySolRecentMaxTxs          = 15
+	paySolArchivalRecentMaxTxs  = 6
+	paySolHistoryMaxTxs         = 40
+	paySolSigPageSize           = 50
+	paySolTxConcurrency         = 6
+	paySolArchivalTxConcurrency = 3
+	paySolFinalizedTxTTL        = 10 * time.Minute
+	paySolMintMetaTTL           = 1 * time.Hour
 )
 
 type solSigRow struct {
@@ -32,6 +34,7 @@ type solSigRow struct {
 	Slot      uint64 `json:"slot"`
 	BlockTime *int64 `json:"blockTime"`
 	Err       any    `json:"err"`
+	rpcIdx    int
 }
 
 type solAccountKey string
@@ -130,25 +133,28 @@ func fetchSolanaSigsTarget(ctx context.Context, rpcs []string, target string, si
 	var kept []solSigRow
 	var before string
 	truncated := false
+	rpcIdx := 0
 
-	for {
+	for rpcIdx < len(rpcs) {
+		limit := pageLimit
+		if sinceUnix == 0 && rpcIdx > 0 && limit > paySolArchivalRecentMaxTxs {
+			limit = paySolArchivalRecentMaxTxs
+		}
 		cfg := map[string]any{
-			"limit":      pageLimit,
+			"limit":      limit,
 			"commitment": "confirmed", // B1: never rely on default finalized commitment
 		}
 		if before != "" {
 			cfg["before"] = before
 		}
-		res, code := solanaRPCFailover(ctx, rpcs, "getSignaturesForAddress", target, cfg)
+		res, usedOffset, code := solanaRPCFailoverIdx(ctx, rpcs[rpcIdx:], "getSignaturesForAddress", target, cfg)
 		if code != "" {
 			return nil, false, code
 		}
+		rpcIdx += usedOffset
 		var page []solSigRow
 		if err := json.Unmarshal(res, &page); err != nil {
 			return nil, false, "bad_response"
-		}
-		if len(page) == 0 {
-			break
 		}
 
 		reachedSince := false
@@ -157,21 +163,39 @@ func fetchSolanaSigsTarget(ctx context.Context, rpcs []string, target string, si
 				reachedSince = true
 				break
 			}
+			r.rpcIdx = rpcIdx
 			kept = append(kept, r)
+		}
+		if len(page) > 0 {
+			before = page[len(page)-1].Signature
 		}
 
 		if sinceUnix == 0 {
-			// Single-page mode (/live)
+			// Single-page mode (/live): if a pruned primary node returned no
+			// signatures within its retention window, try the next (archival) RPC.
+			if len(kept) == 0 && rpcIdx+1 < len(rpcs) {
+				rpcIdx++
+				continue
+			}
 			break
 		}
-		if reachedSince || len(page) < pageLimit {
+		if reachedSince {
 			break
 		}
 		if len(kept) > maxKeep {
 			truncated = true
 			break
 		}
-		before = page[len(page)-1].Signature
+		if len(page) < limit {
+			// A pruned primary node returns fewer than limit rows when it hits its
+			// ledger retention boundary before sinceUnix; continue from `before`
+			// on the next (archival) RPC if available.
+			if rpcIdx+1 < len(rpcs) {
+				rpcIdx++
+				continue
+			}
+			break
+		}
 	}
 
 	if len(kept) > maxKeep {
@@ -215,14 +239,25 @@ func collectSolanaSignatures(ctx context.Context, rpcs []string, asset, addr str
 	}
 
 	seen := make(map[string]solSigRow)
+	ataSigs := make(map[string]bool)
 	truncated := false
-	for _, r := range results {
+	for i, r := range results {
 		if r.trunc {
 			truncated = true
 		}
+		isATA := len(targets) > 1 && i < len(targets)-1
 		for _, row := range r.rows {
+			if isATA {
+				ataSigs[row.Signature] = true
+			}
 			if existing, ok := seen[row.Signature]; !ok || row.Slot > existing.Slot {
+				if ok && existing.rpcIdx > row.rpcIdx {
+					row.rpcIdx = existing.rpcIdx
+				}
 				seen[row.Signature] = row
+			} else if row.rpcIdx > existing.rpcIdx {
+				existing.rpcIdx = row.rpcIdx
+				seen[row.Signature] = existing
 			}
 		}
 	}
@@ -237,9 +272,39 @@ func collectSolanaSignatures(ctx context.Context, rpcs []string, asset, addr str
 		}
 		return merged[i].Signature > merged[j].Signature
 	})
-	if len(merged) > maxKeep {
-		merged = merged[:maxKeep]
-		truncated = true
+	effectiveMaxKeep := maxKeep
+	if sinceUnix == 0 {
+		for _, r := range merged {
+			if r.rpcIdx > 0 && effectiveMaxKeep > paySolArchivalRecentMaxTxs {
+				effectiveMaxKeep = paySolArchivalRecentMaxTxs
+				break
+			}
+		}
+	}
+	if len(merged) > effectiveMaxKeep {
+		if len(targets) > 1 {
+			var ataTop, walletRest []solSigRow
+			for _, r := range merged {
+				if ataSigs[r.Signature] && len(ataTop) < min(effectiveMaxKeep, paySolArchivalRecentMaxTxs) {
+					ataTop = append(ataTop, r)
+				} else {
+					walletRest = append(walletRest, r)
+				}
+			}
+			need := effectiveMaxKeep - len(ataTop)
+			merged = append(ataTop, walletRest[:min(need, len(walletRest))]...)
+			sort.Slice(merged, func(i, j int) bool {
+				if merged[i].Slot != merged[j].Slot {
+					return merged[i].Slot > merged[j].Slot
+				}
+				return merged[i].Signature > merged[j].Signature
+			})
+		} else {
+			merged = merged[:effectiveMaxKeep]
+		}
+		if effectiveMaxKeep == maxKeep {
+			truncated = true
+		}
 	}
 	return merged, truncated, nil
 }
@@ -247,7 +312,14 @@ func collectSolanaSignatures(ctx context.Context, rpcs []string, asset, addr str
 func fetchSolanaTxDetails(ctx context.Context, cache *Cache, rpcs []string, sigs []solSigRow, heads payHeads) ([]*solTxResult, error) {
 	out := make([]*solTxResult, len(sigs))
 	var g errgroup.Group
-	g.SetLimit(paySolTxConcurrency)
+	limit := paySolTxConcurrency
+	for _, s := range sigs {
+		if s.rpcIdx > 0 {
+			limit = paySolArchivalTxConcurrency
+			break
+		}
+	}
+	g.SetLimit(limit)
 
 	for i, s := range sigs {
 		idx, sigRow := i, s
@@ -266,14 +338,26 @@ func fetchSolanaTxDetails(ctx context.Context, cache *Cache, rpcs []string, sigs
 				"maxSupportedTransactionVersion": 1,
 				"commitment":                     "confirmed",
 			}
-			res, code := solanaRPCFailover(ctx, rpcs, "getTransaction", sigRow.Signature, txCfg)
+			txRPCs := rpcs
+			if sigRow.rpcIdx > 0 && sigRow.rpcIdx < len(rpcs) {
+				txRPCs = rpcs[sigRow.rpcIdx:]
+			}
+			res, code := solanaRPCFailover(ctx, txRPCs, "getTransaction", sigRow.Signature, txCfg)
+			for attempt := 0; code == "rate_limited" && attempt < 2; attempt++ {
+				select {
+				case <-ctx.Done():
+					return errors.New("timeout")
+				case <-time.After(350 * time.Millisecond * time.Duration(attempt+1)):
+				}
+				res, code = solanaRPCFailover(ctx, txRPCs, "getTransaction", sigRow.Signature, txCfg)
+			}
 			if code != "" {
 				return errors.New(code)
 			}
 			// A lagging node behind a load balancer can return null for a signature
 			// another node already confirmed; ask the remaining RPCs once each.
-			for i := 1; i < len(rpcs) && (len(res) == 0 || string(res) == "null"); i++ {
-				if r, c := solanaRPC(ctx, rpcs[i], "getTransaction", sigRow.Signature, txCfg); c == "" {
+			for i := 1; i < len(txRPCs) && (len(res) == 0 || string(res) == "null"); i++ {
+				if r, c := solanaRPC(ctx, txRPCs[i], "getTransaction", sigRow.Signature, txCfg); c == "" {
 					res = r
 				}
 			}

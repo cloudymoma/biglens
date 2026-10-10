@@ -624,3 +624,232 @@ func TestSolanaCounterfeitDetectionViaToken2022Metadata(t *testing.T) {
 		t.Fatalf("fake token row = %+v, want tierCounterfeit 5000 from %s", txs, attackerAddr)
 	}
 }
+
+func TestSolanaPrunedRPCFallsBackToArchivalForRecentAndHistory(t *testing.T) {
+	const (
+		userAddr = "6zZYgaSgSKtHT75tgMujtijKvFYmPSrkQMpSUMaVfgn3"
+		userATA  = "G2vVEULz7dmTkbRNsfzx2MwG2rER8ABHERbBM7rSJvvX"
+		peerAddr = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM"
+		peerATA  = "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1"
+		usdcMint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+	)
+
+	t.Run("recent_falls_back_when_pruned_returns_empty", func(t *testing.T) {
+		var prunedGetTxCalls, archivalRateLimitedOnce atomic.Int32
+		pruned := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var req struct {
+				Method string `json:"method"`
+			}
+			b, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(b, &req)
+			switch req.Method {
+			case "getSignaturesForAddress":
+				// Pruned node has 0 signatures in its ~35h retention window.
+				w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":[]}`))
+			case "getTransaction":
+				prunedGetTxCalls.Add(1)
+				w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":null}`))
+			default:
+				w.WriteHeader(http.StatusBadRequest)
+			}
+		}))
+		defer pruned.Close()
+
+		archival := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var req struct {
+				Method string            `json:"method"`
+				Params []json.RawMessage `json:"params"`
+			}
+			b, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(b, &req)
+			switch req.Method {
+			case "getSignaturesForAddress":
+				var target string
+				var cfg struct {
+					Limit int `json:"limit"`
+				}
+				_ = json.Unmarshal(req.Params[0], &target)
+				_ = json.Unmarshal(req.Params[1], &cfg)
+				if cfg.Limit != paySolArchivalRecentMaxTxs {
+					t.Errorf("archival getSignaturesForAddress limit = %d, want %d", cfg.Limit, paySolArchivalRecentMaxTxs)
+				}
+				if target == userATA {
+					w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":[
+						{"signature":"sig_sweep_out","slot":453625525,"blockTime":1790916011,"err":null},
+						{"signature":"sig_deposit_in","slot":453625479,"blockTime":1790915992,"err":null}
+					]}`))
+				} else {
+					w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":[]}`))
+				}
+			case "getTransaction":
+				if archivalRateLimitedOnce.CompareAndSwap(0, 1) {
+					w.WriteHeader(http.StatusTooManyRequests)
+					return
+				}
+				var sig string
+				_ = json.Unmarshal(req.Params[0], &sig)
+				if sig == "sig_deposit_in" {
+					w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{
+						"slot":453625479,"blockTime":1790915992,
+						"transaction":{"message":{
+							"accountKeys":["` + peerAddr + `","` + peerATA + `","` + userATA + `","` + solanaTokenProgramID + `"],
+							"instructions":[{"program":"spl-token","parsed":{"type":"transferChecked","info":{
+								"source":"` + peerATA + `","destination":"` + userATA + `","authority":"` + peerAddr + `",
+								"mint":"` + usdcMint + `","tokenAmount":{"amount":"3095387960","decimals":6}
+							}}}]
+						}},
+						"meta":{"err":null,"preTokenBalances":[
+							{"accountIndex":1,"mint":"` + usdcMint + `","owner":"` + peerAddr + `","uiTokenAmount":{"amount":"3095387960","decimals":6}},
+							{"accountIndex":2,"mint":"` + usdcMint + `","owner":"` + userAddr + `","uiTokenAmount":{"amount":"0","decimals":6}}
+						],"postTokenBalances":[
+							{"accountIndex":1,"mint":"` + usdcMint + `","owner":"` + peerAddr + `","uiTokenAmount":{"amount":"0","decimals":6}},
+							{"accountIndex":2,"mint":"` + usdcMint + `","owner":"` + userAddr + `","uiTokenAmount":{"amount":"3095387960","decimals":6}}
+						]}
+					}}`))
+					return
+				}
+				w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{
+					"slot":453625525,"blockTime":1790916011,
+					"transaction":{"message":{
+						"accountKeys":["` + userAddr + `","` + userATA + `","` + peerATA + `","` + solanaTokenProgramID + `"],
+						"instructions":[{"program":"spl-token","parsed":{"type":"transferChecked","info":{
+							"source":"` + userATA + `","destination":"` + peerATA + `","authority":"` + userAddr + `",
+							"mint":"` + usdcMint + `","tokenAmount":{"amount":"3095387960","decimals":6}
+						}}}]
+					}},
+					"meta":{"err":null,"preTokenBalances":[
+						{"accountIndex":1,"mint":"` + usdcMint + `","owner":"` + userAddr + `","uiTokenAmount":{"amount":"3095387960","decimals":6}},
+						{"accountIndex":2,"mint":"` + usdcMint + `","owner":"` + peerAddr + `","uiTokenAmount":{"amount":"0","decimals":6}}
+					],"postTokenBalances":[
+						{"accountIndex":1,"mint":"` + usdcMint + `","owner":"` + userAddr + `","uiTokenAmount":{"amount":"0","decimals":6}},
+						{"accountIndex":2,"mint":"` + usdcMint + `","owner":"` + peerAddr + `","uiTokenAmount":{"amount":"3095387960","decimals":6}}
+					]}
+				}}`))
+			default:
+				w.WriteHeader(http.StatusBadRequest)
+			}
+		}))
+		defer archival.Close()
+
+		heads := payHeads{Latest: 455192350, Safe: 455192348, Finalized: 455192300}
+		txs, err := fetchSolanaRecent(context.Background(), NewCache(time.Minute), []string{pruned.URL, archival.URL}, "USDC", userAddr, heads)
+		if err != nil {
+			t.Fatalf("fetchSolanaRecent error: %v", err)
+		}
+		if len(txs) != 2 || txs[1].TxHash != "sig_deposit_in" || txs[1].Direction != "in" || txs[1].Amount != "3095.38796" {
+			t.Fatalf("txs = %+v, want 2 txs with sig_deposit_in (in, 3095.38796 USDC)", txs)
+		}
+		if prunedGetTxCalls.Load() != 0 {
+			t.Errorf("pruned getTransaction calls = %d, want 0 (archival sigs must route directly to archival RPC)", prunedGetTxCalls.Load())
+		}
+	})
+
+	t.Run("history_continues_pagination_on_archival_after_pruned_cutoff", func(t *testing.T) {
+		since := time.Unix(1790900000, 0).UTC()
+		var archivalBeforeSeen atomic.Value
+
+		pruned := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var req struct {
+				Method string            `json:"method"`
+				Params []json.RawMessage `json:"params"`
+			}
+			b, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(b, &req)
+			switch req.Method {
+			case "getSignaturesForAddress":
+				var target string
+				_ = json.Unmarshal(req.Params[0], &target)
+				if target == userATA {
+					// Returns 1 recent tx (< pageLimit) and stops at its 35h pruning boundary before sinceUnix.
+					w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":[
+						{"signature":"sig_recent_1d","slot":455100000,"blockTime":1791400000,"err":null}
+					]}`))
+				} else {
+					w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":[]}`))
+				}
+			case "getTransaction":
+				var sig string
+				_ = json.Unmarshal(req.Params[0], &sig)
+				if sig != "sig_recent_1d" {
+					t.Errorf("pruned RPC received getTransaction for %q, want only sig_recent_1d", sig)
+				}
+				w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{
+					"slot":455100000,"blockTime":1791400000,
+					"transaction":{"message":{
+						"accountKeys":["` + peerAddr + `","` + peerATA + `","` + userATA + `","` + solanaTokenProgramID + `"],
+						"instructions":[{"program":"spl-token","parsed":{"type":"transferChecked","info":{
+							"source":"` + peerATA + `","destination":"` + userATA + `","authority":"` + peerAddr + `",
+							"mint":"` + usdcMint + `","tokenAmount":{"amount":"50000000","decimals":6}
+						}}}]
+					}},
+					"meta":{"err":null}
+				}}`))
+			default:
+				w.WriteHeader(http.StatusBadRequest)
+			}
+		}))
+		defer pruned.Close()
+
+		archival := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var req struct {
+				Method string            `json:"method"`
+				Params []json.RawMessage `json:"params"`
+			}
+			b, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(b, &req)
+			switch req.Method {
+			case "getSignaturesForAddress":
+				var target string
+				var cfg struct {
+					Before string `json:"before"`
+				}
+				_ = json.Unmarshal(req.Params[0], &target)
+				_ = json.Unmarshal(req.Params[1], &cfg)
+				if target == userATA {
+					archivalBeforeSeen.Store(cfg.Before)
+					w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":[
+						{"signature":"sig_archival_5d","slot":453625479,"blockTime":1790915992,"err":null},
+						{"signature":"sig_older_than_7d","slot":452000000,"blockTime":1790800000,"err":null}
+					]}`))
+				} else {
+					w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":[]}`))
+				}
+			case "getTransaction":
+				var sig string
+				_ = json.Unmarshal(req.Params[0], &sig)
+				if sig != "sig_archival_5d" {
+					t.Errorf("archival RPC received getTransaction for %q, want only sig_archival_5d", sig)
+				}
+				w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{
+					"slot":453625479,"blockTime":1790915992,
+					"transaction":{"message":{
+						"accountKeys":["` + peerAddr + `","` + peerATA + `","` + userATA + `","` + solanaTokenProgramID + `"],
+						"instructions":[{"program":"spl-token","parsed":{"type":"transferChecked","info":{
+							"source":"` + peerATA + `","destination":"` + userATA + `","authority":"` + peerAddr + `",
+							"mint":"` + usdcMint + `","tokenAmount":{"amount":"3095387960","decimals":6}
+						}}}]
+					}},
+					"meta":{"err":null}
+				}}`))
+			default:
+				w.WriteHeader(http.StatusBadRequest)
+			}
+		}))
+		defer archival.Close()
+
+		heads := payHeads{Latest: 455192350, Safe: 455192348, Finalized: 455192300}
+		txs, scope, err := fetchSolanaHistory(context.Background(), NewCache(time.Minute), []string{pruned.URL, archival.URL}, "USDC", userAddr, since, heads)
+		if err != nil {
+			t.Fatalf("fetchSolanaHistory error: %v", err)
+		}
+		if got, _ := archivalBeforeSeen.Load().(string); got != "sig_recent_1d" {
+			t.Errorf("archival getSignaturesForAddress before = %q, want %q", got, "sig_recent_1d")
+		}
+		if scope.Transactions != 2 || len(txs) != 2 {
+			t.Fatalf("scope.Transactions=%d len(txs)=%d, want 2 and 2: %+v", scope.Transactions, len(txs), txs)
+		}
+		if txs[0].TxHash != "sig_recent_1d" || txs[1].TxHash != "sig_archival_5d" {
+			t.Errorf("txs order = [%s, %s], want [sig_recent_1d, sig_archival_5d]", txs[0].TxHash, txs[1].TxHash)
+		}
+	})
+}

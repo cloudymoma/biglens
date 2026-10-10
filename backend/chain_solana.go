@@ -227,8 +227,13 @@ func solanaRPC(ctx context.Context, rpcURL, method string, params ...any) (json.
 }
 
 func solanaRPCFailover(ctx context.Context, rpcs []string, method string, params ...any) (json.RawMessage, string) {
+	res, _, code := solanaRPCFailoverIdx(ctx, rpcs, method, params...)
+	return res, code
+}
+
+func solanaRPCFailoverIdx(ctx context.Context, rpcs []string, method string, params ...any) (json.RawMessage, int, string) {
 	if len(rpcs) == 0 {
-		return nil, "unavailable"
+		return nil, 0, "unavailable"
 	}
 	deadline, hasDeadline := ctx.Deadline()
 	code := "unavailable"
@@ -242,12 +247,12 @@ func solanaRPCFailover(ctx context.Context, rpcs []string, method string, params
 		res, c := solanaRPC(actx, u, method, params...)
 		acancel()
 		if c == "" {
-			return res, ""
+			return res, i, ""
 		}
 		code = c
 		if ctx.Err() != nil {
-			return nil, "timeout"
+			return nil, i, "timeout"
 		}
 	}
-	return nil, code
+	return nil, 0, code
 }
