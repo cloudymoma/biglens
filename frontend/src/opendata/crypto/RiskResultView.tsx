@@ -216,12 +216,14 @@ export default function RiskResultView({
             </li>
           ))}
         </ul>
-        <p className="mt-3 text-[11px] text-zinc-500">
-          Check your own wallet's token approvals →{' '}
-          <a href={REVOKE_CASH_URL} target="_blank" rel="noopener noreferrer" className="text-zinc-300 hover:text-white">
-            Revoke.cash
-          </a>
-        </p>
+        {RISK_CHAINS.find(c => c.id === chain)?.family === 'evm' && (
+          <p className="mt-3 text-[11px] text-zinc-500">
+            Check your own wallet's token approvals →{' '}
+            <a href={REVOKE_CASH_URL} target="_blank" rel="noopener noreferrer" className="text-zinc-300 hover:text-white">
+              Revoke.cash
+            </a>
+          </p>
+        )}
       </div>
     </Panel>
   );

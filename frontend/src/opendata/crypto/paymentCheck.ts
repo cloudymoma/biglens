@@ -157,6 +157,7 @@ export function levelCopy(
   estSecLeft: number,
   network?: PaymentNetwork,
   block?: number,
+  isToken?: boolean,
 ): string {
   switch (level) {
     case 'DANGER':
@@ -173,6 +174,9 @@ export function levelCopy(
       return `Past the chain's safe head${eta}. A reversal would need an extraordinary reorg.`;
     }
     case 'FINALIZED':
+      if (isToken === false) {
+        return 'Final by consensus — cannot be reorged.';
+      }
       return 'Final by consensus — cannot be reorged. Stablecoin issuers can still freeze addresses.';
   }
 }

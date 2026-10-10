@@ -97,7 +97,7 @@ export default function PaymentTxDetail({
             />
           </div>
           <p className="font-mono text-[11px] text-zinc-400">{headRelation}</p>
-          <p className="text-zinc-300">{levelCopy(tx.level, tx.est_sec_left, network, tx.block)}</p>
+          <p className="text-zinc-300">{levelCopy(tx.level, tx.est_sec_left, network, tx.block, tx.token_contract !== '')}</p>
           {tx.failed && (
             <p className="text-red-300 font-medium">
               Transaction failed / reverted on-chain — no funds were transferred.

@@ -316,7 +316,7 @@ function LatestSettlementBody({
         </div>
 
         <p className="text-xs text-zinc-300">
-          {levelCopy(tx.level, tx.est_sec_left, live.network, tx.block)}
+          {levelCopy(tx.level, tx.est_sec_left, live.network, tx.block, tx.token_contract !== '')}
         </p>
       </div>
 
