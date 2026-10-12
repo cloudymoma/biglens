@@ -15,6 +15,7 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks(id) {
+          if (id.includes('/catalog/colors')) return 'vendor';
           if (id.includes('node_modules')) {
             if (id.includes('echarts') || id.includes('zrender')) return 'echarts-vendor';
             if (id.includes('three') || id.includes('force-graph') || id.includes('d3-')) return 'graph-vendor';

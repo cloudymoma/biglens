@@ -226,11 +226,11 @@ export default function CatalogView() {
         ) : graph.nodes.length === 0 ? (
           <EmptyGraph importing={importing} onImport={handleImport} />
         ) : (
-          <Suspense fallback={<div className="absolute inset-0 flex items-center justify-center text-zinc-600 text-xs">Rendering graph…</div>}>
-            <GraphErrorBoundary key={mode}>
+          <GraphErrorBoundary key={`${mode}-${refreshKey}`}>
+            <Suspense fallback={<div className="absolute inset-0 flex items-center justify-center text-zinc-600 text-xs">Rendering graph…</div>}>
               <GraphCanvas graph={graph} mode={mode} selectedId={selectedId} onSelect={select} />
-            </GraphErrorBoundary>
-          </Suspense>
+            </Suspense>
+          </GraphErrorBoundary>
         )}
 
         {/* Legend */}

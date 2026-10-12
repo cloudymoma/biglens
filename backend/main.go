@@ -244,7 +244,7 @@ func main() {
 	if _, err := os.Stat(staticDir); os.IsNotExist(err) {
 		staticDir = "static"
 	}
-	mux.Handle("/", logMW(http.FileServer(http.Dir(staticDir))))
+	mux.Handle("/", logMW(staticFileHandler(staticDir)))
 
 	port := cfg.Server.Port
 	if port == 0 {
@@ -263,6 +263,36 @@ func main() {
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("listen: %s\n", err)
 	}
+}
+
+// staticFileHandler serves the built SPA with Cache-Control: no-cache on
+// index.html / unhashed assets so browsers always revalidate the entry HTML
+// after a rebuild, and immutable caching on content-hashed /assets/ bundles.
+func staticFileHandler(staticDir string) http.Handler {
+	fs := http.FileServer(http.Dir(staticDir))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/assets/") {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else {
+			w.Header().Set("Cache-Control", "no-cache")
+		}
+		fs.ServeHTTP(&staticCacheWriter{ResponseWriter: w}, r)
+	})
+}
+
+type staticCacheWriter struct {
+	http.ResponseWriter
+}
+
+func (w *staticCacheWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
+func (w *staticCacheWriter) WriteHeader(status int) {
+	if status >= http.StatusBadRequest {
+		w.Header().Set("Cache-Control", "no-store")
+	}
+	w.ResponseWriter.WriteHeader(status)
 }
 
 type statusWriter struct {
@@ -293,3 +323,4 @@ func (w *gzipResponseWriter) Write(b []byte) (int, error) {
 func (w *gzipResponseWriter) Unwrap() http.ResponseWriter {
 	return w.ResponseWriter
 }
+
