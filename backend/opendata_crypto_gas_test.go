@@ -9,8 +9,10 @@ import (
 )
 
 // Cost guardrail (gas_fee_design.md §2.1): every 72h query is bounded by the
-// half-open window on its partition timestamp, reads only its approved table,
+// half-open window on its clustering timestamp, reads only its approved table,
 // and emits all seven neutral columns so every chain scans into GasHourRow.
+// Under the SQD layout `*_month` columns are no longer partition keys, so a
+// month predicate only adds scanned bytes and is forbidden on every chain.
 func TestGasHourlySQL(t *testing.T) {
 	allCols := []string{"AS hour_utc", "AS tx_count", "AS band_low", "AS primary_val", "AS band_high", "AS load_val", "AS total_fee"}
 	tests := []struct {
@@ -19,8 +21,8 @@ func TestGasHourlySQL(t *testing.T) {
 		notWant []string
 	}{
 		{gasChainBTC, []string{"crypto_bitcoin.transactions", "NOT is_coinbase",
-			"block_timestamp_month >= DATE_TRUNC(DATE(@start_ts), MONTH)",
-			"block_timestamp >= @start_ts AND block_timestamp < @end_ts"}, nil},
+			"block_timestamp >= @start_ts AND block_timestamp < @end_ts"},
+			[]string{"_month"}},
 		{gasChainETH, []string{"crypto_ethereum.transactions", "block_timestamp >= @start_ts AND block_timestamp < @end_ts"},
 			[]string{"crypto_ethereum.blocks"}},
 		{gasChainArb, []string{"goog_blockchain_arbitrum_one_us.blocks", "MIN(", "MAX(", "base_fee_per_gas"},
@@ -45,7 +47,7 @@ func TestGasHourlySQL(t *testing.T) {
 					t.Errorf("missing %q in SQL:\n%s", w, sql)
 				}
 			}
-			for _, nw := range tt.notWant {
+			for _, nw := range append([]string{"timestamp_month"}, tt.notWant...) {
 				if strings.Contains(sql, nw) {
 					t.Errorf("SQL must not contain %q:\n%s", nw, sql)
 				}
@@ -62,11 +64,15 @@ func TestGasHourlySQLUnknownChain(t *testing.T) {
 
 func TestBtcGasLoadSQL(t *testing.T) {
 	sql := btcGasLoadSQL()
-	for _, w := range []string{"crypto_bitcoin.blocks", "timestamp_month >= DATE_TRUNC(DATE(@start_ts), MONTH)",
+	for _, w := range []string{"crypto_bitcoin.blocks",
 		"timestamp >= @start_ts AND timestamp < @end_ts", "AS hour_utc", "AS load_val"} {
 		if !strings.Contains(sql, w) {
 			t.Errorf("missing %q in SQL:\n%s", w, sql)
 		}
+	}
+	// timestamp_month is no longer a partition key under SQD: it only adds bytes.
+	if strings.Contains(sql, "_month") {
+		t.Errorf("BTC load SQL must not filter a *_month column:\n%s", sql)
 	}
 }
 

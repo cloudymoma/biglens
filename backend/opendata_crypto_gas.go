@@ -3,12 +3,18 @@ package main
 // BigQuery Open Data: Crypto Pulse 72h Gas Pulse (gas_fee_design.md §5).
 //
 // Seven chains share one hourly row shape, GasHourRow. Every 72h query is
-// bounded by the half-open [@start_ts, @end_ts) window on its partition
-// timestamp; BTC additionally prunes its MONTH partition column. Solana lives
-// in us-central1 and must run with q.Location set. Column names are neutral
-// (primary_val / band_low / band_high / load_val / total_fee); what they mean
-// for each chain is declared once in gasChainMetas, and every query emits all
-// seven columns (NULL where a chain has no such value).
+// bounded by the half-open [@start_ts, @end_ts) window on its block
+// timestamp. crypto_bitcoin, crypto_ethereum and goog_blockchain_*_us are
+// SQD-backed Analytics Hub views: the backing tables are RANGE-partitioned on
+// block_number and CLUSTERed BY block_timestamp, so the timestamp window
+// prunes through clustering. BTC's block_timestamp_month / timestamp_month
+// are no longer partition keys and filtering them only adds scanned bytes,
+// so no query uses them. Solana lives in us-central1 and must run with
+// q.Location set.
+// Column names are neutral (primary_val / band_low / band_high / load_val /
+// total_fee); what they mean for each chain is declared once in
+// gasChainMetas, and every query emits all seven columns (NULL where a chain
+// has no such value).
 
 import (
 	"context"
@@ -49,12 +55,14 @@ const (
 	cryptoDefaultMaxBytesBilled int64 = 16 << 30
 )
 
-// WHERE fragments; tests assert their presence.
+// WHERE fragments; tests assert their presence. BTC windows are plain
+// timestamp windows: a *_month predicate no longer prunes under SQD (a 1-day
+// dry run billed transactions 0.054 → 0.072 GiB, blocks 0.014 → 0.022 GiB
+// with it).
 const (
 	gasTsWindow       = `block_timestamp >= @start_ts AND block_timestamp < @end_ts`
-	gasBtcTxWindow    = `block_timestamp_month >= DATE_TRUNC(DATE(@start_ts), MONTH) AND ` + gasTsWindow
-	gasBtcBlockWindow = `timestamp_month >= DATE_TRUNC(DATE(@start_ts), MONTH)
-		AND timestamp >= @start_ts AND timestamp < @end_ts`
+	gasBtcTxWindow    = gasTsWindow
+	gasBtcBlockWindow = `timestamp >= @start_ts AND timestamp < @end_ts`
 )
 
 // GasChainMeta tells the frontend how to label one chain's neutral columns.
