@@ -133,6 +133,7 @@ func (b bqStablecoinSource) Fetch(ctx context.Context, start, end civil.Date, ma
 	q := b.client.Query(stablecoinSQL)
 	q.Parameters = windowParams(start, end)
 	q.MaxBytesBilled = maxBytes
+	applyQueryDefaults(q) // app=biglens label; keeps the caller's cap
 	job, err := q.Run(ctx)
 	if err != nil {
 		return nil, 0, err
@@ -193,6 +194,7 @@ func (b bqStablecoinSource) DryRun(ctx context.Context, start, end civil.Date) (
 	q := b.client.Query(stablecoinSQL)
 	q.Parameters = windowParams(start, end)
 	q.DryRun = true
+	applyQueryDefaults(q) // app=biglens label; dry runs stay uncapped
 	job, err := q.Run(ctx)
 	if err != nil {
 		return 0, err
