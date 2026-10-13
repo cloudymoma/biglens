@@ -315,34 +315,78 @@ provisional 4-day tail on the trend chart.
 On-chain financial fundamentals and live payment/risk telemetry across Bitcoin,
 Ethereum, Arbitrum, Optimism, Base, Polygon, TRON and Solana, powered by
 `bigquery-public-data.crypto_bitcoin`, `crypto_ethereum` and `goog_blockchain_*`
-(near-real-time public tables, typically lagging chain head by a few minutes;
-daily analytical endpoints align to settled complete UTC days) plus live public
-RPCs and indexers. Seven lazily-loaded tabs:
+(since Aug–Sep 2026 these are Analytics Hub–linked views, produced by SQD pipelines,
+that trail the chain head by seconds — Bitcoin by about one block — see
+[Data source notes](#data-source-notes-2026-sqd-migration); daily analytical
+endpoints align to settled complete UTC days) plus live public RPCs and indexers.
+Seven lazily-loaded tabs:
 
 | Tab | Widgets |
 |---|---|
-| **Network Pulse** | Per-chain KPI strip (latest complete UTC day), daily transactions, value settled, active addresses (approx. distinct senders, ≤90d), block fullness, block production |
-| **Fee Market** | **72h Gas Pulse** (default): last 72 complete UTC hours for Bitcoin, Ethereum, Arbitrum, Optimism, Polygon, TRON and Solana — hourly fee band + load chart, latest-hour 72h percentile, 72h low/high/median, all-time base-fee records (incremental BigQuery scan from a pre-seeded baseline, refreshed daily) and TRON energy price history (TronGrid). Selecting Bitcoin or TRON adds a live bar refreshed every 30s (paused while the tab is hidden): BTC precise fee tiers (sub-1 sat/vB, USD per 140 vB transfer) and mempool backlog by fee band (mempool.space), or the TRX burned by a USDT transfer to an existing vs. new address (TronGrid prices, Coinbase spot). The Bitcoin bar also shows a block conveyor (next three projected blocks vs. the five latest mined), and selecting Ethereum, Arbitrum or Optimism shows an L1-vs-L2 ladder: full cost of an ETH and a USDC transfer on Ethereum, Arbitrum One, Optimism and Base — L2 execution plus unpadded L1 data fee (GasPriceOracle / NodeInterface) — with USD and savings vs. L1. Transfer profiles are measured daily rather than assumed — USDT energy and bandwidth from the last 24h of TRON transfers (BigQuery + TronGrid), USDC transfer gas as the 6h median on Ethereum — and every endpoint can be overridden in an optional `crypto_gas` section of `conf.yaml` (Ethereum RPCs are tried in order). **Daily Economics**: BTC median sat/vB vs ETH avg gwei trend, BTC miner revenue (subsidy vs fees), ETH EIP-1559 burned vs tips, congestion-vs-fee scatter |
+| **Network Pulse** | Per-chain KPI strip (latest complete UTC day), daily transactions, value settled, active addresses (approx. distinct senders, ≤90d), block fullness, block production, on-chain ETH/BTC daily price (Uniswap v3) with `≈ $` equivalents on value settled and fees |
+| **Fee Market** | **72h Gas Pulse** (default): last 72 complete UTC hours for Bitcoin, Ethereum, Arbitrum, Optimism, Polygon, TRON and Solana — hourly fee band + load chart, latest-hour 72h percentile, 72h low/high/median, all-time base-fee records (incremental BigQuery scan from a pre-seeded baseline, refreshed daily; stale records and failed refreshes are flagged on the cards with the date the records are verified through) and TRON energy price history (TronGrid). Selecting Bitcoin or TRON adds a live bar refreshed every 30s (paused while the tab is hidden): BTC precise fee tiers (sub-1 sat/vB, USD per 140 vB transfer) and mempool backlog by fee band (mempool.space), or the TRX burned by a USDT transfer to an existing vs. new address (TronGrid prices, Coinbase spot). The Bitcoin bar also shows a block conveyor (next three projected blocks vs. the five latest mined), and selecting Ethereum, Arbitrum or Optimism shows an L1-vs-L2 ladder: full cost of an ETH and a USDC transfer on Ethereum, Arbitrum One, Optimism and Base — L2 execution plus unpadded L1 data fee (GasPriceOracle / NodeInterface) — with USD and savings vs. L1. Transfer profiles are measured daily rather than assumed — USDT energy and bandwidth from the last 24h of TRON transfers (BigQuery + TronGrid), USDC transfer gas as the 6h median on Ethereum — and every endpoint can be overridden in an optional `crypto_gas` section of `conf.yaml` (Ethereum RPCs are tried in order). **Daily Economics**: BTC median sat/vB vs ETH avg gwei trend, BTC miner revenue (subsidy vs fees), ETH EIP-1559 burned vs tips, congestion-vs-fee scatter, with `≈ $` equivalents at the on-chain daily price |
 | **Whales & Flow** | Top 50 largest transfers (explorer links), whale-sized tx trend (≥100 BTC / ≥1,000 ETH), top receiving addresses, top-1% value concentration (among value-bearing txs) |
 | **Token Economy** | Top 25 token contracts by Transfer event count (ERC-20 & ERC-721), token vs native activity, new contract deployments, token movement treemap |
 | **Mining Economics** | Network hashrate (7d avg + 1d implied), miner revenue, yield per TH/s, rig economics for the latest day, shutdown price by rig (editable electricity, PUE, pool fee, BTC price, custom rig) |
-| **Payment Check** | Live receiving-address verification for USDT, USDC, ETH, TRX, BTC and SOL across Ethereum, Arbitrum, Optimism, Base, TRON, Bitcoin and Solana — finality-graded balances, latest incoming settlement progress (`DANGER` / `SOFT` / `SAFE` → `FINALIZED`), official vs. bridged/counterfeit token verification, 7-day transfer history with address-poisoning & BIP-125 RBF detection, and independent payer risk screening — see [Payment Check](#payment-check-receiving-address-verification) below |
-| **Address Risk** | Multi-chain address risk-clue lookup (Ethereum, Arbitrum, Optimism, Base, TRON, Bitcoin, Solana), live issuer & SPL freeze checks, freeze-history overview, **Scam Radar** (30-day ETH/TRON address-poisoning & fake-token intelligence, top counterfeit contracts, BTC explicit RBF share), and sources table — see [Address Risk](#address-risk-multi-chain-address-risk-clues) below |
+| **Payment Check** | Live receiving-address verification for USDT, USDC, ETH, TRX, BTC and SOL across Ethereum, Arbitrum, Optimism, Base, TRON, Bitcoin and Solana — finality-graded balances, latest incoming settlement progress (`DANGER` / `SOFT` / `SAFE` → `FINALIZED`), official vs. bridged/counterfeit token verification, 7-day transfer history with address-poisoning & BIP-125 RBF detection, independent payer risk screening, and an EIP-7702 delegation alert for your own EVM address — see [Payment Check](#payment-check-receiving-address-verification) below |
+| **Address Risk** | Multi-chain address risk-clue lookup (Ethereum, Arbitrum, Optimism, Base, TRON, Bitcoin, Solana), live issuer & SPL freeze checks, EIP-7702 delegation detection, serial counterfeit-deployer intelligence, an opt-in BigQuery address profile (Ethereum), freeze-history overview, **Scam Radar** (30-day ETH/TRON address-poisoning & fake-token intelligence, top counterfeit contracts and deployers, BTC explicit RBF share), and sources table — see [Address Risk](#address-risk-multi-chain-address-risk-clues) below |
 
 Ranges: 7/30/90 days everywhere, plus 1 year for the slim aggregate trends
 (pulse, fees, mining); token queries cap at 30 days. Daily endpoints align their
 window to settled UTC days (with a 20-minute post-midnight ingest buffer) and
-cache results until the next UTC day rollover. Every query bounds the timestamp
-window — `crypto_bitcoin.transactions` and `crypto_ethereum.transactions` /
-`token_transfers` prune daily on `block_timestamp`, while `crypto_ethereum.blocks`
-and `contracts` include a conservative post-Merge block-number lower bound
-(`number >= @start_block` / `block_number >= @start_block`) alongside the exact
-timestamp window, and every query sets `MaxBytesBilled`.
+cache results until the next UTC day rollover — but only after a cheap per-chain
+readiness probe (~2–8 MB, cached 5 minutes) confirms the source has ingested past
+midnight; otherwise the response is cached for 5 minutes, flagged
+`last_day_complete: false`, and the tab notes "Latest day may still be ingesting".
+Every query bounds the timestamp window and sets `MaxBytesBilled`. The public
+views prune through `block_timestamp` clustering (even below a day), so the
+`block_timestamp_month` / `timestamp_month` columns are not used — they are no
+longer partition keys and only add bytes; `crypto_ethereum.blocks` and
+`contracts` additionally carry a conservative post-Merge block-number lower bound
+(`number >= @start_block` / `block_number >= @start_block`), which prunes the
+block-number range partitions.
+
+#### Data source notes (2026 SQD migration)
+
+In August–September 2026 Google re-platformed the public blockchain datasets onto
+pipelines from SQD (formerly Subsquid), as announced publicly in August 2026. The
+customer paths did not change, so BigLens queries work unchanged. What changed
+underneath, as observed from BigQuery:
+
+- **Linked views.** `crypto_bitcoin`, `crypto_ethereum` and every
+  `goog_blockchain_*_us` dataset is now an Analytics Hub linked dataset whose
+  tables are all VIEWs. Link creation dates per the dataset metadata: Avalanche
+  08-07, Polygon 08-21, Arbitrum 08-24, Ethereum
+  (`goog_blockchain_ethereum_mainnet_us`) and Cronos 08-31, TRON and Optimism
+  09-14, `crypto_bitcoin` 09-16, `crypto_ethereum` 09-22.
+- **Pruning.** Timestamp predicates prune even below a day. `block_timestamp_month`
+  / `timestamp_month` no longer act as partition filters and only add bytes.
+  Literal block-number bounds prune the `blocks` / `contracts` views. Dry-run
+  estimates on these views are upper bounds, and `maximum_bytes_billed` is
+  checked against that upper bound before a job starts.
+- **Freshness.** Seconds behind head (Bitcoin ≈ one block). Rows near the head
+  can be rolled back on a reorg, so BigLens still reads only settled UTC days or
+  complete hours, and keeps `NOT removed` on `goog_blockchain_*` event tables.
+- **Semantics.** `crypto_bitcoin.inputs` now carries one coinbase input row per
+  block (Scam Radar R5 excludes it), and `inputs.addresses` is `[]` instead of
+  `NULL` when an input has no address. `crypto_ethereum` gained `tokens_latest`
+  (one row per contract, with creator and proxy metadata) and
+  `token_supply_latest`. `decoded_events` decodes only events with a known ABI:
+  about 73% of Ethereum events on 2026-10-11, and not the USDT blacklist events,
+  so the freeze sync keeps reading raw `logs`.
+- **Coverage.** Arbitrum, Optimism and Polygon have no `token_transfers` or
+  `traces`, and Optimism receipts have no L1-fee columns (the 72h OP series is
+  L2 execution only; the live ladder adds the L1 data fee over RPC). There is no
+  Base dataset and no EU copy in `bigquery-public-data`. The Flashbots mempool
+  and Tektonic x402 datasets are separate Analytics Hub listings that BigLens
+  does not use.
 
 #### Understanding the data
 
-These datasets contain **on-chain data only — no fiat prices**. Everything is
-reported in native units (BTC, ETH, gwei) or counts:
+The datasets themselves carry **no fiat prices**: everything is reported in
+native units (BTC, ETH, gwei) or counts. BigLens derives daily ETH/USD and
+BTC/USD on-chain (see [On-chain prices](#on-chain-prices-uniswap-v3)) and shows
+them only as `≈ $` hints next to native units:
 
 - **Value settled (BTC)** sums transaction outputs, which include change
   returning to the sender — an upper bound on economic volume, not a measure
@@ -356,7 +400,29 @@ reported in native units (BTC, ETH, gwei) or counts:
   cross-token value sums are meaningless without prices, and the `decimals`
   metadata needed to scale raw amounts is unreliable for long-tail tokens.
 - **Whale thresholds** (≥100 BTC, ≥1,000 ETH) are named constants in native
-  units; there is no USD equivalent in the datasets.
+  units, independent of price.
+
+#### On-chain prices (Uniswap v3)
+
+Daily ETH/USD and BTC/USD are computed inside BigQuery from Uniswap v3 swaps in
+`goog_blockchain_ethereum_mainnet_us.decoded_events` — no price API is called.
+ETH/USD comes from the USDC/WETH 0.01% and 0.05% pools (`1e12 / 1.0001^tick`).
+BTC/USD is WBTC-derived: the WBTC/WETH 0.05% and 0.3% pools give WETH per WBTC
+(`1.0001^tick · 1e-10`), multiplied by the same hour's ETH/USD. To keep the scan
+small, only four one-hour windows per UTC day are read (00, 06, 12 and 18 UTC),
+as literal time ranges that prune through clustering. An hour counts if it has
+at least 5 ETH swaps or 2 WBTC swaps, and the daily price is the median of that
+day's qualifying hourly medians.
+
+A background sync stores the days in `onchain_prices_daily` inside
+`data/security.db`. The first start backfills `crypto_prices.initial_days` days
+(default 365, max 730, `0` disables): about 125 GiB, roughly $0.8 once. After
+that it adds one day per day (about 360 MiB, roughly $0.002/day) once that day's
+18:00 window has been ingested (after 19:30 UTC). A billed failure backs off for
+6 hours. Without the SQLite file, prices are kept in memory and the cold start
+is limited to 31 days. `GET /api/opendata/crypto/prices?days=7|30|90|365` reads
+only the stored rows and never queries BigQuery. These are DEX-derived prices,
+not an exchange index, and the UI says so.
 
 #### Payment Check (receiving address verification)
 
@@ -385,11 +451,17 @@ and **SOL** (`sol`):
   wallet rather than token account). Scans chronologically (with 0-confirmation mempool transfers ordered last so they
   never enter trusted counterparty history) to flag `zero_value`, `dust`, `rbf_signaled`, `lookalike` (matching both first
   4 and last 4 characters — stripping `0x` on EVM and `bc1q`/`bc1p` on SegWit/Taproot BTC), `lookalike_known`,
-  `sent_to_lookalike`, `counterfeit_token`, `failed` and `counterparty_listed`. The default "Hide zero-value & unrelated
+  `sent_to_lookalike`, `counterfeit_token`, `counterfeit_deployer` (the token's creator, or the counterparty, is a serial
+  counterfeit-USDT/USDC deployer from Scam Radar), `failed` and `counterparty_listed`. The default "Hide zero-value & unrelated
   tokens" filter hides benign noise while never hiding `DANGER`, `rbf_signaled`, or any row carrying a risk flag.
 - **Independent payer screening** — when the latest incoming transfer's `tx_hash` changes, the payer address is
   checked once through Address Risk (`lookup`) without re-polling on every 5-second settlement tick. Queried
   receiving addresses stay in the URL hash (`#pay?asset=…&network=…&address=…`) and short-lived in-memory caches only.
+  Payer screening never runs the optional BigQuery profile.
+- **EIP-7702 delegation alert** — on Ethereum, Arbitrum, Optimism and Base, the live check also reads your receiving
+  address's code (`eth_getCode`). If it carries an active EIP-7702 delegation (`0xef0100…`), a warning names the
+  delegate contract, because code at that contract can move incoming funds. The source footer lists the check as
+  "EIP-7702 delegation (live)" and shows the RPC error if it fails.
 
 #### Address Risk (multi-chain address risk clues)
 
@@ -404,20 +476,54 @@ when nothing is found it says how many sources were checked and which could not 
 | USDT / USDC freeze, unfreeze and destroy events (`crypto_ethereum.logs`) | ETH | synced from BigQuery by complete UTC day | No |
 | TRON USDT freeze, unfreeze and destroy events (`goog_blockchain_tron_mainnet_us.logs`) | TRON | synced from BigQuery by complete UTC day (`tron_stablecoin`) | No |
 | Known address-poisoning lookalike corpus (`scam_lookalikes`) | ETH, Arb, OP, Base, TRON | synced from BigQuery by complete UTC day (ETH zero-value + TRON dust poisoning; EVM EOAs shared across L1/L2) | No |
+| Serial counterfeit-stablecoin deployers (`fake_token_deployers`) | ETH, Arb, OP, Base (seen on Ethereum) | refreshed daily by Scam Radar from `crypto_ethereum.tokens_latest`: creators of ≥3 non-official contracts whose symbol imitates USDT/USDC/USD₮ | No |
 | **Issuer freeze (live)** (`isBlackListed` / `isBlacklisted` / `isBlocked` / SPL account freeze state) | ETH, Arb, OP, Base, TRON, SOL | live `eth_call` / TronGrid `triggerconstantcontract` / Solana `getMultipleAccounts` against registered USDT / USDC contracts & ATAs | Yes — the RPC / TronGrid / Solana RPC provider |
+| **EIP-7702 delegation (live)** (`eip7702`) | ETH, Arb, OP, Base | live `eth_getCode`: an active delegation (`0xef0100…`) is a warning naming the delegate contract, which is enriched via Blockscout (verified name / scam badge) | Yes — the RPC provider (and Blockscout for the delegate) |
 | Chainalysis sanctions oracle (on-chain `isSanctioned`) | ETH, Arb, OP | live `eth_call` via public RPCs (not deployed on Base) | Yes — the RPC provider |
 | [GoPlus](https://gopluslabs.io) address security | ETH, Arb, OP, Base, TRON | live, keyless (`chain_id` `1` / `42161` / `10` / `8453` / `tron`) | Yes — GoPlus |
 | Blockscout public tags & scam badge | ETH, Arb, OP, Base | live, keyless (`eth` / `arbitrum` / `optimism` / `base` Blockscout instances) | Yes — Blockscout |
 | Etherscan / Blockscout association analysis (optional free key on ETH) | ETH | live `txlist` / `tokentx` / `txlistinternal`, 1 hop, poisoning-filtered | Yes — Etherscan (with your key) or Blockscout |
+| **BigQuery profile (opt-in)** (`bigquery_profile`) | ETH | only when the **BigQuery profile** switch is on: one capped query on the address-clustered `transactions_by_from_address` / `transactions_by_to_address` views (see below) | No third party — it runs in your own GCP project, but the address is recorded in that project's BigQuery job history |
 
 Local data lives in `data/security.db` (relative to the working directory; override with `address_risk.db_path`).
 If the file cannot be opened the server still starts and lookups report the local lists as unavailable.
-Looked-up addresses are kept only in the 10-minute in-memory cache — never written to disk or logs.
+Looked-up addresses are kept only in the 10-minute in-memory cache — never written to disk or logs. The one exception
+is the opt-in BigQuery profile: when you switch it on, the address is sent as a query parameter to BigQuery in your own
+project and therefore appears in that project's job history.
+
+**BigQuery profile (opt-in, Ethereum).** Next to the lookup controls, a **BigQuery profile** switch is off by default.
+Its **?** icon explains what it adds. When you turn it on (the choice is remembered in this browser), Ethereum lookups
+also run one parameterized query against `goog_blockchain_ethereum_mainnet_us.transactions_by_from_address` and
+`transactions_by_to_address`. These views are clustered by address, so a lookup reads only the storage blocks that can
+hold the address, not the whole chain. A full profile bills about 0.9 GiB (≈ $0.006) whatever the address's activity:
+vitalik.eth and a never-used address both billed about 0.97 GB, versus more than 180 GiB for an unclustered scan of
+the same columns. The profile shows:
+
+- the first funder (earliest incoming transfer with value, with its block) and account age, from full history;
+- lifetime incoming and outgoing counts, distinct counterparties, ETH moved and last activity. These cover top-level
+  transactions only (failed ones included; no internal or token transfers);
+- the top counterparties, with 1-hop matches against the local OFAC / MEW / freeze / lookalike / counterfeit-token
+  deployer lists reported as association clues (deployer matches count only for the first funder and for counterparties
+  that sent the address a top-level transaction, so shared token-launcher factory contracts do not flag ordinary callers).
+
+There is no Etherscan key or third-party API involved. Guardrails, all in `address_risk.bigquery_profile`:
+
+- `enabled` (default `true`) lets users opt in. Set `false` to remove the option.
+- `max_bytes_billed` (default 2 GiB, max 10 GiB) is the per-lookup cap. Very active contracts such as DEX routers exceed
+  it and are rejected up front as "too active for the configured BigQuery budget", with no charge.
+- `max_per_hour` (default 60, max 600) is a global rate limit.
+- `timeout_seconds` (default 20, max 45) bounds the wait: a slow profile delays the lookup response by at most this long,
+  and a job that finishes later still fills the cache.
+
+With the defaults, 60 typical profiles per hour bill about 60 × 0.9 GiB ≈ $0.33/hour, and the hard cap ceiling is
+`max_per_hour × max_bytes_billed` = 60 × 2 GiB = 120 GiB/hour (≈ $0.73/hour). Results, including over-budget verdicts,
+are cached for 10 minutes, so repeating a lookup costs nothing.
 
 **Freeze history (BigQuery).** On first start the server syncs the last 30 days of Ethereum USDT/USDC freeze events
 (~92 GB / 86 GiB billed, ~$0.54 once), then one new day per day (~3.4–3.6 GB/day billed, ~4.4 GB dry-run upper bound,
 plus ~25 MB for the partitioned completeness check, ~$0.02/day). `address_risk.initial_sync_days`
-changes the window (0 disables it, max 31). Until the full history is backfilled, lookups say
+changes the first-start window (max 31; `0` skips the first-start sync, while an existing cursor keeps syncing daily).
+Until the full history is backfilled, lookups say
 "Freeze history covers … only". In addition to the local Ethereum and TRON event histories, every lookup on ETH, Arbitrum,
 Optimism, Base and TRON runs a live `issuer_freeze` contract call so current freeze state is checked even before
 backfill completes. The Ethereum backfill is safe to run while the server runs:
@@ -437,9 +543,15 @@ tracks four daily BigQuery intelligence feeds and feeds them back into Address R
 - **ETH zero-value address poisoning (`scam_eth` / R1)** — scans `goog_blockchain_ethereum_mainnet_us.token_transfers` on
   official USDT and USDC for zero-value transfers whose recipient matches the first 4 and last 4 hex characters of a
   real recipient that the same victim paid on the **same UTC day**.
-- **ETH counterfeit USDT/USDC contracts (`scam_eth` / R2)** — joins `token_transfers` against `crypto_ethereum.tokens`
-  for non-official contracts whose symbol matches `^(USDT|USDC|USD₮)[^A-Z0-9]?$`, ranking the top 10 most active fake
-  contracts over the last 7 days and feeding `scam_fake_tokens` into Payment Check.
+- **ETH counterfeit USDT/USDC contracts (`scam_eth` / R2)** — joins `token_transfers` against
+  `crypto_ethereum.tokens_latest` (one row per contract) for non-official contracts whose symbol matches
+  `^(USDT|USDC|USD₮)[^A-Z0-9]?$`, ranking the top 10 most active fake contracts over the last 7 days and feeding
+  `scam_fake_tokens` (now with each contract's creator) into Payment Check.
+- **Serial counterfeit deployers (`scam_eth`)** — once per day, `tokens_latest` creators of at least 3 such counterfeit
+  contracts are stored as `scam_fake_token_deployers`. On 2026-10-13 there were 1,178 such creators behind 22,791
+  contracts, and one address alone had deployed 4,394. They power the `fake_token_deployers` lookup source, the
+  `counterfeit_deployer` Payment Check flag, a Whales badge, and the overview's KPI and top-5 list (a creator can be a
+  factory contract, and the clue says so).
 - **TRON USDT dust poisoning (`scam_tron` / R3)** — scans `goog_blockchain_tron_mainnet_us.logs` on official TRON USDT
   (`TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t`) for dust transfers (`< 0x100000` smallest units, ~1.05 USDT — both incoming dust
   from a lookalike and forged/dust outgoing transfers to a lookalike) paired with real transfers on the **same UTC day**,
@@ -449,13 +561,22 @@ tracks four daily BigQuery intelligence feeds and feeds them back into Address R
   and the `tron_stablecoin` lookup source.
 - **BTC explicit RBF share (`scam_btc` / R5)** — computes the daily share of Bitcoin transactions with at least one input
   signaling BIP-125 Replace-By-Fee (`sequence < 0xfffffffe`) from `crypto_bitcoin.inputs`, reinforcing why 0-confirmation
-  BTC transfers are never treated as settled.
+  BTC transfers are never treated as settled. Coinbase inputs (`spent_output_index IS NULL`) are excluded: the SQD
+  dataset carries one per block, and many have a low `sequence`.
+- **Silent-zero guard** — a filter that stops matching after an upstream schema or format change would otherwise
+  "succeed" with zeros. So each run checks that the source and its matching predicates actually returned data: official
+  USDT/USDC transfers and zero-value transfers per day (R1), official TRON USDT transfers and dust-poisoning candidates
+  per day (R3), official TRON USDT logs per day (R4), BTC transactions per day (R5), and at least one serial deployer. A
+  suspicious run stores nothing, keeps its cursor, and backs off for 6 hours. Its `last_error` reads like
+  `suspicious empty result for 2026-10-12: 0 official USDT/USDC transfers scanned — upstream schema or format change?`.
 - **Lower-bound methodology & cost** — because R1 and R3 only pair zero-value/dust transfers against real transfers within
   the **same UTC day**, cross-day poisoning (where a victim transacts on day $T$ and is poisoned days later) is not
   counted; reported poisoning hits and lookalike counts are therefore a **lower bound**. Scam Radar is enabled by default
-  (`address_risk.scam_radar.initial_days: 30`, `retention_days: 90`; set `initial_days: 0` to disable). The 30-day cold
-  start scans ~150–160 GB (~$0.95–$1.00 once, with `crypto_ethereum.tokens` scanned once across the window), and
-  subsequent daily syncs scan ~5.3 GB/day (~$0.033/day, ~$1/month at $6.25/TiB).
+  (`address_risk.scam_radar.initial_days: 30`, `retention_days: 90`). Setting `initial_days: 0` disables all four jobs,
+  even ones that already have a cursor; stored data stays readable but goes stale. By dry-run upper bounds, the 30-day
+  cold start is about 92 GB (~$0.55 once) and the daily runs are up to about 8 GB/day (~$1.50/month at $6.25/TiB);
+  the serial-deployer refresh accounts for about 1.7 GB of that. All Scam Radar and freeze-sync jobs carry the
+  `app=biglens` label.
 
 **Etherscan key (optional).** With a free Etherscan API key (https://etherscan.io/myapikey) an Ethereum lookup also checks the
 address's newest 1000 transactions, token transfers (12 allowlisted tokens: USDT/USDC/DAI/WETH/WBTC/stETH/wstETH/USDS/USDe/PYUSD/FDUSD/cbBTC) and internal transfers against the
@@ -465,8 +586,9 @@ with mode 0600 (a hand-edited conf.yaml keeps its mode until the first save from
 are ever shown, and the key is never logged. Etherscan's API terms allow personal, non-commercial use only
 (https://etherscan.io/apiterms): configure a key only on an instance you use alone.
 
-In **Whales & Flow** (BTC & ETH), addresses on the local lists carry `OFAC` / `Frozen` / `MEW` / `Lookalike` badges (with a coverage note when local freeze history is partial), and clicking an
-ETH address opens it in Address Risk.
+In **Whales & Flow** (ETH mode), addresses on the local lists carry `OFAC` / `Frozen` / `MEW` / `Lookalike` /
+`Fake-token deployer` badges (with a coverage note when local freeze history is partial), and clicking an ETH address
+opens it in Address Risk. Bitcoin rows are not tagged.
 
 ### SEM Insights
 

@@ -47,6 +47,16 @@ function BackfillHint({ empty }: { empty: boolean }) {
   );
 }
 
+// Status of a source that is not a synced list (no sync_state row): live
+// checks run per lookup; the BigQuery profile runs only when a user opts in.
+function liveSourceStatus(id: string, sources: AddressRiskSources | null): string {
+  if (id === 'etherscan' && !sources?.etherscan?.configured) return 'not configured';
+  if (id === 'bigquery_profile') {
+    return sources?.bigquery_profile?.available === false ? 'disabled on this server' : 'opt-in per lookup';
+  }
+  return 'live';
+}
+
 export default function AddressRiskOverview({ sources, onInspect }: {
   sources: AddressRiskSources | null;
   onInspect: (address: string) => void;
@@ -184,7 +194,7 @@ export default function AddressRiskOverview({ sources, onInspect }: {
                     <td className="pr-3 font-mono text-zinc-400">{s?.last_ok_at ? s.last_ok_at.slice(0, 16).replace('T', ' ') : '—'}</td>
                     <td className="pr-3 font-mono text-zinc-400">{s?.upstream_changed_at ? s.upstream_changed_at.slice(0, 10) : '—'}</td>
                     <td className="pr-3">
-                      {s ? s.status.replace('_', ' ') : m.id === 'etherscan' && !sources?.etherscan?.configured ? 'not configured' : 'live'}
+                      {s ? s.status.replace('_', ' ') : liveSourceStatus(m.id, sources)}
                     </td>
                     <td className="pr-3 text-zinc-400">{s?.last_error || s?.error || ''}</td>
                     <td className="pr-3 text-zinc-400">{m.delay}</td>

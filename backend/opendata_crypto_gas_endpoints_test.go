@@ -75,7 +75,8 @@ func TestFetchL2QuoteFallsBackToNextRPC(t *testing.T) {
 		t.Fatalf("got %+v, %v; want the second RPC's quote", q, err)
 	}
 	c.RPCs = []string{down.URL, down.URL}
-	if _, err := fetchL2Quote(context.Background(), c, l2ActionsFor(nil)); err == nil || strings.Count(err.Error(), "502") != 2 {
+	// Count "status 502", not "502": the random httptest port can contain "502".
+	if _, err := fetchL2Quote(context.Background(), c, l2ActionsFor(nil)); err == nil || strings.Count(err.Error(), "status 502") != 2 {
 		t.Errorf("err = %v, want both endpoints' errors", err)
 	}
 }

@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -139,6 +141,117 @@ func TestBuildGasPulseTronError(t *testing.T) {
 		if c.Meta.ID == gasChainTron && (c.AllTime != nil || c.AllTimeError == "" || c.Error != "") {
 			t.Errorf("tron: all_time=%+v all_time_error=%q error=%q; want only the record card to fail", c.AllTime, c.AllTimeError, c.Error)
 		}
+	}
+}
+
+// useFreshGasAllTimeState swaps in a cold-start tracker for one test.
+func useFreshGasAllTimeState(t *testing.T) {
+	t.Helper()
+	old := gasAllTimeState
+	gasAllTimeState = newGasAllTimeTracker()
+	t.Cleanup(func() { gasAllTimeState = old })
+}
+
+// The freshness contract of the BigQuery-derived record cards: every EVM card
+// says what its records are verified through and whether the last refresh
+// failed; TRON's TronGrid card carries none of it.
+func TestBuildGasPulseAllTimeFreshnessJSON(t *testing.T) {
+	start, end := gasTestWindow()
+	tr := newGasAllTimeTracker()
+	tr.markFailed()
+	allTime := tr.current(time.Date(2026, 10, 13, 10, 0, 0, 0, time.UTC))
+	d := buildGasPulse(start, end, gasTestSeries(), allTime, nil, &GasAllTime{Unit: "sun", AthValue: 420}, nil)
+
+	raw, err := json.Marshal(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out struct {
+		Chains []struct {
+			Meta struct {
+				ID string `json:"id"`
+			} `json:"meta"`
+			AllTime map[string]any `json:"all_time"`
+		} `json:"chains"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatal(err)
+	}
+	freshKeys := []string{"records_through", "records_stale", "refresh_failed", "refresh_note"}
+	for _, c := range out.Chains {
+		switch c.Meta.ID {
+		case gasChainETH, gasChainArb, gasChainOP, gasChainPoly:
+			a := c.AllTime
+			if a["records_through"] != "2026-01-01T00:00:00Z" || a["records_stale"] != true ||
+				a["refresh_failed"] != true || a["refresh_note"] != gasAllTimeNoteFailed {
+				t.Errorf("%s all_time freshness = %v, want through 2026-01-01T00:00:00Z, stale, failed, note %q",
+					c.Meta.ID, a, gasAllTimeNoteFailed)
+			}
+		case gasChainTron:
+			for _, k := range freshKeys {
+				if _, ok := c.AllTime[k]; ok {
+					t.Errorf("tron all_time must not carry %q (not a BigQuery record): %v", k, c.AllTime)
+				}
+			}
+		}
+	}
+}
+
+// A failed background refresh must reach the client as metadata while the
+// cards keep serving the last verified records (here: the seeds); the raw
+// BigQuery error stays in the server log, and the failure back-off keeps the
+// next request from re-running the billed scan.
+func TestGasAllTimeRefreshFailureIsSurfaced(t *testing.T) {
+	useFreshGasAllTimeState(t)
+	const rawErr = "Syntax error: Unexpected keyword SELECT at [3:5] in `bigquery-public-data.crypto_ethereum.blocks`"
+	fake := &fakeBigQuery{status: http.StatusBadRequest, errMsg: rawErr}
+	h := newFakeBQHandler(t, fake)
+	r := httptest.NewRequest(http.MethodGet, "/api/opendata/crypto/gas-pulse", nil)
+
+	first, err := h.gasAllTime(r)
+	if err != nil {
+		t.Fatalf("gasAllTime must never fail the response: %v", err)
+	}
+	if eth := first[gasChainETH]; eth.RefreshFailed || !eth.RecordsStale || eth.RefreshNote != gasAllTimeNoteRefreshing {
+		t.Errorf("first response = %+v, want the stale baseline with a pending refresh", eth)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, ok := h.cache.Get(gasAllTimeKey + ":failed"); ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the background refresh never recorded its failure")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	m, err := h.gasAllTime(r)
+	if err != nil {
+		t.Fatalf("gasAllTime must never fail the response: %v", err)
+	}
+	seedThrough := gasAllTimeSeedTime.UTC().Format(time.RFC3339)
+	for _, id := range []string{gasChainETH, gasChainArb, gasChainOP, gasChainPoly} {
+		at, ok := m[id]
+		if !ok {
+			t.Fatalf("%s card missing after a failed refresh", id)
+		}
+		if !at.RefreshFailed || at.RefreshNote != gasAllTimeNoteFailed || at.RecordsThrough != seedThrough {
+			t.Errorf("%s = %+v, want refresh_failed, note %q, through %s", id, at, gasAllTimeNoteFailed, seedThrough)
+		}
+		if want := float64(gasAllTimeSeeds[id].Ath.Fee) / 1e9; at.AthValue != want {
+			t.Errorf("%s ath = %v, want the last verified value %v", id, at.AthValue, want)
+		}
+	}
+	body, _ := json.Marshal(m)
+	for _, leak := range []string{"Syntax error", "bigquery-public-data", "SELECT"} {
+		if strings.Contains(string(body), leak) {
+			t.Errorf("response leaks the raw BigQuery error (%q): %s", leak, body)
+		}
+	}
+	if n := len(fake.sent()); n != 1 {
+		t.Errorf("all-time scan ran %d times, want 1 (the failure back-off must hold)", n)
 	}
 }
 

@@ -180,4 +180,3 @@ func TestEthStartBlockLB(t *testing.T) {
 		t.Errorf("2024-01-01 ethStartBlockLB = %d, want in (15537394, 18908895]", got2024)
 	}
 }
-

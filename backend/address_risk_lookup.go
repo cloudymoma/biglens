@@ -33,6 +33,10 @@ const (
 
 	tronStablecoinFirstDay = "2019-04-16"
 
+	riskTitleFakeDeployerFmt  = "Deployed %s impersonating USDT/USDC on Ethereum (counterfeit-symbol contracts); may be a factory contract."
+	riskFakeDeployerDetailFmt = "Creator of %s whose symbol imitates USDT/USDC/USD₮ (created %s–%s), per the public crypto_ethereum.tokens_latest dataset in BigQuery."
+	riskFakeDeployerL2Note    = "(seen on Ethereum) An externally owned account has the same address on every EVM chain; a contract at this address here may be unrelated. "
+
 	riskListStaleAfter = 12 * time.Hour
 
 	riskDisclaimer = "Risk clues aggregate public lists and third-party signals. They may be incomplete, " +
@@ -52,16 +56,22 @@ var riskSourceOrder = map[string]int{
 	"goplus":             7,
 	"blockscout":         8,
 	"etherscan":          9,
+	// Local Scam Radar corpus (no address leaves the server).
+	"fake_token_deployers": 10,
+	// Live eth_getCode check (address sent to the chain RPCs).
+	"eip7702": 11,
+	// Opt-in, Ethereum only: runs in the operator's own BigQuery project.
+	"bigquery_profile": 12,
 }
 
 func riskSourcesFor(chain string) []string {
 	switch chain {
 	case "eth":
-		return []string{"ofac", "mew_darklist", "stablecoin", "scam_lookalikes", "issuer_freeze", "chainalysis_oracle", "goplus", "blockscout", "etherscan"}
+		return []string{"ofac", "mew_darklist", "stablecoin", "scam_lookalikes", "fake_token_deployers", "issuer_freeze", "chainalysis_oracle", "goplus", "blockscout", "etherscan", "eip7702", "bigquery_profile"}
 	case "arb", "op":
-		return []string{"ofac", "mew_darklist", "scam_lookalikes", "issuer_freeze", "chainalysis_oracle", "goplus", "blockscout"}
+		return []string{"ofac", "mew_darklist", "scam_lookalikes", "fake_token_deployers", "issuer_freeze", "chainalysis_oracle", "goplus", "blockscout", "eip7702"}
 	case "base":
-		return []string{"ofac", "mew_darklist", "scam_lookalikes", "issuer_freeze", "goplus", "blockscout"}
+		return []string{"ofac", "mew_darklist", "scam_lookalikes", "fake_token_deployers", "issuer_freeze", "goplus", "blockscout", "eip7702"}
 	case "tron":
 		return []string{"ofac", "tron_stablecoin", "scam_lookalikes", "issuer_freeze", "goplus"}
 	case "btc":
@@ -119,6 +129,13 @@ type riskLookupResult struct {
 	// AssociationScope says what the Etherscan analysis covered; null when
 	// it did not run (no key, or the source failed).
 	AssociationScope *riskAssociationScope `json:"association_scope"`
+	// BQProfile is the opt-in BigQuery address profile; absent unless the
+	// lookup asked for it (?bq=1 on Ethereum) and the server allows it.
+	BQProfile *riskBQProfile `json:"bq_profile,omitempty"`
+
+	// noCache marks a transient failure that no source status shows (e.g. the
+	// EIP-7702 delegate check), so a retry gets fresh data.
+	noCache bool
 }
 
 func (r *riskLookupResult) hasError() bool {
@@ -134,11 +151,14 @@ func (r *riskLookupResult) hasError() bool {
 // a source errored, a list has not synced yet, or a live counterparty check
 // failed, so a retry gets fresh data.
 func (r *riskLookupResult) cacheable() bool {
+	if r.noCache {
+		return false
+	}
 	if r.AssociationScope != nil && r.AssociationScope.CounterpartyErrors > 0 {
 		return false
 	}
 	for _, s := range r.Sources {
-		if s.Status == "error" || s.Status == "empty" {
+		if s.Status == "error" || s.Status == "empty" || s.Status == bqStatusTimeout || s.Status == bqStatusRateLimited {
 			return false
 		}
 	}
@@ -284,6 +304,35 @@ func lookalikeClues(chain string, row lookalikeRow, cursor string) []riskClue {
 	}}
 }
 
+// fakeTokenDeployerClues turns a serial counterfeit-deployer hit into a
+// Warning. The corpus comes from Ethereum token contracts; on L2s the same
+// EOA address is the same key holder, but a contract at that address may be
+// unrelated, so the detail says "(seen on Ethereum)".
+func fakeTokenDeployerClues(chain string, row fakeTokenDeployerRow, asOf string) []riskClue {
+	if row.Address == "" {
+		return nil
+	}
+	detail := fmt.Sprintf(riskFakeDeployerDetailFmt, plural(row.Contracts, "contract"), row.FirstSeen, row.LastSeen)
+	if chain != "eth" {
+		detail = riskFakeDeployerL2Note + detail
+	}
+	var observed *string
+	if row.FirstSeen != "" {
+		f := row.FirstSeen
+		observed = &f
+	}
+	return []riskClue{{
+		Severity:   sevWarning,
+		Source:     "fake_token_deployers",
+		Code:       "fake_token_deployer",
+		Title:      fmt.Sprintf(riskTitleFakeDeployerFmt, plural(row.Contracts, "token")),
+		Detail:     detail,
+		ObservedAt: observed,
+		AsOf:       asOf,
+		RefURL:     fmt.Sprintf(chains["eth"].AddressURL, row.Address),
+	}}
+}
+
 func listClues(hits []listHit, states map[string]syncState) []riskClue {
 	var out []riskClue
 	for _, h := range hits {
@@ -324,7 +373,9 @@ func plural(n int, word string) string {
 }
 
 // buildRiskSummary implements spec §8.5. The four lists never overlap:
-// checked = ok; failed = error|stale; incomplete = partial|empty; skipped = not_configured.
+// checked = ok; failed = error|stale|timeout|rate_limited; incomplete =
+// partial|empty|over_budget; skipped = not_configured. An opt-in source the
+// user did not request ("skipped") is in no list.
 func buildRiskSummary(clues []riskClue, sources []riskSource) riskSummary {
 	s := riskSummary{Checked: []string{}, Failed: []string{}, Incomplete: []string{}, Skipped: []string{}}
 	for _, c := range clues {
@@ -351,10 +402,10 @@ func buildRiskSummary(clues []riskClue, sources []riskSource) riskSummary {
 		switch src.Status {
 		case "ok":
 			s.Checked = append(s.Checked, src.ID)
-		case "error", "stale":
+		case "error", "stale", bqStatusTimeout, bqStatusRateLimited:
 			s.Failed = append(s.Failed, src.ID)
 			unavailable = unavailable || src.Error == "unavailable"
-		case "partial", "empty":
+		case "partial", "empty", bqStatusOverBudget:
 			s.Incomplete = append(s.Incomplete, src.ID)
 		case "not_configured":
 			s.Skipped = append(s.Skipped, src.ID)
@@ -428,6 +479,9 @@ type addressRiskService struct {
 	backfillMu      sync.Mutex
 	backfillRunning bool
 	pendingPlan     *backfillPlan // last unconfirmed dry-run estimate; guarded by backfillMu
+
+	// bqProfile runs the opt-in BigQuery address profile; nil = unavailable.
+	bqProfile *bqProfiler
 }
 
 func (s *addressRiskService) rpcsFor(chain string) []string {
@@ -636,7 +690,7 @@ func newAddressRiskService(store *riskStore, rpcURLs []string) *addressRiskServi
 }
 
 // riskLocalIDs are the sources answered from SQLite, in response order.
-var riskLocalIDs = []string{"ofac", "mew_darklist", "stablecoin", "tron_stablecoin", "scam_lookalikes"}
+var riskLocalIDs = []string{"ofac", "mew_darklist", "stablecoin", "tron_stablecoin", "scam_lookalikes", "fake_token_deployers"}
 
 // localSources builds the local sources' status from one sync_state read,
 // filtered to the local sources applicable to chain (or all local sources when
@@ -673,6 +727,13 @@ func (s *addressRiskService) localSources(chain string, states map[string]syncSt
 			st := states[syncID]
 			out = append(out, riskSource{ID: id, Status: scamLookalikeSourceStatus(st, now), LastOKAt: st.LastOKAt,
 				CoverageFrom: st.CoverageFrom, Cursor: st.Cursor, LastError: st.LastError})
+		case "fake_token_deployers":
+			// Freshness of the snapshot itself (a scam_eth cursor alone does not
+			// mean the corpus is loaded); errors are recorded on scam_eth, the
+			// job that refreshes it.
+			st := states[scamFakeTokenDeployersSourceID]
+			out = append(out, riskSource{ID: id, Status: scamLookalikeSourceStatus(st, now), LastOKAt: st.LastOKAt,
+				Cursor: st.Cursor, LastError: states[scamEthSourceID].LastError})
 		default:
 			st := states[id]
 			out = append(out, riskSource{ID: id, Status: listSourceStatus(st, now),
@@ -735,6 +796,14 @@ func (s *addressRiskService) localCheck(ctx context.Context, chain, addr string)
 			lookHit = m[normalizeScamAddr(chain, addr)]
 		}
 	}
+	var deployerHit fakeTokenDeployerRow
+	if err == nil && slices.Contains(want, "fake_token_deployers") {
+		var m map[string]fakeTokenDeployerRow
+		m, err = s.store.fakeTokenDeployerHits(ctx, []string{addr})
+		if err == nil {
+			deployerHit = m[normalizeScamAddr("eth", addr)]
+		}
+	}
 	if err != nil {
 		for i := range sources {
 			sources[i] = riskSource{ID: sources[i].ID, Status: "error", Error: "unavailable"}
@@ -755,6 +824,9 @@ func (s *addressRiskService) localCheck(ctx context.Context, chain, addr string)
 		}
 		clues = append(clues, lookalikeClues(chain, lookHit, states[scamKey].Cursor)...)
 	}
+	if slices.Contains(want, "fake_token_deployers") {
+		clues = append(clues, fakeTokenDeployerClues(chain, deployerHit, deployerHit.UpdatedAt)...)
+	}
 	sortClues(clues)
 	return sources, clues, frozen
 }
@@ -764,6 +836,17 @@ func (s *addressRiskService) lookup(ctx context.Context, chain, addr string) *ri
 }
 
 func (s *addressRiskService) lookupKey(ctx context.Context, chain, addr, etherscanKey string) *riskLookupResult {
+	return s.lookupOpts(ctx, chain, addr, etherscanKey, riskLookupOpts{})
+}
+
+// riskLookupOpts are per-request lookup options.
+type riskLookupOpts struct {
+	// BQProfile runs the BigQuery address profile: the user opted in (?bq=1),
+	// the chain is eth, and the server allows it (checked by the handler).
+	BQProfile bool
+}
+
+func (s *addressRiskService) lookupOpts(ctx context.Context, chain, addr, etherscanKey string, opts riskLookupOpts) *riskLookupResult {
 	if chain == "" {
 		chain = "eth"
 	}
@@ -783,6 +866,12 @@ func (s *addressRiskService) lookupKey(ctx context.Context, chain, addr, ethersc
 		etherSrc                                   riskSource
 		etherClues                                 []riskClue
 		scope                                      *riskAssociationScope
+		eipSrc                                     riskSource
+		eipClues                                   []riskClue
+		eipNoCache                                 bool
+		bqSrc                                      = riskSource{ID: "bigquery_profile", Status: bqStatusSkipped}
+		bqClues                                    []riskClue
+		bqProf                                     *riskBQProfile
 	)
 	wg.Add(1)
 	go func() { defer wg.Done(); localSrc, localClues, localFrozen = s.localCheck(ctx, chain, addr) }()
@@ -809,6 +898,16 @@ func (s *addressRiskService) lookupKey(ctx context.Context, chain, addr, ethersc
 		wg.Add(1)
 		go func() { defer wg.Done(); etherSrc, etherClues, scope = s.checkEtherscan(ctx, addr, etherscanKey, now) }()
 	}
+	if has("eip7702") {
+		wg.Add(1)
+		go func() { defer wg.Done(); eipSrc, eipClues, eipNoCache = s.checkEIP7702Source(ctx, chain, addr, now) }()
+	}
+	// The profile has its own timeout (bigquery_profile.timeout_seconds); a
+	// slow job never holds the other sources back beyond it.
+	if has("bigquery_profile") && opts.BQProfile && s.bqProfile.available() {
+		wg.Add(1)
+		go func() { defer wg.Done(); bqSrc, bqClues, bqProf = s.checkBQProfile(ctx, addr, now) }()
+	}
 	wg.Wait()
 
 	asOf := fmtTime(now)
@@ -824,6 +923,8 @@ func (s *addressRiskService) lookupKey(ctx context.Context, chain, addr, ethersc
 	clues = append(clues, goplusFound...)
 	clues = append(clues, bsAddrClues...)
 	clues = append(clues, etherClues...)
+	clues = append(clues, eipClues...)
+	clues = append(clues, bqClues...)
 	sortClues(clues)
 
 	live := func(id, code string, hosts []string) riskSource {
@@ -853,6 +954,12 @@ func (s *addressRiskService) lookupKey(ctx context.Context, chain, addr, ethersc
 	if has("etherscan") {
 		sources = append(sources, etherSrc)
 	}
+	if has("eip7702") {
+		sources = append(sources, eipSrc)
+	}
+	if has("bigquery_profile") {
+		sources = append(sources, bqSrc)
+	}
 
 	return &riskLookupResult{
 		Chain:            chain,
@@ -863,5 +970,7 @@ func (s *addressRiskService) lookupKey(ctx context.Context, chain, addr, ethersc
 		Clues:            clues,
 		Sources:          sources,
 		AssociationScope: scope,
+		BQProfile:        bqProf,
+		noCache:          eipNoCache,
 	}
 }

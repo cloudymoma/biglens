@@ -24,11 +24,23 @@ import {
 import AddressRiskOverview from './AddressRiskOverview';
 import { ChainIcon, TokenIcon } from './CryptoIcons';
 import EtherscanKeyPanel from './EtherscanKeyPanel';
+import HelpTip from './HelpTip';
 import RiskResultView from './RiskResultView';
 
 // GB (1e9), as the backend and CLI print it.
 function fmtGB(bytes: number): string {
   return `${(bytes / 1e9).toFixed(1)} GB`;
+}
+
+// The BigQuery profile switch is a UI preference only ('1' | '0'); off by default.
+const BQ_PROFILE_PREF_KEY = 'biglens.addressRisk.bqProfile';
+
+function readBqPref(): boolean {
+  try {
+    return window.localStorage.getItem(BQ_PROFILE_PREF_KEY) === '1';
+  } catch {
+    return false; // storage disabled
+  }
 }
 
 // The last dry-run estimate; confirm sends its token back (valid 15 min, single use).
@@ -45,17 +57,24 @@ function buildThirdPartyNote(
   chainLabel: string,
   result: AddressRiskLookup | null,
   meta: AddressRiskSources | null,
+  bqOn: boolean,
 ): string {
+  const bqNote =
+    "The BigQuery profile queries this server's GCP project, which keeps the address in its BigQuery job history.";
   if (result && (result.chain || 'eth') === chain) {
     const sent = result.sources.filter(s => s.sends_address && s.hosts && s.hosts.length > 0);
-    const local = result.sources.filter(s => !s.sends_address).map(s => SOURCE_LABELS[s.id] ?? s.id);
+    const local = result.sources
+      .filter(s => !s.sends_address && s.status !== 'skipped' && s.id !== 'bigquery_profile')
+      .map(s => SOURCE_LABELS[s.id] ?? s.id);
     const localText = local.length > 0 ? `${local.join(', ')} checks run on this server.` : '';
+    // rate_limited means no job was started.
+    const bqText = result.bq_profile && result.bq_profile.status !== 'rate_limited' ? bqNote : '';
     if (sent.length === 0) {
-      return `Lookups on ${chainLabel} do not send this address to any third party. ${localText}`.trim();
+      return `Lookups on ${chainLabel} do not send this address to any third party. ${localText} ${bqText}`.trim();
     }
     const hosts = Array.from(new Set(sent.flatMap(s => s.hosts ?? [])));
     const hopNote = chain === 'eth' ? ' (and up to 4 top counterparties during 1-hop screening)' : '';
-    return `Lookups on ${chainLabel} send this address${hopNote} to: ${hosts.join(', ')}. ${localText}`.trim();
+    return `Lookups on ${chainLabel} send this address${hopNote} to: ${hosts.join(', ')}. ${localText} ${bqText}`.trim();
   }
 
   const rpcHosts = meta?.rpc_hosts.join(', ') || 'public Ethereum RPCs';
@@ -68,18 +87,19 @@ function buildThirdPartyNote(
     case 'tron':
       return `Lookups on TRON send this address to TronGrid (issuer freeze) and ${goplusHost}. OFAC checks run on this server.`;
     case 'base':
-      return `Lookups on Base send this address to configured Base RPCs (issuer freeze), ${goplusHost}, and base.blockscout.com. OFAC and MEW checks run on this server.`;
+      return `Lookups on Base send this address to configured Base RPCs (issuer freeze & EIP-7702 check), ${goplusHost}, and base.blockscout.com. OFAC and MEW checks run on this server.`;
     case 'arb':
     case 'op': {
       const bsHost = chain === 'arb' ? 'arbitrum.blockscout.com' : 'explorer.optimism.io';
-      return `Lookups on ${chainLabel} send this address to configured ${chainLabel} RPCs (issuer freeze & Chainalysis oracle), ${goplusHost}, and ${bsHost}. OFAC and MEW checks run on this server.`;
+      return `Lookups on ${chainLabel} send this address to configured ${chainLabel} RPCs (issuer freeze, Chainalysis oracle & EIP-7702 check), ${goplusHost}, and ${bsHost}. OFAC and MEW checks run on this server.`;
     }
     default:
       return (
         `Lookups send this address (and up to 4 top counterparties during 1-hop screening) to: ${rpcHosts} ` +
-        `(issuer freeze & Chainalysis oracle; tried in order), ${goplusHost}, eth.blockscout.com` +
+        `(issuer freeze, Chainalysis oracle & EIP-7702 check; tried in order), ${goplusHost}, eth.blockscout.com` +
         `${meta?.etherscan?.configured ? ', and api.etherscan.io' : ' (also used as keyless 1-hop fallback)'}. ` +
-        'OFAC, MEW and stablecoin checks run on this server.'
+        'OFAC, MEW and stablecoin checks run on this server.' +
+        (bqOn ? ` ${bqNote}` : '')
       );
   }
 }
@@ -100,8 +120,22 @@ export default function AddressRiskTab({
   const [backfillBusy, setBackfillBusy] = useState(false);
   const [backfillErr, setBackfillErr] = useState('');
   const [dryRunPlan, setDryRunPlan] = useState<DryRunPlan | null>(null);
+  const [bqOn, setBqOn] = useState<boolean>(readBqPref);
   const abortRef = useRef<AbortController | null>(null);
   const resultRef = useRef<HTMLHeadingElement | null>(null);
+
+  // The switch applies to Ethereum lookups when the server offers the profile.
+  const bqInfo = meta?.bigquery_profile;
+  const bqAvailable = Boolean(bqInfo?.available);
+  const toggleBq = () => {
+    const next = !bqOn;
+    setBqOn(next);
+    try {
+      window.localStorage.setItem(BQ_PROFILE_PREF_KEY, next ? '1' : '0');
+    } catch {
+      // storage disabled: the choice lasts for this page only
+    }
+  };
 
   const refreshMeta = () => {
     fetchAddressRiskSources().then(setMeta).catch(() => setMeta(null));
@@ -178,7 +212,9 @@ export default function AddressRiskTab({
     setResult(null); // never leave a previous address's clues on screen while loading
     setError('');
     setLoading(true);
-    fetchAddressRiskLookup(addr, targetChain, ctrl.signal)
+    fetchAddressRiskLookup(addr, targetChain, ctrl.signal, {
+      bqProfile: bqOn && bqAvailable && targetChain === 'eth',
+    })
       .then(r => {
         if (ctrl.signal.aborted || r.address.toLowerCase() !== addr.toLowerCase()) return;
         setResult(r);
@@ -219,6 +255,19 @@ export default function AddressRiskTab({
   const selectedChainOpt = RISK_CHAINS.find(c => c.id === chain) ?? RISK_CHAINS[0];
   const detectedFamily = detectAddressFamily(input);
   const familyMismatch = detectedFamily !== null && detectedFamily !== selectedChainOpt.family ? detectedFamily : null;
+  const bqUsable = chain === 'eth' && bqAvailable;
+  const bqChecked = bqOn && bqUsable;
+  const bqReason =
+    chain !== 'eth'
+      ? 'Ethereum only'
+      : !meta
+        ? 'availability unknown'
+        : !bqAvailable
+          ? bqInfo?.reason === 'disabled'
+            ? 'disabled on this server'
+            : 'not available on this server'
+          : '';
+  const bqCap = bqInfo?.max_bytes_billed ? `${Number((bqInfo.max_bytes_billed / 2 ** 30).toFixed(1))} GiB` : '2 GiB';
 
   const selectChain = (nextChain: AddressRiskChain) => {
     if (nextChain !== chain) {
@@ -404,6 +453,41 @@ export default function AddressRiskTab({
           </button>
         </form>
 
+        <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+          <button
+            type="button"
+            role="switch"
+            aria-checked={bqChecked}
+            aria-label="BigQuery profile"
+            disabled={!bqUsable}
+            onClick={toggleBq}
+            className={`relative inline-flex h-4 w-7 shrink-0 items-center rounded-full border transition-colors disabled:cursor-not-allowed disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-zinc-500 ${
+              bqChecked ? 'bg-sky-600 border-sky-500' : 'bg-zinc-800 border-zinc-700'
+            }`}
+          >
+            <span
+              aria-hidden="true"
+              className={`inline-block h-3 w-3 rounded-full bg-white transition-transform ${
+                bqChecked ? 'translate-x-3' : 'translate-x-0.5'
+              }`}
+            />
+          </button>
+          <span className={bqUsable ? 'text-zinc-300' : 'text-zinc-500'}>BigQuery profile</span>
+          <HelpTip label="What does the BigQuery profile add?">
+            Off by default. When on, Ethereum lookups also query Google&apos;s public BigQuery blockchain dataset
+            (address-clustered views) in your GCP project to add: first funder and account age from full history;
+            lifetime in/out activity and top counterparties; 1-hop matches of those counterparties against local
+            OFAC / MEW / freeze / lookalike / counterfeit-token deployer lists. No Etherscan key or third-party API.
+            Typical cost ≈ 0.9 GiB billed (≈ $0.006) per lookup, capped at {bqCap}; the address is recorded in your
+            project&apos;s BigQuery job history.
+          </HelpTip>
+          {bqReason ? (
+            <span className="text-[11px] text-zinc-600">({bqReason})</span>
+          ) : bqChecked ? (
+            <span className="text-[11px] text-zinc-500">on · runs with each Ethereum check</span>
+          ) : null}
+        </div>
+
         {familyMismatch === 'tron' && (
           <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-amber-300">
             <span>This looks like a TRON address — switch to TRON?</span>
@@ -462,7 +546,7 @@ export default function AddressRiskTab({
 
         {inputError && <p className="mt-2 text-xs text-orange-400">{inputError}</p>}
         <p className="mt-3 text-[11px] text-zinc-500">
-          {buildThirdPartyNote(chain, selectedChainOpt.label, result, meta)}
+          {buildThirdPartyNote(chain, selectedChainOpt.label, result, meta, bqChecked)}
         </p>
         {meta && (
           <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-zinc-500">
@@ -480,7 +564,7 @@ export default function AddressRiskTab({
 
       {error && <ErrorBanner message={error} />}
 
-      {result && <RiskResultView result={result} headingRef={resultRef} />}
+      {result && <RiskResultView result={result} headingRef={resultRef} onInspect={addr => inspect(addr, 'eth')} />}
 
       <AddressRiskOverview sources={meta} onInspect={addr => inspect(addr, 'eth')} />
     </div>

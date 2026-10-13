@@ -272,6 +272,9 @@ func poolLabels(sources []string) []string {
 		"chainalysis_oracle": "Chainalysis oracle",
 		"first_funder":       "First ETH funder in window",
 		"blockscout_scam":    riskTitleBlockscoutScam,
+		"scam_lookalikes":    "Known address-poisoning lookalike",
+		// Tagged by riskPoolForAddresses (BigQuery profile 1-hop matching).
+		"fake_token_deployers": "Serial counterfeit-token deployer",
 	}
 	out := make([]string, 0, len(sources))
 	for _, s := range sources {

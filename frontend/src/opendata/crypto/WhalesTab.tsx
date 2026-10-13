@@ -7,7 +7,7 @@ import { RISK_BADGES } from './addressRiskTools';
 import { EmptyState, ErrorBanner } from '../../dashboards/shared';
 import {
   BTC_COLOR, ETH_COLOR, CHART_TOOLTIP, AXIS_LABEL, SPLIT_LINE,
-  fmtNum, shortHash, Panel, DaysPicker,
+  fmtNum, shortHash, Panel, DaysPicker, IngestingNote,
 } from './shared';
 
 const DAY_OPTIONS = [7, 30, 90];
@@ -99,6 +99,7 @@ export default function WhalesTab({ onInspect }: { onInspect?: (address: string,
   return (
     <div className="space-y-4">
       {controls}
+      <IngestingNote complete={data.last_day_complete} />
 
       <div className="grid lg:grid-cols-2 gap-4">
         <Panel

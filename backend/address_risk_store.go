@@ -97,6 +97,7 @@ CREATE TABLE IF NOT EXISTS scam_fake_tokens (
   recipients INTEGER NOT NULL,
   first_seen TEXT NOT NULL,
   last_seen  TEXT NOT NULL,
+  creator    TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (chain, contract)
 );
 CREATE TABLE IF NOT EXISTS scam_daily_stats (
@@ -104,6 +105,15 @@ CREATE TABLE IF NOT EXISTS scam_daily_stats (
   metric TEXT NOT NULL,
   value  REAL NOT NULL,
   PRIMARY KEY (day, metric)
+);
+CREATE TABLE IF NOT EXISTS scam_fake_token_deployers (
+  chain      TEXT NOT NULL,
+  address    TEXT NOT NULL,
+  contracts  INTEGER NOT NULL,
+  first_seen TEXT NOT NULL,
+  last_seen  TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (chain, address)
 );`
 
 type riskStore struct{ db *sql.DB }
@@ -132,7 +142,47 @@ func openRiskStore(path string) (*riskStore, error) {
 		db.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
 	}
+	if err := migrateRiskSchema(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate schema: %w", err)
+	}
 	return &riskStore{db: db}, nil
+}
+
+// riskColumnMigrations are additive columns for databases created before the
+// column existed: CREATE TABLE IF NOT EXISTS never alters an existing table.
+// Every entry must also be in riskSchema so new databases get it directly.
+var riskColumnMigrations = []struct{ table, column, ddl string }{
+	{"scam_fake_tokens", "creator", `ALTER TABLE scam_fake_tokens ADD COLUMN creator TEXT NOT NULL DEFAULT ''`},
+}
+
+// migrateRiskSchema adds missing columns idempotently. A concurrent opener
+// (the backfill CLI next to the service) may add the column first, so a
+// failed ALTER is fine when the column exists afterwards.
+func migrateRiskSchema(db *sql.DB) error {
+	for _, m := range riskColumnMigrations {
+		has, err := tableHasColumn(db, m.table, m.column)
+		if err != nil {
+			return err
+		}
+		if has {
+			continue
+		}
+		if _, err := db.Exec(m.ddl); err != nil {
+			if has, cErr := tableHasColumn(db, m.table, m.column); cErr != nil || !has {
+				return fmt.Errorf("add %s.%s: %w", m.table, m.column, err)
+			}
+		}
+	}
+	return nil
+}
+
+func tableHasColumn(db *sql.DB, table, column string) (bool, error) {
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?`, table, column).Scan(&n); err != nil {
+		return false, fmt.Errorf("inspect %s: %w", table, err)
+	}
+	return n > 0, nil
 }
 
 func (s *riskStore) Close() error { return s.db.Close() }
@@ -513,6 +563,18 @@ func (s *riskStore) riskPoolForAddresses(ctx context.Context, chain string, addr
 		for addr := range lkHits {
 			if !slices.Contains(pool[addr], "scam_lookalikes") {
 				pool[addr] = append(pool[addr], "scam_lookalikes")
+			}
+		}
+	}
+
+	if slices.Contains(want, "fake_token_deployers") {
+		depHits, err := s.fakeTokenDeployerHits(ctx, addrs)
+		if err != nil {
+			return nil, err
+		}
+		for addr := range depHits {
+			if !slices.Contains(pool[addr], "fake_token_deployers") {
+				pool[addr] = append(pool[addr], "fake_token_deployers")
 			}
 		}
 	}

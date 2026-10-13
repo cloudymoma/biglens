@@ -57,9 +57,10 @@ type payHistoryResponse struct {
 
 type payAlert struct {
 	Severity string `json:"severity"` // critical | warning
-	Code     string `json:"code"`     // own_address_frozen | own_address_sanctioned | counterfeit_received | poisoning_received
+	Code     string `json:"code"`     // own_address_frozen | own_address_sanctioned | own_address_eip7702 | counterfeit_received | poisoning_received
 	Message  string `json:"message"`
 	TxHash   string `json:"tx_hash,omitempty"`
+	Address  string `json:"address,omitempty"` // contract the alert refers to (own_address_eip7702: the delegate)
 }
 
 type cachedPayHistory struct {
@@ -291,6 +292,8 @@ func (h *APIHandler) PaymentCheckLive(w http.ResponseWriter, r *http.Request) {
 		freezeStates  []issuerFreezeState
 		freezeErrCode string
 		ownOFACHit    bool
+		ownCode       evmCodeInfo
+		ownCodeErr    string
 		localErr      error
 	)
 
@@ -350,6 +353,14 @@ func (h *APIHandler) PaymentCheckLive(w http.ResponseWriter, r *http.Request) {
 	if checkFreeze {
 		g.Go(func() error {
 			freezeStates, freezeErrCode = checkIssuerFreeze(ctx, network, addr, asset, rpcs)
+			return nil
+		})
+	}
+
+	// 4b. Own address EIP-7702 delegation (EVM; same RPCs as the freeze check)
+	if eip7702Chains[network] {
+		g.Go(func() error {
+			ownCode, ownCodeErr = h.ownAddressCode(ctx, network, addr, rpcs)
 			return nil
 		})
 	}
@@ -417,6 +428,15 @@ func (h *APIHandler) PaymentCheckLive(w http.ResponseWriter, r *http.Request) {
 			Severity: "critical",
 			Code:     "own_address_sanctioned",
 			Message:  "This address appears on the OFAC SDN sanctions list.",
+		})
+	}
+	if ownCode.Kind == evmCodeDelegated {
+		alerts = append(alerts, payAlert{
+			Severity: "warning",
+			Code:     "own_address_eip7702",
+			Message: fmt.Sprintf("Your receiving address has an active EIP-7702 delegation to %s — code at that contract can move incoming funds.",
+				ownCode.Delegate),
+			Address: ownCode.Delegate,
 		})
 	}
 	type txAlertCand struct {
@@ -541,6 +561,13 @@ func (h *APIHandler) PaymentCheckLive(w http.ResponseWriter, r *http.Request) {
 				fSrc.Status, fSrc.Error = "error", freezeErrCode
 			}
 			sources = append(sources, fSrc)
+		}
+		if eip7702Chains[network] {
+			cSrc := riskSource{ID: "eip7702", Status: "ok", Hosts: rpcHosts}
+			if ownCodeErr != "" {
+				cSrc.Status, cSrc.Error = "error", ownCodeErr
+			}
+			sources = append(sources, cSrc)
 		}
 	}
 

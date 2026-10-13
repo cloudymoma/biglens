@@ -1303,4 +1303,137 @@ func TestHandlePaymentCheckLiveAndHistoryBTCAndSolana(t *testing.T) {
 	if !foundFrozen {
 		t.Fatalf("Solana USDC Alerts = %+v, expected critical own_address_frozen alert", usdcLive.Alerts)
 	}
+	// EIP-7702 is EVM-only: no eip7702 source on Bitcoin or Solana.
+	for _, resp := range []payLiveResponse{btcLive, solLive, usdcLive} {
+		for _, s := range resp.Sources {
+			if s.ID == "eip7702" {
+				t.Errorf("%s /live lists %+v", resp.Network, s)
+			}
+		}
+	}
+}
+
+// fakeEVMLiveRPC answers the /live EVM calls (heads, balances, freeze checks,
+// unsettled logs) with neutral values and eth_getCode with code; it counts
+// eth_getCode calls. status != 0 fails eth_getCode with that HTTP status.
+func fakeEVMLiveRPC(t *testing.T, code string, status int) (*httptest.Server, *atomic.Int32) {
+	t.Helper()
+	nowSec := time.Now().Unix()
+	var getCode atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Method string            `json:"method"`
+			Params []json.RawMessage `json:"params"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		switch req.Method {
+		case "eth_getBlockByNumber":
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":1,"result":{"number":"0x64","timestamp":"0x%x"}}`, nowSec)
+		case "eth_getCode":
+			getCode.Add(1)
+			if status != 0 {
+				w.WriteHeader(status)
+				return
+			}
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":1,"result":%q}`, code)
+		case "eth_call", "eth_getBalance":
+			fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"result":"0x0000000000000000000000000000000000000000000000000000000000000000"}`)
+		case "eth_getLogs":
+			fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"result":[]}`)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &getCode
+}
+
+func payLive(t *testing.T, h *APIHandler, query string) payLiveResponse {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	h.PaymentCheckLive(rec, httptest.NewRequest(http.MethodGet, "/api/opendata/crypto/payment-check/live?"+query, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var resp payLiveResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	return resp
+}
+
+func TestPaymentCheckLiveOwnAddressEIP7702(t *testing.T) {
+	rpc, getCode := fakeEVMLiveRPC(t, eip7702TestCode, 0)
+	h := newTestPaymentAPIHandler(t, map[string][]string{"base": {rpc.URL}}, nil)
+	q := "asset=USDC&network=base&address=" + handlerTestEVMAddr
+
+	resp := payLive(t, h, q)
+	var got *payAlert
+	for i := range resp.Alerts {
+		if resp.Alerts[i].Code == "own_address_eip7702" {
+			got = &resp.Alerts[i]
+		}
+	}
+	if got == nil {
+		t.Fatalf("Alerts = %+v, want an own_address_eip7702 alert", resp.Alerts)
+	}
+	want := "Your receiving address has an active EIP-7702 delegation to " + eip7702TestDelegate +
+		" — code at that contract can move incoming funds."
+	if got.Severity != "warning" || got.Message != want || got.Address != eip7702TestDelegate {
+		t.Errorf("alert = %+v, want warning %q with address %s", *got, want, eip7702TestDelegate)
+	}
+
+	// Like the issuer-freeze check, the own-address code check is listed in
+	// the sources (same RPC hosts), so a failure is visible.
+	if src := payLiveSource(t, resp, "eip7702"); src.Status != "ok" || strings.Join(src.Hosts, ",") != strings.Join(hostsOf(rpc.URL), ",") {
+		t.Errorf("eip7702 source = %+v, want ok on the RPC hosts", src)
+	}
+
+	// Polled every few seconds: the delegation state is cached briefly.
+	payLive(t, h, q)
+	if getCode.Load() != 1 {
+		t.Errorf("eth_getCode calls = %d after two polls, want 1 (cached)", getCode.Load())
+	}
+}
+
+func payLiveSource(t *testing.T, resp payLiveResponse, id string) riskSource {
+	t.Helper()
+	for _, s := range resp.Sources {
+		if s.ID == id {
+			return s
+		}
+	}
+	t.Fatalf("source %q missing from %+v", id, resp.Sources)
+	return riskSource{}
+}
+
+func TestPaymentCheckLiveEIP7702NoAlertForEOAOrFailure(t *testing.T) {
+	for name, tc := range map[string]struct {
+		code      string
+		status    int
+		srcStatus string
+		srcError  string
+		calls     int32 // eth_getCode calls after two polls
+	}{
+		"plain EOA":      {code: "0x", srcStatus: "ok", calls: 1},
+		"contract":       {code: "0x6080604052", srcStatus: "ok", calls: 1},
+		"getCode failed": {status: http.StatusBadGateway, srcStatus: "error", srcError: "upstream_http_502", calls: 2},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rpc, getCode := fakeEVMLiveRPC(t, tc.code, tc.status)
+			h := newTestPaymentAPIHandler(t, map[string][]string{"eth": {rpc.URL}}, nil)
+			q := "asset=USDT&network=eth&address=" + handlerTestEVMAddr
+			resp := payLive(t, h, q)
+			for _, a := range resp.Alerts {
+				if a.Code == "own_address_eip7702" {
+					t.Errorf("unexpected alert %+v", a)
+				}
+			}
+			if src := payLiveSource(t, resp, "eip7702"); src.Status != tc.srcStatus || src.Error != tc.srcError {
+				t.Errorf("eip7702 source = %+v, want status %q error %q", src, tc.srcStatus, tc.srcError)
+			}
+			payLive(t, h, q) // a failed check is not cached: the next poll retries
+			if getCode.Load() != tc.calls {
+				t.Errorf("eth_getCode calls = %d after two polls, want %d", getCode.Load(), tc.calls)
+			}
+		})
+	}
 }

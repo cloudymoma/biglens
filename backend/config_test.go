@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -218,4 +219,112 @@ func TestCryptoGasConfigAbsentSectionOmitted(t *testing.T) {
 	if strings.Contains(string(out), "crypto_gas") {
 		t.Errorf("empty crypto_gas section was written:\n%s", out)
 	}
+}
+
+// crypto_prices.initial_days: absent means the 365-day cold start, explicit
+// 0 disables the on-chain price sync, values are clamped to [0, 730], and an
+// absent section is not written back on save.
+func TestCryptoPricesInitialDays(t *testing.T) {
+	ptr := func(n int) *int { return &n }
+	tests := []struct {
+		name string
+		in   *int
+		want int
+	}{
+		{"absent means 365", nil, 365},
+		{"explicit 0 disables", ptr(0), 0},
+		{"explicit 90", ptr(90), 90},
+		{"above 730 clamps", ptr(5000), 730},
+		{"negative clamps to 0", ptr(-1), 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := (CryptoPricesConfig{InitialDays: tt.in}).initialDays(); got != tt.want {
+				t.Errorf("initialDays() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+
+	path := filepath.Join(t.TempDir(), "conf.yaml")
+	if err := os.WriteFile(path, []byte("crypto_prices:\n  initial_days: 0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.CryptoPrices.initialDays(); got != 0 {
+		t.Errorf("explicit 0 in yaml read as %d", got)
+	}
+	out, err := yaml.Marshal(&Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "crypto_prices") {
+		t.Errorf("empty crypto_prices section was written:\n%s", out)
+	}
+}
+
+// The BigQuery profile is opt-in per lookup; the server-side section only
+// sets guardrails. Absent keys must mean "users may opt in" with the
+// documented caps, and an explicit enabled: false must survive a re-save.
+func TestAddressRiskBigQueryProfileDefaults(t *testing.T) {
+	got := AddressRiskConfig{}.bigQueryProfile()
+	want := bqProfileSettings{Enabled: true, MaxBytesBilled: 2 << 30, MaxPerHour: 60, Timeout: 20 * time.Second}
+	if got != want {
+		t.Errorf("defaults = %+v, want %+v", got, want)
+	}
+	off := false
+	explicit := AddressRiskConfig{BigQueryProfile: BigQueryProfileConfig{
+		Enabled: &off, MaxBytesBilled: 1 << 30, MaxPerHour: 5, TimeoutSeconds: 30,
+	}}.bigQueryProfile()
+	if explicit != (bqProfileSettings{Enabled: false, MaxBytesBilled: 1 << 30, MaxPerHour: 5, Timeout: 30 * time.Second}) {
+		t.Errorf("explicit = %+v", explicit)
+	}
+	// The lookup must answer well within the server's 60 s WriteTimeout, and
+	// per-job / hourly caps are bounded against misconfiguration.
+	long := AddressRiskConfig{BigQueryProfile: BigQueryProfileConfig{TimeoutSeconds: 600, MaxPerHour: -1, MaxBytesBilled: -5}}.bigQueryProfile()
+	if long.Timeout != 45*time.Second || long.MaxPerHour != 60 || long.MaxBytesBilled != 2<<30 {
+		t.Errorf("clamped = %+v, want timeout 45s and defaults for non-positive values", long)
+	}
+	high := AddressRiskConfig{BigQueryProfile: BigQueryProfileConfig{MaxBytesBilled: 50 << 30, MaxPerHour: 5000}}.bigQueryProfile()
+	if high.MaxBytesBilled != 10<<30 || high.MaxPerHour != 600 {
+		t.Errorf("upper clamp = %+v, want 10 GiB and 600/hour", high)
+	}
+}
+
+func TestAddressRiskBigQueryProfileYAML(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "conf.yaml")
+	src := "address_risk:\n  bigquery_profile:\n    enabled: false\n    max_bytes_billed: 1073741824\n    max_per_hour: 10\n    timeout_seconds: 15\n"
+	if err := os.WriteFile(path, []byte(src), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := cfg.AddressRisk.bigQueryProfile()
+	if got.Enabled || got.MaxBytesBilled != 1<<30 || got.MaxPerHour != 10 || got.Timeout != 15*time.Second {
+		t.Fatalf("parsed = %+v", got)
+	}
+	if err := SaveConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	out, _ := os.ReadFile(path)
+	if !strings.Contains(string(out), "enabled: false") {
+		t.Errorf("explicit enabled: false lost on save:\n%s", out)
+	}
+	if strings.Contains(string(mustMarshalYAML(t, &Config{})), "bigquery_profile") {
+		t.Error("an absent bigquery_profile section must stay absent on save")
+	}
+}
+
+func mustMarshalYAML(t *testing.T, v any) []byte {
+	t.Helper()
+	out, err := yaml.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
 }

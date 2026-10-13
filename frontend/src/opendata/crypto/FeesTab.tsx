@@ -1,15 +1,16 @@
 import { useState, useEffect } from 'react';
 import ReactECharts from 'echarts-for-react';
 import { Gauge, Flame, Pickaxe } from 'lucide-react';
-import type { CryptoFeesData } from '../../types';
-import { fetchCryptoFees } from '../../api';
+import type { CryptoFeesData, CryptoPricesData } from '../../types';
+import { fetchCryptoFees, fetchCryptoPrices } from '../../api';
 import { MetricCard, EmptyState, ErrorBanner } from '../../dashboards/shared';
 import {
   BTC_COLOR, ETH_COLOR, CHART_TOOLTIP, AXIS_LABEL, SPLIT_LINE,
-  fmtNum, Panel, DaysPicker, mergeDates, seriesByDate,
+  fmtNum, Panel, DaysPicker, IngestingNote, mergeDates, seriesByDate,
 } from './shared';
 import { ChainIcon } from './CryptoIcons';
 import GasPulse72hView from './GasPulse72hView';
+import { approxUSD, priceLookup, usdAxisTooltip } from './onchainPrices';
 
 const DAY_OPTIONS = [7, 30, 90, 365];
 
@@ -28,6 +29,14 @@ function DailyFeesView() {
   const [data, setData] = useState<CryptoFeesData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [prices, setPrices] = useState<CryptoPricesData | null>(null);
+
+  // Optional USD overlay; a failure (null) simply leaves native units only.
+  useEffect(() => {
+    let stale = false;
+    fetchCryptoPrices(days).then(p => { if (!stale) setPrices(p); });
+    return () => { stale = true; };
+  }, [days]);
 
   useEffect(() => {
     let stale = false;
@@ -51,6 +60,20 @@ function DailyFeesView() {
   const feeTrendDates = mergeDates(data.btc, data.eth);
   const btcFeeByDate = new Map(data.btc.map(r => [r.date, r.median_fee_vb]));
   const ethFeeByDate = new Map(data.eth.map(r => [r.date, r.avg_gas_gwei]));
+  // Same-day on-chain USD (Uniswap v3) for "≈ $" hints; absent → native only.
+  const px = priceLookup(prices);
+  const btcPx = latestBtc ? px.btc.get(latestBtc.date) : undefined;
+  const ethPx = latestEth ? px.eth.get(latestEth.date) : undefined;
+  const withUsd = (s: string) => (s ? `${s} · ` : '');
+  const ethFeesUsd = approxUSD(latestEth?.total_fees_eth, ethPx);
+  const btcRevenueTooltip = px.btc.size > 0
+    ? { formatter: usdAxisTooltip({ Subsidy: { unit: 'BTC', prices: px.btc }, Fees: { unit: 'BTC', prices: px.btc } },
+        fmtNum, { label: 'Miner revenue', unit: 'BTC', prices: px.btc }) }
+    : {};
+  const ethBurnTooltip = px.eth.size > 0
+    ? { formatter: usdAxisTooltip({ Burned: { unit: 'ETH', prices: px.eth }, Tips: { unit: 'ETH', prices: px.eth } },
+        fmtNum, { label: 'Total fees', unit: 'ETH', prices: px.eth }) }
+    : {};
 
   return (
     <div className="space-y-4">
@@ -58,12 +81,13 @@ function DailyFeesView() {
         <DaysPicker options={DAY_OPTIONS} value={days} onChange={setDays} />
         <span className="text-[11px] text-zinc-600">Complete UTC days · latest = {latestDate}</span>
       </div>
+      <IngestingNote complete={data.last_day_complete} />
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <MetricCard label="BTC Median Fee" value={latestBtc ? `${latestBtc.median_fee_vb} sat/vB` : '—'} icon={<span className="inline-flex items-center gap-1"><ChainIcon chain="btc" size={14} /><Gauge size={14} /></span>} detail={latestBtc?.date || 'no data'} accentColor={BTC_COLOR} />
-        <MetricCard label="BTC Total Fees" value={latestBtc ? `${fmtNum(latestBtc.total_fees_btc)} BTC` : '—'} icon={<span className="inline-flex items-center gap-1"><ChainIcon chain="btc" size={14} /><Pickaxe size={14} /></span>} detail={`subsidy ${fmtNum(latestBtc?.subsidy_btc ?? 0)} BTC`} accentColor={BTC_COLOR} />
-        <MetricCard label="ETH Avg Gas Price" value={latestEth ? `${latestEth.avg_gas_gwei} gwei` : '—'} icon={<span className="inline-flex items-center gap-1"><ChainIcon chain="eth" size={14} /><Gauge size={14} /></span>} detail={latestEth?.date || 'no data'} accentColor={ETH_COLOR} />
-        <MetricCard label="ETH Burned" value={latestEth ? `${fmtNum(latestEth.burned_eth)} ETH` : '—'} icon={<span className="inline-flex items-center gap-1"><ChainIcon chain="eth" size={14} /><Flame size={14} /></span>} detail={`tips ${fmtNum(latestEth?.tips_eth ?? 0)} ETH`} accentColor={ETH_COLOR} />
+        <MetricCard label="BTC Total Fees" value={latestBtc ? `${fmtNum(latestBtc.total_fees_btc)} BTC` : '—'} icon={<span className="inline-flex items-center gap-1"><ChainIcon chain="btc" size={14} /><Pickaxe size={14} /></span>} detail={`${withUsd(approxUSD(latestBtc?.total_fees_btc, btcPx))}subsidy ${fmtNum(latestBtc?.subsidy_btc ?? 0)} BTC`} accentColor={BTC_COLOR} />
+        <MetricCard label="ETH Avg Gas Price" value={latestEth ? `${latestEth.avg_gas_gwei} gwei` : '—'} icon={<span className="inline-flex items-center gap-1"><ChainIcon chain="eth" size={14} /><Gauge size={14} /></span>} detail={latestEth ? `${latestEth.date} · fees ${fmtNum(latestEth.total_fees_eth)} ETH${ethFeesUsd ? ` ${ethFeesUsd}` : ''}` : 'no data'} accentColor={ETH_COLOR} />
+        <MetricCard label="ETH Burned" value={latestEth ? `${fmtNum(latestEth.burned_eth)} ETH` : '—'} icon={<span className="inline-flex items-center gap-1"><ChainIcon chain="eth" size={14} /><Flame size={14} /></span>} detail={`${withUsd(approxUSD(latestEth?.burned_eth, ethPx))}tips ${fmtNum(latestEth?.tips_eth ?? 0)} ETH`} accentColor={ETH_COLOR} />
       </div>
 
       <Panel title="Fee Trend" note="BTC median sat/vB (left) vs ETH gas-weighted avg gwei (right)">
@@ -99,7 +123,7 @@ function DailyFeesView() {
           <ReactECharts
             style={{ height: 260 }}
             option={{
-              tooltip: { trigger: 'axis', ...CHART_TOOLTIP },
+              tooltip: { trigger: 'axis', ...CHART_TOOLTIP, ...btcRevenueTooltip },
               legend: { textStyle: { color: '#a1a1aa', fontSize: 11 }, top: 0 },
               grid: { left: 60, right: 20, top: 32, bottom: 24 },
               xAxis: { type: 'category', data: btcDates, axisLabel: AXIS_LABEL },
@@ -123,7 +147,7 @@ function DailyFeesView() {
           <ReactECharts
             style={{ height: 260 }}
             option={{
-              tooltip: { trigger: 'axis', ...CHART_TOOLTIP },
+              tooltip: { trigger: 'axis', ...CHART_TOOLTIP, ...ethBurnTooltip },
               legend: { textStyle: { color: '#a1a1aa', fontSize: 11 }, top: 0 },
               grid: { left: 60, right: 20, top: 32, bottom: 24 },
               xAxis: { type: 'category', data: ethDates, axisLabel: AXIS_LABEL },

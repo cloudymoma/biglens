@@ -255,10 +255,10 @@ type gasCalibrationSamples struct {
 
 func fetchCalibrationSamples(ctx context.Context, b *BQClient) (*gasCalibrationSamples, error) {
 	var (
-		modes               []usdtEnergyMode
-		usdc                *usdcGasRow
-		modesErr, usdcErr   error
-		wg                  sync.WaitGroup
+		modes             []usdtEnergyMode
+		usdc              *usdcGasRow
+		modesErr, usdcErr error
+		wg                sync.WaitGroup
 	)
 	wg.Go(func() { modes, modesErr = b.GetUSDTEnergyModes(ctx) })
 	wg.Go(func() { usdc, usdcErr = b.GetUSDCTransferGas(ctx) })

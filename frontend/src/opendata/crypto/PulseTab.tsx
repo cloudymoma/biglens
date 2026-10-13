@@ -1,13 +1,14 @@
 import { useState, useEffect } from 'react';
 import ReactECharts from 'echarts-for-react';
 import { Activity, Coins, Fuel } from 'lucide-react';
-import type { CryptoPulseData, CryptoChainPulse } from '../../types';
-import { fetchCryptoPulse } from '../../api';
+import type { CryptoPulseData, CryptoChainPulse, CryptoPricesData } from '../../types';
+import { fetchCryptoPulse, fetchCryptoPrices } from '../../api';
 import { MetricCard, EmptyState, ErrorBanner } from '../../dashboards/shared';
 import {
   BTC_COLOR, ETH_COLOR, CHART_TOOLTIP, AXIS_LABEL, SPLIT_LINE,
-  fmtNum, Panel, DaysPicker, mergeDates, seriesByDate,
+  fmtNum, Panel, DaysPicker, IngestingNote, mergeDates, seriesByDate,
 } from './shared';
+import { ONCHAIN_PRICE_CAPTION, approxUSD, fmtUSD, priceLookup, usdAxisTooltip } from './onchainPrices';
 
 const DAY_OPTIONS = [7, 30, 90, 365];
 const ADDRESS_MAX_DAYS = 90; // mirrors backend cryptoAddressMaxDays
@@ -35,13 +36,38 @@ function dualChainLineOption(
   };
 }
 
-function KpiRow({ chain, label, color }: { chain: CryptoChainPulse; label: string; color: string }) {
+// Daily on-chain USD price (Uniswap v3): BTC (WBTC-derived) left, ETH right.
+function onchainPriceOption(dates: string[], btc: (number | null)[], eth: (number | null)[]) {
+  const usdAxis = { ...AXIS_LABEL, formatter: (v: number) => fmtUSD(v) };
+  return {
+    tooltip: {
+      trigger: 'axis', ...CHART_TOOLTIP,
+      valueFormatter: (v: unknown) => (typeof v === 'number' ? fmtUSD(v) : '—'),
+    },
+    legend: { textStyle: { color: '#a1a1aa', fontSize: 11 }, top: 0 },
+    grid: { left: 60, right: 60, top: 32, bottom: 24 },
+    xAxis: { type: 'category', data: dates, axisLabel: AXIS_LABEL },
+    yAxis: [
+      { type: 'value', scale: true, axisLabel: usdAxis, splitLine: SPLIT_LINE },
+      { type: 'value', scale: true, axisLabel: usdAxis, splitLine: { show: false } },
+    ],
+    series: [
+      { name: 'BTC/USD (WBTC-derived)', type: 'line', data: btc, showSymbol: false, lineStyle: { color: BTC_COLOR, width: 2 }, itemStyle: { color: BTC_COLOR } },
+      { name: 'ETH/USD', type: 'line', data: eth, showSymbol: false, yAxisIndex: 1, lineStyle: { color: ETH_COLOR, width: 2 }, itemStyle: { color: ETH_COLOR } },
+    ],
+  };
+}
+
+// usdPrice is the same-day on-chain price for the KPI date (undefined → native units only).
+function KpiRow({ chain, label, color, usdPrice }: { chain: CryptoChainPulse; label: string; color: string; usdPrice?: number }) {
   const k = chain.kpi;
+  const settledUsd = approxUSD(k.value_settled, usdPrice);
+  const feesUsd = approxUSD(k.fees_total, usdPrice);
   return (
     <>
       <MetricCard label={`${label} Transactions`} value={fmtNum(k.tx_count)} icon={<Activity size={15} />} detail={k.date || 'no data'} accentColor={color} />
-      <MetricCard label={`${label} Value Settled`} value={fmtNum(k.value_settled)} icon={<Coins size={15} />} detail={`native units · ${k.blocks} blocks`} accentColor={color} />
-      <MetricCard label={`${label} Fees`} value={fmtNum(k.fees_total)} icon={<Fuel size={15} />} detail={`block fullness ${k.fullness_pct}%`} accentColor={color} />
+      <MetricCard label={`${label} Value Settled`} value={fmtNum(k.value_settled)} icon={<Coins size={15} />} detail={`${settledUsd || 'native units'} · ${k.blocks} blocks`} accentColor={color} />
+      <MetricCard label={`${label} Fees`} value={fmtNum(k.fees_total)} icon={<Fuel size={15} />} detail={`${feesUsd ? `${feesUsd} · ` : ''}block fullness ${k.fullness_pct}%`} accentColor={color} />
     </>
   );
 }
@@ -51,6 +77,14 @@ export default function PulseTab() {
   const [data, setData] = useState<CryptoPulseData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [prices, setPrices] = useState<CryptoPricesData | null>(null);
+
+  // Optional USD overlay; a failure (null) simply leaves native units only.
+  useEffect(() => {
+    let stale = false;
+    fetchCryptoPrices(days).then(p => { if (!stale) setPrices(p); });
+    return () => { stale = true; };
+  }, [days]);
 
   useEffect(() => {
     let stale = false;
@@ -70,6 +104,14 @@ export default function PulseTab() {
   const blockDates = mergeDates(data.btc.blocks, data.eth.blocks);
   const addrDates = mergeDates(data.btc.addresses, data.eth.addresses);
   const latestDate = data.btc.kpi.date || data.eth.kpi.date || '—';
+  const px = priceLookup(prices);
+  const priceDates = (prices?.rows ?? []).filter(r => r.eth_usd != null || r.btc_usd != null).map(r => r.day);
+  const settledTooltip = px.eth.size + px.btc.size > 0
+    ? { tooltip: { trigger: 'axis', ...CHART_TOOLTIP, formatter: usdAxisTooltip({
+        'BTC settled': { unit: 'BTC', prices: px.btc },
+        'ETH settled': { unit: 'ETH', prices: px.eth },
+      }, fmtNum) } }
+    : {};
 
   return (
     <div className="space-y-4">
@@ -77,10 +119,11 @@ export default function PulseTab() {
         <DaysPicker options={DAY_OPTIONS} value={days} onChange={setDays} />
         <span className="text-[11px] text-zinc-600">Complete UTC days · latest = {latestDate}</span>
       </div>
+      <IngestingNote complete={data.last_day_complete} />
 
       <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
-        <KpiRow chain={data.btc} label="BTC" color={BTC_COLOR} />
-        <KpiRow chain={data.eth} label="ETH" color={ETH_COLOR} />
+        <KpiRow chain={data.btc} label="BTC" color={BTC_COLOR} usdPrice={px.btc.get(data.btc.kpi.date)} />
+        <KpiRow chain={data.eth} label="ETH" color={ETH_COLOR} usdPrice={px.eth.get(data.eth.kpi.date)} />
       </div>
 
       <div className="grid lg:grid-cols-2 gap-4">
@@ -99,10 +142,13 @@ export default function PulseTab() {
         >
           <ReactECharts
             style={{ height: 260 }}
-            option={dualChainLineOption(dates,
-              seriesByDate(data.btc.daily, dates, r => r.value_settled),
-              seriesByDate(data.eth.daily, dates, r => r.value_settled),
-              'BTC settled', 'ETH settled', true)}
+            option={{
+              ...dualChainLineOption(dates,
+                seriesByDate(data.btc.daily, dates, r => r.value_settled),
+                seriesByDate(data.eth.daily, dates, r => r.value_settled),
+                'BTC settled', 'ETH settled', true),
+              ...settledTooltip,
+            }}
           />
         </Panel>
         <Panel
@@ -152,6 +198,17 @@ export default function PulseTab() {
           }}
         />
       </Panel>
+
+      {priceDates.length > 0 && (
+        <Panel title="On-chain Price (Uniswap v3)" note={ONCHAIN_PRICE_CAPTION}>
+          <ReactECharts
+            style={{ height: 200 }}
+            option={onchainPriceOption(priceDates,
+              priceDates.map(d => px.btc.get(d) ?? null),
+              priceDates.map(d => px.eth.get(d) ?? null))}
+          />
+        </Panel>
+      )}
     </div>
   );
 }

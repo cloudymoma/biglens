@@ -6,7 +6,7 @@ import { fetchCryptoMining, fetchCryptoSpot } from '../../api';
 import { MetricCard, EmptyState, ErrorBanner } from '../../dashboards/shared';
 import {
   BTC_COLOR, CHART_TOOLTIP, AXIS_LABEL, SPLIT_LINE,
-  fmtNum, Panel, DaysPicker,
+  fmtNum, Panel, DaysPicker, IngestingNote,
 } from './shared';
 
 const DAY_OPTIONS = [7, 30, 90, 365];
@@ -136,6 +136,7 @@ export default function MiningTab() {
         <DaysPicker options={DAY_OPTIONS} value={days} onChange={setDays} />
         <span className="text-[11px] text-zinc-600">Complete UTC days · latest = {latest.date}</span>
       </div>
+      <IngestingNote complete={data.last_day_complete} />
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <MetricCard label="Network Hashrate (7d avg)" value={`${fmtNum(avg7dHashrate)} EH/s`} icon={<Cpu size={15} />} detail={`1d implied ${fmtNum(latest.hashrate_ehs)} EH/s · ${latest.blocks} blocks (${latest.date})`} accentColor={BTC_COLOR} />

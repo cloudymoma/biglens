@@ -872,6 +872,7 @@ export interface CryptoPulseData {
   days: number;
   btc: CryptoChainPulse;
   eth: CryptoChainPulse;
+  last_day_complete?: boolean; // false: newest UTC day may still be ingesting
 }
 
 export interface BtcFeeRow {
@@ -895,6 +896,7 @@ export interface CryptoFeesData {
   eth: EthFeeRow[];
   btc_blocks: CryptoBlockRow[];
   eth_blocks: CryptoBlockRow[];
+  last_day_complete?: boolean; // false: newest UTC day may still be ingesting
 }
 
 export type CryptoChain = 'btc' | 'eth';
@@ -935,6 +937,7 @@ export interface CryptoWhalesData {
   trend: WhaleTrendRow[];
   concentration: ConcentrationRow[];
   freeze_coverage_from?: string;
+  last_day_complete?: boolean; // false: newest UTC day may still be ingesting
 }
 
 export interface TokenRow {
@@ -964,6 +967,7 @@ export interface CryptoTokensData {
   top_tokens: TokenRow[];
   daily: TokenDailyRow[];
   contracts: ContractRow[];
+  last_day_complete?: boolean; // false: newest UTC day may still be ingesting
 }
 
 export interface BtcMiningRow {
@@ -976,6 +980,7 @@ export interface BtcMiningRow {
 export interface CryptoMiningData {
   days: number;
   daily: BtcMiningRow[];
+  last_day_complete?: boolean; // false: newest UTC day may still be ingesting
 }
 
 export interface CryptoSpotData {
@@ -987,7 +992,10 @@ export interface CryptoSpotData {
 // --- Crypto Pulse: Address Risk (field names mirror backend/address_risk_lookup.go) ---
 
 export type AddressRiskChain = 'eth' | 'arb' | 'op' | 'base' | 'tron' | 'btc' | 'sol';
-export type AddressRiskStatus = 'ok' | 'partial' | 'stale' | 'empty' | 'error' | 'not_configured';
+export type AddressRiskStatus =
+  | 'ok' | 'partial' | 'stale' | 'empty' | 'error' | 'not_configured'
+  // bigquery_profile only: switch off (not run), hourly limit, cap exceeded, slow job
+  | 'skipped' | 'rate_limited' | 'over_budget' | 'timeout';
 export type AddressRiskSeverity = 'critical' | 'warning' | 'association' | 'info';
 
 export interface AddressRiskClue {
@@ -1064,6 +1072,65 @@ export interface AddressRiskLookup {
   clues: AddressRiskClue[];
   sources: AddressRiskSource[];
   association_scope: AddressRiskScope | null;
+  bq_profile?: AddressRiskBQProfile; // only when the lookup asked for it (?bq=1, Ethereum)
+}
+
+// --- Address Risk: opt-in BigQuery profile (backend/address_risk_bqprofile.go) ---
+
+export interface AddressRiskBQProfileInfo {
+  available: boolean;
+  max_bytes_billed: number;
+  per_hour_limit: number;
+  timeout_seconds: number;
+  reason?: 'disabled' | 'not_configured';
+}
+
+export interface AddressRiskBQSide {
+  txs: number;
+  peers: number;
+  first?: string;
+  last?: string;
+  eth: string;
+}
+
+export interface AddressRiskBQFunder {
+  address: string;
+  block_number: number;
+  timestamp: string;
+  value_eth: string;
+  lists: string[];
+}
+
+export interface AddressRiskBQPeer {
+  address: string;
+  sent: number;
+  received: number;
+  first_ts: string;
+  last_ts: string;
+  eth_sent: string;
+  eth_received: string;
+  lists: string[];
+  first_funder?: boolean;
+}
+
+export interface AddressRiskBQProfile {
+  status: 'ok' | 'rate_limited' | 'over_budget' | 'timeout' | 'error';
+  message?: string;
+  outgoing?: AddressRiskBQSide;
+  incoming?: AddressRiskBQSide;
+  counterparties: number;
+  first_seen?: string;
+  last_active?: string;
+  account_age_days?: number;
+  first_funder?: AddressRiskBQFunder;
+  top_peers?: AddressRiskBQPeer[];
+  listed_peers?: AddressRiskBQPeer[];
+  peers_analyzed: number;
+  lists_checked: boolean;
+  bytes_billed: number;
+  max_bytes_billed: number;
+  elapsed_ms: number;
+  cached: boolean;
 }
 
 export interface AddressRiskKeyInfo {
@@ -1077,6 +1144,7 @@ export interface AddressRiskSources {
   rpc_hosts: string[];
   goplus_host: string;
   etherscan: AddressRiskKeyInfo;
+  bigquery_profile?: AddressRiskBQProfileInfo;
 }
 
 export interface AddressRiskTrendPoint {
@@ -1154,6 +1222,7 @@ export interface ScamRadarKPIs {
   tron_usdt_freezes_30d: number;
   btc_day?: string;
   btc_rbf_percent: number;
+  eth_fake_deployers?: number; // serial counterfeit USDT/USDC deployers in the latest snapshot
 }
 
 export interface ScamTrendPoint {
@@ -1183,12 +1252,21 @@ export interface ScamRBF {
   percent: number;
 }
 
+export interface ScamDeployer {
+  address: string;
+  contracts: number;
+  first_seen: string;
+  last_seen: string;
+  explorer_url: string;
+}
+
 export interface ScamRadarResponse {
   coverage: Record<string, AddressRiskSource>;
   kpis: ScamRadarKPIs;
   trend: ScamTrendPoint[];
   fake_tokens: ScamFakeToken[];
   btc_rbf: ScamRBF | null;
+  top_deployers?: ScamDeployer[];
   empty: boolean;
 }
 
@@ -1670,6 +1748,11 @@ export interface GasAllTime {
   atl_is_floor: boolean;
   current_value: number | null;
   current_time?: string;
+  // Freshness of the BigQuery-derived base-fee records (ETH/ARB/OP/POLY only).
+  records_through?: string; // RFC3339 UTC watermark the records are verified through
+  records_stale?: boolean; // watermark older than one refresh period
+  refresh_failed?: boolean; // latest background refresh failed; last verified records shown
+  refresh_note?: string; // generic status line, e.g. "refresh failed, retrying"
 }
 
 export interface GasPulseChain {
@@ -1685,6 +1768,26 @@ export interface GasPulseData {
   window_start: string;
   window_end: string;
   chains: GasPulseChain[];
+}
+
+// --- Crypto Pulse: on-chain USD prices (/api/opendata/crypto/prices) ---
+
+export interface CryptoPriceDay {
+  day: string; // YYYY-MM-DD (UTC)
+  eth_usd: number | null; // null: no qualifying sampled hour that day
+  btc_usd: number | null; // WBTC-derived (WBTC/WETH × same-hour ETH/USD)
+  eth_swaps: number;
+  btc_swaps: number;
+}
+
+export interface CryptoPricesData {
+  days: number;
+  rows: CryptoPriceDay[];
+  source: string; // 'uniswap_v3'
+  method: string; // 'median of sampled hours (00/06/12/18 UTC)'
+  btc_note: string;
+  coverage_from: string; // earliest stored day, '' when none
+  as_of: string; // RFC3339 of the last successful sync, '' when never
 }
 
 // --- Crypto Pulse: live bars (/api/opendata/crypto/gas-live) ---
@@ -1854,11 +1957,13 @@ export interface PaymentAlert {
   code:
     | 'own_address_frozen'
     | 'own_address_sanctioned'
+    | 'own_address_eip7702'
     | 'counterfeit_received'
     | 'poisoning_received'
     | 'sent_to_lookalike';
   message: string;
   tx_hash?: string;
+  address?: string; // contract the alert refers to (own_address_eip7702: the delegate)
 }
 
 export interface PaymentHistoryScope {

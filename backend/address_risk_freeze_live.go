@@ -52,8 +52,20 @@ func evmFreezeCallOnce(ctx context.Context, rpcURL, contract, freezeSel, addr st
 }
 
 func checkEVMContractFreeze(ctx context.Context, rpcs []string, contract, freezeSel, addr string) (bool, string) {
+	return evmRPCFailover(ctx, rpcs, func(actx context.Context, rpcURL string) (bool, string) {
+		return evmFreezeCallOnce(actx, rpcURL, contract, freezeSel, addr)
+	})
+}
+
+// evmRPCFailover tries each RPC in order and returns the first definitive
+// answer (empty error code), otherwise the last error code. When ctx has a
+// deadline, the remaining budget is split evenly over the RPCs still to try,
+// so a first node that hangs cannot use up the whole budget before failover.
+// Shared by the issuer-freeze and EIP-7702 checks.
+func evmRPCFailover[T any](ctx context.Context, rpcs []string, call func(ctx context.Context, rpcURL string) (T, string)) (T, string) {
+	var zero T
 	if len(rpcs) == 0 {
-		return false, "unavailable"
+		return zero, "unavailable"
 	}
 	deadline, hasDeadline := ctx.Deadline()
 	code := "unavailable"
@@ -64,17 +76,17 @@ func checkEVMContractFreeze(ctx context.Context, rpcs []string, contract, freeze
 			per := time.Until(deadline) / time.Duration(len(rpcs)-i)
 			actx, acancel = context.WithTimeout(ctx, per)
 		}
-		frozen, c := evmFreezeCallOnce(actx, u, contract, freezeSel, addr)
+		v, c := call(actx, u)
 		acancel()
 		if c == "" {
-			return frozen, ""
+			return v, ""
 		}
 		code = c
 		if ctx.Err() != nil {
-			return false, "timeout"
+			return zero, "timeout"
 		}
 	}
-	return false, code
+	return zero, code
 }
 
 func checkTronContractFreeze(ctx context.Context, contract, freezeSel, addr string) (bool, string) {

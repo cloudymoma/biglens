@@ -294,6 +294,13 @@ export const FLAG_META: Record<string, FlagMeta> = {
     description:
       'Counterparty matches the local Scam Radar corpus of known address-poisoning senders observed on-chain.',
   },
+  counterfeit_deployer: {
+    id: 'counterfeit_deployer',
+    label: 'counterfeit deployer',
+    severity: 'warning',
+    description:
+      'The token was created by — or the counterparty is — an address that deployed 3 or more contracts impersonating USDT/USDC on Ethereum (Scam Radar, from BigQuery public data). It may be a factory contract.',
+  },
   lookalike: {
     id: 'lookalike',
     label: 'address poisoning / lookalike',
@@ -330,6 +337,7 @@ const FLAG_PRIORITY = [
   'counterparty_listed',
   'failed',
   'lookalike_known',
+  'counterfeit_deployer',
   'lookalike',
   'zero_value',
   'rbf_signaled',
@@ -388,6 +396,7 @@ export const PAY_SOURCE_LABELS: Record<string, string> = {
   mempool: 'Esplora (mempool / blockstream)',
   solana_rpc: 'Solana RPC',
   issuer_freeze: 'Issuer freeze (live)',
+  eip7702: 'EIP-7702 delegation (live)',
   local: 'Local lists (OFAC / MEW / freezes)',
 };
 

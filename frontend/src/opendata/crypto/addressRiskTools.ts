@@ -17,10 +17,10 @@ export interface RiskChainOption {
 }
 
 export const RISK_CHAINS: RiskChainOption[] = [
-  { id: 'eth', label: 'Ethereum', family: 'evm', placeholder: '0x… address', formatHint: 'Enter a 0x address (42 characters). ENS names are not supported.', localSources: ['ofac', 'mew_darklist', 'stablecoin', 'scam_lookalikes'] },
-  { id: 'arb', label: 'Arbitrum', family: 'evm', placeholder: '0x… address', formatHint: 'Enter a 0x address (42 characters). ENS names are not supported.', localSources: ['ofac', 'mew_darklist', 'scam_lookalikes'] },
-  { id: 'op', label: 'Optimism', family: 'evm', placeholder: '0x… address', formatHint: 'Enter a 0x address (42 characters). ENS names are not supported.', localSources: ['ofac', 'mew_darklist', 'scam_lookalikes'] },
-  { id: 'base', label: 'Base', family: 'evm', placeholder: '0x… address', formatHint: 'Enter a 0x address (42 characters). ENS names are not supported.', localSources: ['ofac', 'mew_darklist', 'scam_lookalikes'] },
+  { id: 'eth', label: 'Ethereum', family: 'evm', placeholder: '0x… address', formatHint: 'Enter a 0x address (42 characters). ENS names are not supported.', localSources: ['ofac', 'mew_darklist', 'stablecoin', 'scam_lookalikes', 'fake_token_deployers'] },
+  { id: 'arb', label: 'Arbitrum', family: 'evm', placeholder: '0x… address', formatHint: 'Enter a 0x address (42 characters). ENS names are not supported.', localSources: ['ofac', 'mew_darklist', 'scam_lookalikes', 'fake_token_deployers'] },
+  { id: 'op', label: 'Optimism', family: 'evm', placeholder: '0x… address', formatHint: 'Enter a 0x address (42 characters). ENS names are not supported.', localSources: ['ofac', 'mew_darklist', 'scam_lookalikes', 'fake_token_deployers'] },
+  { id: 'base', label: 'Base', family: 'evm', placeholder: '0x… address', formatHint: 'Enter a 0x address (42 characters). ENS names are not supported.', localSources: ['ofac', 'mew_darklist', 'scam_lookalikes', 'fake_token_deployers'] },
   { id: 'tron', label: 'TRON', family: 'tron', placeholder: 'T… address', formatHint: 'Enter a TRON address starting with T (34 base58 characters).', localSources: ['ofac', 'tron_stablecoin', 'scam_lookalikes'] },
   { id: 'btc', label: 'Bitcoin', family: 'btc', placeholder: '1…, 3…, or bc1… address', formatHint: 'Enter a Bitcoin mainnet address (1…, 3…, or bc1…).', localSources: ['ofac'] },
   { id: 'sol', label: 'Solana', family: 'sol', placeholder: 'Solana address (32–44 base58 characters)', formatHint: 'Enter a Solana address (32–44 base58 characters).', localSources: ['ofac'] },
@@ -207,6 +207,7 @@ export const RISK_BADGES: Record<string, { label: string; color: string }> = {
   tron_stablecoin: { label: 'Frozen', color: '#f87171' },
   mew_darklist: { label: 'MEW', color: '#fb923c' },
   scam_lookalikes: { label: 'Lookalike', color: '#fb923c' },
+  fake_token_deployers: { label: 'Fake-token deployer', color: '#fb923c' },
 };
 
 // Display names for source ids returned by the backend.
@@ -223,6 +224,9 @@ export const RISK_SOURCE_LABELS: Record<string, string> = {
   etherscan: 'Etherscan / Blockscout',
   mempool: 'Esplora (mempool / blockstream)',
   solana_rpc: 'Solana RPC',
+  fake_token_deployers: 'Serial counterfeit-token deployers',
+  eip7702: 'EIP-7702 delegation (live)',
+  bigquery_profile: 'BigQuery profile',
 };
 
 const ERROR_TEXT: Record<string, string> = {
@@ -275,13 +279,16 @@ export const RISK_SOURCE_META: RiskSourceMeta[] = [
   { id: 'ofac', delay: 'synced every 6 h; the 0xB10C extract updates nightly', terms: 'MIT (0xB10C); OFAC data is public', link: 'https://github.com/0xB10C/ofac-sanctioned-digital-currency-addresses' },
   { id: 'mew_darklist', delay: 'historical list, unchanged since 2020-11', terms: 'MIT', link: 'https://github.com/MyEtherWallet/ethereum-lists' },
   { id: 'stablecoin', delay: 'complete UTC days; up to ~1 day behind', terms: 'public on-chain data via BigQuery', link: 'https://console.cloud.google.com/marketplace/product/ethereum/crypto-ethereum-blockchain' },
-  { id: 'tron_stablecoin', delay: 'complete UTC days; up to ~1 day behind', terms: 'public on-chain data via BigQuery', link: 'https://console.cloud.google.com/marketplace/product/public-data-finance/crypto-tron-blockchain' },
-  { id: 'scam_lookalikes', delay: 'complete UTC days; rolling 90-day corpus (same-day pairing lower bound)', terms: 'public on-chain data via BigQuery', link: 'https://console.cloud.google.com/marketplace/product/ethereum/crypto-ethereum-blockchain' },
+  { id: 'tron_stablecoin', delay: 'complete UTC days; up to ~1 day behind', terms: 'public on-chain data via BigQuery', link: 'https://console.cloud.google.com/bigquery?p=bigquery-public-data&d=goog_blockchain_tron_mainnet_us&page=dataset' },
+  { id: 'scam_lookalikes', delay: 'complete UTC days; rolling 90-day corpus (same-day pairing lower bound)', terms: 'public on-chain data via BigQuery', link: 'https://cloud.google.com/blockchain-analytics/docs/supported-datasets' },
   { id: 'issuer_freeze', delay: 'live per lookup; USDT/USDT0/USDC contract blacklist functions', terms: 'public contract state', link: 'https://tether.to' },
   { id: 'chainalysis_oracle', delay: 'live per lookup; oracle last updated 2026-03', terms: 'public contract; Chainalysis makes no warranty of accuracy', link: 'https://go.chainalysis.com/chainalysis-oracle-docs.html' },
   { id: 'goplus', delay: 'live per lookup', terms: 'free public API', link: 'https://gopluslabs.io' },
   { id: 'blockscout', delay: 'live per lookup (scam reputation & public security tags)', terms: 'Blockscout public API', link: 'https://eth.blockscout.com' },
   { id: 'etherscan', delay: 'live per lookup (Blockscout keyless fallback when no Etherscan key); newest 1000 rows per list + live counterparty screening', terms: 'Etherscan API terms (personal, non-commercial use) or Blockscout public API', link: 'https://etherscan.io/apiterms' },
+  { id: 'fake_token_deployers', delay: 'refreshed with Scam Radar once per UTC day (full snapshot of crypto_ethereum.tokens_latest; EVM chains reuse the Ethereum corpus)', terms: 'public on-chain data via BigQuery', link: 'https://console.cloud.google.com/bigquery?p=bigquery-public-data&d=crypto_ethereum&page=dataset' },
+  { id: 'eip7702', delay: 'live per lookup (eth_getCode at latest on the issuer-freeze RPCs); a delegate contract (not the address) is looked up on Blockscout', terms: 'public chain state; Blockscout public API', link: 'https://eips.ethereum.org/EIPS/eip-7702' },
+  { id: 'bigquery_profile', delay: 'opt-in per Ethereum lookup; full history, seconds behind the chain head; cached 10 min', terms: "public BigQuery dataset queried in this server's GCP project (~0.9 GiB billed per profile); the address stays in that project's BigQuery job history", link: 'https://cloud.google.com/blockchain-analytics/docs/supported-datasets' },
 ];
 
 export const ETHERSCAN_SIGNUP_URL = 'https://etherscan.io/myapikey';

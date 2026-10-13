@@ -12,10 +12,11 @@ import (
 )
 
 const (
-	scamRadarCacheKey   = "address-risk:scam-radar"
-	scamTrendWindowDays = 30
-	scamFakeWindowDays  = 7
-	scamFakeTopLimit    = 10
+	scamRadarCacheKey    = "address-risk:scam-radar"
+	scamTrendWindowDays  = 30
+	scamFakeWindowDays   = 7
+	scamFakeTopLimit     = 10
+	scamDeployerTopLimit = 5
 )
 
 type scamRadarKPIs struct {
@@ -31,6 +32,7 @@ type scamRadarKPIs struct {
 	TronUSDTFreezes30d int64   `json:"tron_usdt_freezes_30d"`
 	BTCDay             string  `json:"btc_day,omitempty"`
 	BTCRBFPercent      float64 `json:"btc_rbf_percent"`
+	ETHFakeDeployers   int64   `json:"eth_fake_deployers"` // serial counterfeit deployers in the latest snapshot
 }
 
 type scamTrendPoint struct {
@@ -60,13 +62,22 @@ type scamRBF struct {
 	Percent float64 `json:"percent"`
 }
 
+type scamDeployer struct {
+	Address     string `json:"address"`
+	Contracts   int64  `json:"contracts"`
+	FirstSeen   string `json:"first_seen"`
+	LastSeen    string `json:"last_seen"`
+	ExplorerURL string `json:"explorer_url"`
+}
+
 type scamRadarResponse struct {
-	Coverage   map[string]riskSource `json:"coverage"` // scam_eth / scam_tron / scam_btc / tron_stablecoin_logs
-	KPIs       scamRadarKPIs         `json:"kpis"`
-	Trend      []scamTrendPoint      `json:"trend"`       // 30 days, zero-filled with has_data
-	FakeTokens []scamFakeToken       `json:"fake_tokens"` // last 7 days Top 10
-	BTCRBF     *scamRBF              `json:"btc_rbf"`     // latest settled day
-	Empty      bool                  `json:"empty"`
+	Coverage     map[string]riskSource `json:"coverage"` // scam_eth / scam_tron / scam_btc / tron_stablecoin_logs / scam_fake_token_deployers
+	KPIs         scamRadarKPIs         `json:"kpis"`
+	Trend        []scamTrendPoint      `json:"trend"`         // 30 days, zero-filled with has_data
+	FakeTokens   []scamFakeToken       `json:"fake_tokens"`   // last 7 days Top 10
+	BTCRBF       *scamRBF              `json:"btc_rbf"`       // latest settled day
+	TopDeployers []scamDeployer        `json:"top_deployers"` // serial counterfeit deployers, top 5 by contracts
+	Empty        bool                  `json:"empty"`
 }
 
 func invalidateAddressRiskCaches(c *Cache) {
@@ -116,7 +127,7 @@ func (s *riskStore) buildScamRadar(ctx context.Context, now time.Time) (*scamRad
 		return nil, err
 	}
 
-	coverage := make(map[string]riskSource, 4)
+	coverage := make(map[string]riskSource, 5)
 	scamSources := []string{scamEthSourceID, scamTronSourceID, scamBTCSourceID, tronStablecoinSourceID}
 	var anchor civil.Date
 	hasAnchor := false
@@ -126,6 +137,9 @@ func (s *riskStore) buildScamRadar(ctx context.Context, now time.Time) (*scamRad
 		coverage[id] = scamRadarSourceInfo(id, st, now)
 		bumpMaxDate(&anchor, &hasAnchor, st.Cursor)
 	}
+	// The deployer snapshot is refreshed by scam_eth (same cursor); it has its
+	// own coverage entry but does not move the anchor.
+	coverage[scamFakeTokenDeployersSourceID] = scamRadarSourceInfo(scamFakeTokenDeployersSourceID, states[scamFakeTokenDeployersSourceID], now)
 
 	statRows, err := s.db.QueryContext(ctx, `SELECT day, metric, value FROM scam_daily_stats ORDER BY day ASC`)
 	if err != nil {
@@ -163,10 +177,11 @@ func (s *riskStore) buildScamRadar(ctx context.Context, now time.Time) (*scamRad
 	bumpMaxDate(&anchor, &hasAnchor, maxTronBlockDay)
 
 	resp := &scamRadarResponse{
-		Coverage:   coverage,
-		Trend:      []scamTrendPoint{},
-		FakeTokens: []scamFakeToken{},
-		Empty:      !hasAnchor,
+		Coverage:     coverage,
+		Trend:        []scamTrendPoint{},
+		FakeTokens:   []scamFakeToken{},
+		TopDeployers: []scamDeployer{},
+		Empty:        !hasAnchor,
 	}
 	if resp.Empty {
 		return resp, nil
@@ -300,6 +315,31 @@ func (s *riskStore) buildScamRadar(ctx context.Context, now time.Time) (*scamRad
 		resp.FakeTokens = append(resp.FakeTokens, ft)
 	}
 	if err := ftRows.Err(); err != nil {
+		return nil, err
+	}
+
+	// 5. Serial counterfeit deployers (latest tokens_latest snapshot).
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM scam_fake_token_deployers WHERE chain = 'eth'`).Scan(&resp.KPIs.ETHFakeDeployers); err != nil {
+		return nil, fmt.Errorf("count fake token deployers: %w", err)
+	}
+	depRows, err := s.db.QueryContext(ctx, `SELECT address, contracts, first_seen, last_seen
+	  FROM scam_fake_token_deployers
+	  WHERE chain = 'eth'
+	  ORDER BY contracts DESC, address ASC
+	  LIMIT ?`, scamDeployerTopLimit)
+	if err != nil {
+		return nil, fmt.Errorf("query top fake token deployers: %w", err)
+	}
+	defer depRows.Close()
+	for depRows.Next() {
+		var d scamDeployer
+		if err := depRows.Scan(&d.Address, &d.Contracts, &d.FirstSeen, &d.LastSeen); err != nil {
+			return nil, fmt.Errorf("scan fake token deployer: %w", err)
+		}
+		d.ExplorerURL = "https://etherscan.io/address/" + d.Address
+		resp.TopDeployers = append(resp.TopDeployers, d)
+	}
+	if err := depRows.Err(); err != nil {
 		return nil, err
 	}
 

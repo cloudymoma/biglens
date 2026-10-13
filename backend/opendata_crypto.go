@@ -3,15 +3,17 @@ package main
 // BigQuery Open Data: Crypto Pulse (Bitcoin + Ethereum on-chain metrics).
 //
 // Queries `bigquery-public-data.crypto_bitcoin` and `crypto_ethereum`
-// directly:
+// directly. Since the 2026 re-platforming (SQD pipelines) both are Analytics
+// Hub linked datasets of views. Observed pruning behaviour on those views:
 //   - crypto_bitcoin.transactions and crypto_ethereum.transactions /
-//     token_transfers prune daily on block_timestamp. (Passing
-//     block_timestamp_month on the Analytics Hub view does not improve pruning
-//     and scans an extra 8 B/row.)
-//   - crypto_ethereum.blocks and contracts do not prune on timestamp alone on
-//     the Analytics Hub views, so every query against them carries a
-//     conservative post-Merge block-number lower bound (`number >= @start_block`
-//     / `block_number >= @start_block`) alongside the exact timestamp window.
+//     token_transfers prune on block_timestamp (even below a day). (Passing
+//     block_timestamp_month does not improve pruning and scans an extra
+//     8 B/row.)
+//   - crypto_ethereum.blocks and contracts carry a conservative post-Merge
+//     block-number lower bound (`number >= @start_block` /
+//     `block_number >= @start_block`) alongside the exact timestamp window:
+//     dry runs show the literal block-number bound pruning these views, which
+//     a timestamp-only predicate was not observed to do.
 // Windows are half-open [start, end) with an ingest lag buffer so rows cover
 // settled UTC days only. Money columns are CAST(... AS FLOAT64) in SQL
 // (sat/1e8, wei/1e18) so rows scan into float64, never *big.Rat.
@@ -931,4 +933,3 @@ func (b *BQClient) GetContractsDaily(ctx context.Context, start, end civil.Date)
 	q.MaxBytesBilled = cryptoBlocksMaxBytesBilled
 	return collectRows[ContractRow](q, ctx)
 }
-

@@ -71,6 +71,7 @@ import type {
   CryptoPulseData,
   CryptoFeesData,
   GasPulseData,
+  CryptoPricesData,
   GasLiveData,
   CryptoWhalesData,
   CryptoTokensData,
@@ -430,6 +431,17 @@ export async function fetchGasPulse(): Promise<GasPulseData> {
   return data;
 }
 
+// On-chain USD prices are an optional overlay: on failure the tabs keep
+// showing native units only, so errors resolve to null here.
+export async function fetchCryptoPrices(days: number): Promise<CryptoPricesData | null> {
+  try {
+    const { data } = await axios.get('/api/opendata/crypto/prices', { params: { days: String(days) } });
+    return data;
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchGasLive(part?: 'btc' | 'tron' | 'l2'): Promise<GasLiveData> {
   const { data } = await axios.get('/api/opendata/crypto/gas-live', { params: part ? { part } : undefined });
   return data;
@@ -461,13 +473,16 @@ export async function fetchCryptoSpot(): Promise<CryptoSpotData | null> {
   }
 }
 
+// opts.bqProfile opts this Ethereum lookup into the BigQuery profile (bq=1);
+// it is never sent for other chains (Payment Check payer screening omits opts).
 export async function fetchAddressRiskLookup(
   address: string,
   chain: AddressRiskChain = 'eth',
   signal?: AbortSignal,
+  opts?: { bqProfile?: boolean },
 ): Promise<AddressRiskLookup> {
   const { data } = await axios.get('/api/opendata/crypto/address-risk/lookup', {
-    params: { address, chain },
+    params: opts?.bqProfile && chain === 'eth' ? { address, chain, bq: '1' } : { address, chain },
     signal,
   });
   return data;

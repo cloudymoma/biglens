@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -35,6 +36,7 @@ type Config struct {
 	AddressRisk  AddressRiskConfig  `yaml:"address_risk,omitempty"`
 	CryptoGas    CryptoGasConfig    `yaml:"crypto_gas,omitempty"`
 	PaymentCheck PaymentCheckConfig `yaml:"payment_check,omitempty"`
+	CryptoPrices CryptoPricesConfig `yaml:"crypto_prices,omitempty"`
 
 	// path is where this config was loaded from, so SaveConfig can write back.
 	path string
@@ -82,6 +84,48 @@ type AddressRiskConfig struct {
 	// UpdateConfig. Never returned by any endpoint or logged.
 	EtherscanAPIKey string          `yaml:"etherscan_api_key,omitempty"`
 	ScamRadar       ScamRadarConfig `yaml:"scam_radar,omitempty"`
+
+	// BigQueryProfile: guardrails of the opt-in per-lookup BigQuery profile.
+	BigQueryProfile BigQueryProfileConfig `yaml:"bigquery_profile,omitempty"`
+}
+
+// BigQueryProfileConfig holds the server-side guardrails of the opt-in
+// BigQuery address profile (Address Risk, Ethereum): users switch it on per
+// lookup, and every profile is one job billed to bigquery.project_id.
+type BigQueryProfileConfig struct {
+	Enabled        *bool `yaml:"enabled,omitempty"`          // nil → true: users may opt in
+	MaxBytesBilled int64 `yaml:"max_bytes_billed,omitempty"` // ≤0 → 2 GiB per job; at most 10 GiB
+	MaxPerHour     int   `yaml:"max_per_hour,omitempty"`     // ≤0 → 60 jobs/hour (global token bucket); at most 600
+	TimeoutSeconds int   `yaml:"timeout_seconds,omitempty"`  // ≤0 → 20; at most 45
+}
+
+// bqProfileSettings is BigQueryProfileConfig with defaults applied.
+type bqProfileSettings struct {
+	Enabled        bool
+	MaxBytesBilled int64
+	MaxPerHour     int
+	Timeout        time.Duration
+}
+
+// bigQueryProfile resolves the profile guardrails. The timeout is capped at
+// 45 s so a lookup always answers within the server's 60 s WriteTimeout.
+func (c AddressRiskConfig) bigQueryProfile() bqProfileSettings {
+	p := c.BigQueryProfile
+	s := bqProfileSettings{Enabled: p.Enabled == nil || *p.Enabled, MaxBytesBilled: p.MaxBytesBilled,
+		MaxPerHour: p.MaxPerHour, Timeout: time.Duration(p.TimeoutSeconds) * time.Second}
+	if s.MaxBytesBilled <= 0 {
+		s.MaxBytesBilled = 2 << 30
+	}
+	s.MaxBytesBilled = min(s.MaxBytesBilled, 10<<30)
+	if s.MaxPerHour <= 0 {
+		s.MaxPerHour = 60
+	}
+	s.MaxPerHour = min(s.MaxPerHour, 600)
+	if s.Timeout <= 0 {
+		s.Timeout = 20 * time.Second
+	}
+	s.Timeout = min(s.Timeout, 45*time.Second)
+	return s
 }
 
 // defaultRiskRPCURLs are keyless public Ethereum RPCs, tried in order for
@@ -229,4 +273,19 @@ func writeConfigLocked(cfg *Config) error {
 		return fmt.Errorf("failed to chmod config: %w", err)
 	}
 	return os.Rename(tmp, cfg.path)
+}
+
+// CryptoPricesConfig configures the on-chain USD price sync (Uniswap v3 swaps
+// in BigQuery → SQLite, opendata_crypto_prices.go).
+type CryptoPricesConfig struct {
+	// InitialDays is the cold-start window: a pointer so "absent" (nil →
+	// 365) differs from an explicit 0 (sync disabled); clamped to [0, 730].
+	InitialDays *int `yaml:"initial_days,omitempty"`
+}
+
+func (c CryptoPricesConfig) initialDays() int {
+	if c.InitialDays == nil {
+		return 365
+	}
+	return min(max(*c.InitialDays, 0), 730)
 }
