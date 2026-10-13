@@ -1697,6 +1697,26 @@ export interface GasPulseData {
   chains: GasPulseChain[];
 }
 
+// --- Crypto Pulse: on-chain USD prices (/api/opendata/crypto/prices) ---
+
+export interface CryptoPriceDay {
+  day: string; // YYYY-MM-DD (UTC)
+  eth_usd: number | null; // null: no qualifying sampled hour that day
+  btc_usd: number | null; // WBTC-derived (WBTC/WETH × same-hour ETH/USD)
+  eth_swaps: number;
+  btc_swaps: number;
+}
+
+export interface CryptoPricesData {
+  days: number;
+  rows: CryptoPriceDay[];
+  source: string; // 'uniswap_v3'
+  method: string; // 'median of sampled hours (00/06/12/18 UTC)'
+  btc_note: string;
+  coverage_from: string; // earliest stored day, '' when none
+  as_of: string; // RFC3339 of the last successful sync, '' when never
+}
+
 // --- Crypto Pulse: live bars (/api/opendata/crypto/gas-live) ---
 
 export interface BtcFeeTier {

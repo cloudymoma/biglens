@@ -71,6 +71,7 @@ import type {
   CryptoPulseData,
   CryptoFeesData,
   GasPulseData,
+  CryptoPricesData,
   GasLiveData,
   CryptoWhalesData,
   CryptoTokensData,
@@ -428,6 +429,17 @@ export async function fetchCryptoFees(days: number): Promise<CryptoFeesData> {
 export async function fetchGasPulse(): Promise<GasPulseData> {
   const { data } = await axios.get('/api/opendata/crypto/gas-pulse');
   return data;
+}
+
+// On-chain USD prices are an optional overlay: on failure the tabs keep
+// showing native units only, so errors resolve to null here.
+export async function fetchCryptoPrices(days: number): Promise<CryptoPricesData | null> {
+  try {
+    const { data } = await axios.get('/api/opendata/crypto/prices', { params: { days: String(days) } });
+    return data;
+  } catch {
+    return null;
+  }
 }
 
 export async function fetchGasLive(part?: 'btc' | 'tron' | 'l2'): Promise<GasLiveData> {
