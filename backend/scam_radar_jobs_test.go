@@ -2,13 +2,19 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"cloud.google.com/go/bigquery"
 	"cloud.google.com/go/civil"
+	"google.golang.org/api/option"
 )
 
 type fakeScamQueryCall struct {
@@ -341,5 +347,117 @@ func TestScamRadarJobsRunAndStoreWithFakeBQ(t *testing.T) {
 	}
 	if !reflect.DeepEqual(gotStats, wantStats) {
 		t.Fatalf("scam_daily_stats:\ngot  %+v\nwant %+v", gotStats, wantStats)
+	}
+}
+
+// fakeJobsInsert stands in for BigQuery's jobs.insert endpoint behind a real
+// *bigquery.Client and records each job's configuration. Dry runs succeed
+// with a fixed estimate; real queries are rejected (400, not retried) right
+// after being recorded, so tests can pin labels and caps without faking the
+// job polling protocol.
+type fakeJobsInsert struct {
+	mu   sync.Mutex
+	jobs []fakeInsertedJob
+}
+
+type fakeInsertedJob struct {
+	labels         map[string]string
+	dryRun         bool
+	maxBytesBilled string
+}
+
+func (f *fakeJobsInsert) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/jobs") {
+		http.Error(w, "fake BigQuery only serves jobs.insert, got "+r.Method+" "+r.URL.Path, http.StatusNotImplemented)
+		return
+	}
+	var req struct {
+		JobReference  json.RawMessage `json:"jobReference"`
+		Configuration struct {
+			Labels map[string]string `json:"labels"`
+			DryRun bool              `json:"dryRun"`
+			Query  struct {
+				MaximumBytesBilled string `json:"maximumBytesBilled"`
+			} `json:"query"`
+		} `json:"configuration"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	f.mu.Lock()
+	f.jobs = append(f.jobs, fakeInsertedJob{
+		labels:         req.Configuration.Labels,
+		dryRun:         req.Configuration.DryRun,
+		maxBytesBilled: req.Configuration.Query.MaximumBytesBilled,
+	})
+	f.mu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	if !req.Configuration.DryRun {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{
+			"code":    http.StatusBadRequest,
+			"message": "fake BigQuery does not run real queries",
+			"errors":  []map[string]string{{"reason": "invalidQuery", "message": "fake"}},
+		}})
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]any{
+		"jobReference": req.JobReference,
+		"status":       map[string]string{"state": "DONE"},
+		"statistics": map[string]any{
+			"totalBytesProcessed": "1234",
+			"query":               map[string]string{"totalBytesProcessed": "1234"},
+		},
+	})
+}
+
+func (f *fakeJobsInsert) recorded() []fakeInsertedJob {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]fakeInsertedJob(nil), f.jobs...)
+}
+
+// Scam Radar jobs must carry the app=biglens label like every other BigLens
+// query (so its own spend can be told apart in JOBS dashboards) while keeping
+// the caller's MaxBytesBilled exactly as before.
+func TestBqScamRunnerJobsCarryAppLabelAndKeepCaps(t *testing.T) {
+	fake := &fakeJobsInsert{}
+	srv := httptest.NewServer(fake)
+	defer srv.Close()
+	ctx := context.Background()
+	client, err := bigquery.NewClient(ctx, "test-project", option.WithEndpoint(srv.URL), option.WithoutAuthentication())
+	if err != nil {
+		t.Fatalf("bigquery.NewClient: %v", err)
+	}
+	defer client.Close()
+	runner := bqScamRunner{client: client}
+	start := civil.Date{Year: 2026, Month: time.October, Day: 5}
+	end := start.AddDays(1)
+
+	est, err := runner.DryRun(ctx, scamBTCRBFSQL, start, end)
+	if err != nil || est != 1234 {
+		t.Fatalf("DryRun = %d, %v; want 1234, nil", est, err)
+	}
+	const wantCap = int64(42 << 30)
+	if _, err := runner.Query(ctx, scamBTCRBFSQL, start, end, wantCap, func(func(dst any) bool) error { return nil }); err == nil {
+		t.Fatal("Query: the fake rejects real queries, want an error")
+	}
+
+	jobs := fake.recorded()
+	if len(jobs) != 2 {
+		t.Fatalf("recorded %d jobs, want 2 (dry run + query)", len(jobs))
+	}
+	for i, j := range jobs {
+		if j.labels["app"] != "biglens" {
+			t.Errorf("job %d labels = %v, want app=biglens", i, j.labels)
+		}
+	}
+	if !jobs[0].dryRun || jobs[0].maxBytesBilled != "" {
+		t.Errorf("dry-run job = %+v, want dryRun without a cap", jobs[0])
+	}
+	if jobs[1].dryRun || jobs[1].maxBytesBilled != "45097156608" {
+		t.Errorf("query job = %+v, want maximumBytesBilled=45097156608 (42 GiB, unchanged)", jobs[1])
 	}
 }

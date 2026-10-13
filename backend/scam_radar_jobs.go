@@ -288,9 +288,18 @@ func (b bqScamRunner) MaxBlockTime(ctx context.Context, checkSQL string, end civ
 	return rows[0].T.Timestamp, nil
 }
 
-func (b bqScamRunner) DryRun(ctx context.Context, sql string, start, end civil.Date) (int64, error) {
+// newQuery builds a windowed Scam Radar job. applyQueryDefaults adds the
+// app=biglens label like every other BigLens query; it only caps
+// INFORMATION_SCHEMA SQL, so each caller's MaxBytesBilled stays as set.
+func (b bqScamRunner) newQuery(sql string, start, end civil.Date) *bigquery.Query {
 	q := b.client.Query(sql)
 	q.Parameters = windowParams(start, end)
+	applyQueryDefaults(q)
+	return q
+}
+
+func (b bqScamRunner) DryRun(ctx context.Context, sql string, start, end civil.Date) (int64, error) {
+	q := b.newQuery(sql, start, end)
 	q.DryRun = true
 	job, err := q.Run(ctx)
 	if err != nil {
@@ -300,8 +309,7 @@ func (b bqScamRunner) DryRun(ctx context.Context, sql string, start, end civil.D
 }
 
 func (b bqScamRunner) Query(ctx context.Context, sql string, start, end civil.Date, maxBytes int64, scan func(next func(dst any) bool) error) (int64, error) {
-	q := b.client.Query(sql)
-	q.Parameters = windowParams(start, end)
+	q := b.newQuery(sql, start, end)
 	q.MaxBytesBilled = maxBytes
 	job, err := q.Run(ctx)
 	if err != nil {
