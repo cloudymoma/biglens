@@ -276,3 +276,50 @@ func TestScamRadarNilStoreReturns503(t *testing.T) {
 		t.Fatalf("body = %q, want fixed 'address risk database unavailable'", rec.Body.String())
 	}
 }
+
+// The overview reports the serial counterfeit-deployer snapshot (SQLite
+// only): how many there are, the top 5 by contracts, and the snapshot's own
+// coverage entry.
+func TestScamRadarSerialDeployers(t *testing.T) {
+	ctx := context.Background()
+	store := newTestRiskStore(t)
+	snapshotAt := time.Date(2026, 10, 6, 1, 0, 0, 0, time.UTC)
+	var rows []fakeTokenDeployerRow
+	for i, n := range []int{3, 4394, 1418, 7, 1164, 1023, 3} {
+		rows = append(rows, fakeTokenDeployerRow{Address: fmt.Sprintf("0x%040x", i+1), Contracts: n, FirstSeen: "2026-01-01", LastSeen: "2026-09-01"})
+	}
+	if err := store.applyScamBatchWithDeployers(ctx, scamEthSourceID, "eth", nil, rows, "2026-09-06", "2026-10-05", snapshotAt); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := store.buildScamRadar(ctx, snapshotAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.KPIs.ETHFakeDeployers != 7 {
+		t.Errorf("eth_fake_deployers = %d, want 7", resp.KPIs.ETHFakeDeployers)
+	}
+	var got []string
+	for _, d := range resp.TopDeployers {
+		got = append(got, fmt.Sprintf("%s:%d", d.Address[len(d.Address)-1:], d.Contracts))
+		if d.ExplorerURL != "https://etherscan.io/address/"+d.Address || d.FirstSeen != "2026-01-01" || d.LastSeen != "2026-09-01" {
+			t.Errorf("top deployer row = %+v", d)
+		}
+	}
+	if strings.Join(got, ",") != "2:4394,3:1418,5:1164,6:1023,4:7" {
+		t.Errorf("top deployers = %v, want the 5 largest by contracts", got)
+	}
+	cov, ok := resp.Coverage[scamFakeTokenDeployersSourceID]
+	if !ok || cov.Cursor != "2026-10-05" || cov.LastOKAt != fmtTime(snapshotAt) {
+		t.Errorf("coverage[%s] = %+v (present %v), want cursor 2026-10-05", scamFakeTokenDeployersSourceID, cov, ok)
+	}
+
+	// Empty database: zero and an empty (not null) list.
+	empty, err := newTestRiskStore(t).buildScamRadar(ctx, snapshotAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if empty.KPIs.ETHFakeDeployers != 0 || empty.TopDeployers == nil || len(empty.TopDeployers) != 0 {
+		t.Errorf("empty DB deployers = %d / %#v, want 0 and []", empty.KPIs.ETHFakeDeployers, empty.TopDeployers)
+	}
+}
