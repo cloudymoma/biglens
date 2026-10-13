@@ -566,6 +566,18 @@ func (s *riskStore) riskPoolForAddresses(ctx context.Context, chain string, addr
 			}
 		}
 	}
+
+	if slices.Contains(want, "fake_token_deployers") {
+		depHits, err := s.fakeTokenDeployerHits(ctx, addrs)
+		if err != nil {
+			return nil, err
+		}
+		for addr := range depHits {
+			if !slices.Contains(pool[addr], "fake_token_deployers") {
+				pool[addr] = append(pool[addr], "fake_token_deployers")
+			}
+		}
+	}
 	return pool, nil
 }
 

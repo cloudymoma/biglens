@@ -114,8 +114,8 @@ func TestAddressRiskSources(t *testing.T) {
 			for _, l := range resp.Lists {
 				listIDs = append(listIDs, l.ID)
 			}
-			if strings.Join(listIDs, ",") != "ofac,mew_darklist,stablecoin,tron_stablecoin,scam_lookalikes" {
-				t.Errorf("lists = %+v, want ofac,mew_darklist,stablecoin,tron_stablecoin,scam_lookalikes", resp.Lists)
+			if strings.Join(listIDs, ",") != "ofac,mew_darklist,stablecoin,tron_stablecoin,scam_lookalikes,fake_token_deployers" {
+				t.Errorf("lists = %+v, want ofac,mew_darklist,stablecoin,tron_stablecoin,scam_lookalikes,fake_token_deployers", resp.Lists)
 			}
 		})
 	}

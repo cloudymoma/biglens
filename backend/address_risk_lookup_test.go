@@ -126,6 +126,11 @@ func TestRiskCopyHasNoBannedWords(t *testing.T) {
 	}
 	texts = append(texts, riskTitleOFAC, riskTitleMEW, riskTitleOracle,
 		riskTitleFrozenFmt, riskTitleUnfrozenFmt, riskDestroyedFmt, riskCoverageFmt)
+	for _, chain := range []string{"eth", "arb"} {
+		for _, c := range fakeTokenDeployerClues(chain, fakeTokenDeployerRow{Address: ronin, Contracts: 12, FirstSeen: "2026-01-01", LastSeen: "2026-02-01"}, "") {
+			texts = append(texts, c.Title, c.Detail)
+		}
+	}
 	for _, srcs := range [][]riskSource{
 		{{ID: "ofac", Status: "ok"}},
 		{{ID: "ofac", Status: "error", Error: "unavailable"}},
@@ -196,15 +201,17 @@ func sourceByID(t *testing.T, srcs []riskSource, id string) riskSource {
 	return riskSource{}
 }
 
-// markStablecoinSynced gives the stablecoin and scam_lookalikes sources
-// coverage up to yesterday, so tests about other sources see them as ok.
+// markStablecoinSynced gives the stablecoin, scam_lookalikes and
+// fake_token_deployers sources coverage up to yesterday, so tests about other
+// sources see them as ok.
 func markStablecoinSynced(t *testing.T, store *riskStore, events ...stablecoinEvent) {
 	t.Helper()
 	cursor := riskNow.AddDate(0, 0, -1).Format("2006-01-02")
 	if err := store.insertStablecoinEvents(context.Background(), events, stablecoinFirstDay, cursor, riskNow); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.applyScamBatch(context.Background(), scamEthSourceID, "eth", nil, "2026-08-27", cursor, riskNow); err != nil && err != errAlreadyApplied {
+	snapshot := []fakeTokenDeployerRow{{Address: "0x9999999999999999999999999999999999999999", Contracts: 3, FirstSeen: "2026-01-01", LastSeen: "2026-01-02"}}
+	if err := store.applyScamBatchWithDeployers(context.Background(), scamEthSourceID, "eth", nil, snapshot, "2026-08-27", cursor, riskNow); err != nil && err != errAlreadyApplied {
 		t.Fatal(err)
 	}
 }
@@ -238,7 +245,7 @@ func TestServiceLookupRoninLikeHit(t *testing.T) {
 	for _, s := range res.Sources {
 		ids = append(ids, s.ID+"="+s.Status)
 	}
-	if strings.Join(ids, ",") != "ofac=ok,mew_darklist=ok,stablecoin=ok,scam_lookalikes=ok,issuer_freeze=ok,chainalysis_oracle=ok,goplus=ok,etherscan=not_configured" {
+	if strings.Join(ids, ",") != "ofac=ok,mew_darklist=ok,stablecoin=ok,scam_lookalikes=ok,fake_token_deployers=ok,issuer_freeze=ok,chainalysis_oracle=ok,goplus=ok,etherscan=not_configured" {
 		t.Errorf("sources = %v", ids)
 	}
 	if res.Disclaimer != riskDisclaimer || res.QueriedAt != "2026-09-26T12:00:00Z" || res.Chain != "eth" {
@@ -276,7 +283,7 @@ func TestServiceLookupGoPlusTimeout(t *testing.T) {
 	if gp.ID != "goplus" || gp.Status != "error" || gp.Error != "timeout" || !res.hasError() {
 		t.Errorf("goplus source = %+v", gp)
 	}
-	if res.Summary.Text != "Nothing found in 6 sources that completed; 1 could not be fully checked (see Sources)." {
+	if res.Summary.Text != "Nothing found in 7 sources that completed; 1 could not be fully checked (see Sources)." {
 		t.Errorf("text = %q", res.Summary.Text)
 	}
 }
@@ -380,7 +387,9 @@ func TestServiceLookupPartialCoverage(t *testing.T) {
 	store.replaceList(ctx, "ofac", []listEntry{{Address: "0x1111111111111111111111111111111111111111"}}, "h", riskNow)
 	store.replaceList(ctx, "mew_darklist", []listEntry{{Address: "0x2222222222222222222222222222222222222222"}}, "h", riskNow)
 	store.insertStablecoinEvents(ctx, nil, "2026-08-27", "2026-09-25", riskNow)
-	_ = store.applyScamBatch(ctx, scamEthSourceID, "eth", nil, "2026-08-27", "2026-09-25", riskNow)
+	_ = store.applyScamBatchWithDeployers(ctx, scamEthSourceID, "eth", nil,
+		[]fakeTokenDeployerRow{{Address: "0x9999999999999999999999999999999999999999", Contracts: 3, FirstSeen: "2026-01-01", LastSeen: "2026-01-02"}},
+		"2026-08-27", "2026-09-25", riskNow)
 	svc := newAddressRiskService(store, []string{up.oracle.URL})
 	svc.now = func() time.Time { return riskNow }
 	res := svc.lookup(ctx, "eth", ronin)
@@ -682,10 +691,10 @@ func TestRiskSourcesForChain(t *testing.T) {
 		addr  string
 		want  string
 	}{
-		{"eth", "0x1111111111111111111111111111111111111111", "ofac,mew_darklist,stablecoin,scam_lookalikes,issuer_freeze,chainalysis_oracle,goplus,blockscout,etherscan"},
-		{"arb", "0x1111111111111111111111111111111111111111", "ofac,mew_darklist,scam_lookalikes,issuer_freeze,chainalysis_oracle,goplus,blockscout"},
-		{"op", "0x1111111111111111111111111111111111111111", "ofac,mew_darklist,scam_lookalikes,issuer_freeze,chainalysis_oracle,goplus,blockscout"},
-		{"base", "0x1111111111111111111111111111111111111111", "ofac,mew_darklist,scam_lookalikes,issuer_freeze,goplus,blockscout"},
+		{"eth", "0x1111111111111111111111111111111111111111", "ofac,mew_darklist,stablecoin,scam_lookalikes,fake_token_deployers,issuer_freeze,chainalysis_oracle,goplus,blockscout,etherscan"},
+		{"arb", "0x1111111111111111111111111111111111111111", "ofac,mew_darklist,scam_lookalikes,fake_token_deployers,issuer_freeze,chainalysis_oracle,goplus,blockscout"},
+		{"op", "0x1111111111111111111111111111111111111111", "ofac,mew_darklist,scam_lookalikes,fake_token_deployers,issuer_freeze,chainalysis_oracle,goplus,blockscout"},
+		{"base", "0x1111111111111111111111111111111111111111", "ofac,mew_darklist,scam_lookalikes,fake_token_deployers,issuer_freeze,goplus,blockscout"},
 		{"tron", "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t", "ofac,tron_stablecoin,scam_lookalikes,issuer_freeze,goplus"},
 		{"btc", "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", "ofac"},
 		{"sol", "depMwrdSqn5y9fDkdotP4iGxTdxSaEHVE6QjnbcEmjN", "ofac,issuer_freeze"},
@@ -1041,5 +1050,107 @@ func TestLookupArbHitsEthLookalikeCorpus(t *testing.T) {
 		!strings.Contains(c.Title, "2026-09-01") ||
 		!strings.Contains(combined, "seen on Ethereum") {
 		t.Errorf("arb lookalike text = (%q, %q), want Known address-poisoning sender + seen 42 times + 2026-09-01 + seen on Ethereum", c.Title, c.Detail)
+	}
+}
+
+// fake_token_deployers reports its own snapshot's freshness: a scam_eth
+// cursor without a deployer snapshot (e.g. right after upgrading) must read
+// "not synced yet", never "checked"; scam_eth's last_error (the job that
+// refreshes the snapshot) is surfaced.
+func TestFakeTokenDeployerSourceStatus(t *testing.T) {
+	store := newTestRiskStore(t)
+	ctx := context.Background()
+	now := riskNow
+	svc := newAddressRiskService(store, nil)
+	svc.now = func() time.Time { return now }
+
+	if err := store.applyScamBatch(ctx, scamEthSourceID, "eth", nil, "2026-08-27", "2026-09-24", riskNow); err != nil {
+		t.Fatal(err)
+	}
+	if src := sourceByID(t, svc.listSources(ctx), "fake_token_deployers"); src.Status != "empty" || src.SendsAddress {
+		t.Errorf("source before any snapshot = %+v, want empty", src)
+	}
+
+	if err := store.applyScamBatchWithDeployers(ctx, scamEthSourceID, "eth", nil,
+		[]fakeTokenDeployerRow{{Address: ronin, Contracts: 7, FirstSeen: "2026-01-01", LastSeen: "2026-09-20"}},
+		"", "2026-09-25", riskNow); err != nil {
+		t.Fatal(err)
+	}
+	src := sourceByID(t, svc.listSources(ctx), "fake_token_deployers")
+	if src.Status != "ok" || src.Cursor != "2026-09-25" || src.LastOKAt != fmtTime(riskNow) || src.LastError != "" {
+		t.Errorf("source after snapshot = %+v, want ok with cursor 2026-09-25", src)
+	}
+
+	const guardMsg = "suspicious empty result for crypto_ethereum.tokens_latest: 0 serial counterfeit USDT/USDC deployers found — upstream schema or format change?"
+	if err := store.setSyncError(ctx, scamEthSourceID, guardMsg); err != nil {
+		t.Fatal(err)
+	}
+	if src := sourceByID(t, svc.listSources(ctx), "fake_token_deployers"); src.LastError != guardMsg {
+		t.Errorf("source last_error = %q, want scam_eth's %q", src.LastError, guardMsg)
+	}
+
+	now = riskNow.AddDate(0, 0, 3)
+	if src := sourceByID(t, svc.listSources(ctx), "fake_token_deployers"); src.Status != "stale" {
+		t.Errorf("source 3 days later = %+v, want stale", src)
+	}
+}
+
+func TestLookupFakeTokenDeployerClue(t *testing.T) {
+	up := newFakeUpstreams(t, `{"result":"`+oracleFalse+`"}`, `{"code":1,"result":{}}`, 0)
+	store := newTestRiskStore(t)
+	ctx := context.Background()
+	const deployer = "0x80d04079ffc53eb14edbeeb37279d126f45552df"
+	store.replaceList(ctx, "ofac", []listEntry{{Address: ronin}}, "h", riskNow)
+	store.replaceList(ctx, "mew_darklist", []listEntry{{Address: "0x2222222222222222222222222222222222222222"}}, "h", riskNow)
+	markStablecoinSynced(t, store)
+	if err := store.applyScamBatchWithDeployers(ctx, scamEthSourceID, "eth", nil,
+		[]fakeTokenDeployerRow{{Address: deployer, Contracts: 4394, FirstSeen: "2026-05-21", LastSeen: "2026-08-27"}},
+		"", riskNow.Format("2006-01-02"), riskNow); err != nil {
+		t.Fatal(err)
+	}
+	svc := newAddressRiskService(store, []string{up.oracle.URL})
+	svc.now = func() time.Time { return riskNow }
+	svc.blockscoutURLs = map[string]string{"eth": "", "arb": "", "base": ""}
+
+	const wantTitle = "Deployed 4394 tokens impersonating USDT/USDC on Ethereum (counterfeit-symbol contracts); may be a factory contract."
+	for _, chain := range []string{"eth", "arb", "base"} {
+		res := svc.lookup(ctx, chain, deployer)
+		var got *riskClue
+		for i := range res.Clues {
+			if res.Clues[i].Source == "fake_token_deployers" {
+				got = &res.Clues[i]
+			}
+		}
+		if got == nil {
+			t.Fatalf("%s: no fake_token_deployers clue in %+v", chain, res.Clues)
+		}
+		if got.Severity != sevWarning || got.Code != "fake_token_deployer" || got.Title != wantTitle ||
+			got.ObservedAt == nil || *got.ObservedAt != "2026-05-21" || got.AsOf != fmtTime(riskNow) ||
+			got.RefURL != "https://etherscan.io/address/"+deployer {
+			t.Errorf("%s: clue = %+v", chain, *got)
+		}
+		if !strings.Contains(got.Detail, "4394 contracts") || !strings.Contains(got.Detail, "2026-05-21") || !strings.Contains(got.Detail, "2026-08-27") {
+			t.Errorf("%s: detail %q must give the count and creation range", chain, got.Detail)
+		}
+		if seen := strings.Contains(got.Detail, "(seen on Ethereum)"); seen != (chain != "eth") {
+			t.Errorf("%s: detail %q: (seen on Ethereum) present = %v, want %v", chain, got.Detail, seen, chain != "eth")
+		}
+		if res.Summary.Counts.Warning != 1 {
+			t.Errorf("%s: summary counts = %+v, want 1 warning", chain, res.Summary.Counts)
+		}
+	}
+
+	// TRON addresses are not EVM: the source does not apply.
+	tronSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"result":{"result":true},"constant_result":["` + oracleFalse[2:] + `"]}`))
+	}))
+	defer tronSrv.Close()
+	origTron := tronGridBaseURL
+	tronGridBaseURL = tronSrv.URL
+	defer func() { tronGridBaseURL = origTron }()
+	for _, s := range svc.lookup(ctx, "tron", "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t").Sources {
+		if s.ID == "fake_token_deployers" {
+			t.Errorf("tron lookup must not include fake_token_deployers: %+v", s)
+		}
 	}
 }

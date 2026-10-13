@@ -33,6 +33,10 @@ const (
 
 	tronStablecoinFirstDay = "2019-04-16"
 
+	riskTitleFakeDeployerFmt  = "Deployed %s impersonating USDT/USDC on Ethereum (counterfeit-symbol contracts); may be a factory contract."
+	riskFakeDeployerDetailFmt = "Creator of %s whose symbol imitates USDT/USDC/USD₮ (created %s–%s), per the public crypto_ethereum.tokens_latest dataset in BigQuery."
+	riskFakeDeployerL2Note    = "(seen on Ethereum) An externally owned account has the same address on every EVM chain; a contract at this address here may be unrelated. "
+
 	riskListStaleAfter = 12 * time.Hour
 
 	riskDisclaimer = "Risk clues aggregate public lists and third-party signals. They may be incomplete, " +
@@ -52,16 +56,18 @@ var riskSourceOrder = map[string]int{
 	"goplus":             7,
 	"blockscout":         8,
 	"etherscan":          9,
+	// Local Scam Radar corpus (no address leaves the server).
+	"fake_token_deployers": 10,
 }
 
 func riskSourcesFor(chain string) []string {
 	switch chain {
 	case "eth":
-		return []string{"ofac", "mew_darklist", "stablecoin", "scam_lookalikes", "issuer_freeze", "chainalysis_oracle", "goplus", "blockscout", "etherscan"}
+		return []string{"ofac", "mew_darklist", "stablecoin", "scam_lookalikes", "fake_token_deployers", "issuer_freeze", "chainalysis_oracle", "goplus", "blockscout", "etherscan"}
 	case "arb", "op":
-		return []string{"ofac", "mew_darklist", "scam_lookalikes", "issuer_freeze", "chainalysis_oracle", "goplus", "blockscout"}
+		return []string{"ofac", "mew_darklist", "scam_lookalikes", "fake_token_deployers", "issuer_freeze", "chainalysis_oracle", "goplus", "blockscout"}
 	case "base":
-		return []string{"ofac", "mew_darklist", "scam_lookalikes", "issuer_freeze", "goplus", "blockscout"}
+		return []string{"ofac", "mew_darklist", "scam_lookalikes", "fake_token_deployers", "issuer_freeze", "goplus", "blockscout"}
 	case "tron":
 		return []string{"ofac", "tron_stablecoin", "scam_lookalikes", "issuer_freeze", "goplus"}
 	case "btc":
@@ -281,6 +287,35 @@ func lookalikeClues(chain string, row lookalikeRow, cursor string) []riskClue {
 		ObservedAt: observed,
 		AsOf:       asOf,
 		RefURL:     fmt.Sprintf(chains[refChain].AddressURL, row.Lookalike),
+	}}
+}
+
+// fakeTokenDeployerClues turns a serial counterfeit-deployer hit into a
+// Warning. The corpus comes from Ethereum token contracts; on L2s the same
+// EOA address is the same key holder, but a contract at that address may be
+// unrelated, so the detail says "(seen on Ethereum)".
+func fakeTokenDeployerClues(chain string, row fakeTokenDeployerRow, asOf string) []riskClue {
+	if row.Address == "" {
+		return nil
+	}
+	detail := fmt.Sprintf(riskFakeDeployerDetailFmt, plural(row.Contracts, "contract"), row.FirstSeen, row.LastSeen)
+	if chain != "eth" {
+		detail = riskFakeDeployerL2Note + detail
+	}
+	var observed *string
+	if row.FirstSeen != "" {
+		f := row.FirstSeen
+		observed = &f
+	}
+	return []riskClue{{
+		Severity:   sevWarning,
+		Source:     "fake_token_deployers",
+		Code:       "fake_token_deployer",
+		Title:      fmt.Sprintf(riskTitleFakeDeployerFmt, plural(row.Contracts, "token")),
+		Detail:     detail,
+		ObservedAt: observed,
+		AsOf:       asOf,
+		RefURL:     fmt.Sprintf(chains["eth"].AddressURL, row.Address),
 	}}
 }
 
@@ -636,7 +671,7 @@ func newAddressRiskService(store *riskStore, rpcURLs []string) *addressRiskServi
 }
 
 // riskLocalIDs are the sources answered from SQLite, in response order.
-var riskLocalIDs = []string{"ofac", "mew_darklist", "stablecoin", "tron_stablecoin", "scam_lookalikes"}
+var riskLocalIDs = []string{"ofac", "mew_darklist", "stablecoin", "tron_stablecoin", "scam_lookalikes", "fake_token_deployers"}
 
 // localSources builds the local sources' status from one sync_state read,
 // filtered to the local sources applicable to chain (or all local sources when
@@ -673,6 +708,13 @@ func (s *addressRiskService) localSources(chain string, states map[string]syncSt
 			st := states[syncID]
 			out = append(out, riskSource{ID: id, Status: scamLookalikeSourceStatus(st, now), LastOKAt: st.LastOKAt,
 				CoverageFrom: st.CoverageFrom, Cursor: st.Cursor, LastError: st.LastError})
+		case "fake_token_deployers":
+			// Freshness of the snapshot itself (a scam_eth cursor alone does not
+			// mean the corpus is loaded); errors are recorded on scam_eth, the
+			// job that refreshes it.
+			st := states[scamFakeTokenDeployersSourceID]
+			out = append(out, riskSource{ID: id, Status: scamLookalikeSourceStatus(st, now), LastOKAt: st.LastOKAt,
+				Cursor: st.Cursor, LastError: states[scamEthSourceID].LastError})
 		default:
 			st := states[id]
 			out = append(out, riskSource{ID: id, Status: listSourceStatus(st, now),
@@ -735,6 +777,14 @@ func (s *addressRiskService) localCheck(ctx context.Context, chain, addr string)
 			lookHit = m[normalizeScamAddr(chain, addr)]
 		}
 	}
+	var deployerHit fakeTokenDeployerRow
+	if err == nil && slices.Contains(want, "fake_token_deployers") {
+		var m map[string]fakeTokenDeployerRow
+		m, err = s.store.fakeTokenDeployerHits(ctx, []string{addr})
+		if err == nil {
+			deployerHit = m[normalizeScamAddr("eth", addr)]
+		}
+	}
 	if err != nil {
 		for i := range sources {
 			sources[i] = riskSource{ID: sources[i].ID, Status: "error", Error: "unavailable"}
@@ -754,6 +804,9 @@ func (s *addressRiskService) localCheck(ctx context.Context, chain, addr string)
 			scamKey = scamTronSourceID
 		}
 		clues = append(clues, lookalikeClues(chain, lookHit, states[scamKey].Cursor)...)
+	}
+	if slices.Contains(want, "fake_token_deployers") {
+		clues = append(clues, fakeTokenDeployerClues(chain, deployerHit, deployerHit.UpdatedAt)...)
 	}
 	sortClues(clues)
 	return sources, clues, frozen
