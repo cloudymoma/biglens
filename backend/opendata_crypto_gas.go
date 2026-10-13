@@ -56,9 +56,9 @@ const (
 )
 
 // WHERE fragments; tests assert their presence. BTC windows are plain
-// timestamp windows: a *_month predicate no longer prunes under SQD (a 1-day
-// dry run billed transactions 0.054 → 0.072 GiB, blocks 0.014 → 0.022 GiB
-// with it).
+// timestamp windows: a *_month predicate no longer prunes under SQD and only
+// adds bytes (72h dry run: transactions 102 → 127 MB, blocks 16 → 23 MB with
+// it).
 const (
 	gasTsWindow       = `block_timestamp >= @start_ts AND block_timestamp < @end_ts`
 	gasBtcTxWindow    = gasTsWindow
