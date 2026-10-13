@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -313,6 +314,10 @@ func TestBQProfileResultAndClues(t *testing.T) {
 	if prof.TopPeers[2].ETHReceived != "<0.000001" {
 		t.Errorf("dust must not read as zero: %q", prof.TopPeers[2].ETHReceived)
 	}
+	// The UI maps over every lists array: never null in JSON.
+	if js, _ := json.Marshal(prof); strings.Contains(string(js), `"lists":null`) || !strings.Contains(string(js), `"lists":[]`) {
+		t.Errorf("unlisted peers must carry \"lists\":[]: %s", js)
+	}
 
 	byCode := map[string]riskClue{}
 	for _, c := range clues {
@@ -393,6 +398,22 @@ func TestBQProfileWithoutStoreIsPartial(t *testing.T) {
 	for _, c := range clues {
 		if c.Severity == sevAssociation {
 			t.Errorf("association clue without local lists: %+v", c)
+		}
+	}
+}
+
+func TestFormatWeiETH(t *testing.T) {
+	for in, want := range map[string]string{
+		"0":                         "0",
+		"1":                         "<0.000001", // dust never reads as zero
+		"250000000000000000":        "0.25",
+		"1500000000000000000":       "1.5",
+		"87564582537611094200799":   "87,564.582538",
+		"1000000000000000000000000": "1,000,000",
+		"not-a-number":              "",
+	} {
+		if got := formatWeiETH(in); got != want {
+			t.Errorf("formatWeiETH(%q) = %q, want %q", in, got, want)
 		}
 	}
 }

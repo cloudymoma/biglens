@@ -464,8 +464,9 @@ type riskBQPeer struct {
 	FirstFunder bool     `json:"first_funder,omitempty"`
 }
 
-// formatWeiETH renders a decimal wei string as ETH with at most 6 decimals;
-// a positive amount that rounds to zero shows as "<0.000001", never "0".
+// formatWeiETH renders a decimal wei string as ETH with at most 6 decimals
+// and thousands separators; a positive amount that rounds to zero shows as
+// "<0.000001", never "0".
 func formatWeiETH(wei string) string {
 	r, ok := new(big.Rat).SetString(strings.TrimSpace(wei))
 	if !ok {
@@ -476,7 +477,14 @@ func formatWeiETH(wei string) string {
 	if s == "0" && r.Sign() > 0 {
 		return "<0.000001"
 	}
-	return s
+	whole, frac, hasFrac := strings.Cut(s, ".")
+	if n, ok := new(big.Int).SetString(whole, 10); ok && n.IsInt64() {
+		whole = fmtCount(n.Int64())
+	}
+	if hasFrac {
+		return whole + "." + frac
+	}
+	return whole
 }
 
 func fmtCount(n int64) string {
@@ -581,7 +589,9 @@ func (s *addressRiskService) checkBQProfile(ctx context.Context, addr string, no
 }
 
 func fillBQProfile(prof *riskBQProfile, row *bqProfileRow, pool riskPool, now time.Time) {
-	lists := func(a string) []string { return slices.Clone(pool[a]) }
+	lists := func(a string) []string { // never nil: the UI maps over it
+		return append([]string{}, pool[a]...)
+	}
 	prof.Outgoing = &riskBQSide{Txs: row.OutTxs, Peers: row.OutPeers, First: row.OutFirst, Last: row.OutLast, ETH: formatWeiETH(row.OutWei)}
 	prof.Incoming = &riskBQSide{Txs: row.InTxs, Peers: row.InPeers, First: row.InFirst, Last: row.InLast, ETH: formatWeiETH(row.InWei)}
 	prof.Counterparties = row.Peers
