@@ -203,21 +203,22 @@ func (s *addressRiskService) checkEIP7702Source(ctx context.Context, chain, addr
 const payOwnCodeTTL = 60 * time.Second
 
 // ownAddressCode classifies a Payment Check receiving address's code (EVM),
-// cached per network and address for payOwnCodeTTL. A failed check yields
-// the zero value — no alert — and is not cached, so the next poll retries.
-func (h *APIHandler) ownAddressCode(ctx context.Context, network, addr string, rpcs []string) evmCodeInfo {
+// cached per network and address for payOwnCodeTTL. A failed check returns
+// its error code (shown as the "eip7702" source) and is not cached, so the
+// next poll retries; it never raises an alert.
+func (h *APIHandler) ownAddressCode(ctx context.Context, network, addr string, rpcs []string) (evmCodeInfo, string) {
 	key := "pay:code:" + network + ":" + addr
 	if h.cache != nil {
 		if v, ok := h.cache.Get(key); ok {
-			return v.(evmCodeInfo)
+			return v.(evmCodeInfo), ""
 		}
 	}
 	info, code := checkEIP7702(ctx, rpcs, addr)
 	if code != "" {
-		return evmCodeInfo{}
+		return evmCodeInfo{}, code
 	}
 	if h.cache != nil {
 		h.cache.SetWithTTL(key, info, payOwnCodeTTL)
 	}
-	return info
+	return info, ""
 }

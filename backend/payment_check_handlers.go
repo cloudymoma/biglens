@@ -293,6 +293,7 @@ func (h *APIHandler) PaymentCheckLive(w http.ResponseWriter, r *http.Request) {
 		freezeErrCode string
 		ownOFACHit    bool
 		ownCode       evmCodeInfo
+		ownCodeErr    string
 		localErr      error
 	)
 
@@ -359,7 +360,7 @@ func (h *APIHandler) PaymentCheckLive(w http.ResponseWriter, r *http.Request) {
 	// 4b. Own address EIP-7702 delegation (EVM; same RPCs as the freeze check)
 	if eip7702Chains[network] {
 		g.Go(func() error {
-			ownCode = h.ownAddressCode(ctx, network, addr, rpcs)
+			ownCode, ownCodeErr = h.ownAddressCode(ctx, network, addr, rpcs)
 			return nil
 		})
 	}
@@ -560,6 +561,13 @@ func (h *APIHandler) PaymentCheckLive(w http.ResponseWriter, r *http.Request) {
 				fSrc.Status, fSrc.Error = "error", freezeErrCode
 			}
 			sources = append(sources, fSrc)
+		}
+		if eip7702Chains[network] {
+			cSrc := riskSource{ID: "eip7702", Status: "ok", Hosts: rpcHosts}
+			if ownCodeErr != "" {
+				cSrc.Status, cSrc.Error = "error", ownCodeErr
+			}
+			sources = append(sources, cSrc)
 		}
 	}
 

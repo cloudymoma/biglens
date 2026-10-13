@@ -396,6 +396,7 @@ export const PAY_SOURCE_LABELS: Record<string, string> = {
   mempool: 'Esplora (mempool / blockstream)',
   solana_rpc: 'Solana RPC',
   issuer_freeze: 'Issuer freeze (live)',
+  eip7702: 'EIP-7702 delegation (live)',
   local: 'Local lists (OFAC / MEW / freezes)',
 };
 
