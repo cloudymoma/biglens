@@ -197,3 +197,27 @@ func (s *addressRiskService) checkEIP7702Source(ctx context.Context, chain, addr
 	clues = eip7702Clues(chain, addr, info, bs, bsCode, info.Kind == evmCodeDelegated && bsURL == "", fmtTime(now))
 	return src, clues, bsCode != ""
 }
+
+// payOwnCodeTTL caches a receiving address's code classification between
+// Payment Check polls (every 5–30 s); delegations rarely change.
+const payOwnCodeTTL = 60 * time.Second
+
+// ownAddressCode classifies a Payment Check receiving address's code (EVM),
+// cached per network and address for payOwnCodeTTL. A failed check yields
+// the zero value — no alert — and is not cached, so the next poll retries.
+func (h *APIHandler) ownAddressCode(ctx context.Context, network, addr string, rpcs []string) evmCodeInfo {
+	key := "pay:code:" + network + ":" + addr
+	if h.cache != nil {
+		if v, ok := h.cache.Get(key); ok {
+			return v.(evmCodeInfo)
+		}
+	}
+	info, code := checkEIP7702(ctx, rpcs, addr)
+	if code != "" {
+		return evmCodeInfo{}
+	}
+	if h.cache != nil {
+		h.cache.SetWithTTL(key, info, payOwnCodeTTL)
+	}
+	return info
+}
