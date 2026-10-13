@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import ReactECharts from 'echarts-for-react';
-import { AlertTriangle, Coins, ExternalLink, Radar, Repeat, ShieldAlert, Snowflake } from 'lucide-react';
+import { AlertTriangle, Coins, ExternalLink, Factory, Radar, Repeat, ShieldAlert, Snowflake } from 'lucide-react';
 import type { AddressRiskSource, ScamRadarResponse } from '../../types';
 import { fetchAddressRiskScamRadar } from '../../api';
 import { ErrorBanner, MetricCard } from '../../dashboards/shared';
@@ -110,10 +110,22 @@ export default function ScamRadarPanel({ onInspect }: { onInspect: (address: str
       ? `${fmtNum(data.btc_rbf.rbf_txs)} / ${fmtNum(data.btc_rbf.txs)} txs · ${data.btc_rbf.day}`
       : 'not synced';
 
+  // Serial counterfeit deployers: a daily snapshot refreshed by scam_eth, so
+  // scam_eth's sync error applies to it too.
+  const deployerSrc = cov.scam_fake_token_deployers;
+  const topDeployers = data.top_deployers ?? [];
+  const deployersOk = sourceReady(deployerSrc);
+  const deployersVal = ethErr ? '—' : deployersOk ? fmtNum(data.kpis.eth_fake_deployers ?? 0) : '—';
+  const deployersDetail = ethErr
+    ? `sync error: ${ethErr}`
+    : deployersOk
+      ? `≥3 fake USDT/USDC contracts each · ${deployerSrc?.cursor}`
+      : 'not synced';
+
   return (
     <Panel
       title="Scam Radar"
-      note="daily on-chain scam & settlement risk intelligence · Data: BigQuery public datasets, ~$1/month"
+      note="daily on-chain scam & settlement risk intelligence · Data: BigQuery public datasets, up to ~$1.50/month"
     >
       <div className="space-y-4">
         {erroredSources.length > 0 && (
@@ -134,7 +146,7 @@ export default function ScamRadarPanel({ onInspect }: { onInspect: (address: str
           </div>
         )}
 
-        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+        <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3">
           <MetricCard
             label="ETH poisoning (1d)"
             value={ethPoisonVal}
@@ -170,6 +182,13 @@ export default function ScamRadarPanel({ onInspect }: { onInspect: (address: str
             detail={btcRbfDetail}
             accentColor={BTC_COLOR}
           />
+          <MetricCard
+            label="Serial counterfeit deployers"
+            value={deployersVal}
+            icon={<span className="inline-flex items-center gap-1"><ChainIcon chain="eth" size={14} /><Factory size={13} /></span>}
+            detail={deployersDetail}
+            accentColor={FAKE_COLOR}
+          />
         </div>
 
         {data.empty ? (
@@ -179,11 +198,12 @@ export default function ScamRadarPanel({ onInspect }: { onInspect: (address: str
             </p>
             <p>
               When enabled, Scam Radar syncs complete UTC days from BigQuery public datasets: Ethereum &amp; TRON
-              lookalike address-poisoning hits (R1/R3), counterfeit USDT/USDC token contracts on Ethereum (R2), TRON
-              USDT blacklist events (R4), and Bitcoin explicit opt-in RBF share (R5).
+              lookalike address-poisoning hits (R1/R3), counterfeit USDT/USDC token contracts on Ethereum (R2) and the
+              serial deployers behind them, TRON USDT blacklist events (R4), and Bitcoin explicit opt-in RBF share (R5).
             </p>
             <p className="text-[11px] text-zinc-500">
-              Estimated BigQuery on-demand scan: ~160 GB (~$1) for a 30-day cold start, then ~5.3 GB/day (~$1/month).
+              Estimated BigQuery on-demand scan (dry-run upper bounds): ~92 GB (~$0.55) for a 30-day cold start, then
+              up to ~8 GB/day (~$1.50/month).
               Set <code className="font-mono text-zinc-300">address_risk.scam_radar.initial_days: 0</code> in{' '}
               <code className="font-mono text-zinc-300">conf.yaml</code> to disable background syncing.
             </p>
@@ -360,6 +380,64 @@ export default function ScamRadarPanel({ onInspect }: { onInspect: (address: str
                     </table>
                   </div>
                 )}
+
+                <div className="mt-3 border-t border-zinc-800/60 pt-2.5">
+                  <div className="flex items-baseline justify-between mb-2">
+                    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-zinc-200">
+                      <ChainIcon chain="eth" size={13} />
+                      <span>Serial counterfeit deployers (ETH, all time)</span>
+                    </span>
+                    <span className="text-[11px] text-zinc-500">creators of ≥3 USDT/USDC-symbol contracts · may be factories</span>
+                  </div>
+                  {ethErr ? (
+                    <p className="text-xs text-amber-300 font-mono py-2">Deployer snapshot source error: {ethErr}</p>
+                  ) : !deployersOk || topDeployers.length === 0 ? (
+                    <p className="text-xs text-zinc-500 py-2">No serial counterfeit deployer snapshot synced yet.</p>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs">
+                        <thead className="text-zinc-500 text-left">
+                          <tr>
+                            <th className="py-1 pr-3 font-normal">Deployer</th>
+                            <th className="pr-3 font-normal text-right">Contracts</th>
+                            <th className="font-normal text-right">Created</th>
+                          </tr>
+                        </thead>
+                        <tbody className="text-zinc-300">
+                          {topDeployers.map(d => (
+                            <tr key={d.address} className="border-t border-zinc-800/60">
+                              <td className="py-1 pr-3">
+                                <div className="flex items-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => onInspect(d.address)}
+                                    title={d.address}
+                                    className="font-mono text-zinc-200 hover:text-white underline decoration-zinc-700"
+                                  >
+                                    {shortHash(d.address)}
+                                  </button>
+                                  <a
+                                    href={d.explorer_url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    title="View on Etherscan"
+                                    className="text-zinc-500 hover:text-zinc-300"
+                                  >
+                                    <ExternalLink size={11} />
+                                  </a>
+                                </div>
+                              </td>
+                              <td className="pr-3 font-mono text-right">{fmtNum(d.contracts)}</td>
+                              <td className="font-mono text-zinc-400 text-right">
+                                {d.first_seen} → {d.last_seen}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           </>
@@ -387,7 +465,7 @@ export default function ScamRadarPanel({ onInspect }: { onInspect: (address: str
             })}
           </div>
           <div>
-            Data: BigQuery public datasets, ~$1/month · Results are a lower bound: same-day pairing only; poisoning
+            Data: BigQuery public datasets, up to ~$1.50/month · Results are a lower bound: same-day pairing only; poisoning
             without a same-day genuine transfer is not detected.
           </div>
         </div>
