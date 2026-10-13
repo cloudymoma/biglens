@@ -11,8 +11,12 @@ package main
 //	GET /api/opendata/crypto/gas-pulse                 (72h, 7 chains; opendata_crypto_gas_handlers.go)
 //	GET /api/opendata/crypto/gas-live                  (BTC/TRON live bars, 30s; opendata_crypto_gas_live_handlers.go)
 //
-// Each endpoint is fetched lazily by its tab, cached 10 minutes, and guarded
-// by singleflight so concurrent tab opens run one BigQuery round each.
+// Each endpoint is fetched lazily by its tab and guarded by singleflight so
+// concurrent tab opens run one BigQuery round each. Daily responses are
+// cached until the next UTC rollover once the readiness probe
+// (opendata_crypto_ready.go) confirms the newest day is complete, 5 minutes
+// while it is still ingesting (last_day_complete: false) and 2 minutes when
+// a query failed.
 
 import (
 	"context"
@@ -95,13 +99,16 @@ func cryptoTTL(end civil.Date, now time.Time) time.Duration {
 	return ttl
 }
 
-// getCachedBtcBlocks shares BTC block stats between /pulse and /fees.
+// getCachedBtcBlocks shares BTC block stats between /pulse and /fees. Like
+// the responses, the shared result outlives the rollover only once BTC's
+// newest day is confirmed complete.
 func (h *APIHandler) getCachedBtcBlocks(ctx context.Context, start, end civil.Date) ([]CryptoBlockRow, error) {
 	qKey := fmt.Sprintf("opendata:crypto:q:btc_blocks:%s:%s", start, end)
 	if cached, ok := h.cache.Get(qKey); ok {
 		return cached.([]CryptoBlockRow), nil
 	}
 	v, err, _ := cryptoFlight.Do(qKey, func() (any, error) {
+		ready := h.cryptoReadyAsync(ctx, end, "btc")
 		rows, err := h.bq.GetCryptoBlockStats(ctx, "btc", start, end)
 		if err != nil {
 			return nil, err
@@ -109,7 +116,7 @@ func (h *APIHandler) getCachedBtcBlocks(ctx context.Context, start, end civil.Da
 		if rows == nil {
 			rows = []CryptoBlockRow{}
 		}
-		h.cache.SetWithTTL(qKey, rows, cryptoTTL(end, time.Now().UTC()))
+		h.cache.SetWithTTL(qKey, rows, cryptoResponseTTL(end, time.Now().UTC(), false, <-ready))
 		return rows, nil
 	})
 	if err != nil {
@@ -125,6 +132,7 @@ func (h *APIHandler) getCachedBtcCoinbase(ctx context.Context, start, end civil.
 		return cached.([]BtcCoinbaseRow), nil
 	}
 	v, err, _ := cryptoFlight.Do(qKey, func() (any, error) {
+		ready := h.cryptoReadyAsync(ctx, end, "btc")
 		rows, err := h.bq.GetBtcCoinbase(ctx, start, end)
 		if err != nil {
 			return nil, err
@@ -132,7 +140,7 @@ func (h *APIHandler) getCachedBtcCoinbase(ctx context.Context, start, end civil.
 		if rows == nil {
 			rows = []BtcCoinbaseRow{}
 		}
-		h.cache.SetWithTTL(qKey, rows, cryptoTTL(end, time.Now().UTC()))
+		h.cache.SetWithTTL(qKey, rows, cryptoResponseTTL(end, time.Now().UTC(), false, <-ready))
 		return rows, nil
 	})
 	if err != nil {
@@ -164,6 +172,9 @@ type CryptoPulseData struct {
 	BTC      CryptoChainPulse `json:"btc"`
 	ETH      CryptoChainPulse `json:"eth"`
 	Warnings []string         `json:"warnings,omitempty"`
+	// LastDayComplete is false while the newest UTC day may still be
+	// ingesting (readiness probe found no row past the window end yet).
+	LastDayComplete bool `json:"last_day_complete"`
 }
 
 // rollupCryptoKpi derives the KPI strip from the latest complete day,
@@ -221,6 +232,7 @@ func (h *APIHandler) CryptoPulse(w http.ResponseWriter, r *http.Request) {
 		}
 		data := CryptoPulseData{Days: days, BTC: empty(), ETH: empty()}
 		includeAddr := days <= cryptoAddressMaxDays
+		ready := h.cryptoReadyAsync(ctx, end, "btc", "eth")
 
 		type pulseResult struct {
 			btcRows   []cryptoPulseRow
@@ -298,11 +310,8 @@ func (h *APIHandler) CryptoPulse(w http.ResponseWriter, r *http.Request) {
 
 		data.BTC.Kpi = rollupCryptoKpi(data.BTC.Daily, data.BTC.Blocks)
 		data.ETH.Kpi = rollupCryptoKpi(data.ETH.Daily, data.ETH.Blocks)
-		ttl := cryptoTTL(end, time.Now().UTC())
-		if len(data.Warnings) > 0 {
-			ttl = cryptoPartialTTL
-		}
-		h.cache.SetWithTTL(key, &data, ttl)
+		data.LastDayComplete = <-ready
+		h.cache.SetWithTTL(key, &data, cryptoResponseTTL(end, time.Now().UTC(), len(data.Warnings) > 0, data.LastDayComplete))
 		return &data, nil
 	})
 	if err != nil {
@@ -321,6 +330,8 @@ type CryptoFeesData struct {
 	BTCBlocks []CryptoBlockRow `json:"btc_blocks"`
 	ETHBlocks []CryptoBlockRow `json:"eth_blocks"`
 	Warnings  []string         `json:"warnings,omitempty"`
+	// LastDayComplete: see CryptoPulseData.
+	LastDayComplete bool `json:"last_day_complete"`
 }
 
 // mergeBtcFees returns new rows with SubsidyBTC = coinbase revenue − fees,
@@ -401,6 +412,8 @@ func (h *APIHandler) CryptoFees(w http.ResponseWriter, r *http.Request) {
 			btcBlocksErr error
 			ethFeeErr    error
 		)
+		btcReady := h.cryptoReadyAsync(ctx, end, "btc")
+		ethReady := h.cryptoReadyAsync(ctx, end, "eth")
 
 		done := make(chan struct{}, 3)
 		go func() {
@@ -422,6 +435,8 @@ func (h *APIHandler) CryptoFees(w http.ResponseWriter, r *http.Request) {
 		if btcFeeErr != nil && ethFeeErr != nil {
 			return nil, fmt.Errorf("btc fees: %v; eth fees: %w", btcFeeErr, ethFeeErr)
 		}
+		btcOK, ethOK := <-btcReady, <-ethReady
+		data.LastDayComplete = btcOK && ethOK
 		if btcFeeErr != nil {
 			slog.Warn("crypto fees: btc query failed", "error", btcFeeErr)
 			data.Warnings = append(data.Warnings, "btc_fees: "+btcFeeErr.Error())
@@ -433,7 +448,7 @@ func (h *APIHandler) CryptoFees(w http.ResponseWriter, r *http.Request) {
 				cbRows = append(cbRows, BtcCoinbaseRow{Date: f.Date, CoinbaseBTC: f.CoinbaseBTC})
 			}
 			cbKey := fmt.Sprintf("opendata:crypto:q:btc_coinbase:%s:%s", start, end)
-			h.cache.SetWithTTL(cbKey, cbRows, cryptoTTL(end, time.Now().UTC()))
+			h.cache.SetWithTTL(cbKey, cbRows, cryptoResponseTTL(end, time.Now().UTC(), false, btcOK))
 		}
 		if btcBlocksErr != nil {
 			slog.Warn("crypto fees: btc blocks query failed", "error", btcBlocksErr)
@@ -453,11 +468,7 @@ func (h *APIHandler) CryptoFees(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		ttl := cryptoTTL(end, time.Now().UTC())
-		if len(data.Warnings) > 0 {
-			ttl = cryptoPartialTTL
-		}
-		h.cache.SetWithTTL(key, &data, ttl)
+		h.cache.SetWithTTL(key, &data, cryptoResponseTTL(end, time.Now().UTC(), len(data.Warnings) > 0, data.LastDayComplete))
 		return &data, nil
 	})
 	if err != nil {
@@ -515,6 +526,8 @@ type CryptoWhalesData struct {
 	Trend              []WhaleTrendRow    `json:"trend"`
 	Concentration      []ConcentrationRow `json:"concentration"`
 	FreezeCoverageFrom string             `json:"freeze_coverage_from,omitempty"`
+	// LastDayComplete: see CryptoPulseData.
+	LastDayComplete bool `json:"last_day_complete"`
 }
 
 func (h *APIHandler) CryptoWhales(w http.ResponseWriter, r *http.Request) {
@@ -560,6 +573,7 @@ func (h *APIHandler) CryptoWhales(w http.ResponseWriter, r *http.Request) {
 			Concentration: []ConcentrationRow{},
 		}
 
+		ready := h.cryptoReadyAsync(ctx, end, chain)
 		bundle, err := h.bq.getCryptoWhalesBundle(ctx, chain, start, end)
 		if err != nil {
 			return nil, err
@@ -573,7 +587,8 @@ func (h *APIHandler) CryptoWhales(w http.ResponseWriter, r *http.Request) {
 			data.Concentration = append(data.Concentration, ConcentrationRow{Date: d.Date, Top1PctShare: d.Top1PctShare})
 		}
 
-		h.cache.SetWithTTL(key, &data, cryptoTTL(end, time.Now().UTC()))
+		data.LastDayComplete = <-ready
+		h.cache.SetWithTTL(key, &data, cryptoResponseTTL(end, time.Now().UTC(), false, data.LastDayComplete))
 		return &data, nil
 	})
 	if err != nil {
@@ -595,6 +610,8 @@ type CryptoTokensData struct {
 	Daily     []TokenDailyRow `json:"daily"`
 	Contracts []ContractRow   `json:"contracts"`
 	Warnings  []string        `json:"warnings,omitempty"`
+	// LastDayComplete: see CryptoPulseData (probes Ethereum).
+	LastDayComplete bool `json:"last_day_complete"`
 }
 
 // mergeTokenDaily zips transfer counts with native tx counts over the union
@@ -663,6 +680,7 @@ func (h *APIHandler) CryptoTokens(w http.ResponseWriter, r *http.Request) {
 			nativeErr    error
 			contractsErr error
 		)
+		ready := h.cryptoReadyAsync(ctx, end, "eth")
 
 		done := make(chan struct{}, 4)
 		go func() {
@@ -710,11 +728,8 @@ func (h *APIHandler) CryptoTokens(w http.ResponseWriter, r *http.Request) {
 		}
 
 		data.Daily = mergeTokenDaily(transfers, native)
-		ttl := cryptoTTL(end, time.Now().UTC())
-		if len(data.Warnings) > 0 {
-			ttl = cryptoPartialTTL
-		}
-		h.cache.SetWithTTL(key, &data, ttl)
+		data.LastDayComplete = <-ready
+		h.cache.SetWithTTL(key, &data, cryptoResponseTTL(end, time.Now().UTC(), len(data.Warnings) > 0, data.LastDayComplete))
 		return &data, nil
 	})
 	if err != nil {
@@ -740,6 +755,8 @@ type BtcMiningRow struct {
 type CryptoMiningData struct {
 	Days  int            `json:"days"`
 	Daily []BtcMiningRow `json:"daily"`
+	// LastDayComplete: see CryptoPulseData (probes Bitcoin).
+	LastDayComplete bool `json:"last_day_complete"`
 }
 
 // mergeBtcMining joins daily block stats with coinbase revenue by date and
@@ -796,6 +813,7 @@ func (h *APIHandler) CryptoMining(w http.ResponseWriter, r *http.Request) {
 			blocksErr   error
 			coinbaseErr error
 		)
+		ready := h.cryptoReadyAsync(ctx, end, "btc")
 
 		done := make(chan struct{}, 2)
 		go func() {
@@ -816,8 +834,8 @@ func (h *APIHandler) CryptoMining(w http.ResponseWriter, r *http.Request) {
 			return nil, coinbaseErr
 		}
 
-		data := CryptoMiningData{Days: days, Daily: mergeBtcMining(blocks, coinbase)}
-		h.cache.SetWithTTL(key, &data, cryptoTTL(end, time.Now().UTC()))
+		data := CryptoMiningData{Days: days, Daily: mergeBtcMining(blocks, coinbase), LastDayComplete: <-ready}
+		h.cache.SetWithTTL(key, &data, cryptoResponseTTL(end, time.Now().UTC(), false, data.LastDayComplete))
 		return &data, nil
 	})
 	if err != nil {
@@ -907,4 +925,3 @@ func (h *APIHandler) CryptoSpot(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, v)
 }
-

@@ -56,6 +56,14 @@ export function DaysPicker({ options, value, onChange }: {
   );
 }
 
+// Subtle note for the daily tabs while the backend's readiness probe has not
+// yet seen the newest UTC day complete (last_day_complete: false; the
+// response is then re-fetched within ~5 minutes). Absent flag → no note.
+export function IngestingNote({ complete }: { complete?: boolean }) {
+  if (complete !== false) return null;
+  return <p className="text-[11px] text-amber-400/80 text-right -mt-2">Latest day may still be ingesting</p>;
+}
+
 // Aligns both chains' series on the union of dates so lines share one x-axis.
 export function mergeDates(btc: { date: string }[], eth: { date: string }[]): string[] {
   return [...new Set([...btc.map(r => r.date), ...eth.map(r => r.date)])].sort();

@@ -6,7 +6,7 @@ import { fetchCryptoFees } from '../../api';
 import { MetricCard, EmptyState, ErrorBanner } from '../../dashboards/shared';
 import {
   BTC_COLOR, ETH_COLOR, CHART_TOOLTIP, AXIS_LABEL, SPLIT_LINE,
-  fmtNum, Panel, DaysPicker, mergeDates, seriesByDate,
+  fmtNum, Panel, DaysPicker, IngestingNote, mergeDates, seriesByDate,
 } from './shared';
 import { ChainIcon } from './CryptoIcons';
 import GasPulse72hView from './GasPulse72hView';
@@ -58,6 +58,7 @@ function DailyFeesView() {
         <DaysPicker options={DAY_OPTIONS} value={days} onChange={setDays} />
         <span className="text-[11px] text-zinc-600">Complete UTC days · latest = {latestDate}</span>
       </div>
+      <IngestingNote complete={data.last_day_complete} />
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <MetricCard label="BTC Median Fee" value={latestBtc ? `${latestBtc.median_fee_vb} sat/vB` : '—'} icon={<span className="inline-flex items-center gap-1"><ChainIcon chain="btc" size={14} /><Gauge size={14} /></span>} detail={latestBtc?.date || 'no data'} accentColor={BTC_COLOR} />

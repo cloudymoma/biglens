@@ -5,7 +5,7 @@ import { fetchCryptoTokens } from '../../api';
 import { EmptyState, ErrorBanner } from '../../dashboards/shared';
 import {
   ETH_COLOR, CHART_TOOLTIP, AXIS_LABEL, SPLIT_LINE,
-  fmtNum, shortHash, Panel, DaysPicker,
+  fmtNum, shortHash, Panel, DaysPicker, IngestingNote,
 } from './shared';
 
 const DAY_OPTIONS = [7, 30];
@@ -40,6 +40,7 @@ export default function TokensTab() {
           activity measured in Transfer event counts (ERC-20 & ERC-721, incl. zero-value) — cross-token value sums are meaningless without prices
         </span>
       </div>
+      <IngestingNote complete={data.last_day_complete} />
 
       <div className="grid lg:grid-cols-2 gap-4">
         <Panel title="Token vs Native Activity" note="daily token Transfer events (ERC-20 / ERC-721) vs all ETH transactions">

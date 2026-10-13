@@ -872,6 +872,7 @@ export interface CryptoPulseData {
   days: number;
   btc: CryptoChainPulse;
   eth: CryptoChainPulse;
+  last_day_complete?: boolean; // false: newest UTC day may still be ingesting
 }
 
 export interface BtcFeeRow {
@@ -895,6 +896,7 @@ export interface CryptoFeesData {
   eth: EthFeeRow[];
   btc_blocks: CryptoBlockRow[];
   eth_blocks: CryptoBlockRow[];
+  last_day_complete?: boolean; // false: newest UTC day may still be ingesting
 }
 
 export type CryptoChain = 'btc' | 'eth';
@@ -935,6 +937,7 @@ export interface CryptoWhalesData {
   trend: WhaleTrendRow[];
   concentration: ConcentrationRow[];
   freeze_coverage_from?: string;
+  last_day_complete?: boolean; // false: newest UTC day may still be ingesting
 }
 
 export interface TokenRow {
@@ -964,6 +967,7 @@ export interface CryptoTokensData {
   top_tokens: TokenRow[];
   daily: TokenDailyRow[];
   contracts: ContractRow[];
+  last_day_complete?: boolean; // false: newest UTC day may still be ingesting
 }
 
 export interface BtcMiningRow {
@@ -976,6 +980,7 @@ export interface BtcMiningRow {
 export interface CryptoMiningData {
   days: number;
   daily: BtcMiningRow[];
+  last_day_complete?: boolean; // false: newest UTC day may still be ingesting
 }
 
 export interface CryptoSpotData {

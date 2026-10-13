@@ -6,7 +6,7 @@ import { fetchCryptoPulse } from '../../api';
 import { MetricCard, EmptyState, ErrorBanner } from '../../dashboards/shared';
 import {
   BTC_COLOR, ETH_COLOR, CHART_TOOLTIP, AXIS_LABEL, SPLIT_LINE,
-  fmtNum, Panel, DaysPicker, mergeDates, seriesByDate,
+  fmtNum, Panel, DaysPicker, IngestingNote, mergeDates, seriesByDate,
 } from './shared';
 
 const DAY_OPTIONS = [7, 30, 90, 365];
@@ -77,6 +77,7 @@ export default function PulseTab() {
         <DaysPicker options={DAY_OPTIONS} value={days} onChange={setDays} />
         <span className="text-[11px] text-zinc-600">Complete UTC days · latest = {latestDate}</span>
       </div>
+      <IngestingNote complete={data.last_day_complete} />
 
       <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
         <KpiRow chain={data.btc} label="BTC" color={BTC_COLOR} />
