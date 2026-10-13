@@ -610,6 +610,36 @@ func (s *riskStore) lookalikeHits(ctx context.Context, chain string, addrs []str
 	return out, rows.Err()
 }
 
+// fakeTokenCreators returns the known creator of each of contracts that is a
+// counterfeit with a recorded creator on chain (one IN (...) query).
+func (s *riskStore) fakeTokenCreators(ctx context.Context, chain string, contracts []string) (map[string]string, error) {
+	out := map[string]string{}
+	if len(contracts) == 0 {
+		return out, nil
+	}
+	placeholders := make([]string, len(contracts))
+	args := make([]any, 0, 1+len(contracts))
+	args = append(args, chain)
+	for i, c := range contracts {
+		placeholders[i] = "?"
+		args = append(args, normalizeScamAddr(chain, c))
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT contract, creator FROM scam_fake_tokens
+	  WHERE chain = ? AND creator != '' AND contract IN (`+strings.Join(placeholders, ",")+`)`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("fake token creators: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var contract, creator string
+		if err := rows.Scan(&contract, &creator); err != nil {
+			return nil, fmt.Errorf("scan fake token creator: %w", err)
+		}
+		out[contract] = creator
+	}
+	return out, rows.Err()
+}
+
 // fakeTokenSet returns the set of known counterfeit token contracts for chain.
 func (s *riskStore) fakeTokenSet(ctx context.Context, chain string) (map[string]bool, error) {
 	out := map[string]bool{}

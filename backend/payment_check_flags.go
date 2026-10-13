@@ -229,6 +229,7 @@ func applyFlags(txs []payTx, asset string, fam chainFamily) {
 		tx := &txs[idx]
 		hadListed := slices.Contains(tx.Flags, "counterparty_listed")
 		hadRBF := slices.Contains(tx.Flags, "rbf_signaled")
+		hadDeployer := slices.Contains(tx.Flags, "counterfeit_deployer")
 		flags := []string{}
 
 		isOfficial := tx.TokenTier == tierNative || tx.TokenTier == tierBridged
@@ -279,6 +280,9 @@ func applyFlags(txs []payTx, asset string, fam chainFamily) {
 		}
 		if hadRBF && !slices.Contains(flags, "rbf_signaled") {
 			flags = append(flags, "rbf_signaled")
+		}
+		if hadDeployer && !slices.Contains(flags, "counterfeit_deployer") {
+			flags = append(flags, "counterfeit_deployer")
 		}
 
 		tx.Flags = flags
@@ -352,15 +356,67 @@ func applyFakeTokenSet(ctx context.Context, store *riskStore, network string, tx
 	return nil
 }
 
+// applyFakeTokenDeployers flags ETH counterfeit-token transfers whose token
+// was created by a known serial counterfeit deployer (scam_fake_tokens.creator
+// found in scam_fake_token_deployers). Token contracts are chain-specific and
+// both corpora come from Ethereum, so other networks are skipped.
+func applyFakeTokenDeployers(ctx context.Context, store *riskStore, network string, txs []payTx) error {
+	if network != "eth" {
+		return nil
+	}
+	tokenOf := func(tx payTx) string { return strings.ToLower(strings.TrimSpace(tx.TokenContract)) }
+	seen := map[string]bool{}
+	var contracts []string
+	for _, tx := range txs {
+		if c := tokenOf(tx); tx.TokenTier == tierCounterfeit && c != "" && !seen[c] {
+			seen[c] = true
+			contracts = append(contracts, c)
+		}
+	}
+	if len(contracts) == 0 {
+		return nil
+	}
+	creators, err := store.fakeTokenCreators(ctx, "eth", contracts)
+	if err != nil {
+		return errors.New("unavailable")
+	}
+	var creatorList []string
+	for _, c := range creators {
+		if !slices.Contains(creatorList, c) {
+			creatorList = append(creatorList, c)
+		}
+	}
+	if len(creatorList) == 0 {
+		return nil
+	}
+	serial, err := store.fakeTokenDeployerHits(ctx, creatorList)
+	if err != nil {
+		return errors.New("unavailable")
+	}
+	for i := range txs {
+		if txs[i].TokenTier != tierCounterfeit {
+			continue
+		}
+		if _, ok := serial[creators[tokenOf(txs[i])]]; ok && !slices.Contains(txs[i].Flags, "counterfeit_deployer") {
+			txs[i].Flags = append(txs[i].Flags, "counterfeit_deployer")
+		}
+	}
+	return nil
+}
+
 // applyLocalHits queries local OFAC / MEW / stablecoin-freeze / scam-lookalike
-// corpora in a single batch via store.riskPoolForAddresses, re-tiers ETH fake
-// tokens via scam_fake_tokens, and tags matching rows with counterparty_listed,
-// lookalike_known, and (for real outgoing to known poisoners) sent_to_lookalike.
+// / serial-deployer corpora in a single batch via store.riskPoolForAddresses,
+// re-tiers ETH fake tokens via scam_fake_tokens, and tags matching rows with
+// counterparty_listed, lookalike_known, counterfeit_deployer, and (for real
+// outgoing to known poisoners) sent_to_lookalike.
 func applyLocalHits(ctx context.Context, store *riskStore, network string, txs []payTx) error {
 	if store == nil {
 		return errors.New("unavailable")
 	}
 	if err := applyFakeTokenSet(ctx, store, network, txs); err != nil {
+		return err
+	}
+	if err := applyFakeTokenDeployers(ctx, store, network, txs); err != nil {
 		return err
 	}
 	fam := chains[network].Family
@@ -390,6 +446,9 @@ func applyLocalHits(ctx context.Context, store *riskStore, network string, txs [
 		txs[i].CounterpartyHits = slices.Clone(hits)
 		if hasListedCounterpartyHit(hits) && !slices.Contains(txs[i].Flags, "counterparty_listed") {
 			txs[i].Flags = append(txs[i].Flags, "counterparty_listed")
+		}
+		if slices.Contains(hits, "fake_token_deployers") && !slices.Contains(txs[i].Flags, "counterfeit_deployer") {
+			txs[i].Flags = append(txs[i].Flags, "counterfeit_deployer")
 		}
 		if slices.Contains(hits, "scam_lookalikes") {
 			if !slices.Contains(txs[i].Flags, "lookalike_known") {
