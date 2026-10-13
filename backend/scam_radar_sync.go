@@ -52,12 +52,12 @@ func suspiciousEmpty(scope, what string) error {
 	return &suspiciousResultError{msg: fmt.Sprintf("suspicious empty result for %s: 0 %s — upstream schema or format change?", scope, what)}
 }
 
-// minPerDayGuard fails when any day of the window has a count below min
+// minPerDayGuard fails when any day of the window has a count below floor
 // (days absent from counts count as 0), naming the first such day.
-func minPerDayGuard(order []string, counts map[string]int64, min int64, what string) error {
+func minPerDayGuard(order []string, counts map[string]int64, floor int64, what string) error {
 	var low []string
 	for _, d := range order {
-		if counts[d] < min {
+		if counts[d] < floor {
 			low = append(low, d)
 		}
 	}
