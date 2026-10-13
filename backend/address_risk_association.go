@@ -272,6 +272,7 @@ func poolLabels(sources []string) []string {
 		"chainalysis_oracle": "Chainalysis oracle",
 		"first_funder":       "First ETH funder in window",
 		"blockscout_scam":    riskTitleBlockscoutScam,
+		"scam_lookalikes":    "Known address-poisoning lookalike",
 	}
 	out := make([]string, 0, len(sources))
 	for _, s := range sources {

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -164,6 +165,10 @@ func newFakeUpstreams(t *testing.T, oracleBody, goplusBody string, goplusDelay t
 		}
 		b, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(b, &req)
+		if strings.Contains(string(b), `"eth_getCode"`) {
+			w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":"0x"}`)) // plain EOA: no EIP-7702 clue
+			return
+		}
 		if !strings.Contains(string(b), riskOracleContract) {
 			w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":"` + oracleFalse + `"}`))
 			return
@@ -245,7 +250,7 @@ func TestServiceLookupRoninLikeHit(t *testing.T) {
 	for _, s := range res.Sources {
 		ids = append(ids, s.ID+"="+s.Status)
 	}
-	if strings.Join(ids, ",") != "ofac=ok,mew_darklist=ok,stablecoin=ok,scam_lookalikes=ok,fake_token_deployers=ok,issuer_freeze=ok,chainalysis_oracle=ok,goplus=ok,etherscan=not_configured" {
+	if strings.Join(ids, ",") != "ofac=ok,mew_darklist=ok,stablecoin=ok,scam_lookalikes=ok,fake_token_deployers=ok,issuer_freeze=ok,chainalysis_oracle=ok,goplus=ok,etherscan=not_configured,eip7702=ok,bigquery_profile=skipped" {
 		t.Errorf("sources = %v", ids)
 	}
 	if res.Disclaimer != riskDisclaimer || res.QueriedAt != "2026-09-26T12:00:00Z" || res.Chain != "eth" {
@@ -283,7 +288,7 @@ func TestServiceLookupGoPlusTimeout(t *testing.T) {
 	if gp.ID != "goplus" || gp.Status != "error" || gp.Error != "timeout" || !res.hasError() {
 		t.Errorf("goplus source = %+v", gp)
 	}
-	if res.Summary.Text != "Nothing found in 7 sources that completed; 1 could not be fully checked (see Sources)." {
+	if res.Summary.Text != "Nothing found in 8 sources that completed; 1 could not be fully checked (see Sources)." {
 		t.Errorf("text = %q", res.Summary.Text)
 	}
 }
@@ -691,10 +696,10 @@ func TestRiskSourcesForChain(t *testing.T) {
 		addr  string
 		want  string
 	}{
-		{"eth", "0x1111111111111111111111111111111111111111", "ofac,mew_darklist,stablecoin,scam_lookalikes,fake_token_deployers,issuer_freeze,chainalysis_oracle,goplus,blockscout,etherscan"},
-		{"arb", "0x1111111111111111111111111111111111111111", "ofac,mew_darklist,scam_lookalikes,fake_token_deployers,issuer_freeze,chainalysis_oracle,goplus,blockscout"},
-		{"op", "0x1111111111111111111111111111111111111111", "ofac,mew_darklist,scam_lookalikes,fake_token_deployers,issuer_freeze,chainalysis_oracle,goplus,blockscout"},
-		{"base", "0x1111111111111111111111111111111111111111", "ofac,mew_darklist,scam_lookalikes,fake_token_deployers,issuer_freeze,goplus,blockscout"},
+		{"eth", "0x1111111111111111111111111111111111111111", "ofac,mew_darklist,stablecoin,scam_lookalikes,fake_token_deployers,issuer_freeze,chainalysis_oracle,goplus,blockscout,etherscan,eip7702,bigquery_profile"},
+		{"arb", "0x1111111111111111111111111111111111111111", "ofac,mew_darklist,scam_lookalikes,fake_token_deployers,issuer_freeze,chainalysis_oracle,goplus,blockscout,eip7702"},
+		{"op", "0x1111111111111111111111111111111111111111", "ofac,mew_darklist,scam_lookalikes,fake_token_deployers,issuer_freeze,chainalysis_oracle,goplus,blockscout,eip7702"},
+		{"base", "0x1111111111111111111111111111111111111111", "ofac,mew_darklist,scam_lookalikes,fake_token_deployers,issuer_freeze,goplus,blockscout,eip7702"},
 		{"tron", "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t", "ofac,tron_stablecoin,scam_lookalikes,issuer_freeze,goplus"},
 		{"btc", "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", "ofac"},
 		{"sol", "depMwrdSqn5y9fDkdotP4iGxTdxSaEHVE6QjnbcEmjN", "ofac,issuer_freeze"},
@@ -1152,5 +1157,41 @@ func TestLookupFakeTokenDeployerClue(t *testing.T) {
 		if s.ID == "fake_token_deployers" {
 			t.Errorf("tron lookup must not include fake_token_deployers: %+v", s)
 		}
+	}
+}
+
+// The BigQuery profile reports its own statuses: a switched-off profile is in
+// no summary list and changes nothing; over_budget is a lasting "could not be
+// fully checked"; timeouts and limits are failures that must not be cached.
+func TestBuildRiskSummaryBQProfileStatuses(t *testing.T) {
+	ok := riskSource{ID: "ofac", Status: "ok"}
+	tests := []struct {
+		status, list string
+		cacheable    bool
+	}{
+		{bqStatusSkipped, "", true},
+		{bqStatusOK, "checked", true},
+		{bqStatusOverBudget, "incomplete", true},
+		{bqStatusRateLimited, "failed", false},
+		{bqStatusTimeout, "failed", false},
+		{bqStatusError, "failed", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.status, func(t *testing.T) {
+			srcs := []riskSource{ok, {ID: "bigquery_profile", Status: tt.status, Error: tt.status}}
+			s := buildRiskSummary(nil, srcs)
+			lists := map[string][]string{"checked": s.Checked, "failed": s.Failed, "incomplete": s.Incomplete, "skipped": s.Skipped}
+			for name, ids := range lists {
+				if got, want := slices.Contains(ids, "bigquery_profile"), name == tt.list; got != want {
+					t.Errorf("%s list contains bigquery_profile = %v, want %v (%+v)", name, got, want, s)
+				}
+			}
+			if got := (&riskLookupResult{Sources: srcs}).cacheable(); got != tt.cacheable {
+				t.Errorf("cacheable = %v, want %v", got, tt.cacheable)
+			}
+		})
+	}
+	if got := buildRiskSummary(nil, []riskSource{ok, {ID: "bigquery_profile", Status: bqStatusSkipped}}).Text; got != "No records in the 1 source checked." {
+		t.Errorf("text with a skipped profile = %q", got)
 	}
 }

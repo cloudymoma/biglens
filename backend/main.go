@@ -120,6 +120,7 @@ func main() {
 	}
 	api.risk.cfg = cfg
 	api.risk.bqSrc = bqStablecoinSource{client: bq.client}
+	api.risk.bqProfile = newBQProfiler(cfg.AddressRisk.bigQueryProfile(), bqProfileClient{client: bq.client})
 	api.risk.invalidateCache = invalidate
 	api.risk.setEtherscanKey(cfg.AddressRisk.EtherscanAPIKey)
 

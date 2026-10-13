@@ -310,38 +310,46 @@ func (t blockscoutTag) text() string {
 	return ""
 }
 
-// checkBlockscoutAddress inspects Blockscout V2 address metadata for scam
-// reputation and high-risk public/metadata tags (never contract self-names).
-func checkBlockscoutAddress(ctx context.Context, baseURL, addr string, now time.Time) ([]riskClue, string) {
-	if baseURL == "" {
-		return nil, ""
-	}
+// blockscoutAddressInfo is the part of Blockscout's V2 address metadata the
+// lookups use. Found is false when Blockscout has no record (HTTP 404).
+type blockscoutAddressInfo struct {
+	Found      bool
+	Scam       bool     // is_scam, or reputation "scam"
+	RiskTags   []string // public/metadata tags naming a risk, deduplicated
+	IsContract bool
+	IsVerified bool
+	Name       string // contract name (attacker-chosen text; display only)
+}
+
+// fetchBlockscoutAddress reads GET {base}/api/v2/addresses/{addr} within one
+// riskSourceTimeout budget. A 404 is a definitive "no record", not an error.
+func fetchBlockscoutAddress(ctx context.Context, baseURL, addr string) (blockscoutAddressInfo, string) {
 	ctx, cancel := context.WithTimeout(ctx, riskSourceTimeout)
 	defer cancel()
 	base := strings.TrimRight(baseURL, "/")
 	u := base + "/api/v2/addresses/" + addr
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return nil, "bad_request"
+		return blockscoutAddressInfo{}, "bad_request"
 	}
 	req.Header.Set("User-Agent", blockscoutUserAgent)
 	resp, err := riskHTTPClient.Do(req)
 	if err != nil {
-		return nil, upstreamErrCode(err)
+		return blockscoutAddressInfo{}, upstreamErrCode(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound {
-		return nil, ""
+		return blockscoutAddressInfo{}, ""
 	}
 	if resp.StatusCode == http.StatusTooManyRequests {
-		return nil, "rate_limited"
+		return blockscoutAddressInfo{}, "rate_limited"
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Sprintf("upstream_http_%d", resp.StatusCode)
+		return blockscoutAddressInfo{}, fmt.Sprintf("upstream_http_%d", resp.StatusCode)
 	}
 	body, err := readCapped(resp.Body, riskMaxBody)
 	if err != nil {
-		return nil, "bad_response"
+		return blockscoutAddressInfo{}, "bad_response"
 	}
 	var parsed struct {
 		IsScam     bool            `json:"is_scam"`
@@ -350,19 +358,19 @@ func checkBlockscoutAddress(ctx context.Context, baseURL, addr string, now time.
 		Metadata   *struct {
 			Tags []blockscoutTag `json:"tags"`
 		} `json:"metadata"`
+		// Decoded leniently: an unexpected type here must not turn a scam
+		// verdict into bad_response.
+		IsContract json.RawMessage `json:"is_contract"`
+		IsVerified json.RawMessage `json:"is_verified"`
+		Name       json.RawMessage `json:"name"`
 	}
 	if err := json.Unmarshal(body, &parsed); err != nil {
-		return nil, "bad_response"
+		return blockscoutAddressInfo{}, "bad_response"
 	}
-	asOf := fmtTime(now)
-	ref := base + "/address/" + addr
-	var out []riskClue
-	if parsed.IsScam || strings.EqualFold(parsed.Reputation, "scam") {
-		out = append(out, riskClue{
-			Severity: sevWarning, Source: "blockscout", Flag: "is_scam", Code: "blockscout_scam",
-			Title: riskTitleBlockscoutScam, AsOf: asOf, RefURL: ref,
-		})
-	}
+	info := blockscoutAddressInfo{Found: true, Scam: parsed.IsScam || strings.EqualFold(parsed.Reputation, "scam")}
+	_ = json.Unmarshal(parsed.IsContract, &info.IsContract)
+	_ = json.Unmarshal(parsed.IsVerified, &info.IsVerified)
+	_ = json.Unmarshal(parsed.Name, &info.Name)
 	var allTags []string
 	for _, t := range parsed.PublicTags {
 		if s := t.text(); s != "" {
@@ -376,16 +384,37 @@ func checkBlockscoutAddress(ctx context.Context, baseURL, addr string, now time.
 			}
 		}
 	}
-	var riskTags []string
 	for _, tag := range allTags {
-		if blockscoutRiskTag(tag) && !slices.Contains(riskTags, tag) {
-			riskTags = append(riskTags, tag)
+		if blockscoutRiskTag(tag) && !slices.Contains(info.RiskTags, tag) {
+			info.RiskTags = append(info.RiskTags, tag)
 		}
 	}
-	if len(riskTags) > 0 {
+	return info, ""
+}
+
+// checkBlockscoutAddress inspects Blockscout V2 address metadata for scam
+// reputation and high-risk public/metadata tags (never contract self-names).
+func checkBlockscoutAddress(ctx context.Context, baseURL, addr string, now time.Time) ([]riskClue, string) {
+	if baseURL == "" {
+		return nil, ""
+	}
+	info, code := fetchBlockscoutAddress(ctx, baseURL, addr)
+	if code != "" {
+		return nil, code
+	}
+	asOf := fmtTime(now)
+	ref := strings.TrimRight(baseURL, "/") + "/address/" + addr
+	var out []riskClue
+	if info.Scam {
+		out = append(out, riskClue{
+			Severity: sevWarning, Source: "blockscout", Flag: "is_scam", Code: "blockscout_scam",
+			Title: riskTitleBlockscoutScam, AsOf: asOf, RefURL: ref,
+		})
+	}
+	if len(info.RiskTags) > 0 {
 		out = append(out, riskClue{
 			Severity: sevWarning, Source: "blockscout", Flag: "risk_tag", Code: "blockscout_tag",
-			Title: fmt.Sprintf(riskTitleBlockscoutTagFmt, strings.Join(riskTags, ", ")),
+			Title: fmt.Sprintf(riskTitleBlockscoutTagFmt, strings.Join(info.RiskTags, ", ")),
 			AsOf:  asOf, RefURL: ref,
 		})
 	}

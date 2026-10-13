@@ -55,7 +55,7 @@ func TestServiceLookupEtherscanNotConfigured(t *testing.T) {
 		es.HelpURL != "https://docs.etherscan.io/set-up-your-api-key" || calls.Load() != 0 || res.AssociationScope != nil {
 		t.Errorf("etherscan source = %+v, calls %d", es, calls.Load())
 	}
-	want := "No records in the 8 sources checked. Not checked: Etherscan association analysis (no API key)."
+	want := "No records in the 9 sources checked. Not checked: Etherscan association analysis (no API key)."
 	if res.Summary.Text != want || strings.Join(res.Summary.Skipped, ",") != "etherscan" {
 		t.Errorf("summary = %+v", res.Summary)
 	}
@@ -107,7 +107,7 @@ func TestServiceLookupEtherscanKeyInvalid(t *testing.T) {
 	if es.Status != "error" || es.Error != "key_invalid" || res.cacheable() || res.AssociationScope != nil {
 		t.Errorf("etherscan source = %+v cacheable %v", es, res.cacheable())
 	}
-	if !strings.HasPrefix(res.Summary.Text, "Nothing found in 8 sources that completed; 1 could not be fully checked") {
+	if !strings.HasPrefix(res.Summary.Text, "Nothing found in 9 sources that completed; 1 could not be fully checked") {
 		t.Errorf("text = %q", res.Summary.Text)
 	}
 }

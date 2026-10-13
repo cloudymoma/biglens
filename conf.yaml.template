@@ -24,6 +24,11 @@ catalog:
 #   scam_radar:
 #     initial_days: 30                    # first-start sync of Scam Radar & TRON freeze history (days, max 31; 0 = off, ~$1 once)
 #     retention_days: 90                  # retention window for scam_lookalikes and scam_fake_tokens (days)
+#   bigquery_profile:                     # opt-in "BigQuery profile" switch on Ethereum lookups (off in the UI by default)
+#     enabled: true                       # false = lookups never query BigQuery
+#     max_bytes_billed: 2147483648        # per-lookup cap (2 GiB); a profile bills ~0.9 GiB, busier addresses are rejected unbilled
+#     max_per_hour: 60                    # global limit (token bucket); worst case ~60 x 0.9 GiB ≈ $0.33/hour on-demand
+#     timeout_seconds: 20                 # lookup returns without the profile after this (max 45)
 
 # Crypto Pulse → Payment Check (all optional; defaults shown)
 # payment_check:

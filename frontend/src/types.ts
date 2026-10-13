@@ -992,7 +992,10 @@ export interface CryptoSpotData {
 // --- Crypto Pulse: Address Risk (field names mirror backend/address_risk_lookup.go) ---
 
 export type AddressRiskChain = 'eth' | 'arb' | 'op' | 'base' | 'tron' | 'btc' | 'sol';
-export type AddressRiskStatus = 'ok' | 'partial' | 'stale' | 'empty' | 'error' | 'not_configured';
+export type AddressRiskStatus =
+  | 'ok' | 'partial' | 'stale' | 'empty' | 'error' | 'not_configured'
+  // bigquery_profile only: switch off (not run), hourly limit, cap exceeded, slow job
+  | 'skipped' | 'rate_limited' | 'over_budget' | 'timeout';
 export type AddressRiskSeverity = 'critical' | 'warning' | 'association' | 'info';
 
 export interface AddressRiskClue {
@@ -1069,6 +1072,65 @@ export interface AddressRiskLookup {
   clues: AddressRiskClue[];
   sources: AddressRiskSource[];
   association_scope: AddressRiskScope | null;
+  bq_profile?: AddressRiskBQProfile; // only when the lookup asked for it (?bq=1, Ethereum)
+}
+
+// --- Address Risk: opt-in BigQuery profile (backend/address_risk_bqprofile.go) ---
+
+export interface AddressRiskBQProfileInfo {
+  available: boolean;
+  max_bytes_billed: number;
+  per_hour_limit: number;
+  timeout_seconds: number;
+  reason?: 'disabled' | 'not_configured';
+}
+
+export interface AddressRiskBQSide {
+  txs: number;
+  peers: number;
+  first?: string;
+  last?: string;
+  eth: string;
+}
+
+export interface AddressRiskBQFunder {
+  address: string;
+  block_number: number;
+  timestamp: string;
+  value_eth: string;
+  lists: string[];
+}
+
+export interface AddressRiskBQPeer {
+  address: string;
+  sent: number;
+  received: number;
+  first_ts: string;
+  last_ts: string;
+  eth_sent: string;
+  eth_received: string;
+  lists: string[];
+  first_funder?: boolean;
+}
+
+export interface AddressRiskBQProfile {
+  status: 'ok' | 'rate_limited' | 'over_budget' | 'timeout' | 'error';
+  message?: string;
+  outgoing?: AddressRiskBQSide;
+  incoming?: AddressRiskBQSide;
+  counterparties: number;
+  first_seen?: string;
+  last_active?: string;
+  account_age_days?: number;
+  first_funder?: AddressRiskBQFunder;
+  top_peers?: AddressRiskBQPeer[];
+  listed_peers?: AddressRiskBQPeer[];
+  peers_analyzed: number;
+  lists_checked: boolean;
+  bytes_billed: number;
+  max_bytes_billed: number;
+  elapsed_ms: number;
+  cached: boolean;
 }
 
 export interface AddressRiskKeyInfo {
@@ -1082,6 +1144,7 @@ export interface AddressRiskSources {
   rpc_hosts: string[];
   goplus_host: string;
   etherscan: AddressRiskKeyInfo;
+  bigquery_profile?: AddressRiskBQProfileInfo;
 }
 
 export interface AddressRiskTrendPoint {
@@ -1894,11 +1957,13 @@ export interface PaymentAlert {
   code:
     | 'own_address_frozen'
     | 'own_address_sanctioned'
+    | 'own_address_eip7702'
     | 'counterfeit_received'
     | 'poisoning_received'
     | 'sent_to_lookalike';
   message: string;
   tx_hash?: string;
+  address?: string; // contract the alert refers to (own_address_eip7702: the delegate)
 }
 
 export interface PaymentHistoryScope {
