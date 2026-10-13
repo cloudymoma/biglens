@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -82,6 +83,46 @@ type AddressRiskConfig struct {
 	// UpdateConfig. Never returned by any endpoint or logged.
 	EtherscanAPIKey string          `yaml:"etherscan_api_key,omitempty"`
 	ScamRadar       ScamRadarConfig `yaml:"scam_radar,omitempty"`
+
+	// BigQueryProfile: guardrails of the opt-in per-lookup BigQuery profile.
+	BigQueryProfile BigQueryProfileConfig `yaml:"bigquery_profile,omitempty"`
+}
+
+// BigQueryProfileConfig holds the server-side guardrails of the opt-in
+// BigQuery address profile (Address Risk, Ethereum): users switch it on per
+// lookup, and every profile is one job billed to bigquery.project_id.
+type BigQueryProfileConfig struct {
+	Enabled        *bool `yaml:"enabled,omitempty"`          // nil → true: users may opt in
+	MaxBytesBilled int64 `yaml:"max_bytes_billed,omitempty"` // ≤0 → 2 GiB per job
+	MaxPerHour     int   `yaml:"max_per_hour,omitempty"`     // ≤0 → 60 jobs/hour (global token bucket)
+	TimeoutSeconds int   `yaml:"timeout_seconds,omitempty"`  // ≤0 → 20; at most 45
+}
+
+// bqProfileSettings is BigQueryProfileConfig with defaults applied.
+type bqProfileSettings struct {
+	Enabled        bool
+	MaxBytesBilled int64
+	MaxPerHour     int
+	Timeout        time.Duration
+}
+
+// bigQueryProfile resolves the profile guardrails. The timeout is capped at
+// 45 s so a lookup always answers within the server's 60 s WriteTimeout.
+func (c AddressRiskConfig) bigQueryProfile() bqProfileSettings {
+	p := c.BigQueryProfile
+	s := bqProfileSettings{Enabled: p.Enabled == nil || *p.Enabled, MaxBytesBilled: p.MaxBytesBilled,
+		MaxPerHour: p.MaxPerHour, Timeout: time.Duration(p.TimeoutSeconds) * time.Second}
+	if s.MaxBytesBilled <= 0 {
+		s.MaxBytesBilled = 2 << 30
+	}
+	if s.MaxPerHour <= 0 {
+		s.MaxPerHour = 60
+	}
+	if s.Timeout <= 0 {
+		s.Timeout = 20 * time.Second
+	}
+	s.Timeout = min(s.Timeout, 45*time.Second)
+	return s
 }
 
 // defaultRiskRPCURLs are keyless public Ethereum RPCs, tried in order for
