@@ -51,6 +51,10 @@ const (
 	bqProfileCacheMax   = 2000
 	bqProfileJobTimeout = 2 * time.Minute // hard cap for a job that outlives its lookup
 
+	// bqProfileNewAddressDays: an address first active less than this many
+	// days ago gets a "New address" Info clue.
+	bqProfileNewAddressDays = 30
+
 	bqStatusOK          = "ok"
 	bqStatusSkipped     = "skipped" // not requested (switch off), non-Ethereum, or disabled
 	bqStatusRateLimited = "rate_limited"
@@ -499,19 +503,6 @@ func fmtCount(n int64) string {
 	return b.String()
 }
 
-func accountAgeText(days int) string {
-	switch {
-	case days < 1:
-		return "less than a day"
-	case days < 60:
-		return plural(days, "day")
-	case days < 730:
-		return plural(days/30, "month")
-	default:
-		return fmt.Sprintf("%.1f years", float64(days)/365.25)
-	}
-}
-
 // poolVerb phrases one local-list membership for a clue title.
 func poolVerb(source string) string {
 	switch source {
@@ -523,6 +514,8 @@ func poolVerb(source string) string {
 		return "on the MEW darklist"
 	case "scam_lookalikes":
 		return "a known address-poisoning lookalike"
+	case "fake_token_deployers":
+		return "a serial counterfeit-token deployer"
 	default:
 		return "on local list " + source
 	}
@@ -631,7 +624,8 @@ func fillBQProfile(prof *riskBQProfile, row *bqProfileRow, pool riskPool, now ti
 
 // bqProfileClues maps a profile to clues: association clues for a listed
 // first funder and for listed counterparties (as the Etherscan association
-// analysis does), plus Info clues for account age and lifetime activity.
+// analysis does), plus Info clues only when risk-relevant: a never-used
+// address or one first active less than bqProfileNewAddressDays ago.
 func bqProfileClues(prof *riskBQProfile, asOf string) []riskClue {
 	var out []riskClue
 	clue := func(sev, code, title, detail, observed, ref string) {
@@ -690,17 +684,19 @@ func bqProfileClues(prof *riskBQProfile, asOf string) []riskClue {
 			"Internal transfers and token transfers are not covered by this profile.", "", "")
 		return out
 	}
-	detail := "Earliest top-level transaction in BigQuery's full Ethereum history."
-	if f != nil {
-		detail += fmt.Sprintf(" First funded by %s with %s ETH in block %d.", f.Address, f.ValueETH, f.BlockNumber)
+	// First seen, account age and lifetime activity are on the profile card;
+	// only a very new address is worth an Info clue of its own.
+	if prof.AccountAgeDays < bqProfileNewAddressDays {
+		age := "less than a day"
+		if prof.AccountAgeDays > 0 {
+			age = plural(prof.AccountAgeDays, "day")
+		}
+		detail := fmt.Sprintf("First top-level transaction in BigQuery's full Ethereum history: %s.", prof.FirstSeen[:min(10, len(prof.FirstSeen))])
+		if f != nil {
+			detail += fmt.Sprintf(" First funded by %s with %s ETH in block %d.", f.Address, f.ValueETH, f.BlockNumber)
+		}
+		clue(sevInfo, "bq_new_address", "New address: first activity "+age+" ago",
+			detail+" A new address has little history to judge.", prof.FirstSeen, "")
 	}
-	clue(sevInfo, "bq_first_seen",
-		fmt.Sprintf("First seen on Ethereum %s (account age %s)", prof.FirstSeen[:min(10, len(prof.FirstSeen))], accountAgeText(prof.AccountAgeDays)),
-		detail, prof.FirstSeen, "")
-	clue(sevInfo, "bq_activity",
-		fmt.Sprintf("Lifetime activity: %s outgoing / %s incoming transactions with %s counterparties; last active %s",
-			fmtCount(prof.Outgoing.Txs), fmtCount(prof.Incoming.Txs), fmtCount(prof.Counterparties), prof.LastActive[:min(10, len(prof.LastActive))]),
-		fmt.Sprintf("Sent %s ETH and received %s ETH in top-level transactions (internal transfers and tokens not included).",
-			prof.Outgoing.ETH, prof.Incoming.ETH), "", "")
 	return out
 }

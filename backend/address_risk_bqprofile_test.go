@@ -16,11 +16,12 @@ import (
 )
 
 const (
-	bqTarget    = "0x1111111111111111111111111111111111111111"
-	bqFunder    = "0x5555555555555555555555555555555555555555"
-	bqPeerMEW   = "0x2222222222222222222222222222222222222222"
-	bqPeerLook  = "0x123400000000000000000000000000000000abcd"
-	bqPeerPlain = "0x3333333333333333333333333333333333333333"
+	bqTarget     = "0x1111111111111111111111111111111111111111"
+	bqFunder     = "0x5555555555555555555555555555555555555555"
+	bqPeerMEW    = "0x2222222222222222222222222222222222222222"
+	bqPeerLook   = "0x123400000000000000000000000000000000abcd"
+	bqPeerPlain  = "0x3333333333333333333333333333333333333333"
+	bqPeerDeploy = "0x4444444444444444444444444444444444444444"
 )
 
 // fakeBQQuerier stands in for BigQuery: it records every profile job and
@@ -68,6 +69,7 @@ func testBQRow() *bqProfileRow {
 			{Address: bqPeerMEW, Sent: 2, Received: 0, FirstTS: "2020-01-01T00:00:00Z", LastTS: "2020-02-01T00:00:00Z", WeiSent: "500000000000000000", WeiReceived: "0"},
 			{Address: bqPeerLook, Sent: 0, Received: 3, FirstTS: "2026-09-01T00:00:00Z", LastTS: "2026-09-20T12:00:00Z", WeiSent: "0", WeiReceived: "1"},
 			{Address: bqFunder, Sent: 0, Received: 1, FirstTS: "2019-03-01T08:00:00Z", LastTS: "2019-03-01T08:00:00Z", WeiSent: "0", WeiReceived: "250000000000000000"},
+			{Address: bqPeerDeploy, Sent: 1, Received: 0, FirstTS: "2026-05-01T00:00:00Z", LastTS: "2026-05-01T00:00:00Z", WeiSent: "10000000000000000", WeiReceived: "0"},
 		},
 	}
 }
@@ -258,7 +260,8 @@ func TestBQProfilerAvailability(t *testing.T) {
 }
 
 // bqTestService has a store with the first funder on OFAC, a counterparty on
-// the MEW darklist and another in the lookalike corpus.
+// the MEW darklist, one in the lookalike corpus and one in the serial
+// counterfeit-token deployer snapshot.
 func bqTestService(t *testing.T, f *fakeBQQuerier) *addressRiskService {
 	t.Helper()
 	up := newFakeUpstreams(t, `{"result":"`+oracleFalse+`"}`, `{"code":1,"result":{}}`, 0)
@@ -266,10 +269,12 @@ func bqTestService(t *testing.T, f *fakeBQQuerier) *addressRiskService {
 	ctx := context.Background()
 	store.replaceList(ctx, "ofac", []listEntry{{Address: bqFunder}}, "h", riskNow)
 	store.replaceList(ctx, "mew_darklist", []listEntry{{Address: bqPeerMEW}}, "h", riskNow)
-	// The lookalike day must land before markStablecoinSynced moves the cursor.
-	if err := store.applyScamBatch(ctx, scamEthSourceID, "eth", []scamDayBatch{{Day: "2026-09-25",
+	// The Scam Radar day must land before markStablecoinSynced moves the cursor.
+	if err := store.applyScamBatchWithDeployers(ctx, scamEthSourceID, "eth", []scamDayBatch{{Day: "2026-09-25",
 		Lookalikes: []lookalikeRow{{Lookalike: bqPeerLook, Imitated: "0x123499999999999999999999999999999999abcd",
-			Hits: 4, Victims: 2, FirstSeen: "2026-09-01", LastSeen: "2026-09-25"}}}}, "2026-08-27", "2026-09-25", riskNow); err != nil {
+			Hits: 4, Victims: 2, FirstSeen: "2026-09-01", LastSeen: "2026-09-25"}}}},
+		[]fakeTokenDeployerRow{{Address: bqPeerDeploy, Contracts: 5, FirstSeen: "2026-05-01", LastSeen: "2026-09-01"}},
+		"2026-08-27", "2026-09-25", riskNow); err != nil {
 		t.Fatal(err)
 	}
 	markStablecoinSynced(t, store)
@@ -301,14 +306,14 @@ func TestBQProfileResultAndClues(t *testing.T) {
 	if ff == nil || ff.Address != bqFunder || ff.BlockNumber != 7300000 || ff.ValueETH != "0.25" || strings.Join(ff.Lists, ",") != "ofac" {
 		t.Errorf("first funder = %+v", ff)
 	}
-	if len(prof.TopPeers) != 4 || prof.PeersAnalyzed != 4 || prof.TopPeers[0].Address != bqPeerPlain {
+	if len(prof.TopPeers) != 5 || prof.PeersAnalyzed != 5 || prof.TopPeers[0].Address != bqPeerPlain {
 		t.Errorf("top peers = %+v", prof.TopPeers)
 	}
 	var listed []string
 	for _, p := range prof.ListedPeers {
 		listed = append(listed, p.Address+"="+strings.Join(p.Lists, "+"))
 	}
-	if strings.Join(listed, ",") != bqPeerMEW+"=mew_darklist,"+bqPeerLook+"=scam_lookalikes,"+bqFunder+"=ofac" {
+	if strings.Join(listed, ",") != bqPeerMEW+"=mew_darklist,"+bqPeerLook+"=scam_lookalikes,"+bqFunder+"=ofac,"+bqPeerDeploy+"=fake_token_deployers" {
 		t.Errorf("listed peers = %v", listed)
 	}
 	if prof.TopPeers[2].ETHReceived != "<0.000001" {
@@ -332,20 +337,69 @@ func TestBQProfileResultAndClues(t *testing.T) {
 		t.Errorf("first funder clue = %+v", fc)
 	}
 	cc := byCode["bq_counterparties_listed"]
-	if cc.Severity != sevAssociation || cc.Title != "2 direct counterparties appear on local lists" ||
+	if cc.Severity != sevAssociation || cc.Title != "3 direct counterparties appear on local lists" ||
 		!strings.Contains(cc.Detail, bqPeerMEW) || !strings.Contains(cc.Detail, "MEW darklist") ||
-		!strings.Contains(cc.Detail, "address-poisoning lookalike") || strings.Contains(cc.Detail, bqFunder) {
+		!strings.Contains(cc.Detail, "address-poisoning lookalike") ||
+		!strings.Contains(cc.Detail, bqPeerDeploy+" (Serial counterfeit-token deployer;") || strings.Contains(cc.Detail, bqFunder) {
 		t.Errorf("counterparties clue = %+v (the funder has its own clue)", cc)
 	}
-	if fs := byCode["bq_first_seen"]; fs.Severity != sevInfo || !strings.Contains(fs.Title, "2019-03-01") || !strings.Contains(fs.Title, "7.6 years") {
-		t.Errorf("first seen clue = %+v", fs)
+	// First seen, account age and activity are on the card; as clues they
+	// were noise for every ordinary address (only risk-relevant Info stays).
+	if len(clues) != 2 {
+		t.Errorf("clues = %+v, want only the 2 association clues", clues)
 	}
-	if act := byCode["bq_activity"]; act.Severity != sevInfo || !strings.Contains(act.Title, "12 outgoing") ||
-		!strings.Contains(act.Title, "30 incoming") || !strings.Contains(act.Title, "6 counterparties") {
-		t.Errorf("activity clue = %+v", act)
+}
+
+// Info clues stay only when they matter for risk: a never-used address (see
+// TestBQProfileNoActivity) and an address whose first activity is < 30 days old.
+func TestBQProfileNewAddressClue(t *testing.T) {
+	tests := []struct {
+		name  string
+		age   time.Duration
+		title string // "" = no new-address clue
+	}{
+		{"hours old", 2 * time.Hour, "New address: first activity less than a day ago"},
+		{"six days", 6*24*time.Hour + time.Hour, "New address: first activity 6 days ago"},
+		{"one day", 24*time.Hour + time.Hour, "New address: first activity 1 day ago"},
+		{"29 days", 29*24*time.Hour + time.Hour, "New address: first activity 29 days ago"},
+		{"30 days is not new", 30*24*time.Hour + time.Hour, ""},
 	}
-	if len(clues) != 4 {
-		t.Errorf("clues = %d, want 4", len(clues))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			first := riskNow.Add(-tt.age).UTC().Format(time.RFC3339)
+			row := &bqProfileRow{InTxs: 1, InFirst: first, InLast: first, InPeers: 1, InWei: "50000000000000000", OutWei: "0", Peers: 1,
+				FirstFunder: []bqProfileFunderRow{{Address: bqPeerPlain, BlockNumber: 23500000, TS: first, Wei: "50000000000000000"}},
+				TopPeers:    []bqProfilePeerRow{{Address: bqPeerPlain, Received: 1, FirstTS: first, LastTS: first, WeiSent: "0", WeiReceived: "50000000000000000"}}}
+			svc := bqTestService(t, &fakeBQQuerier{row: row})
+			_, clues, _ := svc.checkBQProfile(context.Background(), bqTarget, riskNow)
+			if tt.title == "" {
+				if len(clues) != 0 {
+					t.Errorf("clues = %+v, want none for a 30-day-old address", clues)
+				}
+				return
+			}
+			if len(clues) != 1 || clues[0].Code != "bq_new_address" || clues[0].Severity != sevInfo || clues[0].Title != tt.title ||
+				clues[0].ObservedAt == nil || *clues[0].ObservedAt != first {
+				t.Fatalf("clues = %+v, want one info %q", clues, tt.title)
+			}
+			if !strings.Contains(clues[0].Detail, bqPeerPlain) || !strings.Contains(clues[0].Detail, "0.05 ETH") {
+				t.Errorf("detail = %q, want the first funder and amount", clues[0].Detail)
+			}
+		})
+	}
+}
+
+// riskPoolForAddresses also tags serial counterfeit-token deployers; their
+// clue text must read as words, not as the internal source id.
+func TestBQProfileDeployerLabels(t *testing.T) {
+	if got := poolLabels([]string{"fake_token_deployers"}); len(got) != 1 || got[0] != "Serial counterfeit-token deployer" {
+		t.Errorf("poolLabels = %v", got)
+	}
+	prof := &riskBQProfile{FirstSeen: "2019-03-01T08:00:00Z", AccountAgeDays: 2766,
+		FirstFunder: &riskBQFunder{Address: bqPeerDeploy, BlockNumber: 1, Timestamp: "2019-03-01T08:00:00Z", ValueETH: "1", Lists: []string{"fake_token_deployers"}}}
+	clues := bqProfileClues(prof, "2026-09-26T12:00:00Z")
+	if len(clues) != 1 || clues[0].Title != "First funder "+bqPeerDeploy+" is a serial counterfeit-token deployer" {
+		t.Errorf("clues = %+v", clues)
 	}
 }
 
