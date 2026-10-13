@@ -17,6 +17,10 @@ const (
 	scamEthSourceID        = "scam_eth"
 	scamTronSourceID       = "scam_tron"
 	scamBTCSourceID        = "scam_btc"
+	// scamFakeTokenDeployersSourceID is the sync_state row of the serial
+	// counterfeit-deployer snapshot that scam_eth refreshes; lookups call the
+	// source "fake_token_deployers".
+	scamFakeTokenDeployersSourceID = "scam_fake_token_deployers"
 
 	scamStatsRetentionDays = 400
 )
@@ -49,6 +53,17 @@ type scamDayBatch struct {
 	Lookalikes []lookalikeRow
 	FakeTokens []fakeTokenRow
 	Stats      map[string]float64
+}
+
+// fakeTokenDeployerRow is one serial counterfeit deployer: an address that
+// created Contracts counterfeit-symbol contracts between FirstSeen and
+// LastSeen. UpdatedAt (snapshot time) is only set on reads.
+type fakeTokenDeployerRow struct {
+	Address   string
+	Contracts int
+	FirstSeen string
+	LastSeen  string
+	UpdatedAt string
 }
 
 type sqlExecer interface {
@@ -418,6 +433,13 @@ func (s *riskStore) putDailyStats(ctx context.Context, day string, m map[string]
 // any day in the batch is <= the current cursor (or cursor <= currentCursor),
 // it aborts with errAlreadyApplied so cumulative counters are never doubled.
 func (s *riskStore) applyScamBatch(ctx context.Context, source, chain string, days []scamDayBatch, newFrom, cursor string, now time.Time) error {
+	return s.applyScamBatchWithDeployers(ctx, source, chain, days, nil, newFrom, cursor, now)
+}
+
+// applyScamBatchWithDeployers is applyScamBatch plus, in the same
+// transaction, a replacement of chain's serial-deployer snapshot when
+// deployers is non-empty (an empty snapshot never wipes the corpus).
+func (s *riskStore) applyScamBatchWithDeployers(ctx context.Context, source, chain string, days []scamDayBatch, deployers []fakeTokenDeployerRow, newFrom, cursor string, now time.Time) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin: %w", err)
@@ -454,6 +476,11 @@ func (s *riskStore) applyScamBatch(ctx context.Context, source, chain string, da
 			return err
 		}
 	}
+	if len(deployers) > 0 {
+		if err := replaceFakeTokenDeployersTx(ctx, tx, chain, deployers, cursor, now); err != nil {
+			return err
+		}
+	}
 
 	var rowCount int
 	switch source {
@@ -480,6 +507,66 @@ func (s *riskStore) applyScamBatch(ctx context.Context, source, chain string, da
 		return err
 	}
 	return tx.Commit()
+}
+
+// replaceFakeTokenDeployersTx swaps chain's serial-deployer snapshot and
+// records it in its own sync_state row. Rows must be unique by address (a
+// leftover primary-key conflict fails loudly).
+func replaceFakeTokenDeployersTx(ctx context.Context, ex sqlExecer, chain string, rows []fakeTokenDeployerRow, cursor string, now time.Time) error {
+	if _, err := ex.ExecContext(ctx, `DELETE FROM scam_fake_token_deployers WHERE chain = ?`, chain); err != nil {
+		return fmt.Errorf("clear fake token deployers %s: %w", chain, err)
+	}
+	stmt, err := ex.PrepareContext(ctx, `INSERT INTO scam_fake_token_deployers
+	  (chain, address, contracts, first_seen, last_seen, updated_at) VALUES (?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		return fmt.Errorf("prepare insert fake token deployers: %w", err)
+	}
+	defer stmt.Close()
+	ts := fmtTime(now)
+	for _, r := range rows {
+		addr := normalizeScamAddr(chain, r.Address)
+		if addr == "" || r.Contracts <= 0 || r.FirstSeen == "" || r.LastSeen == "" {
+			return fmt.Errorf("invalid fake token deployer row for %s: %+v", chain, r)
+		}
+		if _, err := stmt.ExecContext(ctx, chain, addr, r.Contracts, r.FirstSeen, r.LastSeen, ts); err != nil {
+			return fmt.Errorf("insert fake token deployer %s %s: %w", chain, addr, err)
+		}
+	}
+	if err := ensureSyncRow(ctx, ex, scamFakeTokenDeployersSourceID); err != nil {
+		return fmt.Errorf("ensure sync row %s: %w", scamFakeTokenDeployersSourceID, err)
+	}
+	return updateSyncWatermarksTx(ctx, ex, scamFakeTokenDeployersSourceID, "", cursor, len(rows), now)
+}
+
+// fakeTokenDeployerHits looks addrs up in the Ethereum serial-deployer
+// corpus in one IN (...) query. EVM addresses are shared across chains, so
+// L2 callers use the same corpus (the clue says "seen on Ethereum").
+func (s *riskStore) fakeTokenDeployerHits(ctx context.Context, addrs []string) (map[string]fakeTokenDeployerRow, error) {
+	out := map[string]fakeTokenDeployerRow{}
+	if len(addrs) == 0 {
+		return out, nil
+	}
+	placeholders := make([]string, len(addrs))
+	args := make([]any, len(addrs))
+	for i, a := range addrs {
+		placeholders[i] = "?"
+		args[i] = normalizeScamAddr("eth", a)
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT address, contracts, first_seen, last_seen, updated_at
+	  FROM scam_fake_token_deployers
+	  WHERE chain = 'eth' AND address IN (`+strings.Join(placeholders, ",")+`)`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("fake token deployer hits: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var r fakeTokenDeployerRow
+		if err := rows.Scan(&r.Address, &r.Contracts, &r.FirstSeen, &r.LastSeen, &r.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan fake token deployer: %w", err)
+		}
+		out[r.Address] = r
+	}
+	return out, rows.Err()
 }
 
 // lookalikeHits queries scam_lookalikes for addrs in a single IN (...) query.

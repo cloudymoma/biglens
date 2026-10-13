@@ -33,6 +33,9 @@ const (
 	// tronStablecoinEmptyGuardDays: a day without TRON USDT blacklist events
 	// is normal; a window this long without a single one is not.
 	tronStablecoinEmptyGuardDays = 7
+	// scamMinFakeTokenDeployers: the tokens_latest snapshot normally yields
+	// over a thousand serial counterfeit deployers (1,178 on 2026-10-13).
+	scamMinFakeTokenDeployers = 1
 )
 
 // suspiciousResultError fails a run whose BigQuery query succeeded but whose
@@ -82,6 +85,7 @@ type dailyResult struct {
 	Rows       int
 	TronEvents []stablecoinEvent
 	Days       []scamDayBatch
+	Deployers  []fakeTokenDeployerRow // scam_eth: serial-deployer snapshot
 }
 
 type dailyJob interface {

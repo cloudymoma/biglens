@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -25,15 +26,16 @@ type fakeScamQueryCall struct {
 }
 
 type fakeScamBQRunner struct {
-	maxTime    time.Time
-	dryBytes   int64
-	billed     int64
-	queryCalls []fakeScamQueryCall
-	ethPoison  []ethPoisonRow
-	ethFake    []ethFakeTokenRow
-	tronPoison []tronPoisonRow
-	tronEvents []tronStablecoinRow
-	btcRBF     []btcRBFRow
+	maxTime      time.Time
+	dryBytes     int64
+	billed       int64
+	queryCalls   []fakeScamQueryCall
+	ethPoison    []ethPoisonRow
+	ethFake      []ethFakeTokenRow
+	ethDeployers []fakeTokenDeployerBQRow
+	tronPoison   []tronPoisonRow
+	tronEvents   []tronStablecoinRow
+	btcRBF       []btcRBFRow
 }
 
 func (f *fakeScamBQRunner) MaxBlockTime(_ context.Context, _ string, _ civil.Date) (time.Time, error) {
@@ -65,6 +67,17 @@ func (f *fakeScamBQRunner) Query(_ context.Context, sql string, start, end civil
 				return false
 			}
 			*(dst.(*ethFakeTokenRow)) = f.ethFake[idx]
+			idx++
+			return true
+		})
+		return f.billed, err
+	case scamEthFakeTokenDeployersSQL:
+		idx := 0
+		err := scan(func(dst any) bool {
+			if idx >= len(f.ethDeployers) {
+				return false
+			}
+			*(dst.(*fakeTokenDeployerBQRow)) = f.ethDeployers[idx]
 			idx++
 			return true
 		})
@@ -258,6 +271,7 @@ func TestScamRadarJobsRunAndStoreWithFakeBQ(t *testing.T) {
 		ethLookalike1 = "0x111199999999999999999999999999999999aaaa"
 		ethImitated1  = "0x111100000000000000000000000000000000aaaa"
 		ethFake1      = "0xdead000000000000000000000000000000000001"
+		ethDeployer1  = "0x80d04079ffc53eb14edbeeb37279d126f45552df"
 		tronLookalike = "TTZAH6Yw11111111111111111111jk9747"
 		tronImitated  = "TTZAHWEr22222222222222222222jk9747"
 		usdtHex20     = "a614f803b6fd780986a42c78ec9c7f77e6ded13c"
@@ -270,6 +284,9 @@ func TestScamRadarJobsRunAndStoreWithFakeBQ(t *testing.T) {
 		},
 		ethFake: []ethFakeTokenRow{
 			{Day: "2026-10-05", Contract: ethFake1, Symbol: "USDT", Transfers: 45, Recipients: 30},
+		},
+		ethDeployers: []fakeTokenDeployerBQRow{
+			{Creator: ethDeployer1, Contracts: 4394, FirstSeen: "2026-05-21", LastSeen: "2026-08-27"},
 		},
 		tronPoison: []tronPoisonRow{
 			{Day: "2026-10-05", Lookalike58: tronLookalike, Imitated58: tronImitated, Hits: 7, Victims: 6, Candidates: 137386, Transfers: 2345678},
@@ -313,6 +330,12 @@ func TestScamRadarJobsRunAndStoreWithFakeBQ(t *testing.T) {
 	fset, err := store.fakeTokenSet(ctx, "eth")
 	if err != nil || !fset[ethFake1] {
 		t.Fatalf("eth fakeTokenSet = %v, err = %v", fset, err)
+	}
+
+	// Verify the serial-deployer snapshot stored with scam_eth.
+	deps, err := store.fakeTokenDeployerHits(ctx, []string{ethDeployer1})
+	if err != nil || deps[ethDeployer1].Contracts != 4394 || deps[ethDeployer1].FirstSeen != "2026-05-21" || deps[ethDeployer1].LastSeen != "2026-08-27" {
+		t.Fatalf("eth deployer = %+v, err = %v", deps, err)
 	}
 
 	// Verify all 13 scam_daily_stats metrics for 2026-10-05.
@@ -468,10 +491,11 @@ func TestBqScamRunnerJobsCarryAppLabelAndKeepCaps(t *testing.T) {
 // plausible amount of data on day, for tests unrelated to the guards.
 func healthyScamRunner(day string) *fakeScamBQRunner {
 	return &fakeScamBQRunner{
-		billed:     1 << 30,
-		ethPoison:  []ethPoisonRow{{Day: day, Transfers: 750000}},
-		tronPoison: []tronPoisonRow{{Day: day, Transfers: 2100000}},
-		btcRBF:     []btcRBFRow{{Day: day, Txs: 400000, RBFSignalTxs: 100000}},
+		billed:       1 << 30,
+		ethPoison:    []ethPoisonRow{{Day: day, Transfers: 750000}},
+		ethDeployers: []fakeTokenDeployerBQRow{{Creator: "0x80d04079ffc53eb14edbeeb37279d126f45552df", Contracts: 4394, FirstSeen: "2026-05-21", LastSeen: "2026-08-27"}},
+		tronPoison:   []tronPoisonRow{{Day: day, Transfers: 2100000}},
+		btcRBF:       []btcRBFRow{{Day: day, Txs: 400000, RBFSignalTxs: 100000}},
 	}
 }
 
@@ -553,7 +577,8 @@ func TestScamEthGuardRejectsDayWithoutOfficialTransfers(t *testing.T) {
 	wantSuspicious(t, err, "2026-10-04")
 
 	// Days with official transfers but no poisoning match are normal.
-	runner = &fakeScamBQRunner{billed: 1, ethPoison: []ethPoisonRow{{Day: "2026-10-04", Transfers: 700000}, {Day: "2026-10-05", Transfers: 9}}}
+	runner = healthyScamRunner("2026-10-04")
+	runner.ethPoison = []ethPoisonRow{{Day: "2026-10-04", Transfers: 700000}, {Day: "2026-10-05", Transfers: 9}}
 	res, _, err := scamJobByID(t, runner, scamEthSourceID).Run(ctx, start, end, dailySyncIncrementalMaxBytes)
 	if err != nil {
 		t.Fatalf("healthy days without matches: %v", err)
@@ -691,5 +716,66 @@ func TestScamEthStoresFakeTokenCreator(t *testing.T) {
 	runner.ethFake[0].Creator = "80d04079ffc53eb14edbeeb37279d126f45552df"
 	if _, _, err := scamJobByID(t, runner, scamEthSourceID).Run(ctx, day, day.AddDays(1), dailySyncIncrementalMaxBytes); err == nil {
 		t.Fatal("Run with a malformed creator: want an error")
+	}
+}
+
+// The serial-deployer corpus is a full daily snapshot of tokens_latest:
+// creators of at least scamFakeTokenDeployerMinContracts counterfeit-symbol
+// contracts (same symbol rule as R2), excluding the official USDT/USDC
+// contracts and contracts without a known creator.
+func TestScamEthFakeTokenDeployersSQL(t *testing.T) {
+	if scamFakeTokenDeployerMinContracts != 3 {
+		t.Errorf("scamFakeTokenDeployerMinContracts = %d, want 3", scamFakeTokenDeployerMinContracts)
+	}
+	for _, frag := range []string{
+		"FROM " + scamEthTokensTable,
+		counterfeitSymbolPredicate,
+		"LOWER(address) NOT IN ('" + usdtContract + "', '" + usdcContract + "')",
+		"creator_address IS NOT NULL",
+		"COUNT(DISTINCT LOWER(address)) AS contracts",
+		"FORMAT_TIMESTAMP('%Y-%m-%d', MIN(block_timestamp)) AS first_seen",
+		"FORMAT_TIMESTAMP('%Y-%m-%d', MAX(block_timestamp)) AS last_seen",
+		fmt.Sprintf("HAVING contracts >= %d", scamFakeTokenDeployerMinContracts),
+	} {
+		if !strings.Contains(scamEthFakeTokenDeployersSQL, frag) {
+			t.Errorf("scamEthFakeTokenDeployersSQL missing %q:\n%s", frag, scamEthFakeTokenDeployersSQL)
+		}
+	}
+	if !strings.Contains(scamEthFakeTokenSQL, counterfeitSymbolPredicate) {
+		t.Errorf("R2 must share counterfeitSymbolPredicate with the deployer corpus:\n%s", scamEthFakeTokenSQL)
+	}
+}
+
+func TestScamEthGuardRejectsEmptyDeployerSnapshot(t *testing.T) {
+	ctx := context.Background()
+	day := civil.Date{Year: 2026, Month: time.October, Day: 5}
+	runner := healthyScamRunner(day.String())
+	runner.ethDeployers = nil
+	runner.billed = 3 << 30
+	_, billed, err := scamJobByID(t, runner, scamEthSourceID).Run(ctx, day, day.AddDays(1), dailySyncIncrementalMaxBytes)
+	wantSuspicious(t, err, "suspicious empty result for crypto_ethereum.tokens_latest:", "0 serial counterfeit USDT/USDC deployers found")
+	if billed != 3*(3<<30) {
+		t.Errorf("billed = %d, want the three scam_eth queries (%d)", billed, int64(3*(3<<30)))
+	}
+	if n := len(runner.queryCalls); n != 3 || runner.queryCalls[2].sql != scamEthFakeTokenDeployersSQL {
+		t.Errorf("query calls = %d, want R1, R2, deployers", n)
+	}
+}
+
+func TestScamEthRejectsMalformedDeployerRows(t *testing.T) {
+	ctx := context.Background()
+	day := civil.Date{Year: 2026, Month: time.October, Day: 5}
+	const creator = "0x80d04079ffc53eb14edbeeb37279d126f45552df"
+	for name, bad := range map[string]fakeTokenDeployerBQRow{
+		"bad address":     {Creator: "80d04079ffc53eb14edbeeb37279d126f45552df", Contracts: 5, FirstSeen: "2026-05-21", LastSeen: "2026-08-27"},
+		"below the floor": {Creator: creator, Contracts: 2, FirstSeen: "2026-05-21", LastSeen: "2026-08-27"},
+		"bad first_seen":  {Creator: creator, Contracts: 5, FirstSeen: "", LastSeen: "2026-08-27"},
+		"bad last_seen":   {Creator: creator, Contracts: 5, FirstSeen: "2026-05-21", LastSeen: "2026-08-27T00:00:00Z"},
+	} {
+		runner := healthyScamRunner(day.String())
+		runner.ethDeployers = []fakeTokenDeployerBQRow{bad}
+		if _, _, err := scamJobByID(t, runner, scamEthSourceID).Run(ctx, day, day.AddDays(1), dailySyncIncrementalMaxBytes); err == nil {
+			t.Errorf("%s: Run = nil error, want the row rejected", name)
+		}
 	}
 }

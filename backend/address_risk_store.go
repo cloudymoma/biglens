@@ -105,6 +105,15 @@ CREATE TABLE IF NOT EXISTS scam_daily_stats (
   metric TEXT NOT NULL,
   value  REAL NOT NULL,
   PRIMARY KEY (day, metric)
+);
+CREATE TABLE IF NOT EXISTS scam_fake_token_deployers (
+  chain      TEXT NOT NULL,
+  address    TEXT NOT NULL,
+  contracts  INTEGER NOT NULL,
+  first_seen TEXT NOT NULL,
+  last_seen  TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (chain, address)
 );`
 
 type riskStore struct{ db *sql.DB }

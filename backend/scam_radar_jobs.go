@@ -20,6 +20,15 @@ const (
 
 	tronUSDTLogAddress = "0xa614f803b6fd780986a42c78ec9c7f77e6ded13c"
 
+	// counterfeitSymbolPredicate matches token symbols impersonating USDT /
+	// USDC; R2 and the serial-deployer corpus share it.
+	counterfeitSymbolPredicate = `REGEXP_CONTAINS(UPPER(symbol), r'^(USDT|USDC|USD₮)[^A-Z0-9]?$')`
+
+	// scamFakeTokenDeployerMinContracts: the creator of at least this many
+	// counterfeit-symbol contracts is a serial deployer (the HAVING clause of
+	// scamEthFakeTokenDeployersSQL must match; a test pins both).
+	scamFakeTokenDeployerMinContracts = 3
+
 	ethTokenTransfersReadySQL = `
 SELECT MAX(block_timestamp) AS t FROM ` + scamEthTokenTransfersTable + `
 WHERE block_timestamp >= TIMESTAMP(@end_date) AND block_timestamp < TIMESTAMP_ADD(TIMESTAMP(@end_date), INTERVAL 2 HOUR)`
@@ -85,7 +94,7 @@ WITH tok AS (
          ANY_VALUE(symbol) AS symbol,
          ANY_VALUE(LOWER(creator_address)) AS creator
   FROM ` + scamEthTokensTable + `
-  WHERE REGEXP_CONTAINS(UPPER(symbol), r'^(USDT|USDC|USD₮)[^A-Z0-9]?$')
+  WHERE ` + counterfeitSymbolPredicate + `
   GROUP BY 1
 )
 SELECT FORMAT_DATE('%Y-%m-%d', DATE(tt.block_timestamp)) AS day,
@@ -100,6 +109,22 @@ WHERE tt.block_timestamp >= TIMESTAMP(@start_date) AND tt.block_timestamp < TIME
   AND tt.address NOT IN ('` + usdtContract + `', '` + usdcContract + `')
   AND NOT tt.removed
 GROUP BY 1, 2, 3, 4`
+
+	// Serial counterfeit deployers, run by scam_eth (once per run, i.e. once
+	// per UTC day): a full snapshot of tokens_latest, not windowed (the
+	// window parameters are passed but unused). ~1.7 GB per run (dry run).
+	scamEthFakeTokenDeployersSQL = `
+SELECT LOWER(creator_address) AS creator,
+       COUNT(DISTINCT LOWER(address)) AS contracts,
+       FORMAT_TIMESTAMP('%Y-%m-%d', MIN(block_timestamp)) AS first_seen,
+       FORMAT_TIMESTAMP('%Y-%m-%d', MAX(block_timestamp)) AS last_seen
+FROM ` + scamEthTokensTable + `
+WHERE ` + counterfeitSymbolPredicate + `
+  AND LOWER(address) NOT IN ('` + usdtContract + `', '` + usdcContract + `')
+  AND creator_address IS NOT NULL
+GROUP BY 1
+HAVING contracts >= 3
+ORDER BY contracts DESC, creator`
 
 	// R3: TRON USDT dust poisoning with in-BigQuery Base58 encoding and
 	// 4+4 prefix/suffix matching (spec P2.1, P2.2). Every day with official
@@ -231,6 +256,35 @@ type ethFakeTokenRow struct {
 	Creator    string `bigquery:"creator"` // tokens_latest.creator_address, "" when unknown
 	Transfers  int64  `bigquery:"transfers"`
 	Recipients int64  `bigquery:"recipients"`
+}
+
+type fakeTokenDeployerBQRow struct {
+	Creator   string `bigquery:"creator"`
+	Contracts int64  `bigquery:"contracts"`
+	FirstSeen string `bigquery:"first_seen"`
+	LastSeen  string `bigquery:"last_seen"`
+}
+
+// decodeFakeTokenDeployerRow validates one serial-deployer row strictly: a
+// malformed value means the upstream format changed and fails the run.
+func decodeFakeTokenDeployerRow(r fakeTokenDeployerBQRow) (fakeTokenDeployerRow, error) {
+	if !ethAddressRe.MatchString(r.Creator) {
+		return fakeTokenDeployerRow{}, fmt.Errorf("fake token deployer bad address %q", r.Creator)
+	}
+	if r.Contracts < scamFakeTokenDeployerMinContracts {
+		return fakeTokenDeployerRow{}, fmt.Errorf("fake token deployer %s: %d contracts, below %d", r.Creator, r.Contracts, scamFakeTokenDeployerMinContracts)
+	}
+	for _, d := range []string{r.FirstSeen, r.LastSeen} {
+		if _, err := civil.ParseDate(d); err != nil {
+			return fakeTokenDeployerRow{}, fmt.Errorf("fake token deployer %s: bad date %q", r.Creator, d)
+		}
+	}
+	return fakeTokenDeployerRow{
+		Address:   strings.ToLower(r.Creator),
+		Contracts: int(r.Contracts),
+		FirstSeen: r.FirstSeen,
+		LastSeen:  r.LastSeen,
+	}, nil
 }
 
 type tronPoisonRow struct {
@@ -407,15 +461,15 @@ func (j *bqDailyJob) Ready(ctx context.Context, end civil.Date) (bool, error) {
 func (j *bqDailyJob) DryRun(ctx context.Context, start, end civil.Date) (int64, error) {
 	switch j.id {
 	case scamEthSourceID:
-		b1, err := j.runner.DryRun(ctx, scamEthPoisonSQL, start, end)
-		if err != nil {
-			return 0, err
+		var total int64
+		for _, sql := range []string{scamEthPoisonSQL, scamEthFakeTokenSQL, scamEthFakeTokenDeployersSQL} {
+			b, err := j.runner.DryRun(ctx, sql, start, end)
+			if err != nil {
+				return 0, err
+			}
+			total += b
 		}
-		b2, err := j.runner.DryRun(ctx, scamEthFakeTokenSQL, start, end)
-		if err != nil {
-			return 0, err
-		}
-		return b1 + b2, nil
+		return total, nil
 	case scamTronSourceID:
 		return j.runner.DryRun(ctx, scamTronPoisonSQL, start, end)
 	case tronStablecoinSourceID:
@@ -559,7 +613,28 @@ func (j *bqDailyJob) runEth(ctx context.Context, start, end civil.Date, maxBytes
 		return dailyResult{}, billed1 + billed2, err
 	}
 
-	return dailyResult{Rows: totalRows, Days: collectDays(order, byDay)}, billed1 + billed2, nil
+	// Serial-deployer snapshot (full tokens_latest aggregate, not windowed).
+	var deployers []fakeTokenDeployerRow
+	billed3, err := j.runner.Query(ctx, scamEthFakeTokenDeployersSQL, start, end, maxBytes, func(next func(dst any) bool) error {
+		var r fakeTokenDeployerBQRow
+		for next(&r) {
+			d, err := decodeFakeTokenDeployerRow(r)
+			if err != nil {
+				return err
+			}
+			deployers = append(deployers, d)
+		}
+		return nil
+	})
+	billed := billed1 + billed2 + billed3
+	if err != nil {
+		return dailyResult{}, billed, err
+	}
+	if len(deployers) < scamMinFakeTokenDeployers {
+		return dailyResult{}, billed, suspiciousEmpty("crypto_ethereum.tokens_latest", "serial counterfeit USDT/USDC deployers found")
+	}
+
+	return dailyResult{Rows: totalRows + len(deployers), Days: collectDays(order, byDay), Deployers: deployers}, billed, nil
 }
 
 func (j *bqDailyJob) runTronPoison(ctx context.Context, start, end civil.Date, maxBytes int64) (dailyResult, int64, error) {
@@ -690,7 +765,7 @@ func (j *bqDailyJob) runBTC(ctx context.Context, start, end civil.Date, maxBytes
 func (j *bqDailyJob) Store(ctx context.Context, s *riskStore, r dailyResult, newFrom, cursor string, now time.Time) error {
 	switch j.id {
 	case scamEthSourceID:
-		return s.applyScamBatch(ctx, scamEthSourceID, "eth", r.Days, newFrom, cursor, now)
+		return s.applyScamBatchWithDeployers(ctx, scamEthSourceID, "eth", r.Days, r.Deployers, newFrom, cursor, now)
 	case scamTronSourceID:
 		return s.applyScamBatch(ctx, scamTronSourceID, "tron", r.Days, newFrom, cursor, now)
 	case scamBTCSourceID:
