@@ -269,6 +269,39 @@ func TestDailySyncerBilledFailureBacksOff6h(t *testing.T) {
 	}
 }
 
+// A run whose query succeeded but whose result is implausible must fail like
+// a billed BigQuery error: nothing stored, cursor unchanged, the guard's
+// message as last_error (not a generic code), and the 6 h billed back-off.
+func TestDailySyncerSuspiciousEmptyFailsRun(t *testing.T) {
+	cur := at(6, 0)
+	s, job, store := newTestDailySyncer(t, scamEthSourceID, cur, 30)
+	s.now = func() time.Time { return cur }
+	notified := 0
+	s.onChange = func() { notified++ }
+	if err := store.applyScamBatch(context.Background(), scamEthSourceID, "eth", nil, "2026-08-27", "2026-09-24", at(5, 0)); err != nil {
+		t.Fatal(err)
+	}
+	job.runErr = suspiciousEmpty("2026-09-25", "official USDT/USDC transfers scanned")
+	job.runBilled = 3 << 30
+
+	s.syncOnce(context.Background())
+
+	const wantMsg = "suspicious empty result for 2026-09-25: 0 official USDT/USDC transfers scanned — upstream schema or format change?"
+	st, _ := store.getSyncState(context.Background(), scamEthSourceID)
+	if st.Cursor != "2026-09-24" || st.LastError != wantMsg {
+		t.Fatalf("sync_state = %+v, want cursor 2026-09-24 and last_error %q", st, wantMsg)
+	}
+	if job.storeApplied != 0 || notified != 0 {
+		t.Errorf("suspicious run stored %d batches / notified %d times, want 0", job.storeApplied, notified)
+	}
+
+	cur = cur.Add(time.Hour)
+	s.syncOnce(context.Background())
+	if len(job.runCalls) != 1 {
+		t.Fatalf("suspicious billed run retried after 1h: runCalls = %d, want 1 (6h back-off)", len(job.runCalls))
+	}
+}
+
 func TestDailySyncerSourceFailureIsolated(t *testing.T) {
 	store := newTestRiskStore(t)
 	now := at(6, 0)

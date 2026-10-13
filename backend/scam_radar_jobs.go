@@ -33,6 +33,10 @@ SELECT MAX(block_timestamp) AS t FROM ` + scamBTCInputsTable + `
 WHERE block_timestamp >= TIMESTAMP(@end_date) AND block_timestamp < TIMESTAMP_ADD(TIMESTAMP(@end_date), INTERVAL 2 HOUR)`
 
 	// R1: ETH zero-value address poisoning on official USDT/USDC (spec P2.2).
+	// One row per (day, lookalike) match plus one empty-match row for days
+	// without any; every row carries the day's count of official transfers
+	// scanned so the silent-zero guard can tell "no poisoning" from "the
+	// filter matched nothing".
 	scamEthPoisonSQL = `
 WITH t AS (
   SELECT FORMAT_DATE('%Y-%m-%d', DATE(block_timestamp)) AS day,
@@ -46,19 +50,32 @@ WITH t AS (
 ),
 real AS (
   SELECT DISTINCT day, src, dst FROM t WHERE q != '0'
+),
+day_transfers AS (
+  SELECT day, COUNT(*) AS transfers FROM t GROUP BY day
+),
+matched AS (
+  SELECT z.day AS day,
+         z.dst AS lookalike,
+         r.dst AS imitated,
+         COUNT(*) AS hits,
+         COUNT(DISTINCT z.src) AS victims
+  FROM t z
+  JOIN real r
+    ON z.day = r.day AND z.src = r.src AND z.dst != r.dst
+   AND SUBSTR(z.dst, 3, 4) = SUBSTR(r.dst, 3, 4)
+   AND RIGHT(z.dst, 4) = RIGHT(r.dst, 4)
+  WHERE z.q = '0'
+  GROUP BY 1, 2, 3
 )
-SELECT z.day AS day,
-       z.dst AS lookalike,
-       r.dst AS imitated,
-       COUNT(*) AS hits,
-       COUNT(DISTINCT z.src) AS victims
-FROM t z
-JOIN real r
-  ON z.day = r.day AND z.src = r.src AND z.dst != r.dst
- AND SUBSTR(z.dst, 3, 4) = SUBSTR(r.dst, 3, 4)
- AND RIGHT(z.dst, 4) = RIGHT(r.dst, 4)
-WHERE z.q = '0'
-GROUP BY 1, 2, 3`
+SELECT dt.day AS day,
+       IFNULL(m.lookalike, '') AS lookalike,
+       IFNULL(m.imitated, '') AS imitated,
+       IFNULL(m.hits, 0) AS hits,
+       IFNULL(m.victims, 0) AS victims,
+       dt.transfers AS transfers
+FROM day_transfers dt
+LEFT JOIN matched m USING (day)`
 
 	// R2: ETH counterfeit USDT/USDC token contracts (spec P2.2).
 	scamEthFakeTokenSQL = `
@@ -81,7 +98,9 @@ WHERE tt.block_timestamp >= TIMESTAMP(@start_date) AND tt.block_timestamp < TIME
 GROUP BY 1, 2, 3`
 
 	// R3: TRON USDT dust poisoning with in-BigQuery Base58 encoding and
-	// 4+4 prefix/suffix matching (spec P2.1, P2.2).
+	// 4+4 prefix/suffix matching (spec P2.1, P2.2). Every day with official
+	// USDT Transfer logs yields at least one row carrying that day's count
+	// (transfers) for the silent-zero guard.
 	scamTronPoisonSQL = `
 CREATE TEMP FUNCTION b58(h STRING) RETURNS STRING LANGUAGE js AS r"""
   const A = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
@@ -121,6 +140,9 @@ cand AS (
 day_cands AS (
   SELECT day, COUNT(*) AS candidates FROM cand GROUP BY day
 ),
+day_transfers AS (
+  SELECT day, COUNT(*) AS transfers FROM t GROUP BY day
+),
 uniq_addrs AS (
   SELECT hex, tron(hex) AS addr58
   FROM (
@@ -143,13 +165,15 @@ matched AS (
     AND RIGHT(lk.addr58, 4) = RIGHT(im.addr58, 4)
   GROUP BY 1, 2, 3
 )
-SELECT dc.day AS day,
+SELECT dt.day AS day,
        IFNULL(m.lookalike58, '') AS lookalike58,
        IFNULL(m.imitated58, '') AS imitated58,
        IFNULL(m.hits, 0) AS hits,
        IFNULL(m.victims, 0) AS victims,
-       dc.candidates AS candidates
-FROM day_cands dc
+       IFNULL(dc.candidates, 0) AS candidates,
+       dt.transfers AS transfers
+FROM day_transfers dt
+LEFT JOIN day_cands dc USING (day)
 LEFT JOIN matched m USING (day)`
 
 	// R4: TRON USDT freeze / unfreeze / destroy logs (spec P2.2). Reuses the
@@ -193,6 +217,7 @@ type ethPoisonRow struct {
 	Imitated  string `bigquery:"imitated"`
 	Hits      int64  `bigquery:"hits"`
 	Victims   int64  `bigquery:"victims"`
+	Transfers int64  `bigquery:"transfers"` // official USDT/USDC transfers scanned that day
 }
 
 type ethFakeTokenRow struct {
@@ -210,6 +235,7 @@ type tronPoisonRow struct {
 	Hits        int64  `bigquery:"hits"`
 	Victims     int64  `bigquery:"victims"`
 	Candidates  int64  `bigquery:"candidates"`
+	Transfers   int64  `bigquery:"transfers"` // official TRON USDT Transfer logs scanned that day
 }
 
 type tronStablecoinRow struct {
@@ -444,6 +470,7 @@ func (j *bqDailyJob) runEth(ctx context.Context, start, end civil.Date, maxBytes
 	})
 	seenLookalikes := map[string]map[string]bool{}
 	seenContracts := map[string]map[string]bool{}
+	dayTransfers := map[string]int64{}
 	totalRows := 0
 
 	billed1, err := j.runner.Query(ctx, scamEthPoisonSQL, start, end, maxBytes, func(next func(dst any) bool) error {
@@ -452,6 +479,10 @@ func (j *bqDailyJob) runEth(ctx context.Context, start, end civil.Date, maxBytes
 			b := byDay[r.Day]
 			if b == nil {
 				return fmt.Errorf("eth poison row day %q outside window", r.Day)
+			}
+			dayTransfers[r.Day] = r.Transfers
+			if r.Lookalike == "" && r.Imitated == "" && r.Hits == 0 {
+				continue // day without a poisoning match
 			}
 			if !ethAddressRe.MatchString(r.Lookalike) || !ethAddressRe.MatchString(r.Imitated) {
 				return fmt.Errorf("eth poison row bad address %q / %q", r.Lookalike, r.Imitated)
@@ -479,6 +510,9 @@ func (j *bqDailyJob) runEth(ctx context.Context, start, end civil.Date, maxBytes
 		return nil
 	})
 	if err != nil {
+		return dailyResult{}, billed1, err
+	}
+	if err := minPerDayGuard(order, dayTransfers, scamEthMinDailyTransfers, "official USDT/USDC transfers scanned"); err != nil {
 		return dailyResult{}, billed1, err
 	}
 
@@ -527,6 +561,7 @@ func (j *bqDailyJob) runTronPoison(ctx context.Context, start, end civil.Date, m
 		"tron_candidates":     0,
 	})
 	seenLookalikes := map[string]map[string]bool{}
+	dayTransfers := map[string]int64{}
 	totalRows := 0
 
 	billed, err := j.runner.Query(ctx, scamTronPoisonSQL, start, end, maxBytes, func(next func(dst any) bool) error {
@@ -536,6 +571,7 @@ func (j *bqDailyJob) runTronPoison(ctx context.Context, start, end civil.Date, m
 			if b == nil {
 				return fmt.Errorf("tron poison row day %q outside window", r.Day)
 			}
+			dayTransfers[r.Day] = r.Transfers
 			b.Stats["tron_candidates"] = float64(r.Candidates)
 			if r.Lookalike58 == "" || r.Hits == 0 {
 				continue
@@ -564,6 +600,9 @@ func (j *bqDailyJob) runTronPoison(ctx context.Context, start, end civil.Date, m
 		return nil
 	})
 	if err != nil {
+		return dailyResult{}, billed, err
+	}
+	if err := minPerDayGuard(order, dayTransfers, scamTronMinDailyTransfers, "official TRON USDT Transfer logs scanned"); err != nil {
 		return dailyResult{}, billed, err
 	}
 	return dailyResult{Rows: totalRows, Days: collectDays(order, byDay)}, billed, nil
@@ -602,6 +641,10 @@ func (j *bqDailyJob) runTronStablecoin(ctx context.Context, start, end civil.Dat
 	if err != nil {
 		return dailyResult{}, billed, err
 	}
+	if days := end.DaysSince(start); days >= tronStablecoinEmptyGuardDays && len(evs) == 0 {
+		return dailyResult{}, billed, suspiciousEmpty(start.String()+".."+end.AddDays(-1).String(),
+			fmt.Sprintf("TRON USDT freeze/unfreeze/destroy events in %d days", days))
+	}
 	return dailyResult{Rows: len(evs), TronEvents: evs, Days: collectDays(order, byDay)}, billed, nil
 }
 
@@ -610,6 +653,7 @@ func (j *bqDailyJob) runBTC(ctx context.Context, start, end civil.Date, maxBytes
 		"btc_txs":     0,
 		"btc_rbf_txs": 0,
 	})
+	dayTxs := map[string]int64{}
 	totalRows := 0
 	billed, err := j.runner.Query(ctx, scamBTCRBFSQL, start, end, maxBytes, func(next func(dst any) bool) error {
 		var r btcRBFRow
@@ -618,6 +662,7 @@ func (j *bqDailyJob) runBTC(ctx context.Context, start, end civil.Date, maxBytes
 			if b == nil {
 				return fmt.Errorf("btc rbf row day %q outside window", r.Day)
 			}
+			dayTxs[r.Day] = r.Txs
 			b.Stats["btc_txs"] = float64(r.Txs)
 			b.Stats["btc_rbf_txs"] = float64(r.RBFSignalTxs)
 			totalRows++
@@ -625,6 +670,9 @@ func (j *bqDailyJob) runBTC(ctx context.Context, start, end civil.Date, maxBytes
 		return nil
 	})
 	if err != nil {
+		return dailyResult{}, billed, err
+	}
+	if err := minPerDayGuard(order, dayTxs, scamBTCMinDailyTxs, "Bitcoin transactions scanned"); err != nil {
 		return dailyResult{}, billed, err
 	}
 	return dailyResult{Rows: totalRows, Days: collectDays(order, byDay)}, billed, nil
