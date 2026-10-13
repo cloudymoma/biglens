@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -43,6 +44,47 @@ func TestOpenRiskStoreCreatesDirAndIsReopenable(t *testing.T) {
 func TestOpenRiskStoreUnwritablePathFails(t *testing.T) {
 	if _, err := openRiskStore("/proc/definitely/not/writable/security.db"); err == nil {
 		t.Fatal("expected error for unwritable path")
+	}
+}
+
+// Databases created before scam_fake_tokens.creator existed get the column
+// on open (CREATE TABLE IF NOT EXISTS never adds columns) and keep their
+// rows; reopening must not try to add it again.
+func TestOpenRiskStoreMigratesFakeTokenCreatorColumn(t *testing.T) {
+	const contract = "0xdeadbeef00000000000000000000000000000001"
+	path := filepath.Join(t.TempDir(), "old.db")
+	old, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := old.Exec(`CREATE TABLE scam_fake_tokens (
+  chain      TEXT NOT NULL,
+  contract   TEXT NOT NULL,
+  symbol     TEXT NOT NULL,
+  transfers  INTEGER NOT NULL,
+  recipients INTEGER NOT NULL,
+  first_seen TEXT NOT NULL,
+  last_seen  TEXT NOT NULL,
+  PRIMARY KEY (chain, contract)
+);
+INSERT INTO scam_fake_tokens VALUES ('eth', '` + contract + `', 'USDT', 5, 4, '2026-10-01', '2026-10-02');`); err != nil {
+		t.Fatalf("create pre-migration schema: %v", err)
+	}
+	old.Close()
+
+	for i := 1; i <= 2; i++ {
+		s, err := openRiskStore(path)
+		if err != nil {
+			t.Fatalf("open #%d: %v", i, err)
+		}
+		var symbol, creator string
+		if err := s.db.QueryRow(`SELECT symbol, creator FROM scam_fake_tokens WHERE chain = 'eth' AND contract = ?`, contract).Scan(&symbol, &creator); err != nil {
+			t.Fatalf("open #%d: read migrated row: %v", i, err)
+		}
+		if symbol != "USDT" || creator != "" {
+			t.Errorf("open #%d: migrated row = (%q, %q), want (USDT, \"\")", i, symbol, creator)
+		}
+		s.Close()
 	}
 }
 

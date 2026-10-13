@@ -14,7 +14,7 @@ import (
 
 const (
 	scamEthTokenTransfersTable = "`bigquery-public-data.goog_blockchain_ethereum_mainnet_us.token_transfers`"
-	scamEthTokensTable         = "`bigquery-public-data.crypto_ethereum.tokens`"
+	scamEthTokensTable         = "`bigquery-public-data.crypto_ethereum.tokens_latest`"
 	scamTronLogsTable          = "`bigquery-public-data.goog_blockchain_tron_mainnet_us.logs`"
 	scamBTCInputsTable         = "`bigquery-public-data.crypto_bitcoin.inputs`"
 
@@ -77,10 +77,13 @@ SELECT dt.day AS day,
 FROM day_transfers dt
 LEFT JOIN matched m USING (day)`
 
-	// R2: ETH counterfeit USDT/USDC token contracts (spec P2.2).
+	// R2: ETH counterfeit USDT/USDC token contracts (spec P2.2). tokens_latest
+	// (SQD) has one row per contract; ANY_VALUE ignores NULL creators.
 	scamEthFakeTokenSQL = `
 WITH tok AS (
-  SELECT LOWER(address) AS address, ANY_VALUE(symbol) AS symbol
+  SELECT LOWER(address) AS address,
+         ANY_VALUE(symbol) AS symbol,
+         ANY_VALUE(LOWER(creator_address)) AS creator
   FROM ` + scamEthTokensTable + `
   WHERE REGEXP_CONTAINS(UPPER(symbol), r'^(USDT|USDC|USD₮)[^A-Z0-9]?$')
   GROUP BY 1
@@ -88,6 +91,7 @@ WITH tok AS (
 SELECT FORMAT_DATE('%Y-%m-%d', DATE(tt.block_timestamp)) AS day,
        LOWER(tt.address) AS contract,
        tok.symbol AS symbol,
+       IFNULL(tok.creator, '') AS creator,
        COUNT(*) AS transfers,
        COUNT(DISTINCT tt.to_address) AS recipients
 FROM ` + scamEthTokenTransfersTable + ` tt
@@ -95,7 +99,7 @@ JOIN tok ON tt.address = tok.address
 WHERE tt.block_timestamp >= TIMESTAMP(@start_date) AND tt.block_timestamp < TIMESTAMP(@end_date)
   AND tt.address NOT IN ('` + usdtContract + `', '` + usdcContract + `')
   AND NOT tt.removed
-GROUP BY 1, 2, 3`
+GROUP BY 1, 2, 3, 4`
 
 	// R3: TRON USDT dust poisoning with in-BigQuery Base58 encoding and
 	// 4+4 prefix/suffix matching (spec P2.1, P2.2). Every day with official
@@ -224,6 +228,7 @@ type ethFakeTokenRow struct {
 	Day        string `bigquery:"day"`
 	Contract   string `bigquery:"contract"`
 	Symbol     string `bigquery:"symbol"`
+	Creator    string `bigquery:"creator"` // tokens_latest.creator_address, "" when unknown
 	Transfers  int64  `bigquery:"transfers"`
 	Recipients int64  `bigquery:"recipients"`
 }
@@ -526,11 +531,15 @@ func (j *bqDailyJob) runEth(ctx context.Context, start, end civil.Date, maxBytes
 			if !ethAddressRe.MatchString(r.Contract) {
 				return fmt.Errorf("eth fake token bad contract %q", r.Contract)
 			}
+			if r.Creator != "" && !ethAddressRe.MatchString(r.Creator) {
+				return fmt.Errorf("eth fake token %s bad creator %q", r.Contract, r.Creator)
+			}
 			c := strings.ToLower(r.Contract)
 			b.FakeTokens = append(b.FakeTokens, fakeTokenRow{
 				Chain:      "eth",
 				Contract:   c,
 				Symbol:     strings.TrimSpace(r.Symbol),
+				Creator:    strings.ToLower(r.Creator),
 				Transfers:  int(r.Transfers),
 				Recipients: int(r.Recipients),
 				FirstSeen:  r.Day,

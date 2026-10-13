@@ -37,6 +37,7 @@ type fakeTokenRow struct {
 	Chain      string
 	Contract   string
 	Symbol     string
+	Creator    string // contract creator (tokens_latest.creator_address), "" when unknown
 	Transfers  int
 	Recipients int
 	FirstSeen  string
@@ -310,10 +311,11 @@ func upsertFakeTokensTx(ctx context.Context, ex sqlExecer, chain string, rows []
 		return nil
 	}
 	stmt, err := ex.PrepareContext(ctx, `INSERT INTO scam_fake_tokens
-	  (chain, contract, symbol, transfers, recipients, first_seen, last_seen)
-	  VALUES (?, ?, ?, ?, ?, ?, ?)
+	  (chain, contract, symbol, creator, transfers, recipients, first_seen, last_seen)
+	  VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 	  ON CONFLICT(chain, contract) DO UPDATE SET
 	    symbol = CASE WHEN excluded.last_seen >= scam_fake_tokens.last_seen AND excluded.symbol != '' THEN excluded.symbol ELSE scam_fake_tokens.symbol END,
+	    creator = CASE WHEN excluded.creator != '' THEN excluded.creator ELSE scam_fake_tokens.creator END,
 	    transfers = scam_fake_tokens.transfers + excluded.transfers,
 	    recipients = scam_fake_tokens.recipients + excluded.recipients,
 	    first_seen = CASE WHEN scam_fake_tokens.first_seen = '' OR excluded.first_seen < scam_fake_tokens.first_seen THEN excluded.first_seen ELSE scam_fake_tokens.first_seen END,
@@ -325,6 +327,7 @@ func upsertFakeTokensTx(ctx context.Context, ex sqlExecer, chain string, rows []
 
 	for _, r := range rows {
 		contract := normalizeScamAddr(chain, r.Contract)
+		creator := normalizeScamAddr(chain, r.Creator)
 		sym := strings.TrimSpace(r.Symbol)
 		first := r.FirstSeen
 		last := r.LastSeen
@@ -337,7 +340,7 @@ func upsertFakeTokensTx(ctx context.Context, ex sqlExecer, chain string, rows []
 		if contract == "" || sym == "" || r.Transfers <= 0 || r.Recipients <= 0 || first == "" || last == "" {
 			return fmt.Errorf("invalid fake token row for %s: %+v", chain, r)
 		}
-		if _, err := stmt.ExecContext(ctx, chain, contract, sym, r.Transfers, r.Recipients, first, last); err != nil {
+		if _, err := stmt.ExecContext(ctx, chain, contract, sym, creator, r.Transfers, r.Recipients, first, last); err != nil {
 			return fmt.Errorf("upsert fake token %s %s: %w", chain, contract, err)
 		}
 	}

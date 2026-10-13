@@ -645,3 +645,51 @@ func TestScamRadarSuspiciousRunKeepsCursorUntilHealthy(t *testing.T) {
 		t.Fatalf("btc_txs = %v (err %v), want 400000", txs, err)
 	}
 }
+
+// R2 reads the SQD tokens_latest view (one row per contract) and returns each
+// counterfeit's creator so serial deployers can be linked to their tokens.
+func TestScamEthFakeTokenSQLUsesTokensLatestWithCreator(t *testing.T) {
+	if scamEthTokensTable != "`bigquery-public-data.crypto_ethereum.tokens_latest`" {
+		t.Errorf("scamEthTokensTable = %s, want the tokens_latest view", scamEthTokensTable)
+	}
+	for _, frag := range []string{
+		"FROM " + scamEthTokensTable,
+		"ANY_VALUE(LOWER(creator_address)) AS creator",
+		"IFNULL(tok.creator, '') AS creator",
+		"GROUP BY 1, 2, 3, 4",
+	} {
+		if !strings.Contains(scamEthFakeTokenSQL, frag) {
+			t.Errorf("R2 scamEthFakeTokenSQL missing %q:\n%s", frag, scamEthFakeTokenSQL)
+		}
+	}
+}
+
+func TestScamEthStoresFakeTokenCreator(t *testing.T) {
+	ctx := context.Background()
+	store := newTestRiskStore(t)
+	const (
+		fake    = "0xdead000000000000000000000000000000000001"
+		creator = "0x80d04079ffc53eb14edbeeb37279d126f45552df"
+	)
+	day := civil.Date{Year: 2026, Month: time.October, Day: 5}
+	runner := healthyScamRunner(day.String())
+	runner.ethFake = []ethFakeTokenRow{{Day: day.String(), Contract: fake, Symbol: "USDT", Creator: "0x" + strings.ToUpper(creator[2:]), Transfers: 4, Recipients: 3}}
+	job := scamJobByID(t, runner, scamEthSourceID)
+	res, _, err := job.Run(ctx, day, day.AddDays(1), dailySyncIncrementalMaxBytes)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if err := job.Store(ctx, store, res, day.String(), day.String(), time.Date(2026, 10, 6, 8, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+	var got string
+	if err := store.db.QueryRowContext(ctx, `SELECT creator FROM scam_fake_tokens WHERE chain = 'eth' AND contract = ?`, fake).Scan(&got); err != nil || got != creator {
+		t.Fatalf("stored creator = %q (err %v), want %q", got, err, creator)
+	}
+
+	// A malformed creator means the column changed format: fail loudly.
+	runner.ethFake[0].Creator = "80d04079ffc53eb14edbeeb37279d126f45552df"
+	if _, _, err := scamJobByID(t, runner, scamEthSourceID).Run(ctx, day, day.AddDays(1), dailySyncIncrementalMaxBytes); err == nil {
+		t.Fatal("Run with a malformed creator: want an error")
+	}
+}

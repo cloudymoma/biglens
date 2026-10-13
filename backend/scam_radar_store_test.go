@@ -207,6 +207,48 @@ func TestUpsertLookalikesFakeTokensAndDailyStats(t *testing.T) {
 	}
 }
 
+// A counterfeit's creator is stored lowercase, kept when a later day has no
+// creator (NULL creator_address) and replaced when tokens_latest reports a
+// different one.
+func TestUpsertFakeTokensStoresCreator(t *testing.T) {
+	s := newTestRiskStore(t)
+	ctx := context.Background()
+	const (
+		fakeTok  = "0xcccc00000000000000000000000000000000dddd"
+		creator1 = "0x80d04079ffc53eb14edbeeb37279d126f45552df"
+		creator2 = "0x0f6666bc699aec39b846e898473e9caec5a6b821"
+	)
+	creatorOf := func() string {
+		t.Helper()
+		var c string
+		if err := s.db.QueryRowContext(ctx, `SELECT creator FROM scam_fake_tokens WHERE chain = 'eth' AND contract = ?`, fakeTok).Scan(&c); err != nil {
+			t.Fatalf("read creator: %v", err)
+		}
+		return c
+	}
+	upsert := func(day, creator string) {
+		t.Helper()
+		if err := s.upsertFakeTokens(ctx, "eth", []fakeTokenRow{
+			{Contract: fakeTok, Symbol: "USDT", Creator: creator, Transfers: 3, Recipients: 2, FirstSeen: day, LastSeen: day},
+		}); err != nil {
+			t.Fatalf("upsertFakeTokens %s: %v", day, err)
+		}
+	}
+
+	upsert("2026-10-05", "0x"+strings.ToUpper(creator1[2:]))
+	if got := creatorOf(); got != creator1 {
+		t.Fatalf("creator after first upsert = %q, want %q (lowercased)", got, creator1)
+	}
+	upsert("2026-10-06", "")
+	if got := creatorOf(); got != creator1 {
+		t.Fatalf("creator after a day without creator = %q, want %q kept", got, creator1)
+	}
+	upsert("2026-10-07", creator2)
+	if got := creatorOf(); got != creator2 {
+		t.Fatalf("creator after a corrected creator = %q, want %q", got, creator2)
+	}
+}
+
 func TestPruneScamBoundaries(t *testing.T) {
 	s := newTestRiskStore(t)
 	ctx := context.Background()
