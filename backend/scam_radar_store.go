@@ -17,6 +17,10 @@ const (
 	scamEthSourceID        = "scam_eth"
 	scamTronSourceID       = "scam_tron"
 	scamBTCSourceID        = "scam_btc"
+	// scamFakeTokenDeployersSourceID is the sync_state row of the serial
+	// counterfeit-deployer snapshot that scam_eth refreshes; lookups call the
+	// source "fake_token_deployers".
+	scamFakeTokenDeployersSourceID = "scam_fake_token_deployers"
 
 	scamStatsRetentionDays = 400
 )
@@ -37,6 +41,7 @@ type fakeTokenRow struct {
 	Chain      string
 	Contract   string
 	Symbol     string
+	Creator    string // contract creator (tokens_latest.creator_address), "" when unknown
 	Transfers  int
 	Recipients int
 	FirstSeen  string
@@ -48,6 +53,17 @@ type scamDayBatch struct {
 	Lookalikes []lookalikeRow
 	FakeTokens []fakeTokenRow
 	Stats      map[string]float64
+}
+
+// fakeTokenDeployerRow is one serial counterfeit deployer: an address that
+// created Contracts counterfeit-symbol contracts between FirstSeen and
+// LastSeen. UpdatedAt (snapshot time) is only set on reads.
+type fakeTokenDeployerRow struct {
+	Address   string
+	Contracts int
+	FirstSeen string
+	LastSeen  string
+	UpdatedAt string
 }
 
 type sqlExecer interface {
@@ -310,10 +326,11 @@ func upsertFakeTokensTx(ctx context.Context, ex sqlExecer, chain string, rows []
 		return nil
 	}
 	stmt, err := ex.PrepareContext(ctx, `INSERT INTO scam_fake_tokens
-	  (chain, contract, symbol, transfers, recipients, first_seen, last_seen)
-	  VALUES (?, ?, ?, ?, ?, ?, ?)
+	  (chain, contract, symbol, creator, transfers, recipients, first_seen, last_seen)
+	  VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 	  ON CONFLICT(chain, contract) DO UPDATE SET
 	    symbol = CASE WHEN excluded.last_seen >= scam_fake_tokens.last_seen AND excluded.symbol != '' THEN excluded.symbol ELSE scam_fake_tokens.symbol END,
+	    creator = CASE WHEN excluded.creator != '' THEN excluded.creator ELSE scam_fake_tokens.creator END,
 	    transfers = scam_fake_tokens.transfers + excluded.transfers,
 	    recipients = scam_fake_tokens.recipients + excluded.recipients,
 	    first_seen = CASE WHEN scam_fake_tokens.first_seen = '' OR excluded.first_seen < scam_fake_tokens.first_seen THEN excluded.first_seen ELSE scam_fake_tokens.first_seen END,
@@ -325,6 +342,7 @@ func upsertFakeTokensTx(ctx context.Context, ex sqlExecer, chain string, rows []
 
 	for _, r := range rows {
 		contract := normalizeScamAddr(chain, r.Contract)
+		creator := normalizeScamAddr(chain, r.Creator)
 		sym := strings.TrimSpace(r.Symbol)
 		first := r.FirstSeen
 		last := r.LastSeen
@@ -337,7 +355,7 @@ func upsertFakeTokensTx(ctx context.Context, ex sqlExecer, chain string, rows []
 		if contract == "" || sym == "" || r.Transfers <= 0 || r.Recipients <= 0 || first == "" || last == "" {
 			return fmt.Errorf("invalid fake token row for %s: %+v", chain, r)
 		}
-		if _, err := stmt.ExecContext(ctx, chain, contract, sym, r.Transfers, r.Recipients, first, last); err != nil {
+		if _, err := stmt.ExecContext(ctx, chain, contract, sym, creator, r.Transfers, r.Recipients, first, last); err != nil {
 			return fmt.Errorf("upsert fake token %s %s: %w", chain, contract, err)
 		}
 	}
@@ -415,6 +433,13 @@ func (s *riskStore) putDailyStats(ctx context.Context, day string, m map[string]
 // any day in the batch is <= the current cursor (or cursor <= currentCursor),
 // it aborts with errAlreadyApplied so cumulative counters are never doubled.
 func (s *riskStore) applyScamBatch(ctx context.Context, source, chain string, days []scamDayBatch, newFrom, cursor string, now time.Time) error {
+	return s.applyScamBatchWithDeployers(ctx, source, chain, days, nil, newFrom, cursor, now)
+}
+
+// applyScamBatchWithDeployers is applyScamBatch plus, in the same
+// transaction, a replacement of chain's serial-deployer snapshot when
+// deployers is non-empty (an empty snapshot never wipes the corpus).
+func (s *riskStore) applyScamBatchWithDeployers(ctx context.Context, source, chain string, days []scamDayBatch, deployers []fakeTokenDeployerRow, newFrom, cursor string, now time.Time) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin: %w", err)
@@ -451,6 +476,11 @@ func (s *riskStore) applyScamBatch(ctx context.Context, source, chain string, da
 			return err
 		}
 	}
+	if len(deployers) > 0 {
+		if err := replaceFakeTokenDeployersTx(ctx, tx, chain, deployers, cursor, now); err != nil {
+			return err
+		}
+	}
 
 	var rowCount int
 	switch source {
@@ -477,6 +507,66 @@ func (s *riskStore) applyScamBatch(ctx context.Context, source, chain string, da
 		return err
 	}
 	return tx.Commit()
+}
+
+// replaceFakeTokenDeployersTx swaps chain's serial-deployer snapshot and
+// records it in its own sync_state row. Rows must be unique by address (a
+// leftover primary-key conflict fails loudly).
+func replaceFakeTokenDeployersTx(ctx context.Context, ex sqlExecer, chain string, rows []fakeTokenDeployerRow, cursor string, now time.Time) error {
+	if _, err := ex.ExecContext(ctx, `DELETE FROM scam_fake_token_deployers WHERE chain = ?`, chain); err != nil {
+		return fmt.Errorf("clear fake token deployers %s: %w", chain, err)
+	}
+	stmt, err := ex.PrepareContext(ctx, `INSERT INTO scam_fake_token_deployers
+	  (chain, address, contracts, first_seen, last_seen, updated_at) VALUES (?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		return fmt.Errorf("prepare insert fake token deployers: %w", err)
+	}
+	defer stmt.Close()
+	ts := fmtTime(now)
+	for _, r := range rows {
+		addr := normalizeScamAddr(chain, r.Address)
+		if addr == "" || r.Contracts <= 0 || r.FirstSeen == "" || r.LastSeen == "" {
+			return fmt.Errorf("invalid fake token deployer row for %s: %+v", chain, r)
+		}
+		if _, err := stmt.ExecContext(ctx, chain, addr, r.Contracts, r.FirstSeen, r.LastSeen, ts); err != nil {
+			return fmt.Errorf("insert fake token deployer %s %s: %w", chain, addr, err)
+		}
+	}
+	if err := ensureSyncRow(ctx, ex, scamFakeTokenDeployersSourceID); err != nil {
+		return fmt.Errorf("ensure sync row %s: %w", scamFakeTokenDeployersSourceID, err)
+	}
+	return updateSyncWatermarksTx(ctx, ex, scamFakeTokenDeployersSourceID, "", cursor, len(rows), now)
+}
+
+// fakeTokenDeployerHits looks addrs up in the Ethereum serial-deployer
+// corpus in one IN (...) query. EVM addresses are shared across chains, so
+// L2 callers use the same corpus (the clue says "seen on Ethereum").
+func (s *riskStore) fakeTokenDeployerHits(ctx context.Context, addrs []string) (map[string]fakeTokenDeployerRow, error) {
+	out := map[string]fakeTokenDeployerRow{}
+	if len(addrs) == 0 {
+		return out, nil
+	}
+	placeholders := make([]string, len(addrs))
+	args := make([]any, len(addrs))
+	for i, a := range addrs {
+		placeholders[i] = "?"
+		args[i] = normalizeScamAddr("eth", a)
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT address, contracts, first_seen, last_seen, updated_at
+	  FROM scam_fake_token_deployers
+	  WHERE chain = 'eth' AND address IN (`+strings.Join(placeholders, ",")+`)`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("fake token deployer hits: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var r fakeTokenDeployerRow
+		if err := rows.Scan(&r.Address, &r.Contracts, &r.FirstSeen, &r.LastSeen, &r.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan fake token deployer: %w", err)
+		}
+		out[r.Address] = r
+	}
+	return out, rows.Err()
 }
 
 // lookalikeHits queries scam_lookalikes for addrs in a single IN (...) query.
@@ -516,6 +606,36 @@ func (s *riskStore) lookalikeHits(ctx context.Context, chain string, addrs []str
 			return nil, fmt.Errorf("scan lookalike hit: %w", err)
 		}
 		out[r.Lookalike] = r
+	}
+	return out, rows.Err()
+}
+
+// fakeTokenCreators returns the known creator of each of contracts that is a
+// counterfeit with a recorded creator on chain (one IN (...) query).
+func (s *riskStore) fakeTokenCreators(ctx context.Context, chain string, contracts []string) (map[string]string, error) {
+	out := map[string]string{}
+	if len(contracts) == 0 {
+		return out, nil
+	}
+	placeholders := make([]string, len(contracts))
+	args := make([]any, 0, 1+len(contracts))
+	args = append(args, chain)
+	for i, c := range contracts {
+		placeholders[i] = "?"
+		args = append(args, normalizeScamAddr(chain, c))
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT contract, creator FROM scam_fake_tokens
+	  WHERE chain = ? AND creator != '' AND contract IN (`+strings.Join(placeholders, ",")+`)`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("fake token creators: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var contract, creator string
+		if err := rows.Scan(&contract, &creator); err != nil {
+			return nil, fmt.Errorf("scan fake token creator: %w", err)
+		}
+		out[contract] = creator
 	}
 	return out, rows.Err()
 }

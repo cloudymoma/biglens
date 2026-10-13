@@ -28,7 +28,8 @@ type DirFilter = 'all' | 'in' | 'out';
 
 // Returns true when a row should be hidden by the "Hide zero-value & unrelated tokens"
 // toggle (spec Task 13: hides `other` tier, standalone `dust`, and standalone `zero_value`,
-// but NEVER hides poisoning evidence, `rbf_signaled`, or any `DANGER` row).
+// but NEVER hides poisoning evidence, Scam Radar deployer hits, `rbf_signaled`, or any
+// `DANGER` row).
 function shouldHideNoiseRow(tx: PaymentTx): boolean {
   if (tx.level === 'DANGER') {
     return false;
@@ -38,6 +39,7 @@ function shouldHideNoiseRow(tx: PaymentTx): boolean {
     tx.flags.includes('lookalike_known') ||
     tx.flags.includes('sent_to_lookalike') ||
     tx.flags.includes('counterfeit_token') ||
+    tx.flags.includes('counterfeit_deployer') ||
     tx.flags.includes('counterparty_listed') ||
     tx.flags.includes('rbf_signaled') ||
     tx.flags.includes('failed');

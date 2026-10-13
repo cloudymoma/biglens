@@ -138,6 +138,36 @@ func TestDailySyncerInitialDaysZeroDisablesColdStart(t *testing.T) {
 	}
 }
 
+// initial_days: 0 disables Scam Radar entirely (spec P2.0 Q2, README, the
+// panel's hint): a source that already has a cursor must stop syncing too,
+// while the data stored so far stays readable.
+func TestDailySyncerInitialDaysZeroDisablesExistingCursor(t *testing.T) {
+	ctx := context.Background()
+	s, job, store := newTestDailySyncer(t, scamEthSourceID, at(6, 0), 0)
+	const lk = "0x111199999999999999999999999999999999aaaa"
+	if err := store.applyScamBatch(ctx, scamEthSourceID, "eth", []scamDayBatch{{
+		Day:        "2026-09-24",
+		Lookalikes: []lookalikeRow{{Lookalike: lk, Imitated: "0x111100000000000000000000000000000000aaaa", Hits: 3, Victims: 2}},
+	}}, "2026-08-27", "2026-09-24", at(5, 0)); err != nil {
+		t.Fatal(err)
+	}
+
+	s.syncOnce(ctx)
+
+	if len(job.readyCalls) != 0 || len(job.runCalls) != 0 || len(job.dryRunCalls) != 0 {
+		t.Fatalf("initial_days=0 with a cursor touched BigQuery: ready=%d dry=%d run=%d",
+			len(job.readyCalls), len(job.dryRunCalls), len(job.runCalls))
+	}
+	st, _ := store.getSyncState(ctx, scamEthSourceID)
+	if st.Cursor != "2026-09-24" || st.LastError != "" {
+		t.Errorf("sync_state = %+v, want cursor 2026-09-24 and no error", st)
+	}
+	hits, err := store.lookalikeHits(ctx, "eth", []string{lk})
+	if err != nil || hits[lk].Hits != 3 {
+		t.Errorf("stored lookalike after disabling = %+v, %v; want it still readable", hits, err)
+	}
+}
+
 func TestDailySyncerAdvancesCursor(t *testing.T) {
 	s, job, store := newTestDailySyncer(t, scamEthSourceID, at(6, 0), 30)
 	if err := store.applyScamBatch(context.Background(), scamEthSourceID, "eth", nil, "2026-08-27", "2026-09-24", at(5, 0)); err != nil {
@@ -236,6 +266,39 @@ func TestDailySyncerBilledFailureBacksOff6h(t *testing.T) {
 	st, _ = store.getSyncState(context.Background(), scamEthSourceID)
 	if st.Cursor != "2026-09-25" || st.LastError != "" {
 		t.Errorf("sync_state after retry = %+v", st)
+	}
+}
+
+// A run whose query succeeded but whose result is implausible must fail like
+// a billed BigQuery error: nothing stored, cursor unchanged, the guard's
+// message as last_error (not a generic code), and the 6 h billed back-off.
+func TestDailySyncerSuspiciousEmptyFailsRun(t *testing.T) {
+	cur := at(6, 0)
+	s, job, store := newTestDailySyncer(t, scamEthSourceID, cur, 30)
+	s.now = func() time.Time { return cur }
+	notified := 0
+	s.onChange = func() { notified++ }
+	if err := store.applyScamBatch(context.Background(), scamEthSourceID, "eth", nil, "2026-08-27", "2026-09-24", at(5, 0)); err != nil {
+		t.Fatal(err)
+	}
+	job.runErr = suspiciousEmpty("2026-09-25", "official USDT/USDC transfers scanned")
+	job.runBilled = 3 << 30
+
+	s.syncOnce(context.Background())
+
+	const wantMsg = "suspicious empty result for 2026-09-25: 0 official USDT/USDC transfers scanned — upstream schema or format change?"
+	st, _ := store.getSyncState(context.Background(), scamEthSourceID)
+	if st.Cursor != "2026-09-24" || st.LastError != wantMsg {
+		t.Fatalf("sync_state = %+v, want cursor 2026-09-24 and last_error %q", st, wantMsg)
+	}
+	if job.storeApplied != 0 || notified != 0 {
+		t.Errorf("suspicious run stored %d batches / notified %d times, want 0", job.storeApplied, notified)
+	}
+
+	cur = cur.Add(time.Hour)
+	s.syncOnce(context.Background())
+	if len(job.runCalls) != 1 {
+		t.Fatalf("suspicious billed run retried after 1h: runCalls = %d, want 1 (6h back-off)", len(job.runCalls))
 	}
 }
 

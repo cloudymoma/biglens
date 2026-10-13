@@ -1159,6 +1159,7 @@ export interface ScamRadarKPIs {
   tron_usdt_freezes_30d: number;
   btc_day?: string;
   btc_rbf_percent: number;
+  eth_fake_deployers?: number; // serial counterfeit USDT/USDC deployers in the latest snapshot
 }
 
 export interface ScamTrendPoint {
@@ -1188,12 +1189,21 @@ export interface ScamRBF {
   percent: number;
 }
 
+export interface ScamDeployer {
+  address: string;
+  contracts: number;
+  first_seen: string;
+  last_seen: string;
+  explorer_url: string;
+}
+
 export interface ScamRadarResponse {
   coverage: Record<string, AddressRiskSource>;
   kpis: ScamRadarKPIs;
   trend: ScamTrendPoint[];
   fake_tokens: ScamFakeToken[];
   btc_rbf: ScamRBF | null;
+  top_deployers?: ScamDeployer[];
   empty: boolean;
 }
 

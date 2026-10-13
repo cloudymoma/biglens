@@ -982,3 +982,90 @@ func TestApplyFlagsPreservesRBFAndOrdersUnconfirmedLast(t *testing.T) {
 		t.Fatalf("txs[1] (confirmed real transfer) flags = %v, want empty", txs[1].Flags)
 	}
 }
+
+// counterfeit_deployer marks a transfer whose counterfeit token was created
+// by a known serial deployer (ETH: scam_fake_tokens.creator joined with the
+// deployer corpus) or whose counterparty is one (every EVM chain: addresses
+// are shared). It is a Scam Radar hint, not a list hit, and must survive
+// applyFlags, which rebuilds the flags.
+func TestCounterfeitDeployerFlag(t *testing.T) {
+	ctx := context.Background()
+	store := newTestRiskStore(t)
+	const (
+		deployer     = "0x80d04079ffc53eb14edbeeb37279d126f45552df"
+		otherCreator = "0x1234000000000000000000000000000000000002"
+		fakeBySerial = "0xfeed000000000000000000000000000000000001"
+		fakeByOther  = "0xfeed000000000000000000000000000000000002"
+	)
+	if err := store.applyScamBatchWithDeployers(ctx, scamEthSourceID, "eth", []scamDayBatch{{
+		Day: "2026-10-05",
+		FakeTokens: []fakeTokenRow{
+			{Contract: fakeBySerial, Symbol: "USDT", Creator: deployer, Transfers: 5, Recipients: 5, FirstSeen: "2026-10-05", LastSeen: "2026-10-05"},
+			{Contract: fakeByOther, Symbol: "USDT_REWARD", Creator: otherCreator, Transfers: 2, Recipients: 2, FirstSeen: "2026-10-05", LastSeen: "2026-10-05"},
+		},
+	}}, []fakeTokenDeployerRow{{Address: deployer, Contracts: 4394, FirstSeen: "2026-05-21", LastSeen: "2026-08-27"}},
+		"2026-10-01", "2026-10-05", time.Date(2026, 10, 6, 1, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+
+	ethTxs := []payTx{
+		// 0: counterfeit token created by the serial deployer, clean counterparty.
+		{TxHash: "0x01", Direction: "in", Timestamp: "2026-10-06T12:00:00Z", Amount: "1000", Symbol: "USDT",
+			TokenContract: fakeBySerial, TokenTier: tierCounterfeit, Counterparty: flagTestEVMOther, Block: 100},
+		// 1: counterfeit token (re-tiered from other) by a one-off creator.
+		{TxHash: "0x02", Direction: "in", Timestamp: "2026-10-06T12:01:00Z", Amount: "5", Symbol: "USDT_REWARD",
+			TokenContract: fakeByOther, TokenTier: tierOther, Counterparty: flagTestEVMReal, Block: 101},
+		// 2: zero-value official USDT sent by the deployer itself.
+		{TxHash: "0x03", Direction: "in", Timestamp: "2026-10-06T12:02:00Z", Amount: "0", Symbol: "USDT",
+			TokenTier: tierNative, Counterparty: "0x" + strings.ToUpper(deployer[2:]), Block: 102},
+	}
+	if err := applyLocalHits(ctx, store, "eth", ethTxs); err != nil {
+		t.Fatalf("applyLocalHits(eth): %v", err)
+	}
+	applyFlags(ethTxs, "USDT", familyEVM)
+	if !slices.Contains(ethTxs[0].Flags, "counterfeit_deployer") || !slices.Contains(ethTxs[0].Flags, "counterfeit_token") {
+		t.Errorf("token by serial deployer flags = %v, want counterfeit_token + counterfeit_deployer", ethTxs[0].Flags)
+	}
+	if len(ethTxs[0].CounterpartyHits) != 0 {
+		t.Errorf("token-creator hit must not tag the clean counterparty: hits = %v", ethTxs[0].CounterpartyHits)
+	}
+	if ethTxs[1].TokenTier != tierCounterfeit || slices.Contains(ethTxs[1].Flags, "counterfeit_deployer") {
+		t.Errorf("one-off counterfeit = tier %q flags %v, want counterfeit without counterfeit_deployer", ethTxs[1].TokenTier, ethTxs[1].Flags)
+	}
+	if !slices.Contains(ethTxs[2].Flags, "counterfeit_deployer") || slices.Contains(ethTxs[2].Flags, "counterparty_listed") ||
+		!reflect.DeepEqual(ethTxs[2].CounterpartyHits, []string{"fake_token_deployers"}) {
+		t.Errorf("transfer from the deployer = flags %v hits %v, want counterfeit_deployer + [fake_token_deployers], not counterparty_listed",
+			ethTxs[2].Flags, ethTxs[2].CounterpartyHits)
+	}
+
+	// L2: the counterparty check applies (EVM addresses are shared); the
+	// token-creator check does not (an L2 token contract is a different
+	// contract and scam_fake_tokens is Ethereum-only).
+	arbTxs := []payTx{
+		{TxHash: "0xa1", Direction: "in", Timestamp: "2026-10-06T12:00:00Z", Amount: "1000", Symbol: "USDT",
+			TokenContract: fakeBySerial, TokenTier: tierCounterfeit, Counterparty: flagTestEVMOther, Block: 100},
+		{TxHash: "0xa2", Direction: "out", Timestamp: "2026-10-06T12:01:00Z", Amount: "25", Symbol: "USDT",
+			TokenTier: tierNative, Counterparty: deployer, Block: 101},
+	}
+	if err := applyLocalHits(ctx, store, "arb", arbTxs); err != nil {
+		t.Fatalf("applyLocalHits(arb): %v", err)
+	}
+	applyFlags(arbTxs, "USDT", familyEVM)
+	if slices.Contains(arbTxs[0].Flags, "counterfeit_deployer") {
+		t.Errorf("arb token-creator check must not apply: flags = %v", arbTxs[0].Flags)
+	}
+	if !slices.Contains(arbTxs[1].Flags, "counterfeit_deployer") {
+		t.Errorf("arb transfer to the deployer flags = %v, want counterfeit_deployer", arbTxs[1].Flags)
+	}
+
+	// TRON addresses never match the EVM corpus.
+	tronTxs := []payTx{{TxHash: "t1", Direction: "in", Timestamp: "2026-10-06T12:00:00Z", Amount: "5", Symbol: "USDT",
+		TokenTier: tierNative, Counterparty: flagTestTronReal, Block: 1}}
+	if err := applyLocalHits(ctx, store, "tron", tronTxs); err != nil {
+		t.Fatalf("applyLocalHits(tron): %v", err)
+	}
+	applyFlags(tronTxs, "USDT", familyTron)
+	if slices.Contains(tronTxs[0].Flags, "counterfeit_deployer") {
+		t.Errorf("tron flags = %v, want no counterfeit_deployer", tronTxs[0].Flags)
+	}
+}

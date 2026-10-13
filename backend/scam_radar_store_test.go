@@ -207,6 +207,102 @@ func TestUpsertLookalikesFakeTokensAndDailyStats(t *testing.T) {
 	}
 }
 
+// A counterfeit's creator is stored lowercase, kept when a later day has no
+// creator (NULL creator_address) and replaced when tokens_latest reports a
+// different one.
+func TestUpsertFakeTokensStoresCreator(t *testing.T) {
+	s := newTestRiskStore(t)
+	ctx := context.Background()
+	const (
+		fakeTok  = "0xcccc00000000000000000000000000000000dddd"
+		creator1 = "0x80d04079ffc53eb14edbeeb37279d126f45552df"
+		creator2 = "0x0f6666bc699aec39b846e898473e9caec5a6b821"
+	)
+	creatorOf := func() string {
+		t.Helper()
+		var c string
+		if err := s.db.QueryRowContext(ctx, `SELECT creator FROM scam_fake_tokens WHERE chain = 'eth' AND contract = ?`, fakeTok).Scan(&c); err != nil {
+			t.Fatalf("read creator: %v", err)
+		}
+		return c
+	}
+	upsert := func(day, creator string) {
+		t.Helper()
+		if err := s.upsertFakeTokens(ctx, "eth", []fakeTokenRow{
+			{Contract: fakeTok, Symbol: "USDT", Creator: creator, Transfers: 3, Recipients: 2, FirstSeen: day, LastSeen: day},
+		}); err != nil {
+			t.Fatalf("upsertFakeTokens %s: %v", day, err)
+		}
+	}
+
+	upsert("2026-10-05", "0x"+strings.ToUpper(creator1[2:]))
+	if got := creatorOf(); got != creator1 {
+		t.Fatalf("creator after first upsert = %q, want %q (lowercased)", got, creator1)
+	}
+	upsert("2026-10-06", "")
+	if got := creatorOf(); got != creator1 {
+		t.Fatalf("creator after a day without creator = %q, want %q kept", got, creator1)
+	}
+	upsert("2026-10-07", creator2)
+	if got := creatorOf(); got != creator2 {
+		t.Fatalf("creator after a corrected creator = %q, want %q", got, creator2)
+	}
+}
+
+// The serial-deployer corpus is replaced as a whole by each scam_eth snapshot,
+// left untouched by batches without one, and tracked in its own sync_state
+// row (the Address Risk source status reads it, not scam_eth's).
+func TestApplyScamBatchReplacesDeployerSnapshot(t *testing.T) {
+	s := newTestRiskStore(t)
+	ctx := context.Background()
+	const (
+		depA = "0x80d04079ffc53eb14edbeeb37279d126f45552df"
+		depB = "0x0f6666bc699aec39b846e898473e9caec5a6b821"
+	)
+	t1 := time.Date(2026, 10, 6, 1, 0, 0, 0, time.UTC)
+	first := []fakeTokenDeployerRow{
+		{Address: "0x" + strings.ToUpper(depA[2:]), Contracts: 4394, FirstSeen: "2026-05-21", LastSeen: "2026-08-27"},
+		{Address: depB, Contracts: 3, FirstSeen: "2026-04-18", LastSeen: "2026-05-20"},
+	}
+	if err := s.applyScamBatchWithDeployers(ctx, scamEthSourceID, "eth", nil, first, "2026-09-06", "2026-10-05", t1); err != nil {
+		t.Fatalf("first snapshot: %v", err)
+	}
+	hits, err := s.fakeTokenDeployerHits(ctx, []string{depA, "0x" + strings.ToUpper(depB[2:]), "0x0000000000000000000000000000000000000001"})
+	if err != nil || len(hits) != 2 || hits[depA].Contracts != 4394 || hits[depB].LastSeen != "2026-05-20" {
+		t.Fatalf("hits after first snapshot = %+v, err = %v", hits, err)
+	}
+	if hits[depA].UpdatedAt != fmtTime(t1) {
+		t.Errorf("updated_at = %q, want %q", hits[depA].UpdatedAt, fmtTime(t1))
+	}
+	st, _ := s.getSyncState(ctx, scamFakeTokenDeployersSourceID)
+	if st.Cursor != "2026-10-05" || st.RowCount != 2 || st.LastOKAt != fmtTime(t1) || st.LastError != "" {
+		t.Errorf("deployer sync_state = %+v", st)
+	}
+
+	t2 := t1.Add(24 * time.Hour)
+	if err := s.applyScamBatchWithDeployers(ctx, scamEthSourceID, "eth", nil,
+		[]fakeTokenDeployerRow{{Address: depA, Contracts: 4400, FirstSeen: "2026-05-21", LastSeen: "2026-10-06"}},
+		"", "2026-10-06", t2); err != nil {
+		t.Fatalf("second snapshot: %v", err)
+	}
+	hits, err = s.fakeTokenDeployerHits(ctx, []string{depA, depB})
+	if err != nil || len(hits) != 1 || hits[depA].Contracts != 4400 {
+		t.Fatalf("hits after replacing snapshot = %+v, err = %v (depB must be gone)", hits, err)
+	}
+
+	// A batch without a snapshot never wipes the corpus.
+	if err := s.applyScamBatch(ctx, scamEthSourceID, "eth", nil, "", "2026-10-07", t2.Add(24*time.Hour)); err != nil {
+		t.Fatalf("batch without snapshot: %v", err)
+	}
+	hits, err = s.fakeTokenDeployerHits(ctx, []string{depA})
+	if err != nil || hits[depA].Contracts != 4400 {
+		t.Fatalf("hits after a batch without snapshot = %+v, err = %v", hits, err)
+	}
+	if st, _ := s.getSyncState(ctx, scamFakeTokenDeployersSourceID); st.Cursor != "2026-10-06" || st.LastOKAt != fmtTime(t2) {
+		t.Errorf("deployer sync_state after a batch without snapshot = %+v, want cursor 2026-10-06", st)
+	}
+}
+
 func TestPruneScamBoundaries(t *testing.T) {
 	s := newTestRiskStore(t)
 	ctx := context.Background()
