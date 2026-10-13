@@ -53,12 +53,13 @@ var riskSourceOrder = map[string]int{
 	"blockscout":         8,
 	"etherscan":          9,
 	"eip7702":            10,
+	"bigquery_profile":   11,
 }
 
 func riskSourcesFor(chain string) []string {
 	switch chain {
 	case "eth":
-		return []string{"ofac", "mew_darklist", "stablecoin", "scam_lookalikes", "issuer_freeze", "chainalysis_oracle", "goplus", "blockscout", "etherscan", "eip7702"}
+		return []string{"ofac", "mew_darklist", "stablecoin", "scam_lookalikes", "issuer_freeze", "chainalysis_oracle", "goplus", "blockscout", "etherscan", "eip7702", "bigquery_profile"}
 	case "arb", "op":
 		return []string{"ofac", "mew_darklist", "scam_lookalikes", "issuer_freeze", "chainalysis_oracle", "goplus", "blockscout", "eip7702"}
 	case "base":
@@ -120,6 +121,9 @@ type riskLookupResult struct {
 	// AssociationScope says what the Etherscan analysis covered; null when
 	// it did not run (no key, or the source failed).
 	AssociationScope *riskAssociationScope `json:"association_scope"`
+	// BQProfile is the opt-in BigQuery address profile; absent unless the
+	// lookup asked for it (?bq=1 on Ethereum) and the server allows it.
+	BQProfile *riskBQProfile `json:"bq_profile,omitempty"`
 
 	// noCache marks a transient failure that no source status shows (e.g. the
 	// EIP-7702 delegate check), so a retry gets fresh data.
@@ -146,7 +150,7 @@ func (r *riskLookupResult) cacheable() bool {
 		return false
 	}
 	for _, s := range r.Sources {
-		if s.Status == "error" || s.Status == "empty" {
+		if s.Status == "error" || s.Status == "empty" || s.Status == bqStatusTimeout || s.Status == bqStatusRateLimited {
 			return false
 		}
 	}
@@ -332,7 +336,9 @@ func plural(n int, word string) string {
 }
 
 // buildRiskSummary implements spec §8.5. The four lists never overlap:
-// checked = ok; failed = error|stale; incomplete = partial|empty; skipped = not_configured.
+// checked = ok; failed = error|stale|timeout|rate_limited; incomplete =
+// partial|empty|over_budget; skipped = not_configured. An opt-in source the
+// user did not request ("skipped") is in no list.
 func buildRiskSummary(clues []riskClue, sources []riskSource) riskSummary {
 	s := riskSummary{Checked: []string{}, Failed: []string{}, Incomplete: []string{}, Skipped: []string{}}
 	for _, c := range clues {
@@ -359,10 +365,10 @@ func buildRiskSummary(clues []riskClue, sources []riskSource) riskSummary {
 		switch src.Status {
 		case "ok":
 			s.Checked = append(s.Checked, src.ID)
-		case "error", "stale":
+		case "error", "stale", bqStatusTimeout, bqStatusRateLimited:
 			s.Failed = append(s.Failed, src.ID)
 			unavailable = unavailable || src.Error == "unavailable"
-		case "partial", "empty":
+		case "partial", "empty", bqStatusOverBudget:
 			s.Incomplete = append(s.Incomplete, src.ID)
 		case "not_configured":
 			s.Skipped = append(s.Skipped, src.ID)
@@ -436,6 +442,9 @@ type addressRiskService struct {
 	backfillMu      sync.Mutex
 	backfillRunning bool
 	pendingPlan     *backfillPlan // last unconfirmed dry-run estimate; guarded by backfillMu
+
+	// bqProfile runs the opt-in BigQuery address profile; nil = unavailable.
+	bqProfile *bqProfiler
 }
 
 func (s *addressRiskService) rpcsFor(chain string) []string {
@@ -772,6 +781,17 @@ func (s *addressRiskService) lookup(ctx context.Context, chain, addr string) *ri
 }
 
 func (s *addressRiskService) lookupKey(ctx context.Context, chain, addr, etherscanKey string) *riskLookupResult {
+	return s.lookupOpts(ctx, chain, addr, etherscanKey, riskLookupOpts{})
+}
+
+// riskLookupOpts are per-request lookup options.
+type riskLookupOpts struct {
+	// BQProfile runs the BigQuery address profile: the user opted in (?bq=1),
+	// the chain is eth, and the server allows it (checked by the handler).
+	BQProfile bool
+}
+
+func (s *addressRiskService) lookupOpts(ctx context.Context, chain, addr, etherscanKey string, opts riskLookupOpts) *riskLookupResult {
 	if chain == "" {
 		chain = "eth"
 	}
@@ -794,6 +814,9 @@ func (s *addressRiskService) lookupKey(ctx context.Context, chain, addr, ethersc
 		eipSrc                                     riskSource
 		eipClues                                   []riskClue
 		eipNoCache                                 bool
+		bqSrc                                      = riskSource{ID: "bigquery_profile", Status: bqStatusSkipped}
+		bqClues                                    []riskClue
+		bqProf                                     *riskBQProfile
 	)
 	wg.Add(1)
 	go func() { defer wg.Done(); localSrc, localClues, localFrozen = s.localCheck(ctx, chain, addr) }()
@@ -824,6 +847,12 @@ func (s *addressRiskService) lookupKey(ctx context.Context, chain, addr, ethersc
 		wg.Add(1)
 		go func() { defer wg.Done(); eipSrc, eipClues, eipNoCache = s.checkEIP7702Source(ctx, chain, addr, now) }()
 	}
+	// The profile has its own timeout (bigquery_profile.timeout_seconds); a
+	// slow job never holds the other sources back beyond it.
+	if has("bigquery_profile") && opts.BQProfile && s.bqProfile.available() {
+		wg.Add(1)
+		go func() { defer wg.Done(); bqSrc, bqClues, bqProf = s.checkBQProfile(ctx, addr, now) }()
+	}
 	wg.Wait()
 
 	asOf := fmtTime(now)
@@ -840,6 +869,7 @@ func (s *addressRiskService) lookupKey(ctx context.Context, chain, addr, ethersc
 	clues = append(clues, bsAddrClues...)
 	clues = append(clues, etherClues...)
 	clues = append(clues, eipClues...)
+	clues = append(clues, bqClues...)
 	sortClues(clues)
 
 	live := func(id, code string, hosts []string) riskSource {
@@ -872,6 +902,9 @@ func (s *addressRiskService) lookupKey(ctx context.Context, chain, addr, ethersc
 	if has("eip7702") {
 		sources = append(sources, eipSrc)
 	}
+	if has("bigquery_profile") {
+		sources = append(sources, bqSrc)
+	}
 
 	return &riskLookupResult{
 		Chain:            chain,
@@ -882,6 +915,7 @@ func (s *addressRiskService) lookupKey(ctx context.Context, chain, addr, ethersc
 		Clues:            clues,
 		Sources:          sources,
 		AssociationScope: scope,
+		BQProfile:        bqProf,
 		noCache:          eipNoCache,
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -242,7 +243,7 @@ func TestServiceLookupRoninLikeHit(t *testing.T) {
 	for _, s := range res.Sources {
 		ids = append(ids, s.ID+"="+s.Status)
 	}
-	if strings.Join(ids, ",") != "ofac=ok,mew_darklist=ok,stablecoin=ok,scam_lookalikes=ok,issuer_freeze=ok,chainalysis_oracle=ok,goplus=ok,etherscan=not_configured,eip7702=ok" {
+	if strings.Join(ids, ",") != "ofac=ok,mew_darklist=ok,stablecoin=ok,scam_lookalikes=ok,issuer_freeze=ok,chainalysis_oracle=ok,goplus=ok,etherscan=not_configured,eip7702=ok,bigquery_profile=skipped" {
 		t.Errorf("sources = %v", ids)
 	}
 	if res.Disclaimer != riskDisclaimer || res.QueriedAt != "2026-09-26T12:00:00Z" || res.Chain != "eth" {
@@ -686,7 +687,7 @@ func TestRiskSourcesForChain(t *testing.T) {
 		addr  string
 		want  string
 	}{
-		{"eth", "0x1111111111111111111111111111111111111111", "ofac,mew_darklist,stablecoin,scam_lookalikes,issuer_freeze,chainalysis_oracle,goplus,blockscout,etherscan,eip7702"},
+		{"eth", "0x1111111111111111111111111111111111111111", "ofac,mew_darklist,stablecoin,scam_lookalikes,issuer_freeze,chainalysis_oracle,goplus,blockscout,etherscan,eip7702,bigquery_profile"},
 		{"arb", "0x1111111111111111111111111111111111111111", "ofac,mew_darklist,scam_lookalikes,issuer_freeze,chainalysis_oracle,goplus,blockscout,eip7702"},
 		{"op", "0x1111111111111111111111111111111111111111", "ofac,mew_darklist,scam_lookalikes,issuer_freeze,chainalysis_oracle,goplus,blockscout,eip7702"},
 		{"base", "0x1111111111111111111111111111111111111111", "ofac,mew_darklist,scam_lookalikes,issuer_freeze,goplus,blockscout,eip7702"},
@@ -1045,5 +1046,41 @@ func TestLookupArbHitsEthLookalikeCorpus(t *testing.T) {
 		!strings.Contains(c.Title, "2026-09-01") ||
 		!strings.Contains(combined, "seen on Ethereum") {
 		t.Errorf("arb lookalike text = (%q, %q), want Known address-poisoning sender + seen 42 times + 2026-09-01 + seen on Ethereum", c.Title, c.Detail)
+	}
+}
+
+// The BigQuery profile reports its own statuses: a switched-off profile is in
+// no summary list and changes nothing; over_budget is a lasting "could not be
+// fully checked"; timeouts and limits are failures that must not be cached.
+func TestBuildRiskSummaryBQProfileStatuses(t *testing.T) {
+	ok := riskSource{ID: "ofac", Status: "ok"}
+	tests := []struct {
+		status, list string
+		cacheable    bool
+	}{
+		{bqStatusSkipped, "", true},
+		{bqStatusOK, "checked", true},
+		{bqStatusOverBudget, "incomplete", true},
+		{bqStatusRateLimited, "failed", false},
+		{bqStatusTimeout, "failed", false},
+		{bqStatusError, "failed", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.status, func(t *testing.T) {
+			srcs := []riskSource{ok, {ID: "bigquery_profile", Status: tt.status, Error: tt.status}}
+			s := buildRiskSummary(nil, srcs)
+			lists := map[string][]string{"checked": s.Checked, "failed": s.Failed, "incomplete": s.Incomplete, "skipped": s.Skipped}
+			for name, ids := range lists {
+				if got, want := slices.Contains(ids, "bigquery_profile"), name == tt.list; got != want {
+					t.Errorf("%s list contains bigquery_profile = %v, want %v (%+v)", name, got, want, s)
+				}
+			}
+			if got := (&riskLookupResult{Sources: srcs}).cacheable(); got != tt.cacheable {
+				t.Errorf("cacheable = %v, want %v", got, tt.cacheable)
+			}
+		})
+	}
+	if got := buildRiskSummary(nil, []riskSource{ok, {ID: "bigquery_profile", Status: bqStatusSkipped}}).Text; got != "No records in the 1 source checked." {
+		t.Errorf("text with a skipped profile = %q", got)
 	}
 }
