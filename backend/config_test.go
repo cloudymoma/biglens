@@ -281,10 +281,15 @@ func TestAddressRiskBigQueryProfileDefaults(t *testing.T) {
 	if explicit != (bqProfileSettings{Enabled: false, MaxBytesBilled: 1 << 30, MaxPerHour: 5, Timeout: 30 * time.Second}) {
 		t.Errorf("explicit = %+v", explicit)
 	}
-	// The lookup must answer well within the server's 60 s WriteTimeout.
+	// The lookup must answer well within the server's 60 s WriteTimeout, and
+	// per-job / hourly caps are bounded against misconfiguration.
 	long := AddressRiskConfig{BigQueryProfile: BigQueryProfileConfig{TimeoutSeconds: 600, MaxPerHour: -1, MaxBytesBilled: -5}}.bigQueryProfile()
 	if long.Timeout != 45*time.Second || long.MaxPerHour != 60 || long.MaxBytesBilled != 2<<30 {
 		t.Errorf("clamped = %+v, want timeout 45s and defaults for non-positive values", long)
+	}
+	high := AddressRiskConfig{BigQueryProfile: BigQueryProfileConfig{MaxBytesBilled: 50 << 30, MaxPerHour: 5000}}.bigQueryProfile()
+	if high.MaxBytesBilled != 10<<30 || high.MaxPerHour != 600 {
+		t.Errorf("upper clamp = %+v, want 10 GiB and 600/hour", high)
 	}
 }
 

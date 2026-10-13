@@ -21,7 +21,8 @@ const (
 	bqPeerMEW    = "0x2222222222222222222222222222222222222222"
 	bqPeerLook   = "0x123400000000000000000000000000000000abcd"
 	bqPeerPlain  = "0x3333333333333333333333333333333333333333"
-	bqPeerDeploy = "0x4444444444444444444444444444444444444444"
+	bqPeerDeploy = "0x4444444444444444444444444444444444444444" // deployer corpus, only ever paid by the target
+	bqPeerDepEOA = "0x6666666666666666666666666666666666666666" // deployer corpus, sent the target transactions
 )
 
 // fakeBQQuerier stands in for BigQuery: it records every profile job and
@@ -70,6 +71,7 @@ func testBQRow() *bqProfileRow {
 			{Address: bqPeerLook, Sent: 0, Received: 3, FirstTS: "2026-09-01T00:00:00Z", LastTS: "2026-09-20T12:00:00Z", WeiSent: "0", WeiReceived: "1"},
 			{Address: bqFunder, Sent: 0, Received: 1, FirstTS: "2019-03-01T08:00:00Z", LastTS: "2019-03-01T08:00:00Z", WeiSent: "0", WeiReceived: "250000000000000000"},
 			{Address: bqPeerDeploy, Sent: 1, Received: 0, FirstTS: "2026-05-01T00:00:00Z", LastTS: "2026-05-01T00:00:00Z", WeiSent: "10000000000000000", WeiReceived: "0"},
+			{Address: bqPeerDepEOA, Sent: 0, Received: 2, FirstTS: "2026-06-01T00:00:00Z", LastTS: "2026-06-02T00:00:00Z", WeiSent: "0", WeiReceived: "20000000000000000"},
 		},
 	}
 }
@@ -260,8 +262,9 @@ func TestBQProfilerAvailability(t *testing.T) {
 }
 
 // bqTestService has a store with the first funder on OFAC, a counterparty on
-// the MEW darklist, one in the lookalike corpus and one in the serial
-// counterfeit-token deployer snapshot.
+// the MEW darklist, one in the lookalike corpus and three in the serial
+// counterfeit-token deployer snapshot: bqPeerDepEOA (sent the target
+// transactions), and bqPeerDeploy and bqPeerMEW (only ever paid by it).
 func bqTestService(t *testing.T, f *fakeBQQuerier) *addressRiskService {
 	t.Helper()
 	up := newFakeUpstreams(t, `{"result":"`+oracleFalse+`"}`, `{"code":1,"result":{}}`, 0)
@@ -269,11 +272,14 @@ func bqTestService(t *testing.T, f *fakeBQQuerier) *addressRiskService {
 	ctx := context.Background()
 	store.replaceList(ctx, "ofac", []listEntry{{Address: bqFunder}}, "h", riskNow)
 	store.replaceList(ctx, "mew_darklist", []listEntry{{Address: bqPeerMEW}}, "h", riskNow)
+	deployer := func(addr string) fakeTokenDeployerRow {
+		return fakeTokenDeployerRow{Address: addr, Contracts: 5, FirstSeen: "2026-05-01", LastSeen: "2026-09-01"}
+	}
 	// The Scam Radar day must land before markStablecoinSynced moves the cursor.
 	if err := store.applyScamBatchWithDeployers(ctx, scamEthSourceID, "eth", []scamDayBatch{{Day: "2026-09-25",
 		Lookalikes: []lookalikeRow{{Lookalike: bqPeerLook, Imitated: "0x123499999999999999999999999999999999abcd",
 			Hits: 4, Victims: 2, FirstSeen: "2026-09-01", LastSeen: "2026-09-25"}}}},
-		[]fakeTokenDeployerRow{{Address: bqPeerDeploy, Contracts: 5, FirstSeen: "2026-05-01", LastSeen: "2026-09-01"}},
+		[]fakeTokenDeployerRow{deployer(bqPeerDeploy), deployer(bqPeerDepEOA), deployer(bqPeerMEW)},
 		"2026-08-27", "2026-09-25", riskNow); err != nil {
 		t.Fatal(err)
 	}
@@ -306,15 +312,21 @@ func TestBQProfileResultAndClues(t *testing.T) {
 	if ff == nil || ff.Address != bqFunder || ff.BlockNumber != 7300000 || ff.ValueETH != "0.25" || strings.Join(ff.Lists, ",") != "ofac" {
 		t.Errorf("first funder = %+v", ff)
 	}
-	if len(prof.TopPeers) != 5 || prof.PeersAnalyzed != 5 || prof.TopPeers[0].Address != bqPeerPlain {
+	if len(prof.TopPeers) != 6 || prof.PeersAnalyzed != 6 || prof.TopPeers[0].Address != bqPeerPlain {
 		t.Errorf("top peers = %+v", prof.TopPeers)
 	}
 	var listed []string
 	for _, p := range prof.ListedPeers {
 		listed = append(listed, p.Address+"="+strings.Join(p.Lists, "+"))
 	}
-	if strings.Join(listed, ",") != bqPeerMEW+"=mew_darklist,"+bqPeerLook+"=scam_lookalikes,"+bqFunder+"=ofac,"+bqPeerDeploy+"=fake_token_deployers" {
+	// A deployer hit counts only for a peer that sent the target a top-level
+	// transaction (an EOA): bqPeerDeploy and bqPeerMEW were only ever paid by
+	// it and could be a token-launcher factory contract.
+	if strings.Join(listed, ",") != bqPeerMEW+"=mew_darklist,"+bqPeerLook+"=scam_lookalikes,"+bqFunder+"=ofac,"+bqPeerDepEOA+"=fake_token_deployers" {
 		t.Errorf("listed peers = %v", listed)
+	}
+	if p := prof.TopPeers[4]; p.Address != bqPeerDeploy || len(p.Lists) != 0 {
+		t.Errorf("outgoing-only deployer-corpus peer = %+v, want no lists", p)
 	}
 	if prof.TopPeers[2].ETHReceived != "<0.000001" {
 		t.Errorf("dust must not read as zero: %q", prof.TopPeers[2].ETHReceived)
@@ -333,15 +345,19 @@ func TestBQProfileResultAndClues(t *testing.T) {
 	}
 	fc := byCode["bq_first_funder_listed"]
 	if fc.Severity != sevAssociation || fc.Title != "First funder "+bqFunder+" is OFAC-listed" ||
-		fc.ObservedAt == nil || *fc.ObservedAt != "2019-03-01T08:00:00Z" {
-		t.Errorf("first funder clue = %+v", fc)
+		fc.ObservedAt == nil || *fc.ObservedAt != "2019-03-01T08:00:00Z" || strings.Contains(fc.Detail, "factory") {
+		t.Errorf("first funder clue = %+v (no deployer caveat without a deployer match)", fc)
 	}
 	cc := byCode["bq_counterparties_listed"]
 	if cc.Severity != sevAssociation || cc.Title != "3 direct counterparties appear on local lists" ||
 		!strings.Contains(cc.Detail, bqPeerMEW) || !strings.Contains(cc.Detail, "MEW darklist") ||
 		!strings.Contains(cc.Detail, "address-poisoning lookalike") ||
-		!strings.Contains(cc.Detail, bqPeerDeploy+" (Serial counterfeit-token deployer;") || strings.Contains(cc.Detail, bqFunder) {
+		!strings.Contains(cc.Detail, bqPeerDepEOA+" (Serial counterfeit-token deployer;") ||
+		strings.Contains(cc.Detail, bqPeerDeploy) || strings.Contains(cc.Detail, bqFunder) {
 		t.Errorf("counterparties clue = %+v (the funder has its own clue)", cc)
+	}
+	if !strings.HasSuffix(cc.Detail, " "+bqDeployerCaveat) || !strings.Contains(bqDeployerCaveat, "token-launcher factory contract") {
+		t.Errorf("counterparties clue detail = %q, want the factory caveat after a deployer match", cc.Detail)
 	}
 	// First seen, account age and activity are on the card; as clues they
 	// were noise for every ordinary address (only risk-relevant Info stays).
@@ -399,6 +415,27 @@ func TestBQProfileDeployerLabels(t *testing.T) {
 		FirstFunder: &riskBQFunder{Address: bqPeerDeploy, BlockNumber: 1, Timestamp: "2019-03-01T08:00:00Z", ValueETH: "1", Lists: []string{"fake_token_deployers"}}}
 	clues := bqProfileClues(prof, "2026-09-26T12:00:00Z")
 	if len(clues) != 1 || clues[0].Title != "First funder "+bqPeerDeploy+" is a serial counterfeit-token deployer" {
+		t.Fatalf("clues = %+v", clues)
+	}
+	if !strings.HasSuffix(clues[0].Detail, " "+bqDeployerCaveat) {
+		t.Errorf("first funder clue detail = %q, want the factory caveat", clues[0].Detail)
+	}
+}
+
+// The first funder sent the target ETH in a top-level transaction, so it is
+// an EOA and its deployer match counts, even when it is not among the top
+// counterparties.
+func TestBQProfileDeployerFirstFunderCounts(t *testing.T) {
+	row := testBQRow()
+	row.FirstFunder = []bqProfileFunderRow{{Address: bqPeerDeploy, BlockNumber: 7300000, TS: "2019-03-01T08:00:00Z", Wei: "250000000000000000"}}
+	row.TopPeers = row.TopPeers[:1] // bqPeerPlain only
+	svc := bqTestService(t, &fakeBQQuerier{row: row})
+	_, clues, prof := svc.checkBQProfile(context.Background(), bqTarget, riskNow)
+	if prof.FirstFunder == nil || strings.Join(prof.FirstFunder.Lists, ",") != "fake_token_deployers" {
+		t.Fatalf("first funder = %+v, want the deployer match", prof.FirstFunder)
+	}
+	if len(clues) != 1 || clues[0].Code != "bq_first_funder_listed" ||
+		clues[0].Title != "First funder "+bqPeerDeploy+" is a serial counterfeit-token deployer" {
 		t.Errorf("clues = %+v", clues)
 	}
 }

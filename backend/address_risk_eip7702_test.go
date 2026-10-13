@@ -181,8 +181,7 @@ func TestEIP7702Clues(t *testing.T) {
 		wantDetail []string
 	}{
 		{name: "plain EOA has no clue", info: evmCodeInfo{Kind: evmCodeEOA}},
-		{name: "contract is info", info: evmCodeInfo{Kind: evmCodeContract}, wantSev: sevInfo,
-			wantTitle: []string{"This address is a smart contract (has bytecode)."}},
+		{name: "ordinary contract has no clue", info: evmCodeInfo{Kind: evmCodeContract}},
 		{name: "delegate flagged as scam is critical", info: delegated,
 			bs:      blockscoutAddressInfo{Found: true, IsContract: true, Scam: true, RiskTags: []string{"Drainer"}},
 			wantSev: sevCritical, wantTitle: []string{"EIP-7702 delegation active → " + eip7702TestDelegate, "flagged"},

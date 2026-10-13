@@ -232,8 +232,8 @@ function BQProfileCard({ p, onInspect }: { p: AddressRiskBQProfile; onInspect?: 
               <p className="mt-1 text-zinc-500">Local lists are unavailable on this server; counterparties were not matched.</p>
             ) : listed.length === 0 ? (
               <p className="mt-1 text-zinc-500">
-                No match on the local OFAC / MEW / freeze / lookalike lists among the {fmtCount(p.peers_analyzed)} most
-                frequent counterparties.
+                No match on the local OFAC / MEW / freeze / lookalike / counterfeit-token deployer lists among the{' '}
+                {fmtCount(p.peers_analyzed)} most frequent counterparties.
               </p>
             ) : (
               <ul className="mt-1 space-y-1">

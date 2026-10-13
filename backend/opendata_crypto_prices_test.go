@@ -95,14 +95,20 @@ func TestCryptoPricesSQLRejectsBadInput(t *testing.T) {
 	}
 }
 
-// The byte cap is sized per sampled hour window (the dry-run upper bound is
-// ~105–131 MiB per window) and never exceeds 16 GiB per query.
+// The byte cap is sized per sampled hour window. BigQuery rejects a query up
+// front when its dry-run upper bound exceeds the cap, and that bound drifts
+// (measured 2026-10-13: a recent day's 4 windows 687–719 MB, older 8-day
+// chunks 4.27–4.63 GB), so the cap keeps ≥ 2.5× headroom over the largest
+// measurement and a query never exceeds 16 GiB.
 func TestCryptoPricesMaxBytes(t *testing.T) {
-	if got := cryptoPricesMaxBytes(1); got != 4*cryptoPricesBytesPerWindow {
-		t.Errorf("1 day cap = %d, want %d", got, 4*cryptoPricesBytesPerWindow)
+	if cryptoPricesBytesPerWindow != 512<<20 || cryptoPricesMaxDaysPerQuery != 8 {
+		t.Errorf("budget = %d B/window, %d days/query; want 512 MiB and 8", cryptoPricesBytesPerWindow, cryptoPricesMaxDaysPerQuery)
 	}
-	if got := cryptoPricesMaxBytes(cryptoPricesMaxDaysPerQuery); got > 16<<30 || got < int64(cryptoPricesMaxDaysPerQuery)*4*(131<<20) {
-		t.Errorf("%d-day cap = %d, want ≥ the dry-run upper bound and ≤ 16 GiB", cryptoPricesMaxDaysPerQuery, got)
+	if got := cryptoPricesMaxBytes(1); got != 4*cryptoPricesBytesPerWindow || float64(got) < 2.5*719_271_916 {
+		t.Errorf("1 day cap = %d, want %d (≥ 2.5× a recent day's 719 MB upper bound)", got, 4*cryptoPricesBytesPerWindow)
+	}
+	if got := cryptoPricesMaxBytes(cryptoPricesMaxDaysPerQuery); got != 16<<30 || float64(got) < 2.5*4_632_190_582 {
+		t.Errorf("%d-day cap = %d, want 16 GiB (≥ 2.5× an 8-day chunk's 4.63 GB upper bound)", cryptoPricesMaxDaysPerQuery, got)
 	}
 	if got := cryptoPricesMaxBytes(31); got != 16<<30 {
 		t.Errorf("31-day cap = %d, want the 16 GiB bound", got)
@@ -196,12 +202,13 @@ type fakePriceQuery struct {
 }
 
 type fakePriceSource struct {
-	mu      sync.Mutex
-	ready   func(from time.Time) (time.Time, error) // nil: every window ingested
-	probes  []time.Time
-	queries []fakePriceQuery
-	err     error // fail HourlyMedians
-	billed  int64 // bytes billed by a failing query
+	mu       sync.Mutex
+	ready    func(from time.Time) (time.Time, error) // nil: every window ingested
+	probes   []time.Time
+	queries  []fakePriceQuery
+	err      error           // fail HourlyMedians
+	billed   int64           // bytes billed by a failing query
+	nullDays map[string]bool // days without any swap rows (all-NULL prices)
 }
 
 func (f *fakePriceSource) LatestEventTime(_ context.Context, from time.Time) (time.Time, error) {
@@ -224,6 +231,9 @@ func (f *fakePriceSource) HourlyMedians(_ context.Context, days []civil.Date, ma
 	}
 	var rows []priceHourRow
 	for _, day := range days {
+		if f.nullDays[day.String()] {
+			continue
+		}
 		for _, h := range cryptoPricesSampleHours {
 			hour := day.String() + " " + strconv.Itoa(100 + h)[1:] + ":00"
 			rows = append(rows, pHourRow(hour, "eth", 1000, 198079), pHourRow(hour, "wbtc", 30, 265293))
@@ -232,10 +242,60 @@ func (f *fakePriceSource) HourlyMedians(_ context.Context, days []civil.Date, ma
 	return rows, int64(len(days)) * (350 << 20), nil
 }
 
+func (f *fakePriceSource) setNullDays(days ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.nullDays = map[string]bool{}
+	for _, d := range days {
+		f.nullDays[d] = true
+	}
+}
+
+func (f *fakePriceSource) setReady(ready func(from time.Time) (time.Time, error)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ready = ready
+}
+
 func (f *fakePriceSource) snapshot() ([]time.Time, []fakePriceQuery) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]time.Time(nil), f.probes...), append([]fakePriceQuery(nil), f.queries...)
+}
+
+func totalQueriedDays(queries []fakePriceQuery) int {
+	n := 0
+	for _, q := range queries {
+		n += len(q.days)
+	}
+	return n
+}
+
+// flakyPriceStore is a cryptoPriceStore whose first failLoads loads fail.
+type flakyPriceStore struct {
+	mu        sync.Mutex
+	failLoads int
+	loads     int
+	rows      []onchainPriceDay
+	asOf      time.Time
+	upserted  []onchainPriceDay
+}
+
+func (f *flakyPriceStore) loadOnchainPrices(context.Context) ([]onchainPriceDay, time.Time, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.loads++
+	if f.loads <= f.failLoads {
+		return nil, time.Time{}, errors.New("database is locked")
+	}
+	return append([]onchainPriceDay(nil), f.rows...), f.asOf, nil
+}
+
+func (f *flakyPriceStore) upsertOnchainPrices(_ context.Context, rows []onchainPriceDay, _ time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.upserted = append(f.upserted, rows...)
+	return nil
 }
 
 func openPricesTestStore(t *testing.T) *riskStore {
@@ -264,8 +324,9 @@ func pAt(s string) time.Time {
 	return v
 }
 
-// Cold start fills initial_days in ≤16-day queries, newest first, persists
-// every day, then syncs one increment per complete day.
+// Cold start fills initial_days in ≤8-day queries, newest first, persists
+// every day, then syncs one increment per complete day. The readiness probe
+// only runs when a day is actually missing.
 func TestCryptoPriceSyncColdStartAndIncrement(t *testing.T) {
 	store := openPricesTestStore(t)
 	clock := &priceClock{t: pAt("2026-10-13T10:00:00Z")}
@@ -277,17 +338,20 @@ func TestCryptoPriceSyncColdStartAndIncrement(t *testing.T) {
 	if len(probes) != 1 || !probes[0].Equal(pAt("2026-10-12T19:00:00Z")) {
 		t.Errorf("probes = %v, want one probe of yesterday's 19:00 (before today's 18:00 window closed)", probes)
 	}
-	if len(queries) != 3 {
-		t.Fatalf("cold start ran %d queries, want 3 (16 + 16 + 8 days)", len(queries))
+	if len(queries) != 5 {
+		t.Fatalf("cold start ran %d queries, want 5 (5 × 8 days)", len(queries))
 	}
-	wantSpans := [][2]string{{"2026-09-27", "2026-10-12"}, {"2026-09-11", "2026-09-26"}, {"2026-09-03", "2026-09-10"}}
+	wantSpans := [][2]string{
+		{"2026-10-05", "2026-10-12"}, {"2026-09-27", "2026-10-04"}, {"2026-09-19", "2026-09-26"},
+		{"2026-09-11", "2026-09-18"}, {"2026-09-03", "2026-09-10"},
+	}
 	for i, q := range queries {
 		first, last := q.days[0], q.days[len(q.days)-1]
 		if first.String() != wantSpans[i][0] || last.String() != wantSpans[i][1] {
 			t.Errorf("query %d covers %s..%s, want %s..%s (newest first)", i, first, last, wantSpans[i][0], wantSpans[i][1])
 		}
-		if q.maxBytes != cryptoPricesMaxBytes(len(q.days)) {
-			t.Errorf("query %d cap = %d, want %d", i, q.maxBytes, cryptoPricesMaxBytes(len(q.days)))
+		if q.maxBytes != 16<<30 {
+			t.Errorf("query %d cap = %d, want 16 GiB for 8 days", i, q.maxBytes)
 		}
 	}
 	stored, _, err := store.loadOnchainPrices(context.Background())
@@ -295,24 +359,34 @@ func TestCryptoPriceSyncColdStartAndIncrement(t *testing.T) {
 		t.Fatalf("stored %d rows (%v), want 40 days 2026-09-03..2026-10-12", len(stored), err)
 	}
 
-	// Same day again: nothing missing, no query.
-	s.syncOnce(context.Background())
-	if _, q := src.snapshot(); len(q) != 3 {
-		t.Errorf("a second sync on the same day ran %d queries, want none", len(q)-3)
+	// Later ticks the same day: nothing missing, so neither probe nor query.
+	for _, at := range []string{"2026-10-13T11:00:00Z", "2026-10-13T19:10:00Z"} {
+		clock.set(pAt(at))
+		s.syncOnce(context.Background())
+	}
+	if p, q := src.snapshot(); len(p) != 1 || len(q) != 5 {
+		t.Errorf("ticks with nothing missing ran %d probes and %d queries, want none", len(p)-1, len(q)-5)
 	}
 
-	// After today's 18:00 window has been ingested: exactly one new day.
+	// After today's 18:00 window has been ingested: one probe, one new day.
 	clock.set(pAt("2026-10-13T20:00:00Z"))
 	s.syncOnce(context.Background())
 	probes, queries = src.snapshot()
-	if len(queries) != 4 || len(queries[3].days) != 1 || queries[3].days[0].String() != "2026-10-13" {
-		t.Fatalf("increment queries = %+v, want one query for 2026-10-13", queries[3:])
+	if len(queries) != 6 || len(queries[5].days) != 1 || queries[5].days[0].String() != "2026-10-13" {
+		t.Fatalf("increment queries = %+v, want one query for 2026-10-13", queries[5:])
 	}
-	if queries[3].maxBytes != 4*cryptoPricesBytesPerWindow {
-		t.Errorf("increment cap = %d, want %d", queries[3].maxBytes, 4*cryptoPricesBytesPerWindow)
+	if queries[5].maxBytes != 4*cryptoPricesBytesPerWindow {
+		t.Errorf("increment cap = %d, want %d", queries[5].maxBytes, 4*cryptoPricesBytesPerWindow)
 	}
-	if last := probes[len(probes)-1]; !last.Equal(pAt("2026-10-13T19:00:00Z")) {
-		t.Errorf("last probe = %v, want today's 19:00", last)
+	if len(probes) != 2 || !probes[1].Equal(pAt("2026-10-13T19:00:00Z")) {
+		t.Errorf("probes = %v, want exactly one more, of today's 19:00", probes)
+	}
+
+	// And quiet again until the next day's window closes.
+	clock.set(pAt("2026-10-14T18:00:00Z"))
+	s.syncOnce(context.Background())
+	if p, q := src.snapshot(); len(p) != 2 || len(q) != 6 {
+		t.Errorf("next day before 19:30: %d probes, %d queries; want no new ones", len(p), len(q))
 	}
 }
 
@@ -364,6 +438,24 @@ func TestCryptoPriceSyncReadiness(t *testing.T) {
 	s.syncOnce(ctx)
 	if p, _ := src.snapshot(); len(p) != 1 || !p[0].Equal(pAt("2026-10-12T19:00:00Z")) {
 		t.Errorf("probes at 19:10 = %v, want only yesterday's window", p)
+	}
+
+	// Everything through yesterday is held and today's window is not in yet:
+	// one probe for today, no fallback probe for yesterday, no query.
+	clock = &priceClock{t: pAt("2026-10-13T10:00:00Z")}
+	src = &fakePriceSource{}
+	s = newCryptoPriceSyncer(src, openPricesTestStore(t), 5, clock.now)
+	s.syncOnce(ctx) // holds 2026-10-08..2026-10-12
+	src.setReady(func(from time.Time) (time.Time, error) {
+		if from.Equal(todayWindow) {
+			return time.Time{}, nil
+		}
+		return from.Add(time.Minute), nil
+	})
+	clock.set(pAt("2026-10-13T20:00:00Z"))
+	s.syncOnce(ctx)
+	if p, q := src.snapshot(); len(p) != 2 || !p[1].Equal(todayWindow) || len(q) != 1 {
+		t.Errorf("today lagging with yesterday held: probes %v, %d queries; want one extra probe (today) and no query", p, len(q)-1)
 	}
 }
 
@@ -437,9 +529,8 @@ func TestCryptoPriceSyncDisabledAndMemoryOnly(t *testing.T) {
 	}
 }
 
-// A restart serves the persisted days without re-querying them; a store
-// that fails keeps the sync working from memory.
-func TestCryptoPriceSyncRestartAndStoreFailure(t *testing.T) {
+// A restart serves the persisted days without re-querying them.
+func TestCryptoPriceSyncRestart(t *testing.T) {
 	ctx := context.Background()
 	store := openPricesTestStore(t)
 	now := func() time.Time { return pAt("2026-10-13T10:00:00Z") }
@@ -451,21 +542,115 @@ func TestCryptoPriceSyncRestartAndStoreFailure(t *testing.T) {
 		t.Errorf("after restart snapshot = %+v, want 7 persisted rows, as_of and coverage_from 2026-10-03", got)
 	}
 	s.syncOnce(ctx)
-	if _, q := src.snapshot(); len(q) != 0 {
-		t.Errorf("restart re-queried %d chunks, want 0", len(q))
+	if p, q := src.snapshot(); len(p) != 0 || len(q) != 0 {
+		t.Errorf("restart ran %d probes and %d queries, want none (nothing missing)", len(p), len(q))
 	}
+}
+
+// A store that cannot be read is not an empty store: the tick whose load
+// fails syncs nothing; while the load keeps failing the sync runs
+// memory-only with the one-month cold start (never initial_days); a load
+// that recovers serves the stored days and fetches only what is missing.
+func TestCryptoPriceSyncLoadFailure(t *testing.T) {
+	ctx := context.Background()
+	clock := &priceClock{t: pAt("2026-10-13T10:00:00Z")}
 
 	broken := openPricesTestStore(t)
 	broken.Close()
+	src := &fakePriceSource{}
+	s := newCryptoPriceSyncer(src, broken, 365, clock.now)
+	s.syncOnce(ctx)
+	if p, q := src.snapshot(); len(p) != 0 || len(q) != 0 {
+		t.Fatalf("tick with a failed load: %d probes, %d queries; want none", len(p), len(q))
+	}
+	clock.set(pAt("2026-10-13T11:00:00Z"))
+	s.syncOnce(ctx)
+	_, queries := src.snapshot()
+	if n := totalQueriedDays(queries); n != cryptoPricesMemoryOnlyMaxDays {
+		t.Errorf("load still failing: synced %d days, want the %d-day memory-only cold start, not initial_days 365", n, cryptoPricesMemoryOnlyMaxDays)
+	}
+	if got := s.snapshot(30); len(got.Rows) != 30 {
+		t.Errorf("memory-only snapshot = %d rows, want 30", len(got.Rows))
+	}
+
+	// A transient failure (e.g. SQLite busy): the next tick loads the stored
+	// days and only fetches the missing ones, over the full window.
+	var stored []onchainPriceDay
+	for _, day := range pDayRange(pDay("2026-10-04"), pDay("2026-10-12")) {
+		eth := 2500.0
+		stored = append(stored, onchainPriceDay{Day: day.String(), EthUSD: &eth})
+	}
+	flaky := &flakyPriceStore{failLoads: 1, rows: stored, asOf: pAt("2026-10-12T19:31:00Z")}
 	src = &fakePriceSource{}
-	s = newCryptoPriceSyncer(src, broken, 5, now)
+	s = newCryptoPriceSyncer(src, nil, 12, clock.now)
+	s.store = flaky
 	s.syncOnce(ctx)
+	if p, q := src.snapshot(); len(p) != 0 || len(q) != 0 {
+		t.Fatalf("tick with a failed load: %d probes, %d queries; want none", len(p), len(q))
+	}
 	s.syncOnce(ctx)
-	if _, q := src.snapshot(); len(q) != 1 {
-		t.Errorf("broken store: %d queries, want 1 (rows kept in memory)", len(q))
+	_, queries = src.snapshot()
+	if len(queries) != 1 || len(queries[0].days) != 3 || queries[0].days[0].String() != "2026-10-01" || queries[0].days[2].String() != "2026-10-03" {
+		t.Fatalf("after the load recovered: queries %+v, want only the missing 2026-10-01..03", queries)
+	}
+	if got := s.snapshot(12); len(got.Rows) != 12 || got.AsOf == "" {
+		t.Errorf("snapshot = %d rows (as_of %q), want 12 (9 stored + 3 fetched)", len(got.Rows), got.AsOf)
+	}
+	if flaky.loads != 2 {
+		t.Errorf("loads = %d, want 2 (one failed, one retried on the next tick)", flaky.loads)
+	}
+}
+
+// A day without any qualifying swap is not final while it is recent (< 3
+// days old): it is neither stored nor served, and the next tick re-queries
+// it. Older empty days are stored (with a warning) so they are not
+// re-queried forever.
+func TestCryptoPriceSyncProvisionalNullDays(t *testing.T) {
+	ctx := context.Background()
+	store := openPricesTestStore(t)
+	clock := &priceClock{t: pAt("2026-10-13T10:00:00Z")}
+	src := &fakePriceSource{}
+	src.setNullDays("2026-10-12", "2026-10-11", "2026-10-10", "2026-10-05")
+	s := newCryptoPriceSyncer(src, store, 10, clock.now) // window 2026-10-03..2026-10-12
+	s.syncOnce(ctx)
+
+	rows, _, err := store.loadOnchainPrices(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byDay := map[string]onchainPriceDay{}
+	for _, r := range rows {
+		byDay[r.Day] = r
+	}
+	for _, day := range []string{"2026-10-11", "2026-10-12"} {
+		if _, ok := byDay[day]; ok {
+			t.Errorf("%s (recent, no swaps) was stored; it must stay provisional", day)
+		}
+	}
+	for _, day := range []string{"2026-10-10", "2026-10-05"} {
+		if r, ok := byDay[day]; !ok || r.EthUSD != nil || r.BtcUSD != nil {
+			t.Errorf("%s (≥ 3 days old, no swaps) = %+v (stored %v), want stored with NULL prices", day, r, ok)
+		}
+	}
+	if len(rows) != 8 {
+		t.Errorf("stored %d days, want 8 (10 minus the 2 provisional)", len(rows))
 	}
 	if got := s.snapshot(7); len(got.Rows) != 5 {
-		t.Errorf("broken store snapshot = %d rows, want 5 from memory", len(got.Rows))
+		t.Errorf("snapshot(7) = %d rows, want 5 (provisional days are not served)", len(got.Rows))
+	}
+
+	// The data arrives: the next tick re-queries only the provisional days.
+	src.setNullDays()
+	clock.set(pAt("2026-10-13T11:00:00Z"))
+	s.syncOnce(ctx)
+	_, queries := src.snapshot()
+	last := queries[len(queries)-1]
+	if len(queries) != 3 || len(last.days) != 2 || last.days[0].String() != "2026-10-11" || last.days[1].String() != "2026-10-12" {
+		t.Fatalf("retry queries = %+v, want one query for 2026-10-11..12", queries[1:])
+	}
+	rows, _, _ = store.loadOnchainPrices(ctx)
+	if len(rows) != 10 || rows[9].EthUSD == nil {
+		t.Errorf("after the retry stored %d days (last %+v), want 10 with prices for 2026-10-12", len(rows), rows[len(rows)-1])
 	}
 }
 

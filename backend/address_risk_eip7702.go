@@ -6,7 +6,7 @@ package main
 //
 //	"0x"                        plain EOA (no clue)
 //	0xef0100 ‖ 20-byte address  EOA whose code is delegated (EIP-7702)
-//	any other bytecode          smart contract
+//	any other bytecode          smart contract (no clue)
 //
 // BigQuery's goog_blockchain accounts views are deliberately not used: on
 // 2026-10-13 they carried duplicate rows per address, is_contract = true for
@@ -94,7 +94,6 @@ const (
 	riskEIP7702NamedTitleFmt   = "EIP-7702 delegation active → delegated to verified contract %s (%s)"
 	riskEIP7702Advice          = "If you did not authorize this, the account may be controlled by a sweeper contract; " +
 		"revoke by signing a new authorization to the zero address."
-	riskTitleContract = "This address is a smart contract (has bytecode)."
 
 	maxContractNameRunes = 64
 )
@@ -119,19 +118,17 @@ func displayContractName(name string) string {
 	return strings.Join(strings.Fields(b.String()), " ")
 }
 
-// eip7702Clues turns one code classification into at most one clue. For a
-// delegated EOA the Blockscout view of the delegate sets the severity:
+// eip7702Clues turns one code classification into at most one clue. Ordinary
+// smart contracts emit no clue (otherwise every token, router or multisig
+// lookup shows "1 clue found"). For a delegated EOA the Blockscout view of
+// the delegate sets the severity:
 // flagged → Critical, verified with a name → Info, anything else (unverified,
 // unnamed, unknown, or the lookup failed or is disabled) → Warning, so a
 // failed enrichment never drops the core clue.
 func eip7702Clues(chain, addr string, info evmCodeInfo, bs blockscoutAddressInfo, bsCode string, bsDisabled bool, asOf string) []riskClue {
+	_ = addr
 	explorer := chains[chain].AddressURL
-	switch info.Kind {
-	case evmCodeContract:
-		return []riskClue{{Severity: sevInfo, Source: "eip7702", Code: "address_is_contract",
-			Title: riskTitleContract, AsOf: asOf, RefURL: fmt.Sprintf(explorer, addr) + "#code"}}
-	case evmCodeDelegated:
-	default:
+	if info.Kind != evmCodeDelegated {
 		return nil
 	}
 	d := info.Delegate

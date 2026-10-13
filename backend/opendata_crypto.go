@@ -3,18 +3,17 @@ package main
 // BigQuery Open Data: Crypto Pulse (Bitcoin + Ethereum on-chain metrics).
 //
 // Queries `bigquery-public-data.crypto_bitcoin` and `crypto_ethereum`
-// directly. Since the 2026 SQD migration both are Analytics Hub linked
-// datasets of views over tables RANGE-partitioned on block_number and
-// clustered by block_timestamp:
+// directly. Since the 2026 re-platforming (SQD pipelines) both are Analytics
+// Hub linked datasets of views. Observed pruning behaviour on those views:
 //   - crypto_bitcoin.transactions and crypto_ethereum.transactions /
-//     token_transfers prune through block_timestamp clustering. (Passing
-//     block_timestamp_month does not improve pruning — it is no longer a
-//     partition key — and scans an extra 8 B/row.)
+//     token_transfers prune on block_timestamp (even below a day). (Passing
+//     block_timestamp_month does not improve pruning and scans an extra
+//     8 B/row.)
 //   - crypto_ethereum.blocks and contracts carry a conservative post-Merge
 //     block-number lower bound (`number >= @start_block` /
 //     `block_number >= @start_block`) alongside the exact timestamp window:
-//     the literal bound prunes the block_number range partitions, which a
-//     timestamp-only predicate on these views was not observed to do.
+//     dry runs show the literal block-number bound pruning these views, which
+//     a timestamp-only predicate was not observed to do.
 // Windows are half-open [start, end) with an ingest lag buffer so rows cover
 // settled UTC days only. Money columns are CAST(... AS FLOAT64) in SQL
 // (sat/1e8, wei/1e18) so rows scan into float64, never *big.Rat.

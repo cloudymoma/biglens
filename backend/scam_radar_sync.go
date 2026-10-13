@@ -24,15 +24,23 @@ const (
 	// scamEthMinDailyTransfers: R1 normally scans hundreds of thousands of
 	// official USDT/USDC transfers per UTC day.
 	scamEthMinDailyTransfers = 1
+	// scamEthMinDailyZeroValue: zero-value transfers on official USDT/USDC
+	// happen thousands of times per UTC day (what poisoners send); 0 means
+	// the q = '0' predicate stopped matching.
+	scamEthMinDailyZeroValue = 1
 	// scamTronMinDailyTransfers: R3 normally scans millions of official TRON
 	// USDT Transfer logs per UTC day.
 	scamTronMinDailyTransfers = 1
+	// scamTronMinDailyCandidates: TRON dust poisoning yields dust candidates
+	// every day; 0 means the dust or pairing predicate stopped matching.
+	scamTronMinDailyCandidates = 1
 	// scamBTCMinDailyTxs: R5 normally counts hundreds of thousands of
 	// Bitcoin transactions per UTC day.
 	scamBTCMinDailyTxs = 1
-	// tronStablecoinEmptyGuardDays: a day without TRON USDT blacklist events
-	// is normal; a window this long without a single one is not.
-	tronStablecoinEmptyGuardDays = 7
+	// tronStablecoinMinDailyUSDTLogs: R4 normally scans millions of official
+	// TRON USDT logs (any topic) per UTC day, even when no blacklist event
+	// occurred that day.
+	tronStablecoinMinDailyUSDTLogs = 1
 	// scamMinFakeTokenDeployers: the tokens_latest snapshot normally yields
 	// over a thousand serial counterfeit deployers (1,178 on 2026-10-13).
 	scamMinFakeTokenDeployers = 1

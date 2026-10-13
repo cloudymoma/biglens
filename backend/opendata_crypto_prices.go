@@ -62,12 +62,15 @@ const (
 	cryptoPricesMinETHSwaps  = 5
 	cryptoPricesMinWBTCSwaps = 2
 
-	cryptoPricesMaxDaysPerQuery = 16
+	cryptoPricesMaxDaysPerQuery = 8
 	// cryptoPricesBytesPerWindow budgets one sampled hour. BigQuery rejects a
 	// query up front (unbilled) when its dry-run upper bound exceeds
-	// MaxBytesBilled; that bound measured ~105–131 MiB per window on
-	// 2026-10-13, so 128 MiB is too tight and 256 MiB leaves ~2× headroom.
-	cryptoPricesBytesPerWindow int64 = 256 << 20
+	// MaxBytesBilled, and that bound drifts, upward for recent days: on
+	// 2026-10-13 a recent day's 4 windows estimated 687–719 MB and older
+	// 8-day chunks 4.27–4.63 GB. 512 MiB per window keeps ≥ 2.9× headroom
+	// (2 GiB per day; 8 days × 4 windows × 512 MiB = 16 GiB per query).
+	// Actual billing is unaffected: ~360–500 MiB per day.
+	cryptoPricesBytesPerWindow int64 = 512 << 20
 	cryptoPricesMaxBytesBilled int64 = 16 << 30
 	cryptoPricesReadyMaxBytes  int64 = 256 << 20
 
@@ -77,9 +80,14 @@ const (
 	cryptoPricesFinality         = 30 * time.Minute
 	cryptoPricesSyncTimeout      = 30 * time.Minute
 	cryptoPricesMaxChunksPerSync = 24
-	// Without SQLite every restart is a cold start, so it is limited to one
-	// month (~11 GiB) instead of initial_days.
+	// Without a readable SQLite store every restart is a cold start, so it is
+	// limited to one month (~11–15 GiB) instead of initial_days.
 	cryptoPricesMemoryOnlyMaxDays = 31
+	// A day without any qualifying swap that is younger than this may still
+	// be arriving: it is not stored and is re-queried on the next tick. Older
+	// empty days are stored (with a warning) so they are not re-queried
+	// forever.
+	cryptoPricesProvisionalDays = 3
 
 	cryptoPricesSource  = "uniswap_v3"
 	cryptoPricesMethod  = "median of sampled hours (00/06/12/18 UTC)"
@@ -345,17 +353,25 @@ func (b bqCryptoPriceSource) HourlyMedians(ctx context.Context, days []civil.Dat
 
 // --- syncer ---
 
+// cryptoPriceStore is the persistence the syncer needs (*riskStore in
+// production; tests inject failures).
+type cryptoPriceStore interface {
+	loadOnchainPrices(ctx context.Context) ([]onchainPriceDay, time.Time, error)
+	upsertOnchainPrices(ctx context.Context, rows []onchainPriceDay, syncedAt time.Time) error
+}
+
 // cryptoPriceSyncer keeps the daily prices in memory (the endpoint's only
 // source) and fills missing days of the target window from BigQuery,
 // persisting them to SQLite when available.
 type cryptoPriceSyncer struct {
 	src         cryptoPriceSource
-	store       *riskStore // nil: memory only
+	store       cryptoPriceStore // nil: memory only
 	now         func() time.Time
 	initialDays int
 
 	mu          sync.Mutex
 	loaded      bool
+	loadFailed  bool
 	byDay       map[string]onchainPriceDay
 	asOf        time.Time
 	retryAfter  time.Time
@@ -366,8 +382,12 @@ func newCryptoPriceSyncer(src cryptoPriceSource, store *riskStore, initialDays i
 	if now == nil {
 		now = time.Now
 	}
-	return &cryptoPriceSyncer{src: src, store: store, now: now, initialDays: initialDays,
+	s := &cryptoPriceSyncer{src: src, now: now, initialDays: initialDays,
 		byDay: make(map[string]onchainPriceDay)}
+	if store != nil { // a nil *riskStore must stay a nil interface
+		s.store = store
+	}
+	return s
 }
 
 // warnStoreLocked logs a SQLite failure once; the syncer keeps serving and
@@ -380,21 +400,28 @@ func (s *cryptoPriceSyncer) warnStoreLocked(op string, err error) {
 	slog.Warn("crypto prices: SQLite unavailable, keeping prices in memory", "op", op, "error", err)
 }
 
-// ensureLoaded reads the persisted days into memory once.
-func (s *cryptoPriceSyncer) ensureLoaded(ctx context.Context) {
+// tryLoad reads persisted days into memory once when s.store is readable.
+// On a store error it leaves s.loaded false so the next sync tick retries the
+// load instead of treating the unreadable store as empty.
+func (s *cryptoPriceSyncer) tryLoad(ctx context.Context, fromSync bool) (skipTick bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.loaded {
-		return
+		return false
 	}
-	s.loaded = true
 	if s.store == nil {
-		return
+		s.loaded = true
+		return false
 	}
 	rows, asOf, err := s.store.loadOnchainPrices(ctx)
 	if err != nil {
 		s.warnStoreLocked("load", err)
-		return
+		if fromSync {
+			firstFail := !s.loadFailed
+			s.loadFailed = true
+			return firstFail
+		}
+		return false
 	}
 	for _, r := range rows {
 		s.byDay[r.Day] = r
@@ -402,12 +429,21 @@ func (s *cryptoPriceSyncer) ensureLoaded(ctx context.Context) {
 	if asOf.After(s.asOf) {
 		s.asOf = asOf
 	}
+	s.loaded = true
+	s.loadFailed = false
+	return false
 }
 
 // targetDays is the window kept filled: initial_days, limited to one month
-// when there is no SQLite store.
+// when there is no readable SQLite store.
 func (s *cryptoPriceSyncer) targetDays() int {
-	if s.store == nil {
+	if s.initialDays <= 0 {
+		return 0
+	}
+	s.mu.Lock()
+	memOnly := s.store == nil || !s.loaded
+	s.mu.Unlock()
+	if memOnly {
 		return min(s.initialDays, cryptoPricesMemoryOnlyMaxDays)
 	}
 	return s.initialDays
@@ -421,14 +457,19 @@ func cryptoPricesWindowsEnd(day civil.Date) time.Time {
 
 // readyEnd returns the newest day whose sampled windows are all ingested:
 // today once its 18:00 window closed (plus the finality margin) and rows past
-// it exist, otherwise yesterday if its rows are in.
-func (s *cryptoPriceSyncer) readyEnd(ctx context.Context, now time.Time) (civil.Date, bool, error) {
+// it exist, otherwise yesterday if its rows are in. When every day in the
+// candidate window is already held in memory, it returns without probing
+// BigQuery so idle hourly ticks are free.
+func (s *cryptoPriceSyncer) readyEnd(ctx context.Context, now time.Time, target int) (civil.Date, bool, error) {
 	today := civil.DateOf(now)
 	cand := today
 	if now.Before(cryptoPricesWindowsEnd(today).Add(cryptoPricesFinality)) {
 		cand = today.AddDays(-1)
 	}
 	for {
+		if len(s.missingDays(cand.AddDays(-(target-1)), cand)) == 0 {
+			return cand, true, nil
+		}
 		from := cryptoPricesWindowsEnd(cand)
 		latest, err := s.src.LatestEventTime(ctx, from)
 		if err != nil {
@@ -507,11 +548,13 @@ func (s *cryptoPriceSyncer) syncOnce(ctx context.Context) {
 }
 
 func (s *cryptoPriceSyncer) sync(ctx context.Context) cryptoPriceRun {
-	target := s.targetDays()
-	if target <= 0 {
+	if s.initialDays <= 0 {
 		return cryptoPriceRun{idle: true} // crypto_prices.initial_days: 0
 	}
-	s.ensureLoaded(ctx)
+	if s.tryLoad(ctx, true) {
+		return cryptoPriceRun{errCode: "store load failed"}
+	}
+	target := s.targetDays()
 	now := s.now().UTC()
 	s.mu.Lock()
 	backingOff := now.Before(s.retryAfter)
@@ -520,7 +563,7 @@ func (s *cryptoPriceSyncer) sync(ctx context.Context) cryptoPriceRun {
 		return cryptoPriceRun{idle: true}
 	}
 
-	end, ok, err := s.readyEnd(ctx, now)
+	end, ok, err := s.readyEnd(ctx, now, target)
 	if err != nil {
 		slog.Warn("crypto prices: readiness probe failed", "error", err)
 		return cryptoPriceRun{errCode: "probe failed"}
@@ -533,6 +576,7 @@ func (s *cryptoPriceSyncer) sync(ctx context.Context) cryptoPriceRun {
 		return cryptoPriceRun{end: end, idle: true}
 	}
 
+	today := civil.DateOf(now)
 	run := cryptoPriceRun{end: end}
 	for i := 0; i < len(missing) && run.queries < cryptoPricesMaxChunksPerSync; i += cryptoPricesMaxDaysPerQuery {
 		days := slices.Clone(missing[i:min(i+cryptoPricesMaxDaysPerQuery, len(missing))])
@@ -551,8 +595,21 @@ func (s *cryptoPriceSyncer) sync(ctx context.Context) cryptoPriceRun {
 			return run
 		}
 		rows := dailyPricesFromHours(days, hours)
-		s.put(ctx, rows, s.now().UTC())
-		run.days += len(rows)
+		toStore := make([]onchainPriceDay, 0, len(rows))
+		for _, r := range rows {
+			if r.EthUSD == nil && r.BtcUSD == nil {
+				if d, err := civil.ParseDate(r.Day); err == nil && today.DaysSince(d) < cryptoPricesProvisionalDays {
+					slog.Warn("crypto prices: recent day has no qualifying swaps yet, leaving provisional", "day", r.Day)
+					continue
+				}
+				slog.Warn("crypto prices: day has no qualifying swaps, storing empty row", "day", r.Day)
+			}
+			toStore = append(toStore, r)
+		}
+		if len(toStore) > 0 {
+			s.put(ctx, toStore, s.now().UTC())
+		}
+		run.days += len(toStore)
 	}
 	return run
 }
@@ -572,7 +629,7 @@ type CryptoPricesData struct {
 
 // snapshot returns the days in [today − days, today] from memory.
 func (s *cryptoPriceSyncer) snapshot(days int) CryptoPricesData {
-	s.ensureLoaded(context.Background())
+	s.tryLoad(context.Background(), false)
 	from := civil.DateOf(s.now().UTC()).AddDays(-days).String()
 	out := CryptoPricesData{Days: days, Rows: []onchainPriceDay{},
 		Source: cryptoPricesSource, Method: cryptoPricesMethod, BtcNote: cryptoPricesBtcNote}

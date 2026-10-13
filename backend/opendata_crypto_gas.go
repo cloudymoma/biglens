@@ -5,12 +5,11 @@ package main
 // Seven chains share one hourly row shape, GasHourRow. Every 72h query is
 // bounded by the half-open [@start_ts, @end_ts) window on its block
 // timestamp. crypto_bitcoin, crypto_ethereum and goog_blockchain_*_us are
-// SQD-backed Analytics Hub views: the backing tables are RANGE-partitioned on
-// block_number and CLUSTERed BY block_timestamp, so the timestamp window
-// prunes through clustering. BTC's block_timestamp_month / timestamp_month
-// are no longer partition keys and filtering them only adds scanned bytes,
-// so no query uses them. Solana lives in us-central1 and must run with
-// q.Location set.
+// SQD-backed Analytics Hub views clustered on block_timestamp, so the
+// timestamp window prunes through clustering. BTC's block_timestamp_month /
+// timestamp_month are no longer partition keys and filtering them only adds
+// scanned bytes, so no query uses them. Solana lives in us-central1 and must
+// run with q.Location set.
 // Column names are neutral (primary_val / band_low / band_high / load_val /
 // total_fee); what they mean for each chain is declared once in
 // gasChainMetas, and every query emits all seven columns (NULL where a chain
@@ -384,10 +383,11 @@ const (
 )
 
 // gasAllTimeStaleAfter flags records whose watermark is older than one
-// refresh period plus the 2h re-scan overlap (gasAllTimeOverlap).
+// refresh period plus the 2h re-scan overlap (gasAllTimeOverlap) and a 2h
+// truncation/refresh margin.
 const (
 	gasAllTimeOverlap    = 2 * time.Hour
-	gasAllTimeStaleAfter = gasAllTimeTTL + gasAllTimeOverlap
+	gasAllTimeStaleAfter = gasAllTimeTTL + gasAllTimeOverlap + 2*time.Hour
 )
 
 func (t *gasAllTimeTracker) watermark() time.Time {

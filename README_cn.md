@@ -273,14 +273,14 @@ GDELT 是*新闻报道*的索引，而非经核实事件的登记册。每行是
 
 涵盖比特币、以太坊、Arbitrum、Optimism、Base、Polygon、TRON 与 Solana 的链上
 基本面与实时收款/风控信号，基于 `bigquery-public-data.crypto_bitcoin`、`crypto_ethereum`
-与 `goog_blockchain_*`（2026 年 8–9 月起已改由 SQD 管线生产，并以 Analytics Hub 关联视图对外提供，
+与 `goog_blockchain_*`（2026 年 8–9 月起由 SQD 数据管线生产，并以 Analytics Hub 关联视图对外提供，
 通常仅比链头滞后数秒，比特币约滞后 1 个区块，详见[数据源说明](#数据源说明2026-sqd-迁移)；日级分析接口对齐至已结算的
 完整 UTC 日）以及实时公共 RPC 与区块浏览器索引。七个懒加载标签页：
 
 | 标签页 | 组件 |
 |---|---|
 | **网络脉搏** | 双链 KPI（最新完整 UTC 日）、每日交易数、结算金额、活跃地址（近似去重发送方，≤90 天）、区块拥挤度、出块量、链上 ETH/BTC 日价格（Uniswap v3），并在结算金额与手续费旁给出 `≈ $` 折算 |
-| **手续费市场** | **72h Gas Pulse**（默认）：BTC、ETH、Arbitrum、Optimism、Polygon、TRON 与 Solana 最近 72 个完整 UTC 小时的费率区间与负载趋势、72h 分位数/中位数、全时 Base Fee 极值（从预置基线增量扫描 BigQuery，每日后台刷新；卡片标明纪录已核验到哪一天，刷新失败时会提示）及 TRON 能量价格历史；以及 **Daily Economics**：BTC 中位数 sat/vB 与 ETH 平均 gwei 趋势、BTC 矿工收入（补贴 vs 手续费）、ETH EIP-1559 销毁 vs 小费、拥挤度-费率散点图，并按当日链上价格给出 `≈ $` 折算 |
+| **手续费市场** | **72h Gas Pulse**（默认）：BTC、ETH、Arbitrum、Optimism、Polygon、TRON 与 Solana 最近 72 个完整 UTC 小时的费率区间与负载趋势、72h 分位数/中位数、全时 Base Fee 极值（从预置基线增量扫描 BigQuery，每日后台刷新；纪录过期或刷新失败时，卡片会提示并标明已核验到哪一天）及 TRON 能量价格历史；以及 **Daily Economics**：BTC 中位数 sat/vB 与 ETH 平均 gwei 趋势、BTC 矿工收入（补贴 vs 手续费）、ETH EIP-1559 销毁 vs 小费、拥挤度-费率散点图，并按当日链上价格给出 `≈ $` 折算 |
 | **巨鲸与资金流** | Top 50 大额转账（区块浏览器链接）、巨鲸交易趋势（≥100 BTC / ≥1,000 ETH）、Top 收款地址、Top 1% 金额集中度（仅统计有转账金额的交易） |
 | **代币经济** | Top 25 代币合约（按 Transfer 事件数，含 ERC-20 与 ERC-721）、代币 vs 原生交易活跃度、新合约部署、代币流动 Treemap |
 | **挖矿经济** | 全网算力（7 日均值 + 单日隐含值）、矿工收入、每 TH/s 收益、最新一日矿机经济性、各矿机关机币价（可调电价、PUE、矿池费率、BTC 价格、自定义矿机） |
@@ -299,15 +299,15 @@ GDELT 是*新闻报道*的索引，而非经核实事件的登记册。每行是
 
 #### 数据源说明（2026 SQD 迁移）
 
-2026-08-06 至 2026-09-22 期间，Google 把这批区块链公共数据集从自建管线迁到了
-`cw3-squid-data` 项目中的 SQD（原 Subsquid）管线。客户查询路径没有变，BigLens 的查询无需修改；
-底层的变化如下：
+2026 年 8–9 月，Google 把这批区块链公共数据集迁到了 SQD（原 Subsquid）的数据管线上（双方已于 2026 年 8 月公开宣布合作）。
+客户查询路径没有变，BigLens 的查询无需修改。从 BigQuery 侧可以观察到的变化如下：
 
 - **关联视图**：`crypto_bitcoin`、`crypto_ethereum` 与全部 `goog_blockchain_*_us` 都变成了 Analytics Hub
-  关联数据集，表全部是 VIEW。各数据集切换日期：Avalanche 08-06、Polygon 08-21、Arbitrum 08-24、
+  关联数据集，表全部是 VIEW。按数据集元数据中的创建时间：Avalanche 08-07、Polygon 08-21、Arbitrum 08-24、
   Ethereum（`goog_blockchain_ethereum_mainnet_us`）与 Cronos 08-31、TRON 与 Optimism 09-14、
   `crypto_bitcoin` 09-16、`crypto_ethereum` 09-22。
-- **存储布局**：底表按 `block_number` 做范围分区、按 `block_timestamp` 聚簇，并不是按月分区。
+- **裁剪行为**：时间谓词可以裁剪到小时级；`block_timestamp_month` / `timestamp_month` 已不再起分区过滤作用，
+  加上只会多扫字节；字面量的区块号下界可以裁剪 `blocks` / `contracts` 视图。
   这些视图的 dry-run 字节数只是上限，`maximum_bytes_billed` 也是在作业开始前按这个上限检查的。
 - **新鲜度**：落后链头数秒，比特币约 1 个区块。链头附近的数据可能因重组被回滚，所以 BigLens
   仍只读取已结算的 UTC 日或完整小时，`goog_blockchain_*` 的事件表也继续带 `NOT removed` 过滤。
@@ -359,7 +359,7 @@ WETH（`1.0001^tick · 1e-10`），再乘以同一小时的 ETH/USD。为控制�
 - **代币合约与 Mint 注册表（`native` / `bridged` / `counterfeit` / `other`）** —— `backend/chain_registry.go` 涵盖 EVM、TRON 与 Solana 官方铸币地址（USDT `Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB`、USDC `EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`）。桥接版本（Arbitrum / Optimism 上的 `USDC.e`、Optimism 与 Base 上的旧桥接 `USDT`）显式标注警告；未在注册表中但 EVM/TRON 合约符号或 Solana Metaplex 元数据符号归一化后酷似 `USDT`/`USDC`/`USD₮`（或在以太坊本地 `scam_fake_tokens` 假币库中命中）的代币会被标记为 `counterfeit_token`（假币）。
 - **7 天转账历史、UTXO/ATA 归属还原与地址投毒检测** —— 合并近期 RPC 日志、Esplora UTXO 分页（`mempool.space`）或 Solana `getSignaturesForAddress` + `maxSupportedTransactionVersion: 1` 交易解析（将 SPL 关联代币账户 ATA 还原为 owner 钱包地址，确保 0 元投毒识别攻击者钱包而非代币子账户）。按时间从旧到新扫描（0 确认内存池交易排在最后扫描，绝不进入历史可信对手方集合），标记 `zero_value`、`dust`、`rbf_signaled`、`lookalike`（剥离 EVM `0x` 与 SegWit/Taproot `bc1q`/`bc1p` 固定前缀后比对前 4 位 + 后 4 位）、`lookalike_known`、`sent_to_lookalike`、`counterfeit_token`、`counterfeit_deployer`（该代币的部署者或交易对手是 Scam Radar 识别出的批量假 USDT/USDC 部署者）、`failed` 与 `counterparty_listed`。默认开启的「隐藏 0 元与无关代币」筛选只隐藏噪音，绝不隐藏 `DANGER`、`rbf_signaled` 或任何带风险标记的行。
 - **独立的付款方风险筛查** —— 当最新入账的 `tx_hash` 发生变化时，对付款方地址执行一次 Address Risk 查询，不会随 5 秒结算轮询重复请求。查询过的收款地址仅保存在 URL hash（`#pay?asset=…&network=…&address=…`）与短时内存缓存中。付款方筛查不会触发可选的 BigQuery 地址画像。
-- **EIP-7702 委托告警** —— 在 Ethereum、Arbitrum、Optimism 与 Base 上，实时核验还会读取你的收款地址代码（`eth_getCode`）。若该地址带有生效中的 EIP-7702 委托（`0xef0100…`），页面会给出警告并标明被委托的合约，因为该合约中的代码可以转走转入的资金。
+- **EIP-7702 委托告警** —— 在 Ethereum、Arbitrum、Optimism 与 Base 上，实时核验还会读取你的收款地址代码（`eth_getCode`）。若该地址带有生效中的 EIP-7702 委托（`0xef0100…`），页面会给出警告并标明被委托的合约，因为该合约中的代码可以转走转入的资金。页面底部的数据源列表会显示这项检查（"EIP-7702 delegation (live)"），检查失败时附带 RPC 错误。
 
 #### Address Risk（多链地址风险线索）
 
@@ -374,7 +374,7 @@ WETH（`1.0001^tick · 1e-10`），再乘以同一小时的 ETH/USD。为控制�
 | 已知尾号投毒仿冒地址库（`scam_lookalikes`） | ETH、Arb、OP、Base、TRON | 按完整 UTC 日从 BigQuery 同步（ETH 0 元投毒 + TRON 灰尘投毒；EVM 外部账户跨 L1/L2 共享） | 否 |
 | 批量假稳定币部署者（`fake_token_deployers`） | ETH、Arb、OP、Base（以以太坊为准） | 由 Scam Radar 每日基于 `crypto_ethereum.tokens_latest` 刷新：部署了 ≥3 个符号仿冒 USDT/USDC/USD₮ 的非官方合约的地址 | 否 |
 | **发行方冻结实时检查（`issuer_freeze`）**（`isBlackListed` / `isBlacklisted` / `isBlocked` / SPL 账户冻结状态） | ETH、Arb、OP、Base、TRON、SOL | 对注册表中的 USDT / USDC 合约或 Solana ATA 发起实时 `eth_call`、TronGrid `triggerconstantcontract` 或 Solana `getMultipleAccounts` | 是，发给 RPC / TronGrid / Solana RPC 服务商 |
-| **EIP-7702 委托实时检查（`eip7702`）** | ETH、Arb、OP、Base | 实时 `eth_getCode`：带有生效中的委托（`0xef0100…`）时给出警告并标明被委托合约，并通过 Blockscout 补充该合约的验证名称或诈骗标记；其他字节码按合约展示 | 是，发给 RPC 服务商（被委托合约地址会发给 Blockscout） |
+| **EIP-7702 委托实时检查（`eip7702`）** | ETH、Arb、OP、Base | 实时 `eth_getCode`：带有生效中的委托（`0xef0100…`）时给出警告并标明被委托合约，并通过 Blockscout 补充该合约的验证名称或诈骗标记 | 是，发给 RPC 服务商（被委托合约地址会发给 Blockscout） |
 | Chainalysis 链上制裁预言机（`isSanctioned`） | ETH、Arb、OP | 通过公共 RPC 实时 `eth_call`（Base 未部署） | 是，发给 RPC 服务商 |
 | [GoPlus](https://gopluslabs.io) 地址安全接口 | ETH、Arb、OP、Base、TRON | 实时，免 key（`chain_id` `1` / `42161` / `10` / `8453` / `tron`） | 是，发给 GoPlus |
 | Blockscout 公开标签与诈骗标记 | ETH、Arb、OP、Base | 实时，免 key（对应各链 Blockscout 实例） | 是，发给 Blockscout |
@@ -387,16 +387,16 @@ WETH（`1.0001^tick · 1e-10`），再乘以同一小时的 ETH/USD。为控制�
 
 - 全历史中的首笔资金来源（first funder，即最早一笔有金额的转入，附区块号）与账户年龄；
 - 终身转入/转出笔数、去重对手方数量、ETH 转移量与最近活跃时间。这些数字只统计顶层交易，包含失败交易，不含内部转账与代币转账；
-- Top 对手方，以及它们与本地 OFAC / MEW / 冻结 / 仿冒地址名单的一跳交集，以关联线索形式给出。
+- Top 对手方，以及它们与本地 OFAC / MEW / 冻结 / 仿冒地址 / 批量假币部署者名单的一跳交集，以关联线索形式给出（其中假币部署者仅对首笔资金来源及向目标地址发起过顶层交易的对手方生效，避免公共发币工厂合约误伤普通调用者）。
 
 整个过程不需要 Etherscan key，也不调用第三方 API。防护配置都在 `address_risk.bigquery_profile` 下：
 
 - `enabled`（默认 `true`）：允许用户开启；设为 `false` 则不提供此功能。
-- `max_bytes_billed`（默认 2 GiB）：单次扣费上限。像 DEX 路由合约这样极活跃的地址会在执行前被拒绝，提示"too active for the configured BigQuery budget"，且不产生费用。
-- `max_per_hour`（默认 60）：全局限流。
-- `timeout_seconds`（默认 20，最大 45）：最长等待时间。画像慢也不会拖住其他来源，超时后才完成的作业仍会写入缓存。
+- `max_bytes_billed`（默认 2 GiB，上限 10 GiB）：单次扣费上限。像 DEX 路由合约这样极活跃的地址会在执行前被拒绝，提示"too active for the configured BigQuery budget"，且不产生费用。
+- `max_per_hour`（默认 60，上限 600）：全局限流。
+- `timeout_seconds`（默认 20，最大 45）：最长等待时间。画像慢时，查询响应最多因此延迟这么久；超时后才完成的作业仍会写入缓存。
 
-按默认配置，最坏情况约为每小时 60 × 0.9 GiB ≈ $0.33。结果（包括超出预算的判定）会缓存 10 分钟，重复查询不再计费。
+按默认配置，每小时 60 次常规画像约计费 60 × 0.9 GiB ≈ $0.33/小时，硬上限封顶为 `max_per_hour × max_bytes_billed` = 60 × 2 GiB = 120 GiB/小时（约 $0.73/小时）。结果（包括超出预算的判定）会缓存 10 分钟，重复查询不再计费。
 
 **冻结历史（BigQuery）**。服务首次启动时同步最近 30 天的以太坊 USDT/USDC 冻结事件（实际计费约 92 GB / 86 GiB，一次性约 $0.54），之后每天增量同步一天（`logs` 表实际计费约 3.4–3.6 GB/天，dry-run 上限约 4.4 GB + 分区完整性检查约 25 MB，每天约 $0.02）。`address_risk.initial_sync_days` 可修改首次同步天数（最大 31；设为 0 则跳过首次同步，已有游标仍会每日增量）。全量回填之前，查询结果会注明 "Freeze history covers … only"。除本地以太坊与 TRON 历史事件外，ETH、Arbitrum、Optimism、Base 与 TRON 的每次查询都会执行实时 `issuer_freeze` 合约调用，因此在回填完成前也能查出当前冻结状态。以太坊全量回填时服务可以继续运行：
 
@@ -414,8 +414,8 @@ cd /opt/biglens/backend && sudo -u biglens ./biglens-server --address-risk-backf
 - **批量假币部署者（`scam_eth`）** —— 每天把 `tokens_latest` 中部署了至少 3 个上述假币合约的部署者存入 `scam_fake_token_deployers`。2026-10-13 共有 1,178 个这样的部署者、对应 22,791 个合约，单个地址最多部署了 4,394 个。该名单用于 `fake_token_deployers` 查询来源、Payment Check 的 `counterfeit_deployer` 标记、巨鲸页标记，以及概览页的 KPI 与 Top 5 列表（部署者也可能是工厂合约，线索中会注明）。
 - **TRON USDT 灰尘投毒（`scam_tron` / R3）** —— 扫描 `goog_blockchain_tron_mainnet_us.logs` 中官方 TRON USDT（`TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t`）的小额转账（`< 0x100000` 最小单位，约 1.05 USDT，含仿冒地址转入与伪造的转出两个分支），与同一受害者**同一 UTC 日**的真实转账配对，并在 BigQuery 内直接完成 Base58Check 前 4 位 + 后 4 位比对。
 - **TRON USDT 冻结事件（`tron_stablecoin_logs` / R4）** —— 同步 TRON USDT 的 `AddedBlackList`、`RemovedBlackList` 与 `DestroyedBlackFunds` 日志至 `tron_stablecoin_events`，驱动概览页的 **USDT frozen now (TRON)** KPI 卡片与 `tron_stablecoin` 查询来源。
-- **BTC 显式 RBF 占比（`scam_btc` / R5）** —— 从 `crypto_bitcoin.inputs` 统计每日至少有一个输入开启 BIP-125 显式费用替换（`sequence < 0xfffffffe`）的比特币交易占比，直观说明为何 0 确认 BTC 交易绝不能视为已到账。coinbase 输入（`spent_transaction_hash IS NULL`）不计入：SQD 数据集每个区块都有一行，其中不少 `sequence` 偏低。
-- **防"静默 0"保护** —— 上游 schema 或格式变化可能让某条过滤条件突然什么都匹配不到，查询却照样"成功"返回 0。因此每次运行都会核对数据源确实返回了数据：R1 统计每天扫描到的官方 USDT/USDC 转账数，R3 统计每天的官方 TRON USDT 转账数，R5 统计每天的 BTC 交易数，假币部署者至少有 1 个。R4 只在窗口 ≥7 天时检查，因为某天没有冻结事件是正常的。被判定可疑的运行不写入任何数据、不推进游标，并退避 6 小时；`last_error` 形如 `suspicious empty result for 2026-10-12: 0 official USDT/USDC transfers scanned — upstream schema or format change?`。
+- **BTC 显式 RBF 占比（`scam_btc` / R5）** —— 从 `crypto_bitcoin.inputs` 统计每日至少有一个输入开启 BIP-125 显式费用替换（`sequence < 0xfffffffe`）的比特币交易占比，直观说明为何 0 确认 BTC 交易绝不能视为已到账。coinbase 输入（`spent_output_index IS NULL`）不计入：SQD 数据集每个区块都有一行，其中不少 `sequence` 偏低。
+- **防"静默 0"保护** —— 上游 schema 或格式变化可能让某条过滤条件突然什么都匹配不到，查询却照样"成功"返回 0。因此每次运行都会核对数据源及匹配谓词确实返回了数据：R1 统计每天扫描到的官方 USDT/USDC 转账数与 0 元转账数，R3 统计每天的官方 TRON USDT 转账数与灰尘投毒候选数，R4 统计每天扫描到的官方 TRON USDT 日志数，R5 统计每天的 BTC 交易数，假币部署者至少有 1 个。被判定可疑的运行不写入任何数据、不推进游标，并退避 6 小时；`last_error` 形如 `suspicious empty result for 2026-10-12: 0 official USDT/USDC transfers scanned — upstream schema or format change?`。
 - **下限口径与成本** —— 由于 R1 与 R3 只和**同一 UTC 日**内的真实转账配对，跨天投毒（先正常转账、数日后再投毒）不会被计入，因此看板与线索中的投毒命中数均为**下限（lower bound）**。Scam Radar 默认开启（`address_risk.scam_radar.initial_days: 30`、`retention_days: 90`）。设 `initial_days: 0` 会停掉全部四个任务（已有游标的任务也会停），已存数据仍可查看，但不再更新。按 dry-run 上限估算，30 天冷启动约 92 GB（一次性约 $0.55），之后每日最多约 8 GB（按 $6.25/TiB 折算约 $1.50/月），其中批量部署者刷新约占 1.7 GB。所有 Scam Radar 与冻结同步作业都带有 `app=biglens` 标签。
 
 **Etherscan key（可选）**。配置免费的 Etherscan API key（https://etherscan.io/myapikey）后，以太坊查询还会把该地址最近 1000 笔交易、代币转账（只统计 12 种白名单代币：USDT/USDC/DAI/WETH/WBTC/stETH/wstETH/USDS/USDe/PYUSD/FDUSD/cbBTC）和内部交易与本地名单比对，只看一跳（未配置 key 时自动回退至 Blockscout）。0 金额转账、失败的调用和仿冒代币都会被忽略（防地址投毒）。在 Address Risk 页面里填写 key：先经 Etherscan 校验，再保存到 `conf.yaml`，文件会以 0600 权限重写（手动编辑过的 conf.yaml 要等第一次在 UI 保存后才会变成 0600）。页面上只显示 key 的最后 4 位，日志里也不会出现 key。Etherscan 的 API 条款只允许个人非商业使用（https://etherscan.io/apiterms），只在你一个人用的部署上配置 key。

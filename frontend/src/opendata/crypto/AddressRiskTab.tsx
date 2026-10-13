@@ -477,9 +477,9 @@ export default function AddressRiskTab({
             Off by default. When on, Ethereum lookups also query Google&apos;s public BigQuery blockchain dataset
             (address-clustered views) in your GCP project to add: first funder and account age from full history;
             lifetime in/out activity and top counterparties; 1-hop matches of those counterparties against local
-            OFAC / MEW / freeze / scam lists. No Etherscan key or third-party API. Typical cost ≈ 0.9 GiB billed
-            (≈ $0.006) per lookup, capped at {bqCap}; the address is recorded in your project&apos;s BigQuery job
-            history.
+            OFAC / MEW / freeze / lookalike / counterfeit-token deployer lists. No Etherscan key or third-party API.
+            Typical cost ≈ 0.9 GiB billed (≈ $0.006) per lookup, capped at {bqCap}; the address is recorded in your
+            project&apos;s BigQuery job history.
           </HelpTip>
           {bqReason ? (
             <span className="text-[11px] text-zinc-600">({bqReason})</span>

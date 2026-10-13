@@ -234,13 +234,13 @@ func TestScamRadarPairingIncludesDay(t *testing.T) {
 }
 
 // The SQD-backed crypto_bitcoin.inputs view carries one coinbase input per
-// block (spent_transaction_hash NULL, arbitrary sequence; legacy had none).
+// block (spent_output_index NULL, arbitrary sequence; legacy had none).
 // Counting it would add coinbase txs to the denominator and miscount many of
 // them as RBF-signalling, so R5 must skip inputs that spend nothing.
 func TestScamBTCRBFSQLExcludesCoinbaseInputs(t *testing.T) {
 	where := scamBTCRBFSQL[strings.Index(scamBTCRBFSQL, "WHERE"):]
-	if !strings.Contains(where, "AND spent_transaction_hash IS NOT NULL") {
-		t.Errorf("R5 scamBTCRBFSQL must exclude coinbase inputs (spent_transaction_hash IS NOT NULL) in WHERE:\n%s", scamBTCRBFSQL)
+	if !strings.Contains(where, "AND spent_output_index IS NOT NULL") {
+		t.Errorf("R5 scamBTCRBFSQL must exclude coinbase inputs (spent_output_index IS NOT NULL) in WHERE:\n%s", scamBTCRBFSQL)
 	}
 }
 
@@ -280,7 +280,7 @@ func TestScamRadarJobsRunAndStoreWithFakeBQ(t *testing.T) {
 	runner := &fakeScamBQRunner{
 		billed: 2 << 30,
 		ethPoison: []ethPoisonRow{
-			{Day: "2026-10-05", Lookalike: ethLookalike1, Imitated: ethImitated1, Hits: 12, Victims: 9, Transfers: 812345},
+			{Day: "2026-10-05", Lookalike: ethLookalike1, Imitated: ethImitated1, Hits: 12, Victims: 9, Transfers: 812345, ZeroValue: 260000},
 		},
 		ethFake: []ethFakeTokenRow{
 			{Day: "2026-10-05", Contract: ethFake1, Symbol: "USDT", Transfers: 45, Recipients: 30},
@@ -292,10 +292,10 @@ func TestScamRadarJobsRunAndStoreWithFakeBQ(t *testing.T) {
 			{Day: "2026-10-05", Lookalike58: tronLookalike, Imitated58: tronImitated, Hits: 7, Victims: 6, Candidates: 137386, Transfers: 2345678},
 		},
 		tronEvents: []tronStablecoinRow{
-			{TxHash: "t_f1", LogIndex: 1, BlockNumber: 100, BlockTime: "2026-10-05T01:00:00Z", Action: "freeze", AddressHex20: usdtHex20},
-			{TxHash: "t_f2", LogIndex: 2, BlockNumber: 101, BlockTime: "2026-10-05T02:00:00Z", Action: "freeze", AddressHex20: usdtHex20},
-			{TxHash: "t_u1", LogIndex: 3, BlockNumber: 102, BlockTime: "2026-10-05T03:00:00Z", Action: "unfreeze", AddressHex20: usdtHex20},
-			{TxHash: "t_d1", LogIndex: 4, BlockNumber: 103, BlockTime: "2026-10-05T04:00:00Z", Action: "destroy", AddressHex20: usdtHex20, AmountHex: "05f5e100"},
+			{Day: "2026-10-05", USDTLogs: 5200000, TxHash: "t_f1", LogIndex: 1, BlockNumber: 100, BlockTime: "2026-10-05T01:00:00Z", Action: "freeze", AddressHex20: usdtHex20},
+			{Day: "2026-10-05", USDTLogs: 5200000, TxHash: "t_f2", LogIndex: 2, BlockNumber: 101, BlockTime: "2026-10-05T02:00:00Z", Action: "freeze", AddressHex20: usdtHex20},
+			{Day: "2026-10-05", USDTLogs: 5200000, TxHash: "t_u1", LogIndex: 3, BlockNumber: 102, BlockTime: "2026-10-05T03:00:00Z", Action: "unfreeze", AddressHex20: usdtHex20},
+			{Day: "2026-10-05", USDTLogs: 5200000, TxHash: "t_d1", LogIndex: 4, BlockNumber: 103, BlockTime: "2026-10-05T04:00:00Z", Action: "destroy", AddressHex20: usdtHex20, AmountHex: "05f5e100"},
 		},
 		btcRBF: []btcRBFRow{
 			{Day: "2026-10-05", Txs: 500000, RBFSignalTxs: 333000},
@@ -492,9 +492,10 @@ func TestBqScamRunnerJobsCarryAppLabelAndKeepCaps(t *testing.T) {
 func healthyScamRunner(day string) *fakeScamBQRunner {
 	return &fakeScamBQRunner{
 		billed:       1 << 30,
-		ethPoison:    []ethPoisonRow{{Day: day, Transfers: 750000}},
+		ethPoison:    []ethPoisonRow{{Day: day, Transfers: 750000, ZeroValue: 300000}},
 		ethDeployers: []fakeTokenDeployerBQRow{{Creator: "0x80d04079ffc53eb14edbeeb37279d126f45552df", Contracts: 4394, FirstSeen: "2026-05-21", LastSeen: "2026-08-27"}},
-		tronPoison:   []tronPoisonRow{{Day: day, Transfers: 2100000}},
+		tronPoison:   []tronPoisonRow{{Day: day, Transfers: 2100000, Candidates: 130000}},
+		tronEvents:   []tronStablecoinRow{{Day: day, USDTLogs: 5000000}},
 		btcRBF:       []btcRBFRow{{Day: day, Txs: 400000, RBFSignalTxs: 100000}},
 	}
 }
@@ -524,14 +525,16 @@ func wantSuspicious(t *testing.T, err error, wantSubstrs ...string) {
 }
 
 // R1 must report how many official USDT/USDC transfers it scanned per day,
-// including days without any poisoning match (LEFT JOIN onto the per-day
-// totals, like R3's day_cands), so the guard can tell "no poisoning" from
-// "the filter matched nothing".
+// and how many of them were zero-value (what the poisoning predicate pairs
+// on), including days without any poisoning match (LEFT JOIN onto the
+// per-day totals, like R3's day_cands), so the guards can tell "no
+// poisoning" from "a filter or the q = '0' predicate matched nothing".
 func TestScamEthPoisonSQLReportsDailyOfficialTransfers(t *testing.T) {
 	for _, frag := range []string{
-		"SELECT day, COUNT(*) AS transfers FROM t GROUP BY day",
+		"SELECT day, COUNT(*) AS transfers, COUNTIF(q = '0') AS zero_value FROM t GROUP BY day",
 		"FROM day_transfers dt\nLEFT JOIN matched m USING (day)",
 		"dt.transfers AS transfers",
+		"dt.zero_value AS zero_value",
 		"IFNULL(m.lookalike, '') AS lookalike",
 	} {
 		if !strings.Contains(scamEthPoisonSQL, frag) {
@@ -561,7 +564,7 @@ func TestScamEthGuardRejectsDayWithoutOfficialTransfers(t *testing.T) {
 	end := start.AddDays(2)
 
 	// 2026-10-04 is absent: the per-day CTE saw no official transfer at all.
-	runner := &fakeScamBQRunner{billed: 7 << 30, ethPoison: []ethPoisonRow{{Day: "2026-10-05", Transfers: 812345}}}
+	runner := &fakeScamBQRunner{billed: 7 << 30, ethPoison: []ethPoisonRow{{Day: "2026-10-05", Transfers: 812345, ZeroValue: 250000}}}
 	_, billed, err := scamJobByID(t, runner, scamEthSourceID).Run(ctx, start, end, dailySyncIncrementalMaxBytes)
 	wantSuspicious(t, err, "suspicious empty result for 2026-10-04:", "0 official USDT/USDC transfers scanned", "upstream schema or format change?")
 	if billed != 7<<30 {
@@ -572,19 +575,40 @@ func TestScamEthGuardRejectsDayWithoutOfficialTransfers(t *testing.T) {
 	}
 
 	// An explicit zero is just as suspicious.
-	runner = &fakeScamBQRunner{billed: 1, ethPoison: []ethPoisonRow{{Day: "2026-10-04", Transfers: 0}, {Day: "2026-10-05", Transfers: 9}}}
+	runner = &fakeScamBQRunner{billed: 1, ethPoison: []ethPoisonRow{{Day: "2026-10-04", Transfers: 0}, {Day: "2026-10-05", Transfers: 9, ZeroValue: 1}}}
 	_, _, err = scamJobByID(t, runner, scamEthSourceID).Run(ctx, start, end, dailySyncIncrementalMaxBytes)
 	wantSuspicious(t, err, "2026-10-04")
 
 	// Days with official transfers but no poisoning match are normal.
 	runner = healthyScamRunner("2026-10-04")
-	runner.ethPoison = []ethPoisonRow{{Day: "2026-10-04", Transfers: 700000}, {Day: "2026-10-05", Transfers: 9}}
+	runner.ethPoison = []ethPoisonRow{{Day: "2026-10-04", Transfers: 700000, ZeroValue: 200000}, {Day: "2026-10-05", Transfers: 9, ZeroValue: 1}}
 	res, _, err := scamJobByID(t, runner, scamEthSourceID).Run(ctx, start, end, dailySyncIncrementalMaxBytes)
 	if err != nil {
 		t.Fatalf("healthy days without matches: %v", err)
 	}
 	if len(res.Days) != 2 || len(res.Days[0].Lookalikes) != 0 || res.Days[0].Stats["eth_poison_hits"] != 0 {
 		t.Errorf("healthy no-match days = %+v, want two zero-hit days", res.Days)
+	}
+}
+
+// Zero-value transfers on official USDT/USDC happen every day (that is what
+// poisoners send). Official transfers without a single zero-value one mean
+// the q = '0' predicate stopped matching (e.g. quantity changed format), so
+// R1 would silently find no poisoning.
+func TestScamEthGuardRejectsDayWithoutZeroValueTransfers(t *testing.T) {
+	ctx := context.Background()
+	start := civil.Date{Year: 2026, Month: time.October, Day: 4}
+	runner := &fakeScamBQRunner{billed: 6 << 30, ethPoison: []ethPoisonRow{
+		{Day: "2026-10-04", Transfers: 700000, ZeroValue: 0},
+		{Day: "2026-10-05", Transfers: 690000, ZeroValue: 210000},
+	}}
+	_, billed, err := scamJobByID(t, runner, scamEthSourceID).Run(ctx, start, start.AddDays(2), dailySyncIncrementalMaxBytes)
+	wantSuspicious(t, err, "suspicious empty result for 2026-10-04:", "0 zero-value official USDT/USDC transfers scanned")
+	if billed != 6<<30 {
+		t.Errorf("billed = %d, want R1's %d", billed, int64(6<<30))
+	}
+	if len(runner.queryCalls) != 1 {
+		t.Errorf("guard must fail before R2 runs; query calls = %d", len(runner.queryCalls))
 	}
 }
 
@@ -598,9 +622,26 @@ func TestScamTronGuardRejectsDayWithoutUSDTTransfers(t *testing.T) {
 		t.Errorf("billed = %d, want %d", billed, int64(5<<30))
 	}
 
-	runner = &fakeScamBQRunner{billed: 1, tronPoison: []tronPoisonRow{{Day: "2026-10-05", Transfers: 2000000}}}
+	runner = &fakeScamBQRunner{billed: 1, tronPoison: []tronPoisonRow{{Day: "2026-10-05", Transfers: 2000000, Candidates: 120000}}}
 	if _, _, err := scamJobByID(t, runner, scamTronSourceID).Run(ctx, start, start.AddDays(1), dailySyncIncrementalMaxBytes); err != nil {
-		t.Errorf("a day with USDT transfers but no dust candidates must pass: %v", err)
+		t.Errorf("a day with USDT transfers and dust candidates must pass (no 4+4 match is fine): %v", err)
+	}
+}
+
+// TRON dust poisoning yields dust candidates every day; USDT transfers
+// without a single one mean the dust or pairing predicate stopped matching
+// (e.g. data changed encoding), so R3 would silently find nothing.
+func TestScamTronGuardRejectsDayWithoutDustCandidates(t *testing.T) {
+	ctx := context.Background()
+	start := civil.Date{Year: 2026, Month: time.October, Day: 4}
+	runner := &fakeScamBQRunner{billed: 4 << 30, tronPoison: []tronPoisonRow{
+		{Day: "2026-10-04", Transfers: 2000000, Candidates: 110000},
+		{Day: "2026-10-05", Transfers: 2100000, Candidates: 0},
+	}}
+	_, billed, err := scamJobByID(t, runner, scamTronSourceID).Run(ctx, start, start.AddDays(2), dailySyncIncrementalMaxBytes)
+	wantSuspicious(t, err, "suspicious empty result for 2026-10-05:", "0 TRON USDT dust-poisoning candidates found")
+	if billed != 4<<30 {
+		t.Errorf("billed = %d, want %d", billed, int64(4<<30))
 	}
 }
 
@@ -612,24 +653,70 @@ func TestScamBTCGuardRejectsDayWithoutTransactions(t *testing.T) {
 	wantSuspicious(t, err, "suspicious empty result for 2026-10-04:", "0 Bitcoin transactions scanned")
 }
 
-// A day without TRON USDT blacklist events is normal; only a window of at
-// least tronStablecoinEmptyGuardDays days with none is suspicious.
-func TestTronStablecoinGuardOnlyFlagsLongEmptyWindows(t *testing.T) {
-	ctx := context.Background()
-	end := civil.Date{Year: 2026, Month: time.October, Day: 6}
-	job := scamJobByID(t, &fakeScamBQRunner{billed: 1}, tronStablecoinSourceID)
-	for _, days := range []int{1, tronStablecoinEmptyGuardDays - 1} {
-		if _, _, err := job.Run(ctx, end.AddDays(-days), end, dailySyncIncrementalMaxBytes); err != nil {
-			t.Errorf("%d-day window without events: %v, want no error", days, err)
+// R4 reports, per day, how many official TRON USDT logs it scanned (any
+// topic) next to the rare blacklist events, so a broken address/removed
+// filter is caught even on days without events.
+func TestTronStablecoinSQLReportsDailyUSDTLogs(t *testing.T) {
+	for _, frag := range []string{
+		"SELECT FORMAT_DATE('%Y-%m-%d', DATE(block_timestamp)) AS day, COUNT(*) AS usdt_logs\n  FROM usdt\n  GROUP BY 1",
+		"FROM day_logs d\nLEFT JOIN ev e USING (day)",
+		"d.usdt_logs AS usdt_logs",
+		"IFNULL(e.tx_hash, '') AS tx_hash",
+		"IFNULL(e.log_index, 0) AS log_index",
+	} {
+		if !strings.Contains(tronStablecoinSQL, frag) {
+			t.Errorf("R4 tronStablecoinSQL missing %q:\n%s", frag, tronStablecoinSQL)
 		}
 	}
-	_, _, err := job.Run(ctx, end.AddDays(-tronStablecoinEmptyGuardDays), end, dailySyncIncrementalMaxBytes)
-	wantSuspicious(t, err, "2026-09-29..2026-10-05", "0 TRON USDT freeze/unfreeze/destroy events")
+	// The topic filter applies to the events only, never to the log count.
+	from, to := strings.Index(tronStablecoinSQL, "usdt AS ("), strings.Index(tronStablecoinSQL, "day_logs AS (")
+	if from < 0 || to < from {
+		t.Fatalf("R4 tronStablecoinSQL needs a usdt CTE followed by day_logs:\n%s", tronStablecoinSQL)
+	}
+	if usdt := tronStablecoinSQL[from:to]; strings.Contains(usdt, "topics[SAFE_OFFSET(0)] IN") {
+		t.Errorf("the usdt CTE must not filter on topics:\n%s", usdt)
+	}
+}
 
-	withEvent := &fakeScamBQRunner{billed: 1, tronEvents: []tronStablecoinRow{{TxHash: "t_f1", LogIndex: 1, BlockNumber: 100,
-		BlockTime: "2026-10-01T01:00:00Z", Action: "freeze", AddressHex20: "a614f803b6fd780986a42c78ec9c7f77e6ded13c"}}}
-	if _, _, err := scamJobByID(t, withEvent, tronStablecoinSourceID).Run(ctx, end.AddDays(-30), end, dailySyncColdStartMaxBytes); err != nil {
-		t.Errorf("30-day window with one event: %v, want no error", err)
+// A day without TRON USDT blacklist events is normal, but a day without any
+// official TRON USDT log means the scan matched nothing: fail for every
+// window size.
+func TestTronStablecoinGuardRejectsDayWithoutUSDTLogs(t *testing.T) {
+	ctx := context.Background()
+	end := civil.Date{Year: 2026, Month: time.October, Day: 6}
+
+	// 1-day window, day absent from the result.
+	job := scamJobByID(t, &fakeScamBQRunner{billed: 3 << 30}, tronStablecoinSourceID)
+	_, billed, err := job.Run(ctx, end.AddDays(-1), end, dailySyncIncrementalMaxBytes)
+	wantSuspicious(t, err, "suspicious empty result for 2026-10-05:", "0 official TRON USDT logs scanned")
+	if billed != 3<<30 {
+		t.Errorf("billed = %d, want %d", billed, int64(3<<30))
+	}
+
+	// 3-day window, one day with an explicit zero.
+	runner := &fakeScamBQRunner{billed: 1, tronEvents: []tronStablecoinRow{
+		{Day: "2026-10-03", USDTLogs: 4800000}, {Day: "2026-10-04", USDTLogs: 0}, {Day: "2026-10-05", USDTLogs: 5100000},
+	}}
+	_, _, err = scamJobByID(t, runner, tronStablecoinSourceID).Run(ctx, end.AddDays(-3), end, dailySyncIncrementalMaxBytes)
+	wantSuspicious(t, err, "suspicious empty result for 2026-10-04:")
+
+	// A day with official logs but no blacklist event is stored as a
+	// zero-event day.
+	runner = &fakeScamBQRunner{billed: 1, tronEvents: []tronStablecoinRow{{Day: "2026-10-05", USDTLogs: 5000000}}}
+	res, _, err := scamJobByID(t, runner, tronStablecoinSourceID).Run(ctx, end.AddDays(-1), end, dailySyncIncrementalMaxBytes)
+	if err != nil || len(res.TronEvents) != 0 || res.Rows != 0 || len(res.Days) != 1 || res.Days[0].Stats["tron_usdt_freezes"] != 0 {
+		t.Errorf("day without events = %+v, %v; want a zero-event day", res, err)
+	}
+
+	// Events arrive as extra rows of their day; every day still needs logs.
+	runner = &fakeScamBQRunner{billed: 1, tronEvents: []tronStablecoinRow{
+		{Day: "2026-10-04", USDTLogs: 4900000},
+		{Day: "2026-10-05", USDTLogs: 5000000, TxHash: "t_f1", LogIndex: 1, BlockNumber: 100, BlockTime: "2026-10-05T01:00:00Z",
+			Action: "freeze", AddressHex20: "a614f803b6fd780986a42c78ec9c7f77e6ded13c"},
+	}}
+	res, _, err = scamJobByID(t, runner, tronStablecoinSourceID).Run(ctx, end.AddDays(-2), end, dailySyncIncrementalMaxBytes)
+	if err != nil || len(res.TronEvents) != 1 || res.Days[1].Stats["tron_usdt_freezes"] != 1 {
+		t.Errorf("window with one event = %+v, %v; want the freeze kept", res, err)
 	}
 }
 

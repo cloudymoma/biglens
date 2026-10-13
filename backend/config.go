@@ -94,8 +94,8 @@ type AddressRiskConfig struct {
 // lookup, and every profile is one job billed to bigquery.project_id.
 type BigQueryProfileConfig struct {
 	Enabled        *bool `yaml:"enabled,omitempty"`          // nil → true: users may opt in
-	MaxBytesBilled int64 `yaml:"max_bytes_billed,omitempty"` // ≤0 → 2 GiB per job
-	MaxPerHour     int   `yaml:"max_per_hour,omitempty"`     // ≤0 → 60 jobs/hour (global token bucket)
+	MaxBytesBilled int64 `yaml:"max_bytes_billed,omitempty"` // ≤0 → 2 GiB per job; at most 10 GiB
+	MaxPerHour     int   `yaml:"max_per_hour,omitempty"`     // ≤0 → 60 jobs/hour (global token bucket); at most 600
 	TimeoutSeconds int   `yaml:"timeout_seconds,omitempty"`  // ≤0 → 20; at most 45
 }
 
@@ -116,9 +116,11 @@ func (c AddressRiskConfig) bigQueryProfile() bqProfileSettings {
 	if s.MaxBytesBilled <= 0 {
 		s.MaxBytesBilled = 2 << 30
 	}
+	s.MaxBytesBilled = min(s.MaxBytesBilled, 10<<30)
 	if s.MaxPerHour <= 0 {
 		s.MaxPerHour = 60
 	}
+	s.MaxPerHour = min(s.MaxPerHour, 600)
 	if s.Timeout <= 0 {
 		s.Timeout = 20 * time.Second
 	}

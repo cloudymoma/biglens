@@ -6,7 +6,9 @@ package main
 // One parameterized job over the address-clustered views returns lifetime
 // in/out activity, the first funder and the 200 most frequent counterparties;
 // those are then matched against the local risk pool in SQLite (OFAC, MEW
-// darklist, frozen USDT/USDC, scam lookalikes).
+// darklist, frozen USDT/USDC, scam lookalikes, and serial counterfeit-token
+// deployers — the last only for the first funder and for counterparties that
+// sent the address a top-level transaction; see fillBQProfile).
 //
 // The job is billed to the operator's own project (bigquery.project_id), so
 // the address is not sent to a third party — but BigQuery keeps it in that
@@ -527,6 +529,12 @@ var bqProfileMessages = map[string]string{
 	bqStatusError:       "BigQuery profile unavailable (the query failed; details are in the server log).",
 }
 
+// bqDeployerCaveat ends every clue that rests on a serial counterfeit-token
+// deployer match (the rule is applied in fillBQProfile).
+const bqDeployerCaveat = "Deployer matches count only for the first funder and for counterparties that sent this " +
+	"address a top-level transaction (so they are externally owned accounts): the deployer list records token " +
+	"creators, which can include a token-launcher factory contract that ordinary users call."
+
 func fmtGiB(bytes int64) string {
 	return strings.TrimSuffix(fmt.Sprintf("%.1f", float64(bytes)/(1<<30)), ".0") + " GiB"
 }
@@ -582,8 +590,18 @@ func (s *addressRiskService) checkBQProfile(ctx context.Context, addr string, no
 }
 
 func fillBQProfile(prof *riskBQProfile, row *bqProfileRow, pool riskPool, now time.Time) {
-	lists := func(a string) []string { // never nil: the UI maps over it
-		return append([]string{}, pool[a]...)
+	// The deployer list records token creators, which can be a token-launcher
+	// factory contract that ordinary users call. Only an externally owned
+	// account can send a top-level transaction, so a deployer match counts
+	// only for the first funder and for peers that sent the address one.
+	lists := func(a string, sentToUs bool) []string { // never nil: the UI maps over it
+		out := []string{}
+		for _, l := range pool[a] {
+			if l != "fake_token_deployers" || sentToUs {
+				out = append(out, l)
+			}
+		}
+		return out
 	}
 	prof.Outgoing = &riskBQSide{Txs: row.OutTxs, Peers: row.OutPeers, First: row.OutFirst, Last: row.OutLast, ETH: formatWeiETH(row.OutWei)}
 	prof.Incoming = &riskBQSide{Txs: row.InTxs, Peers: row.InPeers, First: row.InFirst, Last: row.InLast, ETH: formatWeiETH(row.InWei)}
@@ -606,12 +624,12 @@ func fillBQProfile(prof *riskBQProfile, row *bqProfileRow, pool riskPool, now ti
 		f := row.FirstFunder[0]
 		funder = f.Address
 		prof.FirstFunder = &riskBQFunder{Address: f.Address, BlockNumber: f.BlockNumber, Timestamp: f.TS,
-			ValueETH: formatWeiETH(f.Wei), Lists: lists(f.Address)}
+			ValueETH: formatWeiETH(f.Wei), Lists: lists(f.Address, true)}
 	}
 	prof.PeersAnalyzed = len(row.TopPeers)
 	for i, p := range row.TopPeers {
 		peer := riskBQPeer{Address: p.Address, Sent: p.Sent, Received: p.Received, FirstTs: p.FirstTS, LastTs: p.LastTS,
-			ETHSent: formatWeiETH(p.WeiSent), ETHReceived: formatWeiETH(p.WeiReceived), Lists: lists(p.Address),
+			ETHSent: formatWeiETH(p.WeiSent), ETHReceived: formatWeiETH(p.WeiReceived), Lists: lists(p.Address, p.Received > 0),
 			FirstFunder: p.Address == funder}
 		if i < bqProfileUIPeers {
 			prof.TopPeers = append(prof.TopPeers, peer)
@@ -636,6 +654,14 @@ func bqProfileClues(prof *riskBQProfile, asOf string) []riskClue {
 		out = append(out, c)
 	}
 	addrURL := chains["eth"].AddressURL
+	withCaveat := func(detail string, lists ...[]string) string {
+		for _, l := range lists {
+			if slices.Contains(l, "fake_token_deployers") {
+				return detail + " " + bqDeployerCaveat
+			}
+		}
+		return detail
+	}
 	f := prof.FirstFunder
 	if f != nil && len(f.Lists) > 0 {
 		verbs := make([]string, 0, len(f.Lists))
@@ -644,16 +670,18 @@ func bqProfileClues(prof *riskBQProfile, asOf string) []riskClue {
 		}
 		clue(sevAssociation, "bq_first_funder_listed",
 			fmt.Sprintf("First funder %s is %s", f.Address, strings.Join(verbs, " and ")),
-			fmt.Sprintf("First incoming ETH: %s ETH in block %d (%s), full Ethereum history via BigQuery. Counterparty is on: %s. %s",
-				f.ValueETH, f.BlockNumber, f.Timestamp[:min(10, len(f.Timestamp))], strings.Join(poolLabels(f.Lists), ", "), riskPoisoningNote),
+			withCaveat(fmt.Sprintf("First incoming ETH: %s ETH in block %d (%s), full Ethereum history via BigQuery. Counterparty is on: %s. %s",
+				f.ValueETH, f.BlockNumber, f.Timestamp[:min(10, len(f.Timestamp))], strings.Join(poolLabels(f.Lists), ", "), riskPoisoningNote), f.Lists),
 			f.Timestamp, fmt.Sprintf(addrURL, f.Address))
 	}
 	var listed []riskBQPeer
+	var listedLists [][]string
 	for _, p := range prof.ListedPeers {
 		if f != nil && len(f.Lists) > 0 && p.Address == f.Address {
 			continue // has its own clue
 		}
 		listed = append(listed, p)
+		listedLists = append(listedLists, p.Lists)
 	}
 	if len(listed) > 0 {
 		var parts []string
@@ -675,8 +703,8 @@ func bqProfileClues(prof *riskBQProfile, asOf string) []riskClue {
 			title = "1 direct counterparty appears on local lists"
 		}
 		clue(sevAssociation, "bq_counterparties_listed", title,
-			fmt.Sprintf("Among the %d most frequent counterparties (of %s, full history): %s. %s",
-				prof.PeersAnalyzed, fmtCount(prof.Counterparties), strings.Join(parts, "; "), riskPoisoningNote),
+			withCaveat(fmt.Sprintf("Among the %d most frequent counterparties (of %s, full history): %s. %s",
+				prof.PeersAnalyzed, fmtCount(prof.Counterparties), strings.Join(parts, "; "), riskPoisoningNote), listedLists...),
 			newest, fmt.Sprintf(addrURL, listed[0].Address))
 	}
 	if prof.FirstSeen == "" {
