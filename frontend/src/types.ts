@@ -1670,6 +1670,11 @@ export interface GasAllTime {
   atl_is_floor: boolean;
   current_value: number | null;
   current_time?: string;
+  // Freshness of the BigQuery-derived base-fee records (ETH/ARB/OP/POLY only).
+  records_through?: string; // RFC3339 UTC watermark the records are verified through
+  records_stale?: boolean; // watermark older than one refresh period
+  refresh_failed?: boolean; // latest background refresh failed; last verified records shown
+  refresh_note?: string; // generic status line, e.g. "refresh failed, retrying"
 }
 
 export interface GasPulseChain {

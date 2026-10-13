@@ -12,6 +12,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"sync"
 	"time"
@@ -246,29 +247,29 @@ func (h *APIHandler) gasSeries(r *http.Request, chain string, start, end time.Ti
 	return v.([]GasHourRow), nil
 }
 
+// gasAllTime serves the all-time records without ever blocking on BigQuery:
+// the current records (seeds before the first successful refresh) come back
+// immediately with their freshness metadata, and once the 24h refresh marker
+// has expired a background refresh is kicked. A failed refresh is logged
+// server-side, flagged on the cards via gasAllTimeState and retried after
+// gasCalibrationRetryAfter.
 func (h *APIHandler) gasAllTime(r *http.Request) (map[string]GasAllTime, error) {
-	if cached, ok := h.cache.Get(gasAllTimeKey); ok {
-		return cached.(map[string]GasAllTime), nil
-	}
-	if h.bq != nil && h.bq.client != nil {
+	if _, fresh := h.cache.Get(gasAllTimeKey); !fresh && h.bq != nil && h.bq.client != nil {
 		reqCtx := context.WithoutCancel(r.Context())
 		go func() {
 			_, _ = h.cachedFetchOrBackoff(gasAllTimeKey, gasAllTimeTTL, gasCalibrationRetryAfter, func() (any, error) {
 				ctx, cancel := context.WithTimeout(reqCtx, gasFetchTimeout)
 				defer cancel()
-				rows, err := h.bq.GetGasAllTime(ctx)
-				if err != nil {
+				if err := h.bq.RefreshGasAllTime(ctx); err != nil {
+					gasAllTimeState.markFailed()
+					slog.Warn("crypto gas: all-time record refresh failed", "error", err)
 					return nil, err
 				}
-				m := make(map[string]GasAllTime, len(rows))
-				for _, row := range rows {
-					m[row.Chain] = gasAllTimeFromRow(row)
-				}
-				return m, nil
+				return true, nil
 			})
 		}()
 	}
-	return currentGasAllTimeMap(), nil
+	return gasAllTimeState.current(time.Now().UTC()), nil
 }
 
 func (h *APIHandler) gasTronAllTime(r *http.Request) (*GasAllTime, error) {

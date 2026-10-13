@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import ReactECharts from 'echarts-for-react';
 import { Activity, ArrowDownUp, Sigma, Trophy } from 'lucide-react';
-import type { GasPulseChain, GasPulseData } from '../../types';
+import type { GasAllTime, GasPulseChain, GasPulseData } from '../../types';
 import { fetchGasPulse } from '../../api';
 import { MetricCard, EmptyState, ErrorBanner } from '../../dashboards/shared';
 import { Panel } from './shared';
@@ -55,6 +55,7 @@ export default function GasPulse72hView() {
       ) : (
         <>
           <StatCards chain={chain} />
+          <AllTimeFreshnessNote allTime={chain.all_time} />
           {liveChain && <GasLiveBar key={liveChain} chain={liveChain} highlight={chain.meta.id} />}
           <Panel
             title={
@@ -155,6 +156,27 @@ function StatCards({ chain }: { chain: GasPulseChain }) {
         accentColor={color}
       />
       <AllTimeCard chain={chain} />
+    </div>
+  );
+}
+
+// "2026-01-01T00:00:00Z" → "2026-01-01"; other times keep HH:MM UTC.
+function fmtThrough(rfc3339: string): string {
+  const day = rfc3339.slice(0, 10);
+  const hhmm = rfc3339.slice(11, 16);
+  return !hhmm || hhmm === '00:00' ? day : `${day} ${hhmm} UTC`;
+}
+
+// Subtle amber line under the cards when the BigQuery-derived all-time
+// records are stale or their latest background refresh failed.
+function AllTimeFreshnessNote({ allTime: at }: { allTime: GasAllTime | null }) {
+  if (!at?.records_through || (!at.refresh_failed && !at.records_stale)) return null;
+  const note = at.refresh_note ? ` · ${at.refresh_note}` : '';
+  return (
+    <div className="flex justify-end -mt-2">
+      <span className="text-[11px] text-amber-400/80">
+        All-time records verified through {fmtThrough(at.records_through)}{note}
+      </span>
     </div>
   );
 }

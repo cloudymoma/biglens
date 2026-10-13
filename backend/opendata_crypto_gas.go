@@ -289,15 +289,26 @@ func (b *BQClient) GetGasHourly(ctx context.Context, chain string, start, end ti
 
 // GasAllTime is one chain's all-time record card. Times are RFC3339 UTC;
 // "" means genesis. CurrentValue is set only where a live price exists (TRON).
+//
+// The freshness fields are set only on the BigQuery-derived base-fee cards
+// (ETH/ARB/OP/POLY): RecordsThrough is the watermark the records are verified
+// through, RecordsStale flags a watermark older than one refresh period,
+// RefreshFailed reports that the latest background refresh failed (the card
+// keeps serving the last verified records) and RefreshNote is a generic,
+// user-safe status line — never a raw BigQuery error.
 type GasAllTime struct {
-	Unit         string   `json:"unit"`
-	AthValue     float64  `json:"ath_value"`
-	AthTime      string   `json:"ath_time"`
-	AtlValue     float64  `json:"atl_value"`
-	AtlTime      string   `json:"atl_time"`
-	AtlIsFloor   bool     `json:"atl_is_floor"`
-	CurrentValue *float64 `json:"current_value"`
-	CurrentTime  string   `json:"current_time,omitempty"`
+	Unit           string   `json:"unit"`
+	AthValue       float64  `json:"ath_value"`
+	AthTime        string   `json:"ath_time"`
+	AtlValue       float64  `json:"atl_value"`
+	AtlTime        string   `json:"atl_time"`
+	AtlIsFloor     bool     `json:"atl_is_floor"`
+	CurrentValue   *float64 `json:"current_value"`
+	CurrentTime    string   `json:"current_time,omitempty"`
+	RecordsThrough string   `json:"records_through,omitempty"`
+	RecordsStale   bool     `json:"records_stale,omitempty"`
+	RefreshFailed  bool     `json:"refresh_failed,omitempty"`
+	RefreshNote    string   `json:"refresh_note,omitempty"`
 }
 
 type gasFeePoint struct {
@@ -349,12 +360,98 @@ var gasAllTimeSeeds = map[string]gasRecordRow{
 	},
 }
 
-var gasAllTimeState = struct {
+// gasAllTimeTracker holds the merged all-time records in memory together with
+// their freshness: since is the verified-through watermark (each refresh
+// scans only blocks >= since) and failed reports that the latest refresh
+// attempt failed. A restart starts over from the seeds.
+type gasAllTimeTracker struct {
 	mu      sync.Mutex
 	since   time.Time
-	records map[string]gasRecordRow
-}{
-	since: gasAllTimeSeedTime,
+	records map[string]gasRecordRow // nil until the first successful refresh
+	failed  bool
+}
+
+func newGasAllTimeTracker() *gasAllTimeTracker {
+	return &gasAllTimeTracker{since: gasAllTimeSeedTime}
+}
+
+var gasAllTimeState = newGasAllTimeTracker()
+
+// Generic status lines for the record cards (never raw BigQuery errors).
+const (
+	gasAllTimeNoteRefreshing = "refresh in progress"
+	gasAllTimeNoteFailed     = "refresh failed, retrying"
+)
+
+// gasAllTimeStaleAfter flags records whose watermark is older than one
+// refresh period plus the 2h re-scan overlap (gasAllTimeOverlap).
+const (
+	gasAllTimeOverlap    = 2 * time.Hour
+	gasAllTimeStaleAfter = gasAllTimeTTL + gasAllTimeOverlap
+)
+
+func (t *gasAllTimeTracker) watermark() time.Time {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.since
+}
+
+// applyDelta merges a successful delta scan, advances the watermark to next
+// (never backwards) and clears the failure flag.
+func (t *gasAllTimeTracker) applyDelta(rows []gasRecordRow, next time.Time) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.records == nil {
+		t.records = make(map[string]gasRecordRow, len(gasAllTimeSeeds))
+		for k, v := range gasAllTimeSeeds {
+			t.records[k] = v
+		}
+	}
+	for _, r := range rows {
+		t.records[r.Chain] = mergeGasRecordRow(t.records[r.Chain], r)
+	}
+	if next.After(t.since) {
+		t.since = next
+	}
+	t.failed = false
+}
+
+// markFailed records a failed refresh; records and watermark are kept.
+func (t *gasAllTimeTracker) markFailed() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.failed = true
+}
+
+// current returns the latest merged records (the seeds before the first
+// successful refresh) with their freshness at now, so /gas-pulse never blocks
+// on the all-time BigQuery scan.
+func (t *gasAllTimeTracker) current(now time.Time) map[string]GasAllTime {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	src := t.records
+	if len(src) == 0 {
+		src = gasAllTimeSeeds
+	}
+	through := t.since.UTC().Format(time.RFC3339)
+	stale := now.Sub(t.since) > gasAllTimeStaleAfter
+	note := ""
+	switch {
+	case t.failed:
+		note = gasAllTimeNoteFailed
+	case stale:
+		note = gasAllTimeNoteRefreshing
+	}
+	m := make(map[string]GasAllTime, len(src))
+	for chain, row := range src {
+		at := gasAllTimeFromRow(row)
+		at.RecordsThrough = through
+		at.RecordsStale = stale
+		at.RefreshFailed = t.failed
+		at.RefreshNote = note
+		m[chain] = at
+	}
+	return m
 }
 
 // mergeGasRecordRow merges a delta window's ATH/ATL into cur, preserving
@@ -419,11 +516,11 @@ func gasAllTimeSQL() string {
 		GROUP BY chain`, ethBlocksTable, arbBlocksTable, opBlocksTable, polyBlocksTable)
 }
 
-func (b *BQClient) GetGasAllTime(ctx context.Context) ([]gasRecordRow, error) {
-	gasAllTimeState.mu.Lock()
-	since := gasAllTimeState.since
-	gasAllTimeState.mu.Unlock()
-
+// RefreshGasAllTime scans blocks since the tracker's watermark and merges the
+// delta into gasAllTimeState. The next watermark is 2h before now (truncated
+// to the hour) so late or re-orged blocks near the head are re-read.
+func (b *BQClient) RefreshGasAllTime(ctx context.Context) error {
+	since := gasAllTimeState.watermark()
 	q := b.client.Query(gasAllTimeSQL())
 	q.Parameters = []bigquery.QueryParameter{
 		{Name: "since_ts", Value: since},
@@ -432,28 +529,10 @@ func (b *BQClient) GetGasAllTime(ctx context.Context) ([]gasRecordRow, error) {
 	q.MaxBytesBilled = cryptoDefaultMaxBytesBilled
 	rows, err := collectRows[gasRecordRow](q, ctx)
 	if err != nil {
-		return nil, err
+		return err
 	}
-
-	gasAllTimeState.mu.Lock()
-	defer gasAllTimeState.mu.Unlock()
-	if gasAllTimeState.records == nil {
-		gasAllTimeState.records = make(map[string]gasRecordRow, len(gasAllTimeSeeds))
-		for k, v := range gasAllTimeSeeds {
-			gasAllTimeState.records[k] = v
-		}
-	}
-	for _, r := range rows {
-		gasAllTimeState.records[r.Chain] = mergeGasRecordRow(gasAllTimeState.records[r.Chain], r)
-	}
-	if next := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Hour); next.After(gasAllTimeState.since) {
-		gasAllTimeState.since = next
-	}
-	out := make([]gasRecordRow, 0, len(gasAllTimeState.records))
-	for _, r := range gasAllTimeState.records {
-		out = append(out, r)
-	}
-	return out, nil
+	gasAllTimeState.applyDelta(rows, time.Now().UTC().Add(-gasAllTimeOverlap).Truncate(time.Hour))
+	return nil
 }
 
 func gasAllTimeFromRow(r gasRecordRow) GasAllTime {
@@ -468,21 +547,4 @@ func gasAllTimeFromRow(r gasRecordRow) GasAllTime {
 		at.AtlIsFloor = len(r.Atl) > 1 && r.Atl[1].Fee == r.Atl[0].Fee
 	}
 	return at
-}
-
-// currentGasAllTimeMap returns the latest merged all-time base-fee records
-// (or the pre-computed seeds before the first background delta scan finishes)
-// so /gas-pulse never blocks on the all-time BigQuery scan.
-func currentGasAllTimeMap() map[string]GasAllTime {
-	gasAllTimeState.mu.Lock()
-	defer gasAllTimeState.mu.Unlock()
-	src := gasAllTimeState.records
-	if len(src) == 0 {
-		src = gasAllTimeSeeds
-	}
-	m := make(map[string]GasAllTime, len(src))
-	for chain, row := range src {
-		m[chain] = gasAllTimeFromRow(row)
-	}
-	return m
 }

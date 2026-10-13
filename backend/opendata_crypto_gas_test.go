@@ -199,3 +199,72 @@ func TestGasAllTimeFromRow(t *testing.T) {
 		})
 	}
 }
+
+// The all-time cards must say how fresh they are. Before the first
+// successful refresh they serve the pre-seeded baseline, verified through the
+// seed watermark (stale, refresh pending); a failed refresh is flagged
+// without moving the watermark; a success advances the watermark and clears
+// the flags; the watermark never moves backwards.
+func TestGasAllTimeTrackerFreshness(t *testing.T) {
+	now := time.Date(2026, 10, 13, 10, 30, 0, 0, time.UTC)
+	seedThrough := gasAllTimeSeedTime.UTC().Format(time.RFC3339)
+	seedETH, seedArb := gasAllTimeSeeds[gasChainETH], gasAllTimeSeeds[gasChainArb]
+	tr := newGasAllTimeTracker()
+
+	// Cold start: seeds, verified through 2026-01-01, stale, refresh pending.
+	m := tr.current(now)
+	if len(m) != len(gasAllTimeSeeds) {
+		t.Fatalf("cold start serves %d cards, want the %d seeds", len(m), len(gasAllTimeSeeds))
+	}
+	eth := m[gasChainETH]
+	if eth.AthValue != float64(seedETH.Ath.Fee)/1e9 {
+		t.Errorf("cold start ath = %v, want the seed", eth.AthValue)
+	}
+	if eth.RecordsThrough != seedThrough || !eth.RecordsStale || eth.RefreshFailed || eth.RefreshNote != gasAllTimeNoteRefreshing {
+		t.Errorf("cold start freshness = %+v, want through %s, stale, not failed, note %q", eth, seedThrough, gasAllTimeNoteRefreshing)
+	}
+
+	// A failed refresh keeps the baseline and its watermark but says so.
+	tr.markFailed()
+	eth = tr.current(now)[gasChainETH]
+	if !eth.RefreshFailed || eth.RecordsThrough != seedThrough || eth.RefreshNote != gasAllTimeNoteFailed {
+		t.Errorf("after failure = %+v, want failed, through %s, note %q", eth, seedThrough, gasAllTimeNoteFailed)
+	}
+
+	// A successful delta merges, advances the watermark and clears the flags.
+	next := time.Date(2026, 10, 13, 8, 0, 0, 0, time.UTC)
+	newAth := gasFeePoint{Fee: seedETH.Ath.Fee + 1, Ts: next.Add(-time.Hour)}
+	tr.applyDelta([]gasRecordRow{{Chain: gasChainETH, Ath: newAth, Atl: []gasFeePoint{{Fee: seedETH.Atl[0].Fee + 5, Ts: next}}}}, next)
+	m = tr.current(now)
+	eth = m[gasChainETH]
+	if eth.AthValue != float64(newAth.Fee)/1e9 {
+		t.Errorf("ath after delta = %v, want %v", eth.AthValue, float64(newAth.Fee)/1e9)
+	}
+	if eth.RefreshFailed || eth.RecordsStale || eth.RefreshNote != "" || eth.RecordsThrough != "2026-10-13T08:00:00Z" {
+		t.Errorf("after success = %+v, want fresh, through 2026-10-13T08:00:00Z, no note", eth)
+	}
+	if arb := m[gasChainArb]; arb.AthValue != float64(seedArb.Ath.Fee)/1e9 || arb.RecordsThrough != "2026-10-13T08:00:00Z" {
+		t.Errorf("a chain without delta rows keeps its seed and shares the watermark, got %+v", arb)
+	}
+
+	// A later failure flags the cards but keeps the last verified watermark.
+	tr.markFailed()
+	if e := tr.current(now)[gasChainETH]; !e.RefreshFailed || e.RecordsThrough != "2026-10-13T08:00:00Z" || e.AthValue != float64(newAth.Fee)/1e9 {
+		t.Errorf("failure after success = %+v, want failed with the last verified records", e)
+	}
+
+	// Records age into staleness once the watermark is older than one
+	// refresh period plus the re-scan overlap.
+	if e := tr.current(next.Add(gasAllTimeStaleAfter - time.Minute))[gasChainETH]; e.RecordsStale {
+		t.Errorf("records %v old must not be stale yet", gasAllTimeStaleAfter-time.Minute)
+	}
+
+	// The watermark never moves backwards; success still clears the failure.
+	tr.applyDelta(nil, next.Add(-time.Hour))
+	if e := tr.current(now)[gasChainETH]; e.RecordsThrough != "2026-10-13T08:00:00Z" || e.RefreshFailed {
+		t.Errorf("after an older successful delta = %+v, want watermark kept and failure cleared", e)
+	}
+	if e := tr.current(next.Add(gasAllTimeStaleAfter + time.Minute))[gasChainETH]; !e.RecordsStale || e.RefreshNote != gasAllTimeNoteRefreshing {
+		t.Errorf("records older than %v = %+v, want stale with note %q", gasAllTimeStaleAfter, e, gasAllTimeNoteRefreshing)
+	}
+}
