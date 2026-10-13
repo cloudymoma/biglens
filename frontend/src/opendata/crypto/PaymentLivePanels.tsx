@@ -72,6 +72,17 @@ export function PaymentAlertsBanner({
               </span>
               <span>{a.message}</span>
             </div>
+            {a.address && (
+              <a
+                href={netOpt.addrExplorer(a.address)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-mono text-[11px] underline underline-offset-2 inline-flex items-center gap-1 opacity-90 hover:opacity-100"
+                title={a.address}
+              >
+                contract {shortAddr(a.address)} <ExternalLink size={11} />
+              </a>
+            )}
             {a.tx_hash && (
               <a
                 href={txUrl}
