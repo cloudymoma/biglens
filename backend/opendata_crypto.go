@@ -931,4 +931,3 @@ func (b *BQClient) GetContractsDaily(ctx context.Context, start, end civil.Date)
 	q.MaxBytesBilled = cryptoBlocksMaxBytesBilled
 	return collectRows[ContractRow](q, ctx)
 }
-

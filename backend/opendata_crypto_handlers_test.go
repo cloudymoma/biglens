@@ -69,7 +69,6 @@ func TestCryptoWindow(t *testing.T) {
 	}
 }
 
-
 func TestRollupCryptoKpi(t *testing.T) {
 	daily := []CryptoActivityRow{
 		{Date: "2026-07-19", TxCount: 100, ValueSettled: 1.5, FeesTotal: 0.1},
