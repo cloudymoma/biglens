@@ -58,8 +58,10 @@ var riskSourceOrder = map[string]int{
 	"etherscan":          9,
 	// Local Scam Radar corpus (no address leaves the server).
 	"fake_token_deployers": 10,
-	"eip7702":              11,
-	"bigquery_profile":     12,
+	// Live eth_getCode check (address sent to the chain RPCs).
+	"eip7702": 11,
+	// Opt-in, Ethereum only: runs in the operator's own BigQuery project.
+	"bigquery_profile": 12,
 }
 
 func riskSourcesFor(chain string) []string {
