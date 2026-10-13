@@ -172,13 +172,17 @@ WHERE block_timestamp >= TIMESTAMP(@start_date) AND block_timestamp < TIMESTAMP(
   AND address = '` + tronUSDTLogAddress + `' AND NOT removed
   AND topics[SAFE_OFFSET(0)] IN ('` + topicUSDTAddedBlackList + `', '` + topicUSDTRemovedBlackList + `', '` + topicUSDTDestroyedBlackFunds + `')`
 
-	// R5: BTC explicit RBF share per UTC day (spec P2.2).
+	// R5: BTC explicit RBF share per UTC day (spec P2.2). The SQD-backed
+	// inputs view has one coinbase input per block (spent_transaction_hash
+	// NULL, arbitrary sequence); it is excluded so coinbase transactions
+	// neither enter the denominator nor count as RBF-signalling.
 	scamBTCRBFSQL = `
 SELECT FORMAT_DATE('%Y-%m-%d', DATE(block_timestamp)) AS day,
        COUNT(DISTINCT transaction_hash) AS txs,
        COUNT(DISTINCT IF(sequence < 4294967294, transaction_hash, NULL)) AS rbf_signal_txs
 FROM ` + scamBTCInputsTable + `
 WHERE block_timestamp >= TIMESTAMP(@start_date) AND block_timestamp < TIMESTAMP(@end_date)
+  AND spent_transaction_hash IS NOT NULL
 GROUP BY 1
 ORDER BY 1`
 )

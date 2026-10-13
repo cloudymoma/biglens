@@ -212,6 +212,17 @@ func TestScamRadarPairingIncludesDay(t *testing.T) {
 	}
 }
 
+// The SQD-backed crypto_bitcoin.inputs view carries one coinbase input per
+// block (spent_transaction_hash NULL, arbitrary sequence; legacy had none).
+// Counting it would add coinbase txs to the denominator and miscount many of
+// them as RBF-signalling, so R5 must skip inputs that spend nothing.
+func TestScamBTCRBFSQLExcludesCoinbaseInputs(t *testing.T) {
+	where := scamBTCRBFSQL[strings.Index(scamBTCRBFSQL, "WHERE"):]
+	if !strings.Contains(where, "AND spent_transaction_hash IS NOT NULL") {
+		t.Errorf("R5 scamBTCRBFSQL must exclude coinbase inputs (spent_transaction_hash IS NOT NULL) in WHERE:\n%s", scamBTCRBFSQL)
+	}
+}
+
 func TestTronStablecoinSQLReusesTopicConstants(t *testing.T) {
 	for _, topic := range []string{topicUSDTAddedBlackList, topicUSDTRemovedBlackList, topicUSDTDestroyedBlackFunds} {
 		if !strings.Contains(tronStablecoinSQL, topic) {
