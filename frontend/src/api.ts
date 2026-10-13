@@ -461,13 +461,16 @@ export async function fetchCryptoSpot(): Promise<CryptoSpotData | null> {
   }
 }
 
+// opts.bqProfile opts this Ethereum lookup into the BigQuery profile (bq=1);
+// it is never sent for other chains (Payment Check payer screening omits opts).
 export async function fetchAddressRiskLookup(
   address: string,
   chain: AddressRiskChain = 'eth',
   signal?: AbortSignal,
+  opts?: { bqProfile?: boolean },
 ): Promise<AddressRiskLookup> {
   const { data } = await axios.get('/api/opendata/crypto/address-risk/lookup', {
-    params: { address, chain },
+    params: opts?.bqProfile && chain === 'eth' ? { address, chain, bq: '1' } : { address, chain },
     signal,
   });
   return data;

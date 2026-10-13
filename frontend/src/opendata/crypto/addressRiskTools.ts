@@ -223,6 +223,8 @@ export const RISK_SOURCE_LABELS: Record<string, string> = {
   etherscan: 'Etherscan / Blockscout',
   mempool: 'Esplora (mempool / blockstream)',
   solana_rpc: 'Solana RPC',
+  eip7702: 'EIP-7702 delegation (live)',
+  bigquery_profile: 'BigQuery profile',
 };
 
 const ERROR_TEXT: Record<string, string> = {
@@ -282,6 +284,8 @@ export const RISK_SOURCE_META: RiskSourceMeta[] = [
   { id: 'goplus', delay: 'live per lookup', terms: 'free public API', link: 'https://gopluslabs.io' },
   { id: 'blockscout', delay: 'live per lookup (scam reputation & public security tags)', terms: 'Blockscout public API', link: 'https://eth.blockscout.com' },
   { id: 'etherscan', delay: 'live per lookup (Blockscout keyless fallback when no Etherscan key); newest 1000 rows per list + live counterparty screening', terms: 'Etherscan API terms (personal, non-commercial use) or Blockscout public API', link: 'https://etherscan.io/apiterms' },
+  { id: 'eip7702', delay: 'live per lookup (eth_getCode at latest on the issuer-freeze RPCs); a delegate contract (not the address) is looked up on Blockscout', terms: 'public chain state; Blockscout public API', link: 'https://eips.ethereum.org/EIPS/eip-7702' },
+  { id: 'bigquery_profile', delay: 'opt-in per Ethereum lookup; full history, seconds behind the chain head; cached 10 min', terms: "public BigQuery dataset queried in this server's GCP project (~0.9 GiB billed per profile); the address stays in that project's BigQuery job history", link: 'https://cloud.google.com/blockchain-analytics/docs/supported-datasets' },
 ];
 
 export const ETHERSCAN_SIGNUP_URL = 'https://etherscan.io/myapikey';
