@@ -89,6 +89,12 @@ func (s *dailyBQSyncer) syncOnce(ctx context.Context) {
 }
 
 func (s *dailyBQSyncer) sync(ctx context.Context) (stablecoinRun, bool) {
+	// address_risk.scam_radar.initial_days: 0 disables Scam Radar entirely
+	// (spec P2.0 Q2): no BigQuery even when a source already has a cursor;
+	// the corpora stored so far stay readable.
+	if s.initialDays <= 0 {
+		return stablecoinRun{}, false
+	}
 	sourceID := s.job.ID()
 	st, err := s.store.getSyncState(ctx, sourceID)
 	if err != nil {
@@ -102,9 +108,6 @@ func (s *dailyBQSyncer) sync(ctx context.Context) (stablecoinRun, bool) {
 	var start civil.Date
 	newFrom := ""
 	if st.Cursor == "" {
-		if s.initialDays <= 0 {
-			return stablecoinRun{}, false
-		}
 		start = today.AddDays(-s.initialDays)
 		newFrom = start.String()
 	} else {
