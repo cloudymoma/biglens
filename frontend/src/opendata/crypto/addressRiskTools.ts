@@ -17,10 +17,10 @@ export interface RiskChainOption {
 }
 
 export const RISK_CHAINS: RiskChainOption[] = [
-  { id: 'eth', label: 'Ethereum', family: 'evm', placeholder: '0x… address', formatHint: 'Enter a 0x address (42 characters). ENS names are not supported.', localSources: ['ofac', 'mew_darklist', 'stablecoin', 'scam_lookalikes'] },
-  { id: 'arb', label: 'Arbitrum', family: 'evm', placeholder: '0x… address', formatHint: 'Enter a 0x address (42 characters). ENS names are not supported.', localSources: ['ofac', 'mew_darklist', 'scam_lookalikes'] },
-  { id: 'op', label: 'Optimism', family: 'evm', placeholder: '0x… address', formatHint: 'Enter a 0x address (42 characters). ENS names are not supported.', localSources: ['ofac', 'mew_darklist', 'scam_lookalikes'] },
-  { id: 'base', label: 'Base', family: 'evm', placeholder: '0x… address', formatHint: 'Enter a 0x address (42 characters). ENS names are not supported.', localSources: ['ofac', 'mew_darklist', 'scam_lookalikes'] },
+  { id: 'eth', label: 'Ethereum', family: 'evm', placeholder: '0x… address', formatHint: 'Enter a 0x address (42 characters). ENS names are not supported.', localSources: ['ofac', 'mew_darklist', 'stablecoin', 'scam_lookalikes', 'fake_token_deployers'] },
+  { id: 'arb', label: 'Arbitrum', family: 'evm', placeholder: '0x… address', formatHint: 'Enter a 0x address (42 characters). ENS names are not supported.', localSources: ['ofac', 'mew_darklist', 'scam_lookalikes', 'fake_token_deployers'] },
+  { id: 'op', label: 'Optimism', family: 'evm', placeholder: '0x… address', formatHint: 'Enter a 0x address (42 characters). ENS names are not supported.', localSources: ['ofac', 'mew_darklist', 'scam_lookalikes', 'fake_token_deployers'] },
+  { id: 'base', label: 'Base', family: 'evm', placeholder: '0x… address', formatHint: 'Enter a 0x address (42 characters). ENS names are not supported.', localSources: ['ofac', 'mew_darklist', 'scam_lookalikes', 'fake_token_deployers'] },
   { id: 'tron', label: 'TRON', family: 'tron', placeholder: 'T… address', formatHint: 'Enter a TRON address starting with T (34 base58 characters).', localSources: ['ofac', 'tron_stablecoin', 'scam_lookalikes'] },
   { id: 'btc', label: 'Bitcoin', family: 'btc', placeholder: '1…, 3…, or bc1… address', formatHint: 'Enter a Bitcoin mainnet address (1…, 3…, or bc1…).', localSources: ['ofac'] },
   { id: 'sol', label: 'Solana', family: 'sol', placeholder: 'Solana address (32–44 base58 characters)', formatHint: 'Enter a Solana address (32–44 base58 characters).', localSources: ['ofac'] },
@@ -207,6 +207,7 @@ export const RISK_BADGES: Record<string, { label: string; color: string }> = {
   tron_stablecoin: { label: 'Frozen', color: '#f87171' },
   mew_darklist: { label: 'MEW', color: '#fb923c' },
   scam_lookalikes: { label: 'Lookalike', color: '#fb923c' },
+  fake_token_deployers: { label: 'Fake-token deployer', color: '#fb923c' },
 };
 
 // Display names for source ids returned by the backend.
@@ -223,6 +224,7 @@ export const RISK_SOURCE_LABELS: Record<string, string> = {
   etherscan: 'Etherscan / Blockscout',
   mempool: 'Esplora (mempool / blockstream)',
   solana_rpc: 'Solana RPC',
+  fake_token_deployers: 'Serial counterfeit-token deployers',
 };
 
 const ERROR_TEXT: Record<string, string> = {
@@ -282,6 +284,7 @@ export const RISK_SOURCE_META: RiskSourceMeta[] = [
   { id: 'goplus', delay: 'live per lookup', terms: 'free public API', link: 'https://gopluslabs.io' },
   { id: 'blockscout', delay: 'live per lookup (scam reputation & public security tags)', terms: 'Blockscout public API', link: 'https://eth.blockscout.com' },
   { id: 'etherscan', delay: 'live per lookup (Blockscout keyless fallback when no Etherscan key); newest 1000 rows per list + live counterparty screening', terms: 'Etherscan API terms (personal, non-commercial use) or Blockscout public API', link: 'https://etherscan.io/apiterms' },
+  { id: 'fake_token_deployers', delay: 'refreshed with Scam Radar once per UTC day (full snapshot of crypto_ethereum.tokens_latest; EVM chains reuse the Ethereum corpus)', terms: 'public on-chain data via BigQuery', link: 'https://console.cloud.google.com/bigquery?p=bigquery-public-data&d=crypto_ethereum&page=dataset' },
 ];
 
 export const ETHERSCAN_SIGNUP_URL = 'https://etherscan.io/myapikey';
