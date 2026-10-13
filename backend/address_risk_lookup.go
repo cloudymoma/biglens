@@ -52,16 +52,17 @@ var riskSourceOrder = map[string]int{
 	"goplus":             7,
 	"blockscout":         8,
 	"etherscan":          9,
+	"eip7702":            10,
 }
 
 func riskSourcesFor(chain string) []string {
 	switch chain {
 	case "eth":
-		return []string{"ofac", "mew_darklist", "stablecoin", "scam_lookalikes", "issuer_freeze", "chainalysis_oracle", "goplus", "blockscout", "etherscan"}
+		return []string{"ofac", "mew_darklist", "stablecoin", "scam_lookalikes", "issuer_freeze", "chainalysis_oracle", "goplus", "blockscout", "etherscan", "eip7702"}
 	case "arb", "op":
-		return []string{"ofac", "mew_darklist", "scam_lookalikes", "issuer_freeze", "chainalysis_oracle", "goplus", "blockscout"}
+		return []string{"ofac", "mew_darklist", "scam_lookalikes", "issuer_freeze", "chainalysis_oracle", "goplus", "blockscout", "eip7702"}
 	case "base":
-		return []string{"ofac", "mew_darklist", "scam_lookalikes", "issuer_freeze", "goplus", "blockscout"}
+		return []string{"ofac", "mew_darklist", "scam_lookalikes", "issuer_freeze", "goplus", "blockscout", "eip7702"}
 	case "tron":
 		return []string{"ofac", "tron_stablecoin", "scam_lookalikes", "issuer_freeze", "goplus"}
 	case "btc":
@@ -119,6 +120,10 @@ type riskLookupResult struct {
 	// AssociationScope says what the Etherscan analysis covered; null when
 	// it did not run (no key, or the source failed).
 	AssociationScope *riskAssociationScope `json:"association_scope"`
+
+	// noCache marks a transient failure that no source status shows (e.g. the
+	// EIP-7702 delegate check), so a retry gets fresh data.
+	noCache bool
 }
 
 func (r *riskLookupResult) hasError() bool {
@@ -134,6 +139,9 @@ func (r *riskLookupResult) hasError() bool {
 // a source errored, a list has not synced yet, or a live counterparty check
 // failed, so a retry gets fresh data.
 func (r *riskLookupResult) cacheable() bool {
+	if r.noCache {
+		return false
+	}
 	if r.AssociationScope != nil && r.AssociationScope.CounterpartyErrors > 0 {
 		return false
 	}
@@ -783,6 +791,9 @@ func (s *addressRiskService) lookupKey(ctx context.Context, chain, addr, ethersc
 		etherSrc                                   riskSource
 		etherClues                                 []riskClue
 		scope                                      *riskAssociationScope
+		eipSrc                                     riskSource
+		eipClues                                   []riskClue
+		eipNoCache                                 bool
 	)
 	wg.Add(1)
 	go func() { defer wg.Done(); localSrc, localClues, localFrozen = s.localCheck(ctx, chain, addr) }()
@@ -809,6 +820,10 @@ func (s *addressRiskService) lookupKey(ctx context.Context, chain, addr, ethersc
 		wg.Add(1)
 		go func() { defer wg.Done(); etherSrc, etherClues, scope = s.checkEtherscan(ctx, addr, etherscanKey, now) }()
 	}
+	if has("eip7702") {
+		wg.Add(1)
+		go func() { defer wg.Done(); eipSrc, eipClues, eipNoCache = s.checkEIP7702Source(ctx, chain, addr, now) }()
+	}
 	wg.Wait()
 
 	asOf := fmtTime(now)
@@ -824,6 +839,7 @@ func (s *addressRiskService) lookupKey(ctx context.Context, chain, addr, ethersc
 	clues = append(clues, goplusFound...)
 	clues = append(clues, bsAddrClues...)
 	clues = append(clues, etherClues...)
+	clues = append(clues, eipClues...)
 	sortClues(clues)
 
 	live := func(id, code string, hosts []string) riskSource {
@@ -853,6 +869,9 @@ func (s *addressRiskService) lookupKey(ctx context.Context, chain, addr, ethersc
 	if has("etherscan") {
 		sources = append(sources, etherSrc)
 	}
+	if has("eip7702") {
+		sources = append(sources, eipSrc)
+	}
 
 	return &riskLookupResult{
 		Chain:            chain,
@@ -863,5 +882,6 @@ func (s *addressRiskService) lookupKey(ctx context.Context, chain, addr, ethersc
 		Clues:            clues,
 		Sources:          sources,
 		AssociationScope: scope,
+		noCache:          eipNoCache,
 	}
 }

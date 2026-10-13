@@ -159,6 +159,10 @@ func newFakeUpstreams(t *testing.T, oracleBody, goplusBody string, goplusDelay t
 		}
 		b, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(b, &req)
+		if strings.Contains(string(b), `"eth_getCode"`) {
+			w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":"0x"}`)) // plain EOA: no EIP-7702 clue
+			return
+		}
 		if !strings.Contains(string(b), riskOracleContract) {
 			w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":"` + oracleFalse + `"}`))
 			return
@@ -238,7 +242,7 @@ func TestServiceLookupRoninLikeHit(t *testing.T) {
 	for _, s := range res.Sources {
 		ids = append(ids, s.ID+"="+s.Status)
 	}
-	if strings.Join(ids, ",") != "ofac=ok,mew_darklist=ok,stablecoin=ok,scam_lookalikes=ok,issuer_freeze=ok,chainalysis_oracle=ok,goplus=ok,etherscan=not_configured" {
+	if strings.Join(ids, ",") != "ofac=ok,mew_darklist=ok,stablecoin=ok,scam_lookalikes=ok,issuer_freeze=ok,chainalysis_oracle=ok,goplus=ok,etherscan=not_configured,eip7702=ok" {
 		t.Errorf("sources = %v", ids)
 	}
 	if res.Disclaimer != riskDisclaimer || res.QueriedAt != "2026-09-26T12:00:00Z" || res.Chain != "eth" {
@@ -276,7 +280,7 @@ func TestServiceLookupGoPlusTimeout(t *testing.T) {
 	if gp.ID != "goplus" || gp.Status != "error" || gp.Error != "timeout" || !res.hasError() {
 		t.Errorf("goplus source = %+v", gp)
 	}
-	if res.Summary.Text != "Nothing found in 6 sources that completed; 1 could not be fully checked (see Sources)." {
+	if res.Summary.Text != "Nothing found in 7 sources that completed; 1 could not be fully checked (see Sources)." {
 		t.Errorf("text = %q", res.Summary.Text)
 	}
 }
@@ -682,10 +686,10 @@ func TestRiskSourcesForChain(t *testing.T) {
 		addr  string
 		want  string
 	}{
-		{"eth", "0x1111111111111111111111111111111111111111", "ofac,mew_darklist,stablecoin,scam_lookalikes,issuer_freeze,chainalysis_oracle,goplus,blockscout,etherscan"},
-		{"arb", "0x1111111111111111111111111111111111111111", "ofac,mew_darklist,scam_lookalikes,issuer_freeze,chainalysis_oracle,goplus,blockscout"},
-		{"op", "0x1111111111111111111111111111111111111111", "ofac,mew_darklist,scam_lookalikes,issuer_freeze,chainalysis_oracle,goplus,blockscout"},
-		{"base", "0x1111111111111111111111111111111111111111", "ofac,mew_darklist,scam_lookalikes,issuer_freeze,goplus,blockscout"},
+		{"eth", "0x1111111111111111111111111111111111111111", "ofac,mew_darklist,stablecoin,scam_lookalikes,issuer_freeze,chainalysis_oracle,goplus,blockscout,etherscan,eip7702"},
+		{"arb", "0x1111111111111111111111111111111111111111", "ofac,mew_darklist,scam_lookalikes,issuer_freeze,chainalysis_oracle,goplus,blockscout,eip7702"},
+		{"op", "0x1111111111111111111111111111111111111111", "ofac,mew_darklist,scam_lookalikes,issuer_freeze,chainalysis_oracle,goplus,blockscout,eip7702"},
+		{"base", "0x1111111111111111111111111111111111111111", "ofac,mew_darklist,scam_lookalikes,issuer_freeze,goplus,blockscout,eip7702"},
 		{"tron", "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t", "ofac,tron_stablecoin,scam_lookalikes,issuer_freeze,goplus"},
 		{"btc", "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", "ofac"},
 		{"sol", "depMwrdSqn5y9fDkdotP4iGxTdxSaEHVE6QjnbcEmjN", "ofac,issuer_freeze"},
