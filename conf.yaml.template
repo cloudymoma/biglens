@@ -41,3 +41,8 @@ catalog:
 #     - "https://api.mainnet-beta.solana.com"
 #   mempool_base_url: "https://mempool.space"
 
+# Crypto Pulse → on-chain USD prices (optional; default shown). Daily ETH/USD and
+# BTC/USD (WBTC-derived) are computed in BigQuery from Uniswap v3 swaps (median
+# of the 00/06/12/18 UTC sampled hours) and stored in address_risk.db_path.
+# crypto_prices:
+#   initial_days: 365                     # first-start backfill (days, max 730; 0 = off; 365 ≈ 125 GiB ≈ $0.8 once, then ~350 MiB/day)

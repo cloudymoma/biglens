@@ -35,6 +35,7 @@ type Config struct {
 	AddressRisk  AddressRiskConfig  `yaml:"address_risk,omitempty"`
 	CryptoGas    CryptoGasConfig    `yaml:"crypto_gas,omitempty"`
 	PaymentCheck PaymentCheckConfig `yaml:"payment_check,omitempty"`
+	CryptoPrices CryptoPricesConfig `yaml:"crypto_prices,omitempty"`
 
 	// path is where this config was loaded from, so SaveConfig can write back.
 	path string
@@ -229,4 +230,19 @@ func writeConfigLocked(cfg *Config) error {
 		return fmt.Errorf("failed to chmod config: %w", err)
 	}
 	return os.Rename(tmp, cfg.path)
+}
+
+// CryptoPricesConfig configures the on-chain USD price sync (Uniswap v3 swaps
+// in BigQuery → SQLite, opendata_crypto_prices.go).
+type CryptoPricesConfig struct {
+	// InitialDays is the cold-start window: a pointer so "absent" (nil →
+	// 365) differs from an explicit 0 (sync disabled); clamped to [0, 730].
+	InitialDays *int `yaml:"initial_days,omitempty"`
+}
+
+func (c CryptoPricesConfig) initialDays() int {
+	if c.InitialDays == nil {
+		return 365
+	}
+	return min(max(*c.InitialDays, 0), 730)
 }

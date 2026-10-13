@@ -219,3 +219,47 @@ func TestCryptoGasConfigAbsentSectionOmitted(t *testing.T) {
 		t.Errorf("empty crypto_gas section was written:\n%s", out)
 	}
 }
+
+// crypto_prices.initial_days: absent means the 365-day cold start, explicit
+// 0 disables the on-chain price sync, values are clamped to [0, 730], and an
+// absent section is not written back on save.
+func TestCryptoPricesInitialDays(t *testing.T) {
+	ptr := func(n int) *int { return &n }
+	tests := []struct {
+		name string
+		in   *int
+		want int
+	}{
+		{"absent means 365", nil, 365},
+		{"explicit 0 disables", ptr(0), 0},
+		{"explicit 90", ptr(90), 90},
+		{"above 730 clamps", ptr(5000), 730},
+		{"negative clamps to 0", ptr(-1), 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := (CryptoPricesConfig{InitialDays: tt.in}).initialDays(); got != tt.want {
+				t.Errorf("initialDays() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+
+	path := filepath.Join(t.TempDir(), "conf.yaml")
+	if err := os.WriteFile(path, []byte("crypto_prices:\n  initial_days: 0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.CryptoPrices.initialDays(); got != 0 {
+		t.Errorf("explicit 0 in yaml read as %d", got)
+	}
+	out, err := yaml.Marshal(&Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "crypto_prices") {
+		t.Errorf("empty crypto_prices section was written:\n%s", out)
+	}
+}

@@ -100,6 +100,11 @@ func main() {
 		}
 		go runAddressRiskSync(ctx, time.Hour, syncJobs...)
 	}
+	// On-chain USD prices (Uniswap v3 swaps in BigQuery → SQLite). Its own
+	// syncer, run at startup and hourly by the same loop helper; it keeps
+	// working from memory when the SQLite store is unavailable.
+	prices := newCryptoPriceSyncer(bqCryptoPriceSource{client: bq.client}, rstore, cfg.CryptoPrices.initialDays(), time.Now)
+	go runAddressRiskSync(ctx, time.Hour, prices.syncOnce)
 	gasCfg := cfg.CryptoGas.withDefaults()
 	api.risk = newAddressRiskService(rstore, cfg.AddressRisk.rpcURLs())
 	api.risk.chainRPCs = map[string][]string{
@@ -200,6 +205,7 @@ func main() {
 	mux.Handle("/api/opendata/crypto/spot", h(api.CryptoSpot))
 	mux.Handle("/api/opendata/crypto/gas-pulse", h(api.CryptoGasPulse))
 	mux.Handle("/api/opendata/crypto/gas-live", h(api.CryptoGasLive))
+	mux.Handle("/api/opendata/crypto/prices", h(cryptoPricesHandler(prices)))
 	mux.Handle("/api/opendata/crypto/address-risk/lookup", h(api.AddressRiskLookup))
 	mux.Handle("/api/opendata/crypto/address-risk/sources", h(api.AddressRiskSources))
 	mux.Handle("/api/opendata/crypto/address-risk/overview", h(api.AddressRiskOverview))
