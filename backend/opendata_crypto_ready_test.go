@@ -392,7 +392,7 @@ func TestCryptoReadinessProbeIsCached(t *testing.T) {
 	h := newScriptedBQHandler(t, fake)
 	ctx := context.Background()
 	for i := 0; i < 3; i++ {
-		if h.cryptoChainReady(ctx, "btc", end) {
+		if h.cryptoChainReadyStatus(ctx, "btc", end).complete {
 			t.Fatal("btc must not be ready")
 		}
 	}

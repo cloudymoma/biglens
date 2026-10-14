@@ -106,11 +106,6 @@ func (h *APIHandler) cryptoChainReadyStatus(ctx context.Context, chain string, e
 	return v.(cryptoReadyStatus)
 }
 
-// cryptoChainReady reports whether chain's UTC day before end is complete.
-func (h *APIHandler) cryptoChainReady(ctx context.Context, chain string, end civil.Date) bool {
-	return h.cryptoChainReadyStatus(ctx, chain, end).complete
-}
-
 // cryptoReadyAsync probes chains concurrently (with each other and with the
 // caller's main queries) and delivers whether all of them are complete and
 // whether any probe failed.
