@@ -117,7 +117,7 @@ func (h *APIHandler) getCachedBtcBlocks(ctx context.Context, start, end civil.Da
 		if rows == nil {
 			rows = []CryptoBlockRow{}
 		}
-		h.cache.SetWithTTL(qKey, rows, cryptoResponseTTL(end, time.Now().UTC(), false, <-ready))
+		h.cache.SetWithTTL(qKey, rows, cryptoResponseTTL(end, time.Now().UTC(), false, (<-ready).complete))
 		return rows, nil
 	})
 	if err != nil {
@@ -141,7 +141,7 @@ func (h *APIHandler) getCachedBtcCoinbase(ctx context.Context, start, end civil.
 		if rows == nil {
 			rows = []BtcCoinbaseRow{}
 		}
-		h.cache.SetWithTTL(qKey, rows, cryptoResponseTTL(end, time.Now().UTC(), false, <-ready))
+		h.cache.SetWithTTL(qKey, rows, cryptoResponseTTL(end, time.Now().UTC(), false, (<-ready).complete))
 		return rows, nil
 	})
 	if err != nil {
@@ -174,8 +174,12 @@ type CryptoPulseData struct {
 	ETH      CryptoChainPulse `json:"eth"`
 	Warnings []string         `json:"warnings,omitempty"`
 	// LastDayComplete is false while the newest UTC day may still be
-	// ingesting (readiness probe found no row past the window end yet).
+	// ingesting (readiness probe found no row past the window end yet, or
+	// the probe failed).
 	LastDayComplete bool `json:"last_day_complete"`
+	// LastDayProbeFailed is true when the readiness probe query itself
+	// failed, so the UI can distinguish a probe error from normal ingestion lag.
+	LastDayProbeFailed bool `json:"last_day_probe_failed,omitempty"`
 }
 
 // rollupCryptoKpi derives the KPI strip from the latest complete day,
@@ -311,7 +315,9 @@ func (h *APIHandler) CryptoPulse(w http.ResponseWriter, r *http.Request) {
 
 		data.BTC.Kpi = rollupCryptoKpi(data.BTC.Daily, data.BTC.Blocks)
 		data.ETH.Kpi = rollupCryptoKpi(data.ETH.Daily, data.ETH.Blocks)
-		data.LastDayComplete = <-ready
+		st := <-ready
+		data.LastDayComplete = st.complete
+		data.LastDayProbeFailed = st.probeFailed
 		h.cache.SetWithTTL(key, &data, cryptoResponseTTL(end, time.Now().UTC(), len(data.Warnings) > 0, data.LastDayComplete))
 		return &data, nil
 	})
@@ -331,8 +337,9 @@ type CryptoFeesData struct {
 	BTCBlocks []CryptoBlockRow `json:"btc_blocks"`
 	ETHBlocks []CryptoBlockRow `json:"eth_blocks"`
 	Warnings  []string         `json:"warnings,omitempty"`
-	// LastDayComplete: see CryptoPulseData.
-	LastDayComplete bool `json:"last_day_complete"`
+	// LastDayComplete / LastDayProbeFailed: see CryptoPulseData.
+	LastDayComplete    bool `json:"last_day_complete"`
+	LastDayProbeFailed bool `json:"last_day_probe_failed,omitempty"`
 }
 
 // mergeBtcFees returns new rows with SubsidyBTC = coinbase revenue − fees,
@@ -436,8 +443,9 @@ func (h *APIHandler) CryptoFees(w http.ResponseWriter, r *http.Request) {
 		if btcFeeErr != nil && ethFeeErr != nil {
 			return nil, fmt.Errorf("btc fees: %v; eth fees: %w", btcFeeErr, ethFeeErr)
 		}
-		btcOK, ethOK := <-btcReady, <-ethReady
-		data.LastDayComplete = btcOK && ethOK
+		btcSt, ethSt := <-btcReady, <-ethReady
+		data.LastDayComplete = btcSt.complete && ethSt.complete
+		data.LastDayProbeFailed = btcSt.probeFailed || ethSt.probeFailed
 		if btcFeeErr != nil {
 			slog.Warn("crypto fees: btc query failed", "error", btcFeeErr)
 			data.Warnings = append(data.Warnings, "btc_fees: "+btcFeeErr.Error())
@@ -449,7 +457,7 @@ func (h *APIHandler) CryptoFees(w http.ResponseWriter, r *http.Request) {
 				cbRows = append(cbRows, BtcCoinbaseRow{Date: f.Date, CoinbaseBTC: f.CoinbaseBTC})
 			}
 			cbKey := fmt.Sprintf("opendata:crypto:q:btc_coinbase:%s:%s", start, end)
-			h.cache.SetWithTTL(cbKey, cbRows, cryptoResponseTTL(end, time.Now().UTC(), false, btcOK))
+			h.cache.SetWithTTL(cbKey, cbRows, cryptoResponseTTL(end, time.Now().UTC(), false, btcSt.complete))
 		}
 		if btcBlocksErr != nil {
 			slog.Warn("crypto fees: btc blocks query failed", "error", btcBlocksErr)
@@ -527,8 +535,9 @@ type CryptoWhalesData struct {
 	Trend              []WhaleTrendRow    `json:"trend"`
 	Concentration      []ConcentrationRow `json:"concentration"`
 	FreezeCoverageFrom string             `json:"freeze_coverage_from,omitempty"`
-	// LastDayComplete: see CryptoPulseData.
-	LastDayComplete bool `json:"last_day_complete"`
+	// LastDayComplete / LastDayProbeFailed: see CryptoPulseData.
+	LastDayComplete    bool `json:"last_day_complete"`
+	LastDayProbeFailed bool `json:"last_day_probe_failed,omitempty"`
 }
 
 func (h *APIHandler) CryptoWhales(w http.ResponseWriter, r *http.Request) {
@@ -588,7 +597,9 @@ func (h *APIHandler) CryptoWhales(w http.ResponseWriter, r *http.Request) {
 			data.Concentration = append(data.Concentration, ConcentrationRow{Date: d.Date, Top1PctShare: d.Top1PctShare})
 		}
 
-		data.LastDayComplete = <-ready
+		st := <-ready
+		data.LastDayComplete = st.complete
+		data.LastDayProbeFailed = st.probeFailed
 		h.cache.SetWithTTL(key, &data, cryptoResponseTTL(end, time.Now().UTC(), false, data.LastDayComplete))
 		return &data, nil
 	})
@@ -611,8 +622,9 @@ type CryptoTokensData struct {
 	Daily     []TokenDailyRow `json:"daily"`
 	Contracts []ContractRow   `json:"contracts"`
 	Warnings  []string        `json:"warnings,omitempty"`
-	// LastDayComplete: see CryptoPulseData (probes Ethereum).
-	LastDayComplete bool `json:"last_day_complete"`
+	// LastDayComplete / LastDayProbeFailed: see CryptoPulseData (probes Ethereum).
+	LastDayComplete    bool `json:"last_day_complete"`
+	LastDayProbeFailed bool `json:"last_day_probe_failed,omitempty"`
 }
 
 // mergeTokenDaily zips transfer counts with native tx counts over the union
@@ -729,7 +741,9 @@ func (h *APIHandler) CryptoTokens(w http.ResponseWriter, r *http.Request) {
 		}
 
 		data.Daily = mergeTokenDaily(transfers, native)
-		data.LastDayComplete = <-ready
+		st := <-ready
+		data.LastDayComplete = st.complete
+		data.LastDayProbeFailed = st.probeFailed
 		h.cache.SetWithTTL(key, &data, cryptoResponseTTL(end, time.Now().UTC(), len(data.Warnings) > 0, data.LastDayComplete))
 		return &data, nil
 	})
@@ -756,8 +770,9 @@ type BtcMiningRow struct {
 type CryptoMiningData struct {
 	Days  int            `json:"days"`
 	Daily []BtcMiningRow `json:"daily"`
-	// LastDayComplete: see CryptoPulseData (probes Bitcoin).
-	LastDayComplete bool `json:"last_day_complete"`
+	// LastDayComplete / LastDayProbeFailed: see CryptoPulseData (probes Bitcoin).
+	LastDayComplete    bool `json:"last_day_complete"`
+	LastDayProbeFailed bool `json:"last_day_probe_failed,omitempty"`
 }
 
 // mergeBtcMining joins daily block stats with coinbase revenue by date and
@@ -835,7 +850,13 @@ func (h *APIHandler) CryptoMining(w http.ResponseWriter, r *http.Request) {
 			return nil, coinbaseErr
 		}
 
-		data := CryptoMiningData{Days: days, Daily: mergeBtcMining(blocks, coinbase), LastDayComplete: <-ready}
+		st := <-ready
+		data := CryptoMiningData{
+			Days:               days,
+			Daily:              mergeBtcMining(blocks, coinbase),
+			LastDayComplete:    st.complete,
+			LastDayProbeFailed: st.probeFailed,
+		}
 		h.cache.SetWithTTL(key, &data, cryptoResponseTTL(end, time.Now().UTC(), false, data.LastDayComplete))
 		return &data, nil
 	})

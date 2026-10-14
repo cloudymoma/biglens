@@ -40,7 +40,7 @@ export default function TokensTab() {
           activity measured in Transfer event counts (ERC-20 & ERC-721, incl. zero-value) — cross-token value sums are meaningless without prices
         </span>
       </div>
-      <IngestingNote complete={data.last_day_complete} />
+      <IngestingNote complete={data.last_day_complete} probeFailed={data.last_day_probe_failed} />
 
       <div className="grid lg:grid-cols-2 gap-4">
         <Panel title="Token vs Native Activity" note="daily token Transfer events (ERC-20 / ERC-721) vs all ETH transactions">

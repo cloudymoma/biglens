@@ -67,8 +67,9 @@ func (c PaymentCheckConfig) blockscoutURL(chain string) string {
 }
 
 type ScamRadarConfig struct {
-	InitialDays   *int `yaml:"initial_days,omitempty"`   // default 30; 0 = disabled (spec P2.0 Q2)
-	RetentionDays int  `yaml:"retention_days,omitempty"` // default 90 (spec P2.0 Q3)
+	InitialDays         *int `yaml:"initial_days,omitempty"`          // default 30; 0 = disabled (spec P2.0 Q2)
+	RetentionDays       int  `yaml:"retention_days,omitempty"`        // default 90 (spec P2.0 Q3)
+	AllowZeroCandidates bool `yaml:"allow_zero_candidates,omitempty"` // bypass per-day dust/zero-value candidate guards without disabling Scam Radar
 }
 
 // AddressRiskConfig configures the Crypto Pulse "Address Risk" tab. Every

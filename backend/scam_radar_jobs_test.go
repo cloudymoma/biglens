@@ -808,21 +808,28 @@ func TestScamEthStoresFakeTokenCreator(t *testing.T) {
 
 // The serial-deployer corpus is a full daily snapshot of tokens_latest:
 // creators of at least scamFakeTokenDeployerMinContracts counterfeit-symbol
-// contracts (same symbol rule as R2), excluding the official USDT/USDC
-// contracts and contracts without a known creator.
+// contracts (same symbol rule as R2) where counterfeit-symbol tokens make up
+// at least 1/scamFakeTokenDeployerMinShareDenom of all distinct tokens
+// created by that address, excluding the official USDT/USDC contracts,
+// contracts without a known creator, and general-purpose factory contracts.
 func TestScamEthFakeTokenDeployersSQL(t *testing.T) {
 	if scamFakeTokenDeployerMinContracts != 3 {
 		t.Errorf("scamFakeTokenDeployerMinContracts = %d, want 3", scamFakeTokenDeployerMinContracts)
 	}
+	if scamFakeTokenDeployerMinShareDenom != 5 {
+		t.Errorf("scamFakeTokenDeployerMinShareDenom = %d, want 5 (20%% counterfeit share floor)", scamFakeTokenDeployerMinShareDenom)
+	}
 	for _, frag := range []string{
+		"WITH by_creator AS (",
 		"FROM " + scamEthTokensTable,
 		counterfeitSymbolPredicate,
 		"LOWER(address) NOT IN ('" + usdtContract + "', '" + usdcContract + "')",
 		"creator_address IS NOT NULL",
-		"COUNT(DISTINCT LOWER(address)) AS contracts",
-		"FORMAT_TIMESTAMP('%Y-%m-%d', MIN(block_timestamp)) AS first_seen",
-		"FORMAT_TIMESTAMP('%Y-%m-%d', MAX(block_timestamp)) AS last_seen",
+		"COUNT(DISTINCT IF(is_counterfeit, address, NULL)) AS contracts",
+		"FROM by_creator",
+		"GROUP BY 1",
 		fmt.Sprintf("HAVING contracts >= %d", scamFakeTokenDeployerMinContracts),
+		fmt.Sprintf("AND contracts * %d >= COUNT(DISTINCT address)", scamFakeTokenDeployerMinShareDenom),
 	} {
 		if !strings.Contains(scamEthFakeTokenDeployersSQL, frag) {
 			t.Errorf("scamEthFakeTokenDeployersSQL missing %q:\n%s", frag, scamEthFakeTokenDeployersSQL)
@@ -830,6 +837,49 @@ func TestScamEthFakeTokenDeployersSQL(t *testing.T) {
 	}
 	if !strings.Contains(scamEthFakeTokenSQL, counterfeitSymbolPredicate) {
 		t.Errorf("R2 must share counterfeitSymbolPredicate with the deployer corpus:\n%s", scamEthFakeTokenSQL)
+	}
+}
+
+// allow_zero_candidates lets operators bypass the per-day candidate /
+// zero-value predicate floor if an upstream change legitimately zeroes it out,
+// while still enforcing the hard table-health floor (dayTransfers >= 1).
+func TestScamRadarAllowZeroCandidatesEscapeHatch(t *testing.T) {
+	ctx := context.Background()
+	day := civil.Date{Year: 2026, Month: time.October, Day: 5}
+	d := day.String()
+
+	// TRON: 0 dust candidates on a non-empty day fails by default, passes with
+	// allowZeroCandidates, and still fails when the whole day has 0 transfers.
+	runner := healthyScamRunner(d)
+	runner.tronPoison = []tronPoisonRow{{Day: d, Transfers: 4_000_000, Candidates: 0, Hits: 0, Victims: 0}}
+	tronJob := scamJobByID(t, runner, scamTronSourceID)
+	if _, _, err := tronJob.Run(ctx, day, day.AddDays(1), dailySyncIncrementalMaxBytes); err == nil {
+		t.Fatal("tron 0 candidates without allowZeroCandidates: want error")
+	}
+	tronJob.allowZeroCandidates = true
+	if _, _, err := tronJob.Run(ctx, day, day.AddDays(1), dailySyncIncrementalMaxBytes); err != nil {
+		t.Fatalf("tron 0 candidates with allowZeroCandidates: unexpected error: %v", err)
+	}
+	runner.tronPoison = []tronPoisonRow{{Day: d, Transfers: 0, Candidates: 0, Hits: 0, Victims: 0}}
+	if _, _, err := tronJob.Run(ctx, day, day.AddDays(1), dailySyncIncrementalMaxBytes); err == nil {
+		t.Fatal("tron 0 total transfers must still fail even with allowZeroCandidates")
+	}
+
+	// ETH: 0 zero-value transfers on a non-empty day fails by default, passes
+	// with allowZeroCandidates, and still fails when Transfers == 0.
+	runner = healthyScamRunner(d)
+	runner.ethPoison = []ethPoisonRow{{Day: d, Transfers: 900_000, ZeroValue: 0, Hits: 0, Victims: 0}}
+	ethJob := scamJobByID(t, runner, scamEthSourceID)
+	if _, _, err := ethJob.Run(ctx, day, day.AddDays(1), dailySyncIncrementalMaxBytes); err == nil {
+		t.Fatal("eth 0 zero-value without allowZeroCandidates: want error")
+	}
+	ethJob.allowZeroCandidates = true
+	if _, _, err := ethJob.Run(ctx, day, day.AddDays(1), dailySyncIncrementalMaxBytes); err != nil {
+		t.Fatalf("eth 0 zero-value with allowZeroCandidates: unexpected error: %v", err)
+	}
+	runner.ethPoison = []ethPoisonRow{{Day: d, Transfers: 0, ZeroValue: 0, Hits: 0, Victims: 0}}
+	if _, _, err := ethJob.Run(ctx, day, day.AddDays(1), dailySyncIncrementalMaxBytes); err == nil {
+		t.Fatal("eth 0 total transfers must still fail even with allowZeroCandidates")
 	}
 }
 

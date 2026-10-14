@@ -88,6 +88,7 @@ func main() {
 			initialDays: cfg.AddressRisk.initialSyncDays(), onChange: invalidate}
 		syncJobs := []func(context.Context){lists.syncDue, stable.syncOnce}
 		for _, job := range newScamRadarJobs(bq.client) {
+			job.allowZeroCandidates = cfg.AddressRisk.ScamRadar.AllowZeroCandidates
 			syncer := &dailyBQSyncer{
 				store:         rstore,
 				job:           job,

@@ -119,7 +119,7 @@ export default function PulseTab() {
         <DaysPicker options={DAY_OPTIONS} value={days} onChange={setDays} />
         <span className="text-[11px] text-zinc-600">Complete UTC days · latest = {latestDate}</span>
       </div>
-      <IngestingNote complete={data.last_day_complete} />
+      <IngestingNote complete={data.last_day_complete} probeFailed={data.last_day_probe_failed} />
 
       <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
         <KpiRow chain={data.btc} label="BTC" color={BTC_COLOR} usdPrice={px.btc.get(data.btc.kpi.date)} />

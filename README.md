@@ -337,7 +337,9 @@ window to settled UTC days (with a 20-minute post-midnight ingest buffer) and
 cache results until the next UTC day rollover — but only after a cheap per-chain
 readiness probe (~2–8 MB, cached 5 minutes) confirms the source has ingested past
 midnight; otherwise the response is cached for 5 minutes, flagged
-`last_day_complete: false`, and the tab notes "Latest day may still be ingesting".
+`last_day_complete: false` (plus `last_day_probe_failed: true` if the probe query
+itself errored), and the tab notes whether the latest day is still ingesting or
+the completeness probe failed.
 Every query bounds the timestamp window and sets `MaxBytesBilled`. The public
 views prune through `block_timestamp` clustering (even below a day), so the
 `block_timestamp_month` / `timestamp_month` columns are not used — they are no
@@ -476,7 +478,7 @@ when nothing is found it says how many sources were checked and which could not 
 | USDT / USDC freeze, unfreeze and destroy events (`crypto_ethereum.logs`) | ETH | synced from BigQuery by complete UTC day | No |
 | TRON USDT freeze, unfreeze and destroy events (`goog_blockchain_tron_mainnet_us.logs`) | TRON | synced from BigQuery by complete UTC day (`tron_stablecoin`) | No |
 | Known address-poisoning lookalike corpus (`scam_lookalikes`) | ETH, Arb, OP, Base, TRON | synced from BigQuery by complete UTC day (ETH zero-value + TRON dust poisoning; EVM EOAs shared across L1/L2) | No |
-| Serial counterfeit-stablecoin deployers (`fake_token_deployers`) | ETH, Arb, OP, Base (seen on Ethereum) | refreshed daily by Scam Radar from `crypto_ethereum.tokens_latest`: creators of ≥3 non-official contracts whose symbol imitates USDT/USDC/USD₮ | No |
+| Serial counterfeit-stablecoin deployers (`fake_token_deployers`) | ETH, Arb, OP, Base (seen on Ethereum) | refreshed daily by Scam Radar from `crypto_ethereum.tokens_latest`: creators of ≥3 non-official contracts whose symbol imitates USDT/USDC/USD₮ where counterfeit-symbol tokens make up ≥20% of the creator's deployed tokens (excluding general-purpose token-launcher, CREATE2 and bridge factories) | No |
 | **Issuer freeze (live)** (`isBlackListed` / `isBlacklisted` / `isBlocked` / SPL account freeze state) | ETH, Arb, OP, Base, TRON, SOL | live `eth_call` / TronGrid `triggerconstantcontract` / Solana `getMultipleAccounts` against registered USDT / USDC contracts & ATAs | Yes — the RPC / TronGrid / Solana RPC provider |
 | **EIP-7702 delegation (live)** (`eip7702`) | ETH, Arb, OP, Base | live `eth_getCode`: an active delegation (`0xef0100…`) is a warning naming the delegate contract, which is enriched via Blockscout (verified name / scam badge) | Yes — the RPC provider (and Blockscout for the delegate) |
 | Chainalysis sanctions oracle (on-chain `isSanctioned`) | ETH, Arb, OP | live `eth_call` via public RPCs (not deployed on Base) | Yes — the RPC provider |
@@ -548,10 +550,12 @@ tracks four daily BigQuery intelligence feeds and feeds them back into Address R
   `^(USDT|USDC|USD₮)[^A-Z0-9]?$`, ranking the top 10 most active fake contracts over the last 7 days and feeding
   `scam_fake_tokens` (now with each contract's creator) into Payment Check.
 - **Serial counterfeit deployers (`scam_eth`)** — once per day, `tokens_latest` creators of at least 3 such counterfeit
-  contracts are stored as `scam_fake_token_deployers`. On 2026-10-13 there were 1,178 such creators behind 22,791
-  contracts, and one address alone had deployed 4,394. They power the `fake_token_deployers` lookup source, the
-  `counterfeit_deployer` Payment Check flag, a Whales badge, and the overview's KPI and top-5 list (a creator can be a
-  factory contract, and the clue says so).
+  contracts for whom counterfeit-symbol contracts represent at least 20% (`contracts * 5 >= COUNT(DISTINCT address)`) of
+  all distinct contracts they deployed are stored as `scam_fake_token_deployers` (filtering out general-purpose
+  token-launcher, CREATE2 and bridge factory contracts with zero extra BigQuery scan cost). On 2026-10-13 there were
+  1,070 such creators behind 20,337 counterfeit contracts, and one address alone had deployed 4,394. They power the
+  `fake_token_deployers` lookup source, the `counterfeit_deployer` Payment Check flag, a Whales sender badge, and the
+  overview's KPI and top-5 list.
 - **TRON USDT dust poisoning (`scam_tron` / R3)** — scans `goog_blockchain_tron_mainnet_us.logs` on official TRON USDT
   (`TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t`) for dust transfers (`< 0x100000` smallest units, ~1.05 USDT — both incoming dust
   from a lookalike and forged/dust outgoing transfers to a lookalike) paired with real transfers on the **same UTC day**,
@@ -569,6 +573,8 @@ tracks four daily BigQuery intelligence feeds and feeds them back into Address R
   per day (R3), official TRON USDT logs per day (R4), BTC transactions per day (R5), and at least one serial deployer. A
   suspicious run stores nothing, keeps its cursor, and backs off for 6 hours. Its `last_error` reads like
   `suspicious empty result for 2026-10-12: 0 official USDT/USDC transfers scanned — upstream schema or format change?`.
+  Setting `address_risk.scam_radar.allow_zero_candidates: true` bypasses the per-day zero-value / dust-candidate
+  predicate floor (logging a warning instead) while still enforcing the hard table-health floor (`transfers >= 1`).
 - **Lower-bound methodology & cost** — because R1 and R3 only pair zero-value/dust transfers against real transfers within
   the **same UTC day**, cross-day poisoning (where a victim transacts on day $T$ and is poisoned days later) is not
   counted; reported poisoning hits and lookalike counts are therefore a **lower bound**. Scam Radar is enabled by default

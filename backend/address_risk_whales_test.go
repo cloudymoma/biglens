@@ -48,6 +48,38 @@ func TestTagWhales(t *testing.T) {
 	}
 }
 
+// fake_token_deployers is a creator_address corpus: in Whales it must tag
+// Largest[i].From (a top-level ETH tx sender, guaranteed EOA) and never
+// Largest[i].To or TopReceivers (which only received ETH and may be contracts).
+func TestTagWhalesFakeTokenDeployersOnlyTagsSender(t *testing.T) {
+	const deployer = "0x80d04079ffc53eb14edbeeb37279d126f45552df"
+	s := whalesRiskStore(t)
+	if err := replaceFakeTokenDeployersTx(context.Background(), s.db, "eth", []fakeTokenDeployerRow{
+		{Address: deployer, Contracts: 12, FirstSeen: "2026-01-01", LastSeen: "2026-09-01"},
+	}, "2026-09-25", time.Now()); err != nil {
+		t.Fatalf("replaceFakeTokenDeployersTx: %v", err)
+	}
+	svc := newAddressRiskService(s, nil)
+	d := &CryptoWhalesData{
+		Days: 30, Chain: "eth", Threshold: 1000,
+		Largest: []WhaleTx{
+			{Hash: "0xh1", From: deployer, To: "0x1111111111111111111111111111111111111111", Amount: 5000},
+			{Hash: "0xh2", From: "0x2222222222222222222222222222222222222222", To: deployer, Amount: 4000},
+		},
+		TopReceivers: []WhaleAddress{{Address: deployer, Total: 4000, TxCount: 1}},
+	}
+	got := svc.tagWhales(context.Background(), d)
+	if strings.Join(got.Largest[0].FromRisk, ",") != "fake_token_deployers" {
+		t.Errorf("Largest[0].FromRisk = %v, want [fake_token_deployers]", got.Largest[0].FromRisk)
+	}
+	if got.Largest[1].ToRisk != nil {
+		t.Errorf("Largest[1].ToRisk = %v, want nil (receiver may be a contract)", got.Largest[1].ToRisk)
+	}
+	if got.TopReceivers[0].Risk != nil {
+		t.Errorf("TopReceivers[0].Risk = %v, want nil (receiver may be a contract)", got.TopReceivers[0].Risk)
+	}
+}
+
 // Without the risk DB, or for BTC, Whales must answer exactly as before.
 func TestTagWhalesUntouched(t *testing.T) {
 	d := whalesFixture()

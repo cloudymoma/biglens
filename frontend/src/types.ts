@@ -873,6 +873,7 @@ export interface CryptoPulseData {
   btc: CryptoChainPulse;
   eth: CryptoChainPulse;
   last_day_complete?: boolean; // false: newest UTC day may still be ingesting
+  last_day_probe_failed?: boolean; // true: completeness probe query errored
 }
 
 export interface BtcFeeRow {
@@ -897,6 +898,7 @@ export interface CryptoFeesData {
   btc_blocks: CryptoBlockRow[];
   eth_blocks: CryptoBlockRow[];
   last_day_complete?: boolean; // false: newest UTC day may still be ingesting
+  last_day_probe_failed?: boolean; // true: completeness probe query errored
 }
 
 export type CryptoChain = 'btc' | 'eth';
@@ -938,6 +940,7 @@ export interface CryptoWhalesData {
   concentration: ConcentrationRow[];
   freeze_coverage_from?: string;
   last_day_complete?: boolean; // false: newest UTC day may still be ingesting
+  last_day_probe_failed?: boolean; // true: completeness probe query errored
 }
 
 export interface TokenRow {
@@ -968,6 +971,7 @@ export interface CryptoTokensData {
   daily: TokenDailyRow[];
   contracts: ContractRow[];
   last_day_complete?: boolean; // false: newest UTC day may still be ingesting
+  last_day_probe_failed?: boolean; // true: completeness probe query errored
 }
 
 export interface BtcMiningRow {
@@ -981,6 +985,7 @@ export interface CryptoMiningData {
   days: number;
   daily: BtcMiningRow[];
   last_day_complete?: boolean; // false: newest UTC day may still be ingesting
+  last_day_probe_failed?: boolean; // true: completeness probe query errored
 }
 
 export interface CryptoSpotData {

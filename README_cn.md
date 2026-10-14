@@ -290,8 +290,8 @@ GDELT 是*新闻报道*的索引，而非经核实事件的登记册。每行是
 区间：各页支持 7/30/90 天，轻量聚合趋势（网络脉搏、手续费、挖矿）另支持 1 年；
 代币查询上限 30 天。日级接口对齐至已结算的完整 UTC 日（带午夜后 20 分钟入库缓冲），
 并缓存至下一个 UTC 日切换。缓存前会先用一次很便宜的分链就绪探针（约 2–8 MB，结果缓存 5 分钟）
-确认数据源已入库到午夜之后；若尚未就绪，响应只缓存 5 分钟并带上 `last_day_complete: false`，
-页面提示"Latest day may still be ingesting"。所有查询均限制时间窗口并设置 `MaxBytesBilled`。
+确认数据源已入库到午夜之后；若尚未就绪，响应只缓存 5 分钟并带上 `last_day_complete: false`
+（若探针查询本身报错，还会带上 `last_day_probe_failed: true`），页面分别提示最新一日仍在入库或就绪探针失败。所有查询均限制时间窗口并设置 `MaxBytesBilled`。
 公共视图依靠 `block_timestamp` 聚簇完成裁剪（细到小时级同样有效），因此不再使用
 `block_timestamp_month` / `timestamp_month`：它们已不是分区键，加上只会多扫字节。
 `crypto_ethereum.blocks` 与 `contracts` 另外携带 Merge 后区块号下界（`number >= @start_block`
@@ -372,7 +372,7 @@ WETH（`1.0001^tick · 1e-10`），再乘以同一小时的 ETH/USD。为控制�
 | USDT / USDC 冻结、解冻、销毁事件（`crypto_ethereum.logs`） | ETH | 按完整 UTC 日从 BigQuery 同步 | 否 |
 | TRON USDT 冻结、解冻、销毁事件（`goog_blockchain_tron_mainnet_us.logs`） | TRON | 按完整 UTC 日从 BigQuery 同步（`tron_stablecoin`） | 否 |
 | 已知尾号投毒仿冒地址库（`scam_lookalikes`） | ETH、Arb、OP、Base、TRON | 按完整 UTC 日从 BigQuery 同步（ETH 0 元投毒 + TRON 灰尘投毒；EVM 外部账户跨 L1/L2 共享） | 否 |
-| 批量假稳定币部署者（`fake_token_deployers`） | ETH、Arb、OP、Base（以以太坊为准） | 由 Scam Radar 每日基于 `crypto_ethereum.tokens_latest` 刷新：部署了 ≥3 个符号仿冒 USDT/USDC/USD₮ 的非官方合约的地址 | 否 |
+| 批量假稳定币部署者（`fake_token_deployers`） | ETH、Arb、OP、Base（以以太坊为准） | 由 Scam Radar 每日基于 `crypto_ethereum.tokens_latest` 刷新：部署了 ≥3 个符号仿冒 USDT/USDC/USD₮ 的非官方合约、且假币占其所部署全部合约 ≥20% 的地址（排除通用发币工厂、CREATE2 与跨链桥工厂合约） | 否 |
 | **发行方冻结实时检查（`issuer_freeze`）**（`isBlackListed` / `isBlacklisted` / `isBlocked` / SPL 账户冻结状态） | ETH、Arb、OP、Base、TRON、SOL | 对注册表中的 USDT / USDC 合约或 Solana ATA 发起实时 `eth_call`、TronGrid `triggerconstantcontract` 或 Solana `getMultipleAccounts` | 是，发给 RPC / TronGrid / Solana RPC 服务商 |
 | **EIP-7702 委托实时检查（`eip7702`）** | ETH、Arb、OP、Base | 实时 `eth_getCode`：带有生效中的委托（`0xef0100…`）时给出警告并标明被委托合约，并通过 Blockscout 补充该合约的验证名称或诈骗标记 | 是，发给 RPC 服务商（被委托合约地址会发给 Blockscout） |
 | Chainalysis 链上制裁预言机（`isSanctioned`） | ETH、Arb、OP | 通过公共 RPC 实时 `eth_call`（Base 未部署） | 是，发给 RPC 服务商 |
@@ -411,11 +411,11 @@ cd /opt/biglens/backend && sudo -u biglens ./biglens-server --address-risk-backf
 
 - **ETH 0 元尾号投毒（`scam_eth` / R1）** —— 扫描 `goog_blockchain_ethereum_mainnet_us.token_transfers` 中官方 USDT 与 USDC 的 0 元转账，将其与同一受害者在**同一 UTC 日**内的真实收款方比对（前 4 位与后 4 位十六进制字符同时相同）。
 - **ETH 假冒 USDT/USDC 合约（`scam_eth` / R2）** —— 将 `token_transfers` 与 `crypto_ethereum.tokens_latest`（每个合约一行）关联，找出符号匹配 `^(USDT|USDC|USD₮)[^A-Z0-9]?$` 的非官方合约，展示近 7 天最活跃的 Top 10 假币合约，并写入 `scam_fake_tokens`（现在包含每个合约的部署者）供 Payment Check 识别假币。
-- **批量假币部署者（`scam_eth`）** —— 每天把 `tokens_latest` 中部署了至少 3 个上述假币合约的部署者存入 `scam_fake_token_deployers`。2026-10-13 共有 1,178 个这样的部署者、对应 22,791 个合约，单个地址最多部署了 4,394 个。该名单用于 `fake_token_deployers` 查询来源、Payment Check 的 `counterfeit_deployer` 标记、巨鲸页标记，以及概览页的 KPI 与 Top 5 列表（部署者也可能是工厂合约，线索中会注明）。
+- **批量假币部署者（`scam_eth`）** —— 每天把 `tokens_latest` 中部署了至少 3 个上述假币合约、且假币合约占该地址所部署全部去重合约至少 20%（`contracts * 5 >= COUNT(DISTINCT address)`）的部署者存入 `scam_fake_token_deployers`（在不增加任何 BigQuery 扫描字节的前提下过滤掉通用发币平台、CREATE2 与跨链桥工厂合约）。2026-10-13 共有 1,070 个这样的部署者、对应 20,337 个假币合约，单个地址最多部署了 4,394 个。该名单用于 `fake_token_deployers` 查询来源、Payment Check 的 `counterfeit_deployer` 标记、巨鲸页顶层发送方标记，以及概览页的 KPI 与 Top 5 列表。
 - **TRON USDT 灰尘投毒（`scam_tron` / R3）** —— 扫描 `goog_blockchain_tron_mainnet_us.logs` 中官方 TRON USDT（`TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t`）的小额转账（`< 0x100000` 最小单位，约 1.05 USDT，含仿冒地址转入与伪造的转出两个分支），与同一受害者**同一 UTC 日**的真实转账配对，并在 BigQuery 内直接完成 Base58Check 前 4 位 + 后 4 位比对。
 - **TRON USDT 冻结事件（`tron_stablecoin_logs` / R4）** —— 同步 TRON USDT 的 `AddedBlackList`、`RemovedBlackList` 与 `DestroyedBlackFunds` 日志至 `tron_stablecoin_events`，驱动概览页的 **USDT frozen now (TRON)** KPI 卡片与 `tron_stablecoin` 查询来源。
 - **BTC 显式 RBF 占比（`scam_btc` / R5）** —— 从 `crypto_bitcoin.inputs` 统计每日至少有一个输入开启 BIP-125 显式费用替换（`sequence < 0xfffffffe`）的比特币交易占比，直观说明为何 0 确认 BTC 交易绝不能视为已到账。coinbase 输入（`spent_output_index IS NULL`）不计入：SQD 数据集每个区块都有一行，其中不少 `sequence` 偏低。
-- **防"静默 0"保护** —— 上游 schema 或格式变化可能让某条过滤条件突然什么都匹配不到，查询却照样"成功"返回 0。因此每次运行都会核对数据源及匹配谓词确实返回了数据：R1 统计每天扫描到的官方 USDT/USDC 转账数与 0 元转账数，R3 统计每天的官方 TRON USDT 转账数与灰尘投毒候选数，R4 统计每天扫描到的官方 TRON USDT 日志数，R5 统计每天的 BTC 交易数，假币部署者至少有 1 个。被判定可疑的运行不写入任何数据、不推进游标，并退避 6 小时；`last_error` 形如 `suspicious empty result for 2026-10-12: 0 official USDT/USDC transfers scanned — upstream schema or format change?`。
+- **防"静默 0"保护** —— 上游 schema 或格式变化可能让某条过滤条件突然什么都匹配不到，查询却照样"成功"返回 0。因此每次运行都会核对数据源及匹配谓词确实返回了数据：R1 统计每天扫描到的官方 USDT/USDC 转账数与 0 元转账数，R3 统计每天的官方 TRON USDT 转账数与灰尘投毒候选数，R4 统计每天扫描到的官方 TRON USDT 日志数，R5 统计每天的 BTC 交易数，假币部署者至少有 1 个。被判定可疑的运行不写入任何数据、不推进游标，并退避 6 小时；`last_error` 形如 `suspicious empty result for 2026-10-12: 0 official USDT/USDC transfers scanned — upstream schema or format change?`。若上游确实出现 0 候选的合法日期，可在配置中设 `address_risk.scam_radar.allow_zero_candidates: true` 跳过每日 0 元/灰尘候选数下限（改为打印告警），但仍保留每日总转账数 `>= 1` 的表健康底线。
 - **下限口径与成本** —— 由于 R1 与 R3 只和**同一 UTC 日**内的真实转账配对，跨天投毒（先正常转账、数日后再投毒）不会被计入，因此看板与线索中的投毒命中数均为**下限（lower bound）**。Scam Radar 默认开启（`address_risk.scam_radar.initial_days: 30`、`retention_days: 90`）。设 `initial_days: 0` 会停掉全部四个任务（已有游标的任务也会停），已存数据仍可查看，但不再更新。按 dry-run 上限估算，30 天冷启动约 92 GB（一次性约 $0.55），之后每日最多约 8 GB（按 $6.25/TiB 折算约 $1.50/月），其中批量部署者刷新约占 1.7 GB。所有 Scam Radar 与冻结同步作业都带有 `app=biglens` 标签。
 
 **Etherscan key（可选）**。配置免费的 Etherscan API key（https://etherscan.io/myapikey）后，以太坊查询还会把该地址最近 1000 笔交易、代币转账（只统计 12 种白名单代币：USDT/USDC/DAI/WETH/WBTC/stETH/wstETH/USDS/USDe/PYUSD/FDUSD/cbBTC）和内部交易与本地名单比对，只看一跳（未配置 key 时自动回退至 Blockscout）。0 金额转账、失败的调用和仿冒代币都会被忽略（防地址投毒）。在 Address Risk 页面里填写 key：先经 Etherscan 校验，再保存到 `conf.yaml`，文件会以 0600 权限重写（手动编辑过的 conf.yaml 要等第一次在 UI 保存后才会变成 0600）。页面上只显示 key 的最后 4 位，日志里也不会出现 key。Etherscan 的 API 条款只允许个人非商业使用（https://etherscan.io/apiterms），只在你一个人用的部署上配置 key。

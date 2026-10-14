@@ -99,7 +99,7 @@ export default function WhalesTab({ onInspect }: { onInspect?: (address: string,
   return (
     <div className="space-y-4">
       {controls}
-      <IngestingNote complete={data.last_day_complete} />
+      <IngestingNote complete={data.last_day_complete} probeFailed={data.last_day_probe_failed} />
 
       <div className="grid lg:grid-cols-2 gap-4">
         <Panel

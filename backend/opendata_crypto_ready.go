@@ -12,7 +12,8 @@ package main
 // 2-hour clustered range (dry run: ~8 MB BTC, ~2 MB ETH), runs concurrently
 // with the main queries and is cached cryptoIncompleteTTL per (chain, end).
 // A chain that is not ready yet (no row, or the probe failed) caches the
-// response only cryptoIncompleteTTL and flags last_day_complete: false.
+// response only cryptoIncompleteTTL and flags last_day_complete: false
+// (plus last_day_probe_failed: true when the probe query itself errored).
 
 import (
 	"context"
@@ -74,43 +75,59 @@ func (b *BQClient) cryptoLatestRowTime(ctx context.Context, chain string, end ci
 	return rows[0].T, nil
 }
 
-// cryptoChainReady reports whether chain's UTC day before end is complete.
-// The answer (a probe error counts as not ready) is cached
+// cryptoReadyStatus captures both whether the newest UTC day before end is
+// confirmed complete and whether the readiness probe query itself failed.
+type cryptoReadyStatus struct {
+	complete    bool
+	probeFailed bool
+}
+
+// cryptoChainReadyStatus reports whether chain's UTC day before end is
+// complete and whether the probe failed. The answer is cached
 // cryptoIncompleteTTL per (chain, end) and shared via singleflight.
-func (h *APIHandler) cryptoChainReady(ctx context.Context, chain string, end civil.Date) bool {
+func (h *APIHandler) cryptoChainReadyStatus(ctx context.Context, chain string, end civil.Date) cryptoReadyStatus {
 	key := fmt.Sprintf(cryptoReadyKeyFm, chain, end)
 	if v, ok := h.cache.Get(key); ok {
-		return v.(bool)
+		return v.(cryptoReadyStatus)
 	}
 	v, _, _ := cryptoFlight.Do(key, func() (any, error) {
 		pctx, cancel := context.WithTimeout(ctx, cryptoReadyTimeout)
 		defer cancel()
-		ready := false
+		var st cryptoReadyStatus
 		if t, err := h.bq.cryptoLatestRowTime(pctx, chain, end); err != nil {
 			slog.Warn("crypto: readiness probe failed", "chain", chain, "end", end.String(), "error", err)
+			st.probeFailed = true
 		} else {
-			ready = cryptoDayComplete(t, end)
+			st.complete = cryptoDayComplete(t, end)
 		}
-		h.cache.SetWithTTL(key, ready, cryptoIncompleteTTL)
-		return ready, nil
+		h.cache.SetWithTTL(key, st, cryptoIncompleteTTL)
+		return st, nil
 	})
-	return v.(bool)
+	return v.(cryptoReadyStatus)
+}
+
+// cryptoChainReady reports whether chain's UTC day before end is complete.
+func (h *APIHandler) cryptoChainReady(ctx context.Context, chain string, end civil.Date) bool {
+	return h.cryptoChainReadyStatus(ctx, chain, end).complete
 }
 
 // cryptoReadyAsync probes chains concurrently (with each other and with the
-// caller's main queries) and delivers whether all of them are complete.
-func (h *APIHandler) cryptoReadyAsync(ctx context.Context, end civil.Date, chains ...string) <-chan bool {
-	out := make(chan bool, 1)
+// caller's main queries) and delivers whether all of them are complete and
+// whether any probe failed.
+func (h *APIHandler) cryptoReadyAsync(ctx context.Context, end civil.Date, chains ...string) <-chan cryptoReadyStatus {
+	out := make(chan cryptoReadyStatus, 1)
 	go func() {
-		results := make(chan bool, len(chains))
+		results := make(chan cryptoReadyStatus, len(chains))
 		for _, c := range chains {
-			go func() { results <- h.cryptoChainReady(ctx, c, end) }()
+			go func() { results <- h.cryptoChainReadyStatus(ctx, c, end) }()
 		}
-		all := true
+		agg := cryptoReadyStatus{complete: true}
 		for range chains {
-			all = <-results && all
+			st := <-results
+			agg.complete = agg.complete && st.complete
+			agg.probeFailed = agg.probeFailed || st.probeFailed
 		}
-		out <- all
+		out <- agg
 	}()
 	return out
 }

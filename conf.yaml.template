@@ -24,6 +24,7 @@ catalog:
 #   scam_radar:
 #     initial_days: 30                    # Scam Radar & TRON freeze history (days, max 31; 0 = disable Scam Radar syncing, ~$0.55 once)
 #     retention_days: 90                  # retention window for scam_lookalikes and scam_fake_tokens (days)
+#     allow_zero_candidates: false        # escape hatch: true bypasses the per-day dust/zero-value candidate floor without disabling Scam Radar
 #   bigquery_profile:                     # opt-in "BigQuery profile" switch on Ethereum lookups (off in the UI by default)
 #     enabled: true                       # false = lookups never query BigQuery
 #     max_bytes_billed: 2147483648        # per-lookup cap (2 GiB, max 10 GiB); typical ~0.9 GiB, busier addresses are rejected unbilled

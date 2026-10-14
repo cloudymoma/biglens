@@ -47,11 +47,24 @@ func (s *addressRiskService) tagWhales(ctx context.Context, d *CryptoWhalesData)
 		slog.Warn("address_risk whales badges skipped", "error", err)
 		return d
 	}
-	risk := func(addr string) []string {
+	// Like fillBQProfile, a serial-deployer hit counts only for the sender of
+	// a top-level ETH transaction (guaranteed EOA); recipients could be a
+	// contract called by ordinary users.
+	risk := func(addr string, sentTopLevel bool) []string {
 		if addr == "" { // ETH contract creations have no "to"
 			return nil
 		}
-		return pool[strings.ToLower(addr)]
+		hits := pool[strings.ToLower(addr)]
+		if sentTopLevel || !slices.Contains(hits, "fake_token_deployers") {
+			return hits
+		}
+		var out []string
+		for _, h := range hits {
+			if h != "fake_token_deployers" {
+				out = append(out, h)
+			}
+		}
+		return out
 	}
 	c := *d
 	c.Largest = slices.Clone(d.Largest)
@@ -60,11 +73,11 @@ func (s *addressRiskService) tagWhales(ctx context.Context, d *CryptoWhalesData)
 		c.FreezeCoverageFrom = st.CoverageFrom
 	}
 	for i := range c.Largest {
-		c.Largest[i].FromRisk = risk(c.Largest[i].From)
-		c.Largest[i].ToRisk = risk(c.Largest[i].To)
+		c.Largest[i].FromRisk = risk(c.Largest[i].From, true)
+		c.Largest[i].ToRisk = risk(c.Largest[i].To, false)
 	}
 	for i := range c.TopReceivers {
-		c.TopReceivers[i].Risk = risk(c.TopReceivers[i].Address)
+		c.TopReceivers[i].Risk = risk(c.TopReceivers[i].Address, false)
 	}
 	return &c
 }

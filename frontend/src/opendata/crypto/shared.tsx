@@ -58,10 +58,17 @@ export function DaysPicker({ options, value, onChange }: {
 
 // Subtle note for the daily tabs while the backend's readiness probe has not
 // yet seen the newest UTC day complete (last_day_complete: false; the
-// response is then re-fetched within ~5 minutes). Absent flag → no note.
-export function IngestingNote({ complete }: { complete?: boolean }) {
+// response is then re-fetched within ~5 minutes), distinguishing a probe
+// query failure from normal upstream ingestion lag. Absent flag → no note.
+export function IngestingNote({ complete, probeFailed }: { complete?: boolean; probeFailed?: boolean }) {
   if (complete !== false) return null;
-  return <p className="text-[11px] text-amber-400/80 text-right -mt-2">Latest day may still be ingesting</p>;
+  return (
+    <p className="text-[11px] text-amber-400/80 text-right -mt-2">
+      {probeFailed
+        ? 'Latest-day completeness probe failed (retrying in ~5m) — newest day may be incomplete'
+        : 'Latest day may still be ingesting'}
+    </p>
+  );
 }
 
 // Aligns both chains' series on the union of dates so lines share one x-axis.

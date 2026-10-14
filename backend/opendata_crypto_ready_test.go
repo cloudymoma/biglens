@@ -285,6 +285,9 @@ func TestCryptoDailyEndpointsLatestDayComplete(t *testing.T) {
 			if body["last_day_complete"] != true {
 				t.Errorf("last_day_complete = %v, want true", body["last_day_complete"])
 			}
+			if body["last_day_probe_failed"] != nil {
+				t.Errorf("last_day_probe_failed = %v, want omitted when complete", body["last_day_probe_failed"])
+			}
 			key := strings.Replace(ep.key, "%s", end.String(), 1)
 			if got, want := cacheTTLLeft(h.cache, key), cryptoTTL(end, time.Now().UTC()); !ttlNear(got, want) {
 				t.Errorf("response TTL = %v, want ~%v (until the rollover)", got, want)
@@ -338,6 +341,13 @@ func TestCryptoDailyEndpointsLatestDayIncomplete(t *testing.T) {
 				body := getDaily(t, h, ep)
 				if body["last_day_complete"] != false {
 					t.Errorf("last_day_complete = %v, want false", body["last_day_complete"])
+				}
+				if mode == "probe error" {
+					if body["last_day_probe_failed"] != true {
+						t.Errorf("last_day_probe_failed = %v, want true on probe error", body["last_day_probe_failed"])
+					}
+				} else if body["last_day_probe_failed"] != nil {
+					t.Errorf("last_day_probe_failed = %v, want omitted when probe succeeded with NULL", body["last_day_probe_failed"])
 				}
 				if strings.Contains(body2string(body), "Access Denied") {
 					t.Errorf("a probe error must not reach the client: %v", body)

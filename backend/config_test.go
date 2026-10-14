@@ -320,6 +320,32 @@ func TestAddressRiskBigQueryProfileYAML(t *testing.T) {
 	}
 }
 
+func TestAddressRiskScamRadarAllowZeroCandidatesYAML(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "conf.yaml")
+	src := "address_risk:\n  scam_radar:\n    allow_zero_candidates: true\n"
+	if err := os.WriteFile(path, []byte(src), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.AddressRisk.ScamRadar.AllowZeroCandidates {
+		t.Fatal("allow_zero_candidates: true not parsed")
+	}
+	if err := SaveConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	out, _ := os.ReadFile(path)
+	if !strings.Contains(string(out), "allow_zero_candidates: true") {
+		t.Errorf("allow_zero_candidates: true lost on save:\n%s", out)
+	}
+	if strings.Contains(string(mustMarshalYAML(t, &Config{})), "allow_zero_candidates") {
+		t.Error("an absent allow_zero_candidates must stay absent on save")
+	}
+}
+
 func mustMarshalYAML(t *testing.T, v any) []byte {
 	t.Helper()
 	out, err := yaml.Marshal(v)

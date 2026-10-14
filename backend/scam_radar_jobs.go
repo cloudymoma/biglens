@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"math/big"
 	"strings"
 	"time"
@@ -25,9 +26,12 @@ const (
 	counterfeitSymbolPredicate = `REGEXP_CONTAINS(UPPER(symbol), r'^(USDT|USDC|USD₮)[^A-Z0-9]?$')`
 
 	// scamFakeTokenDeployerMinContracts: the creator of at least this many
-	// counterfeit-symbol contracts is a serial deployer (the HAVING clause of
-	// scamEthFakeTokenDeployersSQL must match; a test pins both).
-	scamFakeTokenDeployerMinContracts = 3
+	// counterfeit-symbol contracts is a serial deployer when counterfeit
+	// contracts also make up at least 1/scamFakeTokenDeployerMinShareDenom of
+	// all token contracts it deployed (excluding shared token-launcher and
+	// CREATE2 factories that deploy thousands of unrelated tokens).
+	scamFakeTokenDeployerMinContracts  = 3
+	scamFakeTokenDeployerMinShareDenom = 5
 
 	ethTokenTransfersReadySQL = `
 SELECT MAX(block_timestamp) AS t FROM ` + scamEthTokenTransfersTable + `
@@ -115,18 +119,29 @@ GROUP BY 1, 2, 3, 4`
 	// Serial counterfeit deployers, run by scam_eth (once per run, i.e. once
 	// per UTC day): a full snapshot of tokens_latest, not windowed (the
 	// window parameters are passed but unused). ~1.7 GB per run (dry run).
+	// Grouping before filtering by counterfeitSymbolPredicate reads the same
+	// four columns (0 extra bytes) while excluding general-purpose token
+	// factories and CREATE2 deployers whose counterfeit-symbol contracts are
+	// < 1/5 of all token contracts they deployed.
 	scamEthFakeTokenDeployersSQL = `
-SELECT LOWER(creator_address) AS creator,
-       COUNT(DISTINCT LOWER(address)) AS contracts,
-       FORMAT_TIMESTAMP('%Y-%m-%d', MIN(block_timestamp)) AS first_seen,
-       FORMAT_TIMESTAMP('%Y-%m-%d', MAX(block_timestamp)) AS last_seen
-FROM ` + scamEthTokensTable + `
-WHERE ` + counterfeitSymbolPredicate + `
-  AND LOWER(address) NOT IN ('` + usdtContract + `', '` + usdcContract + `')
-  AND creator_address IS NOT NULL
-  AND REGEXP_CONTAINS(creator_address, r'^0x[0-9a-fA-F]{40}$')
+WITH by_creator AS (
+  SELECT LOWER(creator_address) AS creator,
+         LOWER(address) AS address,
+         block_timestamp,
+         (` + counterfeitSymbolPredicate + `) AS is_counterfeit
+  FROM ` + scamEthTokensTable + `
+  WHERE LOWER(address) NOT IN ('` + usdtContract + `', '` + usdcContract + `')
+    AND creator_address IS NOT NULL
+    AND REGEXP_CONTAINS(creator_address, r'^0x[0-9a-fA-F]{40}$')
+)
+SELECT creator,
+       COUNT(DISTINCT IF(is_counterfeit, address, NULL)) AS contracts,
+       FORMAT_TIMESTAMP('%Y-%m-%d', MIN(IF(is_counterfeit, block_timestamp, NULL))) AS first_seen,
+       FORMAT_TIMESTAMP('%Y-%m-%d', MAX(IF(is_counterfeit, block_timestamp, NULL))) AS last_seen
+FROM by_creator
 GROUP BY 1
 HAVING contracts >= 3
+   AND contracts * 5 >= COUNT(DISTINCT address)
 ORDER BY contracts DESC, creator`
 
 	// R3: TRON USDT dust poisoning with in-BigQuery Base58 encoding and
@@ -477,9 +492,10 @@ func (b bqScamRunner) Query(ctx context.Context, sql string, start, end civil.Da
 }
 
 type bqDailyJob struct {
-	id       string
-	readySQL string
-	runner   scamBQRunner
+	id                  string
+	readySQL            string
+	runner              scamBQRunner
+	allowZeroCandidates bool
 }
 
 func (j *bqDailyJob) ID() string { return j.id }
@@ -611,7 +627,10 @@ func (j *bqDailyJob) runEth(ctx context.Context, start, end civil.Date, maxBytes
 		return dailyResult{}, billed1, err
 	}
 	if err := minPerDayGuard(order, dayZeroValue, scamEthMinDailyZeroValue, "zero-value official USDT/USDC transfers scanned"); err != nil {
-		return dailyResult{}, billed1, err
+		if !j.allowZeroCandidates {
+			return dailyResult{}, billed1, err
+		}
+		slog.Warn("scam_radar guard bypassed (allow_zero_candidates)", "source", j.id, "warning", err.Error())
 	}
 
 	billed2, err := j.runner.Query(ctx, scamEthFakeTokenSQL, start, end, maxBytes, func(next func(dst any) bool) error {
@@ -731,7 +750,10 @@ func (j *bqDailyJob) runTronPoison(ctx context.Context, start, end civil.Date, m
 		return dailyResult{}, billed, err
 	}
 	if err := minPerDayGuard(order, dayCandidates, scamTronMinDailyCandidates, "TRON USDT dust-poisoning candidates found"); err != nil {
-		return dailyResult{}, billed, err
+		if !j.allowZeroCandidates {
+			return dailyResult{}, billed, err
+		}
+		slog.Warn("scam_radar guard bypassed (allow_zero_candidates)", "source", j.id, "warning", err.Error())
 	}
 	return dailyResult{Rows: totalRows, Days: collectDays(order, byDay)}, billed, nil
 }
