@@ -639,9 +639,15 @@ func TestCryptoPriceSyncProvisionalNullDays(t *testing.T) {
 		t.Errorf("snapshot(7) = %d rows, want 5 (provisional days are not served)", len(got.Rows))
 	}
 
-	// The data arrives: the next tick re-queries only the provisional days.
+	// The data arrives: a tick within the 6h billed back-off does not
+	// re-query; after the back-off it re-queries only the provisional days.
 	src.setNullDays()
 	clock.set(pAt("2026-10-13T11:00:00Z"))
+	s.syncOnce(ctx)
+	if _, q := src.snapshot(); len(q) != 2 {
+		t.Fatalf("within 6h back-off after provisional days: %d queries, want 2", len(q))
+	}
+	clock.set(pAt("2026-10-13T10:00:00Z").Add(cryptoPricesBilledRetry + time.Minute))
 	s.syncOnce(ctx)
 	_, queries := src.snapshot()
 	last := queries[len(queries)-1]

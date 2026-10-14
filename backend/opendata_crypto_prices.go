@@ -375,7 +375,8 @@ type cryptoPriceSyncer struct {
 	byDay       map[string]onchainPriceDay
 	asOf        time.Time
 	retryAfter  time.Time
-	storeWarned bool
+	loadWarned  bool
+	writeWarned bool
 }
 
 func newCryptoPriceSyncer(src cryptoPriceSource, store *riskStore, initialDays int, now func() time.Time) *cryptoPriceSyncer {
@@ -390,13 +391,21 @@ func newCryptoPriceSyncer(src cryptoPriceSource, store *riskStore, initialDays i
 	return s
 }
 
-// warnStoreLocked logs a SQLite failure once; the syncer keeps serving and
-// syncing from memory. Caller holds s.mu.
+// warnStoreLocked logs a SQLite failure once per operation ("load" / "write")
+// until it recovers; the syncer keeps serving and syncing from memory.
+// Caller holds s.mu.
 func (s *cryptoPriceSyncer) warnStoreLocked(op string, err error) {
-	if s.storeWarned {
-		return
+	if op == "load" {
+		if s.loadWarned {
+			return
+		}
+		s.loadWarned = true
+	} else {
+		if s.writeWarned {
+			return
+		}
+		s.writeWarned = true
 	}
-	s.storeWarned = true
 	slog.Warn("crypto prices: SQLite unavailable, keeping prices in memory", "op", op, "error", err)
 }
 
@@ -431,6 +440,7 @@ func (s *cryptoPriceSyncer) tryLoad(ctx context.Context, fromSync bool) (skipTic
 	}
 	s.loaded = true
 	s.loadFailed = false
+	s.loadWarned = false
 	return false
 }
 
@@ -511,6 +521,8 @@ func (s *cryptoPriceSyncer) put(ctx context.Context, rows []onchainPriceDay, at 
 	if s.store != nil {
 		if err := s.store.upsertOnchainPrices(ctx, rows, at); err != nil {
 			s.warnStoreLocked("write", err)
+		} else {
+			s.writeWarned = false
 		}
 	}
 }
@@ -578,6 +590,7 @@ func (s *cryptoPriceSyncer) sync(ctx context.Context) cryptoPriceRun {
 
 	today := civil.DateOf(now)
 	run := cryptoPriceRun{end: end}
+	hadProvisional := false
 	for i := 0; i < len(missing) && run.queries < cryptoPricesMaxChunksPerSync; i += cryptoPricesMaxDaysPerQuery {
 		days := slices.Clone(missing[i:min(i+cryptoPricesMaxDaysPerQuery, len(missing))])
 		slices.SortFunc(days, func(a, b civil.Date) int { return a.Compare(b) })
@@ -600,6 +613,7 @@ func (s *cryptoPriceSyncer) sync(ctx context.Context) cryptoPriceRun {
 			if r.EthUSD == nil && r.BtcUSD == nil {
 				if d, err := civil.ParseDate(r.Day); err == nil && today.DaysSince(d) < cryptoPricesProvisionalDays {
 					slog.Warn("crypto prices: recent day has no qualifying swaps yet, leaving provisional", "day", r.Day)
+					hadProvisional = true
 					continue
 				}
 				slog.Warn("crypto prices: day has no qualifying swaps, storing empty row", "day", r.Day)
@@ -610,6 +624,11 @@ func (s *cryptoPriceSyncer) sync(ctx context.Context) cryptoPriceRun {
 			s.put(ctx, toStore, s.now().UTC())
 		}
 		run.days += len(toStore)
+	}
+	if hadProvisional && run.billed > 0 {
+		s.mu.Lock()
+		s.retryAfter = now.Add(cryptoPricesBilledRetry)
+		s.mu.Unlock()
 	}
 	return run
 }
