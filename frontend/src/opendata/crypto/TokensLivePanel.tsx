@@ -20,9 +20,9 @@ export default function TokensLivePanel({
 
   useEffect(() => {
     let stale = false;
-    setLoading(true);
     fetchCryptoTokensLive()
       .then(d => { if (!stale) setLive(d); })
+      .catch(() => {})
       .finally(() => { if (!stale) setLoading(false); });
     return () => { stale = true; };
   }, []);
@@ -36,18 +36,21 @@ export default function TokensLivePanel({
   }
   if (!live) return null;
 
+  const supplyMatrix = live.supply_matrix ?? [];
+  const marketPulse = live.market_pulse ?? [];
+
   const netLabels = NETWORK_ORDER.map(net => {
-    const found = live.supply_matrix.find(r => r.network === net);
+    const found = supplyMatrix.find(r => r.network === net);
     return found?.network_label ?? net.toUpperCase();
   });
 
   const sumSupply = (asset: string, net: string, tier: string) =>
-    live.supply_matrix
+    supplyMatrix
       .filter(r => r.asset === asset && r.network === net && r.tier === tier)
       .reduce((acc, r) => acc + r.supply, 0);
 
-  const totalUSDT = live.supply_matrix.filter(r => r.asset === 'USDT').reduce((a, r) => a + r.supply, 0);
-  const totalUSDC = live.supply_matrix.filter(r => r.asset === 'USDC').reduce((a, r) => a + r.supply, 0);
+  const totalUSDT = supplyMatrix.filter(r => r.asset === 'USDT').reduce((a, r) => a + r.supply, 0);
+  const totalUSDC = supplyMatrix.filter(r => r.asset === 'USDC').reduce((a, r) => a + r.supply, 0);
 
   return (
     <div className="grid lg:grid-cols-2 gap-4">
@@ -121,7 +124,7 @@ export default function TokensLivePanel({
               </tr>
             </thead>
             <tbody className="font-mono">
-              {live.market_pulse.map(m => (
+              {marketPulse.map(m => (
                 <tr key={m.address} className="border-t border-zinc-800/40 text-zinc-300">
                   <td className="py-1.5">
                     <span className="text-white font-semibold">{m.symbol}</span>

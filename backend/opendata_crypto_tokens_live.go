@@ -19,8 +19,8 @@ const (
 	tokenLiveInMemoryTTL = 2 * time.Minute
 	tokenLiveTimeout     = 12 * time.Second
 
-	selTotalSupply      = "0x18160ddd"                        // totalSupply()
-	tronTriggerSelector = "totalSupply()"                     // TRC-20 totalSupply()
+	selTotalSupply      = "0x18160ddd"                         // totalSupply()
+	tronTriggerSelector = "totalSupply()"                      // TRC-20 totalSupply()
 	tronDummyOwner      = "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb" // TronGrid constant call owner_address
 )
 

@@ -42,10 +42,14 @@ export default function TokensTab({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
+  const selectDays = (d: number) => {
+    setDays(d);
+    setError('');
+    if (d !== days) setLoading(true);
+  };
+
   useEffect(() => {
     let stale = false;
-    setLoading(true);
-    setError('');
     fetchCryptoTokens(days)
       .then(d => { if (!stale) setData(d); })
       .catch(e => { if (!stale) setError(e.response?.data || e.message); })
@@ -56,27 +60,32 @@ export default function TokensTab({
   if (error) {
     return (
       <div className="space-y-4">
-        <DaysPicker options={DAY_OPTIONS} value={days} onChange={setDays} />
+        <DaysPicker options={DAY_OPTIONS} value={days} onChange={selectDays} />
         <ErrorBanner message={error} />
       </div>
     );
   }
   if (loading || !data || data.days !== days) return <EmptyState text="Loading token economy…" />;
 
-  const totalStableUSD = data.daily.reduce((s, r) => s + (r.stablecoin_usd ?? 0), 0);
-  const totalWrappedUSD = data.daily.reduce((s, r) => s + (r.eth_token_usd ?? 0) + (r.btc_token_usd ?? 0), 0);
-  const totalTransfers = data.daily.reduce((s, r) => s + r.transfers, 0);
-  const totalZeroTransfers = data.daily.reduce((s, r) => s + (r.zero_value_transfers ?? 0), 0);
+  const daily = data.daily ?? [];
+  const contracts = data.contracts ?? [];
+  const topTokens = data.top_tokens ?? [];
+  const majorTokens = data.major_tokens ?? [];
+
+  const totalStableUSD = daily.reduce((s, r) => s + (r.stablecoin_usd ?? 0), 0);
+  const totalWrappedUSD = daily.reduce((s, r) => s + (r.eth_token_usd ?? 0) + (r.btc_token_usd ?? 0), 0);
+  const totalTransfers = daily.reduce((s, r) => s + r.transfers, 0);
+  const totalZeroTransfers = daily.reduce((s, r) => s + (r.zero_value_transfers ?? 0), 0);
   const zeroSharePct = totalTransfers > 0 ? (totalZeroTransfers / totalTransfers) * 100 : 0;
 
-  const netStableIssuedUSD = (data.major_tokens ?? [])
+  const netStableIssuedUSD = majorTokens
     .filter(m => m.category === 'stablecoin' && m.mint_burn_supported)
     .reduce((s, m) => s + m.net_issued_usd, 0);
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-2">
-        <DaysPicker options={DAY_OPTIONS} value={days} onChange={setDays} />
+        <DaysPicker options={DAY_OPTIONS} value={days} onChange={selectDays} />
         <span className="text-[11px] text-zinc-500">
           Settled days cached in local SQLite · USD volume priced via on-chain Uniswap v3 medians + live RPC supply
         </span>
@@ -136,7 +145,7 @@ export default function TokensTab({
               },
               legend: { textStyle: { color: '#a1a1aa', fontSize: 11 }, top: 0 },
               grid: { left: 64, right: 20, top: 32, bottom: 24 },
-              xAxis: { type: 'category', data: data.daily.map(r => r.date), axisLabel: AXIS_LABEL },
+              xAxis: { type: 'category', data: daily.map(r => r.date), axisLabel: AXIS_LABEL },
               yAxis: {
                 type: 'value',
                 axisLabel: { ...AXIS_LABEL, formatter: (v: number) => `$${fmtNum(v)}` },
@@ -147,21 +156,21 @@ export default function TokensTab({
                   name: 'Stablecoins (USD)',
                   type: 'bar',
                   stack: 'usd',
-                  data: data.daily.map(r => r.stablecoin_usd ?? 0),
+                  data: daily.map(r => r.stablecoin_usd ?? 0),
                   itemStyle: { color: '#22c55e' },
                 },
                 {
                   name: 'ETH-pegged (WETH/stETH/wstETH)',
                   type: 'bar',
                   stack: 'usd',
-                  data: data.daily.map(r => r.eth_token_usd ?? 0),
+                  data: daily.map(r => r.eth_token_usd ?? 0),
                   itemStyle: { color: ETH_COLOR },
                 },
                 {
                   name: 'BTC-pegged (WBTC/cbBTC)',
                   type: 'bar',
                   stack: 'usd',
-                  data: data.daily.map(r => r.btc_token_usd ?? 0),
+                  data: daily.map(r => r.btc_token_usd ?? 0),
                   itemStyle: { color: BTC_COLOR },
                 },
               ],
@@ -186,7 +195,7 @@ export default function TokensTab({
                 </tr>
               </thead>
               <tbody className="font-mono">
-                {(data.major_tokens ?? []).map(m => (
+                {majorTokens.map(m => (
                   <tr key={m.token_address} className="border-t border-zinc-800/40 text-zinc-300">
                     <td className="py-1.5">
                       <button
@@ -245,7 +254,7 @@ export default function TokensTab({
               tooltip: { trigger: 'axis', ...CHART_TOOLTIP },
               legend: { textStyle: { color: '#a1a1aa', fontSize: 11 }, top: 0 },
               grid: { left: 60, right: 20, top: 32, bottom: 24 },
-              xAxis: { type: 'category', data: data.daily.map(r => r.date), axisLabel: AXIS_LABEL },
+              xAxis: { type: 'category', data: daily.map(r => r.date), axisLabel: AXIS_LABEL },
               yAxis: {
                 type: 'value',
                 axisLabel: { ...AXIS_LABEL, formatter: (v: number) => fmtNum(v) },
@@ -256,21 +265,21 @@ export default function TokensTab({
                   name: 'Non-zero transfers',
                   type: 'bar',
                   stack: 'transfers',
-                  data: data.daily.map(r => Math.max(0, r.transfers - (r.zero_value_transfers ?? 0))),
+                  data: daily.map(r => Math.max(0, r.transfers - (r.zero_value_transfers ?? 0))),
                   itemStyle: { color: '#a855f7' },
                 },
                 {
                   name: 'Zero-value transfers (incl. ERC-721 #0 & poisoning)',
                   type: 'bar',
                   stack: 'transfers',
-                  data: data.daily.map(r => r.zero_value_transfers ?? 0),
+                  data: daily.map(r => r.zero_value_transfers ?? 0),
                   itemStyle: { color: '#f59e0b' },
                 },
                 {
                   name: 'ETH transactions (all)',
                   type: 'line',
                   showSymbol: false,
-                  data: data.daily.map(r => r.native_txs),
+                  data: daily.map(r => r.native_txs),
                   lineStyle: { color: ETH_COLOR, width: 2 },
                   itemStyle: { color: ETH_COLOR },
                 },
@@ -285,16 +294,16 @@ export default function TokensTab({
               tooltip: { trigger: 'axis', ...CHART_TOOLTIP },
               legend: { textStyle: { color: '#a1a1aa', fontSize: 11 }, top: 0 },
               grid: { left: 60, right: 20, top: 32, bottom: 24 },
-              xAxis: { type: 'category', data: data.contracts.map(r => r.date), axisLabel: AXIS_LABEL },
+              xAxis: { type: 'category', data: contracts.map(r => r.date), axisLabel: AXIS_LABEL },
               yAxis: {
                 type: 'value',
                 axisLabel: { ...AXIS_LABEL, formatter: (v: number) => fmtNum(v) },
                 splitLine: SPLIT_LINE,
               },
               series: [
-                { name: 'All contracts', type: 'bar', data: data.contracts.map(r => r.contracts), itemStyle: { color: '#3f3f46' } },
-                { name: 'ERC-20', type: 'bar', data: data.contracts.map(r => r.erc20), itemStyle: { color: '#a855f7' } },
-                { name: 'ERC-721', type: 'bar', data: data.contracts.map(r => r.erc721), itemStyle: { color: '#22c55e' } },
+                { name: 'All contracts', type: 'bar', data: contracts.map(r => r.contracts), itemStyle: { color: '#3f3f46' } },
+                { name: 'ERC-20', type: 'bar', data: contracts.map(r => r.erc20), itemStyle: { color: '#a855f7' } },
+                { name: 'ERC-721', type: 'bar', data: contracts.map(r => r.erc721), itemStyle: { color: '#22c55e' } },
               ],
             }}
           />
@@ -342,7 +351,7 @@ export default function TokensTab({
                 breadcrumb: { show: false },
                 label: { color: '#e4e4e7', fontSize: 11, fontFamily: 'JetBrains Mono, monospace' },
                 itemStyle: { borderColor: '#111114', borderWidth: 2, gapWidth: 2 },
-                data: data.top_tokens.map((t, i) => {
+                data: topTokens.map((t, i) => {
                   const hasRisk = (t.risk && t.risk.length > 0) || (t.creator_risk && t.creator_risk.length > 0);
                   const zeroPct = t.transfers > 0 ? ((t.zero_value_transfers / t.transfers) * 100).toFixed(1) : '0.0';
                   return {
@@ -367,7 +376,7 @@ export default function TokensTab({
           title="Top Tokens by Activity, Metadata &amp; Risk"
           note="tokens_latest metadata (cached 7d) + local Scam Radar / OFAC clues · click address to inspect"
         >
-          {data.top_tokens.length === 0 ? <EmptyState text="No token transfers in range." /> : (
+          {topTokens.length === 0 ? <EmptyState text="No token transfers in range." /> : (
             <div className="overflow-y-auto max-h-[360px]">
               <table className="w-full text-xs">
                 <thead>
@@ -381,7 +390,7 @@ export default function TokensTab({
                   </tr>
                 </thead>
                 <tbody className="font-mono">
-                  {data.top_tokens.map((t, i) => {
+                  {topTokens.map((t, i) => {
                     const zeroPct = t.transfers > 0 ? (t.zero_value_transfers / t.transfers) * 100 : 0;
                     return (
                       <tr key={t.token_address} className="border-t border-zinc-800/40 text-zinc-300">
