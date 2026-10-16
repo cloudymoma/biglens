@@ -137,25 +137,60 @@ func TestCryptoWhaleSQLPartitionFilters(t *testing.T) {
 }
 
 func TestCryptoTokenSQLShape(t *testing.T) {
-	sql := tokenTopSQL()
+	topSQL := tokenTopTransfersOnlySQL()
 	for _, want := range []string{
-		"WITH top AS", "block_timestamp >= TIMESTAMP(@start_date)",
-		"APPROX_COUNT_DISTINCT(from_address)", "APPROX_COUNT_DISTINCT(to_address)",
-		"LIMIT 25", "LEFT JOIN", "amended_tokens",
+		"block_timestamp >= TIMESTAMP(@start_date)",
+		"COUNTIF(value = '0') AS zero_value_transfers",
+		"APPROX_COUNT_DISTINCT(from_address)",
+		"APPROX_COUNT_DISTINCT(to_address)",
+		"LIMIT 25",
 	} {
-		if !strings.Contains(sql, want) {
-			t.Errorf("tokenTopSQL missing %q:\n%s", want, sql)
+		if !strings.Contains(topSQL, want) {
+			t.Errorf("tokenTopTransfersOnlySQL missing %q:\n%s", want, topSQL)
 		}
 	}
-	// Spec: aggregate token_transfers to 25 rows in a CTE BEFORE joining the
-	// tokens table — the LIMIT must appear before the join.
-	if strings.Index(sql, "LIMIT 25") > strings.Index(sql, "LEFT JOIN") {
-		t.Errorf("tokenTopSQL joins tokens before aggregating transfers:\n%s", sql)
+	if strings.Contains(topSQL, "JOIN") {
+		t.Errorf("tokenTopTransfersOnlySQL must not join tokens table in BigQuery:\n%s", topSQL)
 	}
 
-	if !strings.Contains(tokenDailySQL(), "block_timestamp >= TIMESTAMP(@start_date)") {
-		t.Errorf("tokenDailySQL missing partition filter:\n%s", tokenDailySQL())
+	bundleSQL := tokenDailyBundleSQL()
+	for _, want := range []string{
+		"WITH filtered AS",
+		"COUNTIF(value = '0')",
+		"SAFE_CAST(value AS BIGNUMERIC)",
+		"0x0000000000000000000000000000000000000000",
+		"0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+	} {
+		if !strings.Contains(bundleSQL, want) {
+			t.Errorf("tokenDailyBundleSQL missing %q:\n%s", want, bundleSQL)
+		}
 	}
+
+	metaSQL := tokenMetadataBatchSQL()
+	for _, want := range []string{
+		"crypto_ethereum.tokens_latest",
+		"token_standard",
+		"proxy_standard",
+		"creator_address",
+		"UNNEST(@addrs)",
+	} {
+		if !strings.Contains(metaSQL, want) {
+			t.Errorf("tokenMetadataBatchSQL missing %q:\n%s", want, metaSQL)
+		}
+	}
+
+	if len(majorTokenCatalog) != len(riskTokenAllowlist) {
+		t.Errorf("len(majorTokenCatalog) = %d, want %d (matching riskTokenAllowlist)", len(majorTokenCatalog), len(riskTokenAllowlist))
+	}
+	for _, m := range majorTokenCatalog {
+		if (m.Symbol == "USDT" || m.Symbol == "WETH") && m.MintBurnSupported {
+			t.Errorf("%s must have MintBurnSupported = false", m.Symbol)
+		}
+		if m.Symbol != "USDT" && m.Symbol != "WETH" && !m.MintBurnSupported {
+			t.Errorf("%s must have MintBurnSupported = true", m.Symbol)
+		}
+	}
+
 	for _, want := range []string{"block_number >= @start_block", "block_timestamp >= TIMESTAMP(@start_date)", "is_erc20"} {
 		if !strings.Contains(contractsDailySQL(), want) {
 			t.Errorf("contractsDailySQL missing %q:\n%s", want, contractsDailySQL())

@@ -21,6 +21,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"cloud.google.com/go/bigquery"
@@ -36,12 +37,13 @@ const (
 
 // Per-query MaxBytesBilled guardrails (~2x worst-case window dry-run bytes).
 const (
-	cryptoPulseMaxBytesBilled  int64 = 100 << 30 // 100 GiB (365d ETH pulse ~45 GiB)
-	cryptoFeesMaxBytesBilled   int64 = 64 << 30  // 64 GiB  (365d ETH fees ~22.5 GiB)
-	cryptoWhalesMaxBytesBilled int64 = 80 << 30  // 80 GiB  (90d ETH whales ~36.7 GiB)
-	cryptoTokensMaxBytesBilled int64 = 40 << 30  // 40 GiB  (30d token_top ~15.1 GiB)
-	cryptoMiningMaxBytesBilled int64 = 16 << 30  // 16 GiB  (365d BTC mining ~4.7 GiB)
-	cryptoBlocksMaxBytesBilled int64 = 2 << 30   // 2 GiB   (pruned blocks/contracts < 500 MiB)
+	cryptoPulseMaxBytesBilled         int64 = 100 << 30 // 100 GiB (365d ETH pulse ~45 GiB)
+	cryptoFeesMaxBytesBilled          int64 = 64 << 30  // 64 GiB  (365d ETH fees ~22.5 GiB)
+	cryptoWhalesMaxBytesBilled        int64 = 80 << 30  // 80 GiB  (90d ETH whales ~36.7 GiB)
+	cryptoTokensMaxBytesBilled        int64 = 40 << 30  // 40 GiB  (30d token_top ~15.1 GiB)
+	cryptoTokenMetadataMaxBytesBilled int64 = 4 << 30   // 4 GiB   (unpartitioned tokens_latest ~1.70 GiB)
+	cryptoMiningMaxBytesBilled        int64 = 16 << 30  // 16 GiB  (365d BTC mining ~4.7 GiB)
+	cryptoBlocksMaxBytesBilled        int64 = 2 << 30   // 2 GiB   (pruned blocks/contracts < 500 MiB)
 )
 
 // WHERE fragments shared by every builder; tests assert their presence.
@@ -799,29 +801,329 @@ func (b *BQClient) getCryptoWhalesBundle(ctx context.Context, chain string, star
 	return &rows[0], nil
 }
 
-// --- /tokens: token Transfer activity (counts only — cross-token value sums are
-// meaningless without prices, and long-tail decimals are unreliable) ---
+// --- /tokens: token Transfer activity & 12-token USD / mint-burn fundamentals ---
 
 const (
 	ethTokenTransfersTable = "`bigquery-public-data.crypto_ethereum.token_transfers`"
+	ethTokensLatestTable   = "`bigquery-public-data.crypto_ethereum.tokens_latest`"
 	ethTokensTable         = "`bigquery-public-data.crypto_ethereum.amended_tokens`"
 	ethContractsTable      = "`bigquery-public-data.crypto_ethereum.contracts`"
 )
 
 // TokenRow is one of the window's most-moved token contracts.
 type TokenRow struct {
-	TokenAddress string `json:"token_address" bigquery:"token_address"`
-	Symbol       string `json:"symbol" bigquery:"symbol"`
-	Name         string `json:"name" bigquery:"name"`
-	Transfers    int64  `json:"transfers" bigquery:"transfers"`
-	Senders      int64  `json:"senders" bigquery:"senders"`
-	Receivers    int64  `json:"receivers" bigquery:"receivers"`
+	TokenAddress       string   `json:"token_address" bigquery:"token_address"`
+	Symbol             string   `json:"symbol" bigquery:"-"`
+	Name               string   `json:"name" bigquery:"-"`
+	TokenStandard      string   `json:"token_standard,omitempty" bigquery:"-"`
+	Decimals           int      `json:"decimals,omitempty" bigquery:"-"`
+	ProxyStandard      string   `json:"proxy_standard,omitempty" bigquery:"-"`
+	CreatorAddress     string   `json:"creator_address,omitempty" bigquery:"-"`
+	CreatedAt          string   `json:"created_at,omitempty" bigquery:"-"`
+	Transfers          int64    `json:"transfers" bigquery:"transfers"`
+	ZeroValueTransfers int64    `json:"zero_value_transfers" bigquery:"zero_value_transfers"`
+	Senders            int64    `json:"senders" bigquery:"senders"`
+	Receivers          int64    `json:"receivers" bigquery:"receivers"`
+	Risk               []string `json:"risk,omitempty" bigquery:"-"`
+	CreatorRisk        []string `json:"creator_risk,omitempty" bigquery:"-"`
 }
 
-// tokenTopSQL aggregates the multi-billion-row token_transfers table down to
-// 25 rows inside the CTE first, then joins the curated amended_tokens table
-// (171 MiB vs 1.31 GiB for raw tokens) and picks a coherent (symbol, name)
-// pair from the same row.
+// TokenDailyRow compares token Transfer events with total ETH transactions and
+// tracks daily USD volume across allowlisted stablecoin, ETH, and BTC tokens.
+type TokenDailyRow struct {
+	Date               string  `json:"date" bigquery:"date"`
+	Transfers          int64   `json:"transfers" bigquery:"transfers"`
+	ZeroValueTransfers int64   `json:"zero_value_transfers" bigquery:"-"`
+	NativeTxs          int64   `json:"native_txs" bigquery:"-"`
+	StablecoinUSD      float64 `json:"stablecoin_usd" bigquery:"-"`
+	EthTokenUSD        float64 `json:"eth_token_usd" bigquery:"-"`
+	BtcTokenUSD        float64 `json:"btc_token_usd" bigquery:"-"`
+}
+
+type MajorTokenSummary struct {
+	TokenAddress      string  `json:"token_address"`
+	Symbol            string  `json:"symbol"`
+	Name              string  `json:"name"`
+	Category          string  `json:"category"` // "stablecoin" | "eth" | "btc"
+	Transfers         int64   `json:"transfers"`
+	ZeroValue         int64   `json:"zero_value"`
+	Senders           int64   `json:"senders"`
+	Receivers         int64   `json:"receivers"`
+	VolumeToken       float64 `json:"volume_token"`
+	VolumeUSD         float64 `json:"volume_usd"`
+	MintedToken       float64 `json:"minted_token"`
+	BurnedToken       float64 `json:"burned_token"`
+	NetIssuedToken    float64 `json:"net_issued_token"`
+	NetIssuedUSD      float64 `json:"net_issued_usd"`
+	MintBurnSupported bool    `json:"mint_burn_supported"`
+}
+
+type majorTokenMeta struct {
+	Address           string
+	Symbol            string
+	Name              string
+	Decimals          int
+	Category          string // "stablecoin" | "eth" | "btc"
+	MintBurnSupported bool   // false for USDT (Issue/Redeem) and WETH (Deposit/Withdrawal)
+}
+
+var majorTokenExtraMeta = map[string]struct {
+	Name              string
+	Category          string
+	MintBurnSupported bool
+}{
+	"USDT":   {"Tether USD", "stablecoin", false},
+	"USDC":   {"USD Coin", "stablecoin", true},
+	"DAI":    {"Dai Stablecoin", "stablecoin", true},
+	"USDS":   {"Sky USD", "stablecoin", true},
+	"USDe":   {"Ethena USDe", "stablecoin", true},
+	"PYUSD":  {"PayPal USD", "stablecoin", true},
+	"FDUSD":  {"First Digital USD", "stablecoin", true},
+	"WETH":   {"Wrapped Ether", "eth", false},
+	"stETH":  {"Lido Staked Ether", "eth", true},
+	"wstETH": {"Wrapped liquid staked Ether 2.0", "eth", true},
+	"WBTC":   {"Wrapped BTC", "btc", true},
+	"cbBTC":  {"Coinbase Wrapped BTC", "btc", true},
+}
+
+// majorTokenCatalog is derived at init time from riskTokenAllowlist +
+// riskTokenAllowlistSymbols (address_risk_association.go) so addresses and
+// decimals have a single source of truth.
+var (
+	majorTokenCatalog []majorTokenMeta
+	majorTokenByAddr  map[string]majorTokenMeta
+)
+
+func init() {
+	addrBySym := make(map[string]string, len(riskTokenAllowlist))
+	for addr, tok := range riskTokenAllowlist {
+		addrBySym[tok.Symbol] = addr
+	}
+	majorTokenCatalog = make([]majorTokenMeta, 0, len(riskTokenAllowlistSymbols))
+	majorTokenByAddr = make(map[string]majorTokenMeta, len(riskTokenAllowlistSymbols))
+	for _, sym := range riskTokenAllowlistSymbols {
+		addr := addrBySym[sym]
+		allow := riskTokenAllowlist[addr]
+		extra := majorTokenExtraMeta[sym]
+		m := majorTokenMeta{
+			Address:           addr,
+			Symbol:            sym,
+			Name:              extra.Name,
+			Decimals:          allow.Decimals,
+			Category:          extra.Category,
+			MintBurnSupported: extra.MintBurnSupported,
+		}
+		majorTokenCatalog = append(majorTokenCatalog, m)
+		majorTokenByAddr[addr] = m
+	}
+}
+
+func tokenTopTransfersOnlySQL() string {
+	return fmt.Sprintf(`
+SELECT
+  LOWER(token_address) AS token_address,
+  COUNT(1) AS transfers,
+  COUNTIF(value = '0') AS zero_value_transfers,
+  APPROX_COUNT_DISTINCT(from_address) AS senders,
+  APPROX_COUNT_DISTINCT(to_address) AS receivers
+FROM %s
+WHERE block_timestamp >= TIMESTAMP(@start_date)
+  AND block_timestamp < TIMESTAMP(@end_date)
+GROUP BY token_address
+ORDER BY transfers DESC
+LIMIT 25`, ethTokenTransfersTable)
+}
+
+func tokenMetadataBatchSQL() string {
+	return fmt.Sprintf(`
+SELECT
+  LOWER(address) AS address,
+  IFNULL(symbol, '') AS symbol,
+  IFNULL(name, '') AS name,
+  IFNULL(token_standard, '') AS token_standard,
+  IFNULL(SAFE_CAST(decimals_int AS INT64), 0) AS decimals,
+  IFNULL(proxy_standard, '') AS proxy_standard,
+  IFNULL(LOWER(creator_address), '') AS creator_address,
+  IFNULL(FORMAT_DATE('%%Y-%%m-%%d', DATE(block_timestamp)), '') AS created_at
+FROM %s
+WHERE LOWER(address) IN UNNEST(@addrs)`, ethTokensLatestTable)
+}
+
+func tokenDailyBundleSQL() string {
+	var inList []string
+	var scaleCases []string
+	var mintBurnAllowed []string
+	for _, m := range majorTokenCatalog {
+		inList = append(inList, fmt.Sprintf("'%s'", m.Address))
+		scaleCases = append(scaleCases, fmt.Sprintf("WHEN '%s' THEN 1e%d", m.Address, m.Decimals))
+		if m.MintBurnSupported {
+			mintBurnAllowed = append(mintBurnAllowed, fmt.Sprintf("'%s'", m.Address))
+		}
+	}
+	inClause := strings.Join(inList, ", ")
+	caseClause := strings.Join(scaleCases, " ")
+	mintBurnClause := strings.Join(mintBurnAllowed, ", ")
+
+	return fmt.Sprintf(`
+WITH filtered AS (
+  SELECT
+    FORMAT_DATE('%%Y-%%m-%%d', DATE(block_timestamp)) AS day,
+    LOWER(token_address) AS token_address,
+    LOWER(from_address) AS from_address,
+    LOWER(to_address) AS to_address,
+    value,
+    CASE LOWER(token_address) %s ELSE 0 END AS scale
+  FROM %s
+  WHERE block_timestamp >= TIMESTAMP(@start_date)
+    AND block_timestamp < TIMESTAMP(@end_date)
+),
+daily_all AS (
+  SELECT
+    day,
+    COUNT(1) AS transfers,
+    COUNTIF(value = '0') AS zero_value_transfers
+  FROM filtered
+  GROUP BY day
+),
+major_daily AS (
+  SELECT
+    day,
+    token_address,
+    COUNT(1) AS transfers,
+    COUNTIF(value = '0') AS zero_value,
+    APPROX_COUNT_DISTINCT(from_address) AS senders,
+    APPROX_COUNT_DISTINCT(to_address) AS receivers,
+    IFNULL(CAST(SUM(SAFE_CAST(value AS BIGNUMERIC) / scale) AS FLOAT64), 0) AS volume_token,
+    IFNULL(CAST(SUM(IF(token_address IN (%s) AND from_address = '%s', SAFE_CAST(value AS BIGNUMERIC) / scale, 0)) AS FLOAT64), 0) AS minted_token,
+    IFNULL(CAST(SUM(IF(token_address IN (%s) AND to_address = '%s', SAFE_CAST(value AS BIGNUMERIC) / scale, 0)) AS FLOAT64), 0) AS burned_token
+  FROM filtered
+  WHERE token_address IN (%s)
+  GROUP BY day, token_address
+)
+SELECT
+  'daily' AS row_type,
+  day,
+  '' AS token_address,
+  transfers,
+  zero_value_transfers AS zero_value,
+  0 AS senders,
+  0 AS receivers,
+  0.0 AS volume_token,
+  0.0 AS minted_token,
+  0.0 AS burned_token
+FROM daily_all
+UNION ALL
+SELECT
+  'major' AS row_type,
+  day,
+  token_address,
+  transfers,
+  zero_value,
+  senders,
+  receivers,
+  volume_token,
+  minted_token,
+  burned_token
+FROM major_daily
+ORDER BY day ASC, row_type ASC, token_address ASC`,
+		caseClause, ethTokenTransfersTable, mintBurnClause, riskZeroAddress, mintBurnClause, riskZeroAddress, inClause)
+}
+
+func (b *BQClient) GetTokenTopTransfers(ctx context.Context, start, end civil.Date) ([]TokenRow, error) {
+	q := b.client.Query(tokenTopTransfersOnlySQL())
+	q.Parameters = cryptoDateParams(start, end)
+	q.MaxBytesBilled = cryptoTokensMaxBytesBilled
+	return collectRows[TokenRow](q, ctx)
+}
+
+type tokenMetadataQueryRow struct {
+	Address        string `bigquery:"address"`
+	Symbol         string `bigquery:"symbol"`
+	Name           string `bigquery:"name"`
+	TokenStandard  string `bigquery:"token_standard"`
+	Decimals       int64  `bigquery:"decimals"`
+	ProxyStandard  string `bigquery:"proxy_standard"`
+	CreatorAddress string `bigquery:"creator_address"`
+	CreatedAt      string `bigquery:"created_at"`
+}
+
+func (b *BQClient) GetTokenMetadataBatch(ctx context.Context, addrs []string) ([]tokenContractMeta, error) {
+	if len(addrs) == 0 {
+		return nil, nil
+	}
+	q := b.client.Query(tokenMetadataBatchSQL())
+	q.Parameters = []bigquery.QueryParameter{{Name: "addrs", Value: addrs}}
+	q.MaxBytesBilled = cryptoTokenMetadataMaxBytesBilled
+	rows, err := collectRows[tokenMetadataQueryRow](q, ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]tokenContractMeta, len(rows))
+	for i, r := range rows {
+		out[i] = tokenContractMeta{
+			Address:        r.Address,
+			Symbol:         r.Symbol,
+			Name:           r.Name,
+			TokenStandard:  r.TokenStandard,
+			Decimals:       int(r.Decimals),
+			ProxyStandard:  r.ProxyStandard,
+			CreatorAddress: r.CreatorAddress,
+			CreatedAt:      r.CreatedAt,
+			Found:          true,
+		}
+	}
+	return out, nil
+}
+
+type tokenBundleQueryRow struct {
+	RowType      string  `bigquery:"row_type"`
+	Day          string  `bigquery:"day"`
+	TokenAddress string  `bigquery:"token_address"`
+	Transfers    int64   `bigquery:"transfers"`
+	ZeroValue    int64   `bigquery:"zero_value"`
+	Senders      int64   `bigquery:"senders"`
+	Receivers    int64   `bigquery:"receivers"`
+	VolumeToken  float64 `bigquery:"volume_token"`
+	MintedToken  float64 `bigquery:"minted_token"`
+	BurnedToken  float64 `bigquery:"burned_token"`
+}
+
+func (b *BQClient) GetTokenDailyBundle(ctx context.Context, start, end civil.Date) ([]tokenEconomyDailyRow, []tokenMajorDailyRow, error) {
+	q := b.client.Query(tokenDailyBundleSQL())
+	q.Parameters = cryptoDateParams(start, end)
+	q.MaxBytesBilled = cryptoTokensMaxBytesBilled
+	rows, err := collectRows[tokenBundleQueryRow](q, ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	var (
+		daily []tokenEconomyDailyRow
+		major []tokenMajorDailyRow
+	)
+	for _, r := range rows {
+		if r.RowType == "daily" {
+			daily = append(daily, tokenEconomyDailyRow{
+				Day:                r.Day,
+				Transfers:          r.Transfers,
+				ZeroValueTransfers: r.ZeroValue,
+			})
+		} else if r.RowType == "major" {
+			major = append(major, tokenMajorDailyRow{
+				Day:          r.Day,
+				TokenAddress: r.TokenAddress,
+				Transfers:    r.Transfers,
+				ZeroValue:    r.ZeroValue,
+				Senders:      r.Senders,
+				Receivers:    r.Receivers,
+				VolumeToken:  r.VolumeToken,
+				MintedToken:  r.MintedToken,
+				BurnedToken:  r.BurnedToken,
+			})
+		}
+	}
+	return daily, major, nil
+}
+
 func tokenTopSQL() string {
 	return fmt.Sprintf(`
 		WITH top AS (
@@ -859,14 +1161,6 @@ func (b *BQClient) GetTokenTop(ctx context.Context, start, end civil.Date) ([]To
 	q.Parameters = cryptoDateParams(start, end)
 	q.MaxBytesBilled = cryptoTokensMaxBytesBilled
 	return collectRows[TokenRow](q, ctx)
-}
-
-// TokenDailyRow compares token Transfer events with total ETH transactions.
-// NativeTxs is filled by mergeTokenDaily (or directly when using blocks).
-type TokenDailyRow struct {
-	Date      string `json:"date" bigquery:"date"`
-	Transfers int64  `json:"transfers" bigquery:"transfers"`
-	NativeTxs int64  `json:"native_txs" bigquery:"-"`
 }
 
 func tokenDailySQL() string {
