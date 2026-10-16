@@ -105,6 +105,7 @@ func main() {
 	// syncer, run at startup and hourly by the same loop helper; it keeps
 	// working from memory when the SQLite store is unavailable.
 	prices := newCryptoPriceSyncer(bqCryptoPriceSource{client: bq.client}, rstore, cfg.CryptoPrices.initialDays(), time.Now)
+	api.prices = prices
 	go runAddressRiskSync(ctx, time.Hour, prices.syncOnce)
 	gasCfg := cfg.CryptoGas.withDefaults()
 	api.risk = newAddressRiskService(rstore, cfg.AddressRisk.rpcURLs())

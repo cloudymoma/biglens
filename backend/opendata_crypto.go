@@ -806,7 +806,6 @@ func (b *BQClient) getCryptoWhalesBundle(ctx context.Context, chain string, star
 const (
 	ethTokenTransfersTable = "`bigquery-public-data.crypto_ethereum.token_transfers`"
 	ethTokensLatestTable   = "`bigquery-public-data.crypto_ethereum.tokens_latest`"
-	ethTokensTable         = "`bigquery-public-data.crypto_ethereum.amended_tokens`"
 	ethContractsTable      = "`bigquery-public-data.crypto_ethereum.contracts`"
 )
 
@@ -1122,62 +1121,6 @@ func (b *BQClient) GetTokenDailyBundle(ctx context.Context, start, end civil.Dat
 		}
 	}
 	return daily, major, nil
-}
-
-func tokenTopSQL() string {
-	return fmt.Sprintf(`
-		WITH top AS (
-			SELECT
-				token_address,
-				COUNT(*) AS transfers,
-				APPROX_COUNT_DISTINCT(from_address) AS senders,
-				APPROX_COUNT_DISTINCT(to_address) AS receivers
-			FROM %s
-			WHERE block_timestamp >= TIMESTAMP(@start_date) AND block_timestamp < TIMESTAMP(@end_date)
-			GROUP BY token_address
-			ORDER BY transfers DESC
-			LIMIT 25
-		)
-		SELECT
-			top.token_address,
-			COALESCE(tk.meta.symbol, '') AS symbol,
-			COALESCE(tk.meta.name, '') AS name,
-			top.transfers,
-			top.senders,
-			top.receivers
-		FROM top
-		LEFT JOIN (
-			SELECT
-				address,
-				ARRAY_AGG(STRUCT(symbol, name) ORDER BY symbol DESC LIMIT 1)[OFFSET(0)] AS meta
-			FROM %s
-			GROUP BY address
-		) tk ON tk.address = top.token_address
-		ORDER BY top.transfers DESC`, ethTokenTransfersTable, ethTokensTable)
-}
-
-func (b *BQClient) GetTokenTop(ctx context.Context, start, end civil.Date) ([]TokenRow, error) {
-	q := b.client.Query(tokenTopSQL())
-	q.Parameters = cryptoDateParams(start, end)
-	q.MaxBytesBilled = cryptoTokensMaxBytesBilled
-	return collectRows[TokenRow](q, ctx)
-}
-
-func tokenDailySQL() string {
-	return fmt.Sprintf(`
-		SELECT
-			FORMAT_DATE('%%Y-%%m-%%d', DATE(block_timestamp)) AS date,
-			COUNT(*) AS transfers
-		FROM %s
-		WHERE block_timestamp >= TIMESTAMP(@start_date) AND block_timestamp < TIMESTAMP(@end_date)
-		GROUP BY date ORDER BY date`, ethTokenTransfersTable)
-}
-
-func (b *BQClient) GetTokenDaily(ctx context.Context, start, end civil.Date) ([]TokenDailyRow, error) {
-	q := b.client.Query(tokenDailySQL())
-	q.Parameters = cryptoDateParams(start, end)
-	q.MaxBytesBilled = cryptoTokensMaxBytesBilled
-	return collectRows[TokenDailyRow](q, ctx)
 }
 
 // ethNativeTxsSQL reads daily Ethereum transaction counts from blocks.transaction_count

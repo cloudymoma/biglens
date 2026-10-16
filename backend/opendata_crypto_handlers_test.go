@@ -463,3 +463,64 @@ func TestPersistSettledTokenEconomyDaysSkipsOnPartialFailure(t *testing.T) {
 		t.Fatalf("expected both 2026-10-13 and 2026-10-14 saved when lastDayComplete=true, got %+v", gotDaily)
 	}
 }
+
+func TestRollupMajorTokensAndSummaries(t *testing.T) {
+	ethPrice := 2500.0
+	btcPrice := 65000.0
+	prices := map[string]onchainPriceDay{
+		"2026-10-13": {Day: "2026-10-13", EthUSD: &ethPrice, BtcUSD: &btcPrice},
+	}
+
+	daily := []TokenDailyRow{
+		{Date: "2026-10-13", Transfers: 1000, ZeroValueTransfers: 200, NativeTxs: 500},
+	}
+	majorRows := []tokenMajorDailyRow{
+		// USDT: volume counts toward StablecoinUSD, but MintBurnSupported is false.
+		{Day: "2026-10-13", TokenAddress: "0xdac17f958d2ee523a2206206994597c13d831ec7", Transfers: 300, ZeroValue: 50, Senders: 100, Receivers: 120, VolumeToken: 10000, MintedToken: 0, BurnedToken: 0},
+		// USDC: supports 0x0 Transfer mint/burn.
+		{Day: "2026-10-13", TokenAddress: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", Transfers: 250, ZeroValue: 20, Senders: 90, Receivers: 110, VolumeToken: 8000, MintedToken: 2000, BurnedToken: 500},
+		// WBTC: supports 0x0 Transfer mint/burn, priced at btcPrice.
+		{Day: "2026-10-13", TokenAddress: "0x2260fac5e5542a773aa44fbcfedf7c193bc2c599", Transfers: 40, ZeroValue: 1, Senders: 25, Receivers: 30, VolumeToken: 2, MintedToken: 1, BurnedToken: 0.5},
+		// wstETH: priced at wstethRatio * ethPrice.
+		{Day: "2026-10-13", TokenAddress: "0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0", Transfers: 50, ZeroValue: 0, Senders: 30, Receivers: 35, VolumeToken: 10, MintedToken: 2, BurnedToken: 1},
+	}
+
+	wstethRatio := 1.22
+	gotDaily, priceWarn := rollupMajorTokens(daily, majorRows, prices, wstethRatio)
+	if priceWarn != "" {
+		t.Errorf("unexpected priceWarn: %q", priceWarn)
+	}
+	if math.Abs(gotDaily[0].StablecoinUSD-18000) > 1e-6 {
+		t.Errorf("StablecoinUSD = %v, want 18000", gotDaily[0].StablecoinUSD)
+	}
+	if math.Abs(gotDaily[0].BtcTokenUSD-130000) > 1e-6 {
+		t.Errorf("BtcTokenUSD = %v, want 130000", gotDaily[0].BtcTokenUSD)
+	}
+	if math.Abs(gotDaily[0].EthTokenUSD-(10*1.22*2500)) > 1e-6 {
+		t.Errorf("EthTokenUSD = %v, want %v", gotDaily[0].EthTokenUSD, 10*1.22*2500)
+	}
+
+	summaries := buildMajorTokenSummaries(majorRows, prices, wstethRatio)
+	bySym := make(map[string]MajorTokenSummary, len(summaries))
+	for _, s := range summaries {
+		bySym[s.Symbol] = s
+	}
+	if bySym["USDT"].MintBurnSupported {
+		t.Errorf("USDT MintBurnSupported = true, want false")
+	}
+	if !bySym["USDC"].MintBurnSupported || math.Abs(bySym["USDC"].NetIssuedUSD-1500) > 1e-6 {
+		t.Errorf("USDC summary = %+v, want NetIssuedUSD 1500", bySym["USDC"])
+	}
+	if !bySym["WBTC"].MintBurnSupported || math.Abs(bySym["WBTC"].NetIssuedUSD-32500) > 1e-6 {
+		t.Errorf("WBTC summary = %+v, want NetIssuedUSD 32500", bySym["WBTC"])
+	}
+
+	// Missing prices must emit a warning and keep ETH/BTC USD at 0.
+	gotNoPrices, warnNoPrices := rollupMajorTokens(daily, majorRows, nil, wstethRatio)
+	if warnNoPrices == "" {
+		t.Errorf("expected warning when prices map is empty")
+	}
+	if gotNoPrices[0].EthTokenUSD != 0 || gotNoPrices[0].BtcTokenUSD != 0 {
+		t.Errorf("expected 0 ETH/BTC USD when prices missing, got %+v", gotNoPrices[0])
+	}
+}

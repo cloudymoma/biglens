@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"cloud.google.com/go/civil"
+	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -616,20 +617,28 @@ func (h *APIHandler) CryptoWhales(w http.ResponseWriter, r *http.Request) {
 
 var cryptoTokenDaysAllowed = []int{7, 30}
 
-const cryptoTokenDefaultDays = 30
+const (
+	cryptoTokenDefaultDays = 30
+	tokenMetadataTTL       = 7 * 24 * time.Hour
+
+	wstethContract      = "0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0"
+	selStEthPerToken    = "0x035faf82" // stEthPerToken()
+	defaultWstETHRatio  = 1.22
+	wstethRatioCacheKey = "crypto:tokens:wsteth_ratio"
+	wstethRatioCacheTTL = 6 * time.Hour
+)
 
 type CryptoTokensData struct {
-	Days      int             `json:"days"`
-	TopTokens []TokenRow      `json:"top_tokens"`
-	Daily     []TokenDailyRow `json:"daily"`
-	Contracts []ContractRow   `json:"contracts"`
-	Warnings  []string        `json:"warnings,omitempty"`
+	Days        int                 `json:"days"`
+	TopTokens   []TokenRow          `json:"top_tokens"`
+	Daily       []TokenDailyRow     `json:"daily"`
+	Contracts   []ContractRow       `json:"contracts"`
+	MajorTokens []MajorTokenSummary `json:"major_tokens"`
+	Warnings    []string            `json:"warnings,omitempty"`
 	// LastDayComplete / LastDayProbeFailed: see CryptoPulseData (probes Ethereum).
 	LastDayComplete    bool `json:"last_day_complete"`
 	LastDayProbeFailed bool `json:"last_day_probe_failed,omitempty"`
 }
-
-const tokenMetadataTTL = 7 * 24 * time.Hour
 
 // mergeTokenDaily zips transfer counts (including zero-value transfers) with
 // native tx counts over the union of dates (sorted), zero-filling either side.
@@ -847,6 +856,221 @@ func persistSettledTokenEconomyDays(
 	}
 }
 
+// fetchWstETHRatio reads stEthPerToken() (uint256, 18 decimals) from the
+// Ethereum wstETH contract via evmRPCFailover and caches it for 6 hours.
+func (h *APIHandler) fetchWstETHRatio(ctx context.Context) (float64, string) {
+	if h != nil && h.cache != nil {
+		if v, ok := h.cache.Get(wstethRatioCacheKey); ok {
+			return v.(float64), ""
+		}
+	}
+	rpcs := h.payRPCs("eth")
+	if len(rpcs) == 0 {
+		return defaultWstETHRatio, "wsteth_ratio: using fallback ratio (no ETH RPC configured)"
+	}
+	cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	ratio, code := evmRPCFailover(cctx, rpcs, func(actx context.Context, rpcURL string) (float64, string) {
+		res, err := evmRPC(actx, rpcURL, "eth_call", map[string]string{"to": wstethContract, "data": selStEthPerToken}, "latest")
+		if err != nil {
+			return 0, evmRPCErrCode(err)
+		}
+		raw, err := hexToFloat(res)
+		if err != nil || raw <= 0 {
+			return 0, "bad_response"
+		}
+		r := raw / 1e18
+		if r < 1.0 || r > 3.0 {
+			return 0, "bad_response"
+		}
+		return r, ""
+	})
+	if code != "" {
+		return defaultWstETHRatio, "wsteth_ratio: RPC " + code + " (using fallback ratio)"
+	}
+	if h != nil && h.cache != nil {
+		h.cache.SetWithTTL(wstethRatioCacheKey, ratio, wstethRatioCacheTTL)
+	}
+	return ratio, ""
+}
+
+func (h *APIHandler) loadPricesByDay(ctx context.Context, days int) map[string]onchainPriceDay {
+	out := make(map[string]onchainPriceDay)
+	if store := h.payRiskStore(); store != nil {
+		if rows, _, err := store.loadOnchainPrices(ctx); err == nil {
+			for _, r := range rows {
+				out[r.Day] = r
+			}
+		}
+	}
+	if len(out) == 0 && h != nil && h.prices != nil {
+		for _, r := range h.prices.snapshot(days).Rows {
+			out[r.Day] = r
+		}
+	}
+	return out
+}
+
+// resolveDayPrices returns the day's (ethUSD, btcUSD) from pricesByDay, falling
+// back deterministically to the most recent prior date (or earliest available
+// date) when a single day is missing. Returns hasAny=false when no prices exist.
+func resolveDayPrices(pricesByDay map[string]onchainPriceDay) (func(day string) (float64, float64), bool) {
+	if len(pricesByDay) == 0 {
+		return func(string) (float64, float64) { return 0, 0 }, false
+	}
+	days := make([]string, 0, len(pricesByDay))
+	for d := range pricesByDay {
+		days = append(days, d)
+	}
+	sort.Strings(days)
+
+	var fallbackETH, fallbackBTC float64
+	for _, d := range days {
+		p := pricesByDay[d]
+		if p.EthUSD != nil && *p.EthUSD > 0 {
+			fallbackETH = *p.EthUSD
+		}
+		if p.BtcUSD != nil && *p.BtcUSD > 0 {
+			fallbackBTC = *p.BtcUSD
+		}
+	}
+	if fallbackETH == 0 && fallbackBTC == 0 {
+		return func(string) (float64, float64) { return 0, 0 }, false
+	}
+	return func(day string) (float64, float64) {
+		eth, btc := fallbackETH, fallbackBTC
+		if p, ok := pricesByDay[day]; ok {
+			if p.EthUSD != nil && *p.EthUSD > 0 {
+				eth = *p.EthUSD
+			}
+			if p.BtcUSD != nil && *p.BtcUSD > 0 {
+				btc = *p.BtcUSD
+			}
+		}
+		return eth, btc
+	}, true
+}
+
+func tokenPriceUSD(meta majorTokenMeta, ethUSD, btcUSD, wstethRatio float64) float64 {
+	if wstethRatio <= 0 {
+		wstethRatio = defaultWstETHRatio
+	}
+	switch meta.Category {
+	case "stablecoin":
+		return 1.0
+	case "eth":
+		if ethUSD <= 0 {
+			return 0
+		}
+		if meta.Symbol == "wstETH" {
+			return ethUSD * wstethRatio
+		}
+		return ethUSD
+	case "btc":
+		if btcUSD <= 0 {
+			return 0
+		}
+		return btcUSD
+	default:
+		return 0
+	}
+}
+
+func rollupMajorTokens(daily []TokenDailyRow, majorRows []tokenMajorDailyRow, pricesByDay map[string]onchainPriceDay, wstethRatio float64) ([]TokenDailyRow, string) {
+	priceFn, hasPrices := resolveDayPrices(pricesByDay)
+	type dayUSD struct {
+		stable, eth, btc float64
+	}
+	byDay := make(map[string]*dayUSD, len(daily))
+	for _, m := range majorRows {
+		meta, ok := majorTokenByAddr[strings.ToLower(m.TokenAddress)]
+		if !ok {
+			continue
+		}
+		ethP, btcP := priceFn(m.Day)
+		usd := m.VolumeToken * tokenPriceUSD(meta, ethP, btcP, wstethRatio)
+		d := byDay[m.Day]
+		if d == nil {
+			d = &dayUSD{}
+			byDay[m.Day] = d
+		}
+		switch meta.Category {
+		case "stablecoin":
+			d.stable += usd
+		case "eth":
+			d.eth += usd
+		case "btc":
+			d.btc += usd
+		}
+	}
+	out := make([]TokenDailyRow, len(daily))
+	for i, r := range daily {
+		out[i] = r
+		if d := byDay[r.Date]; d != nil {
+			out[i].StablecoinUSD = d.stable
+			out[i].EthTokenUSD = d.eth
+			out[i].BtcTokenUSD = d.btc
+		}
+	}
+	var warn string
+	if !hasPrices && len(majorRows) > 0 {
+		warn = "onchain_prices: ETH/BTC USD prices unavailable; wrapped ETH/BTC USD volume is shown as $0"
+	}
+	return out, warn
+}
+
+func buildMajorTokenSummaries(majorRows []tokenMajorDailyRow, pricesByDay map[string]onchainPriceDay, wstethRatio float64) []MajorTokenSummary {
+	priceFn, _ := resolveDayPrices(pricesByDay)
+	byAddr := make(map[string]*MajorTokenSummary, len(majorTokenCatalog))
+	for _, meta := range majorTokenCatalog {
+		byAddr[meta.Address] = &MajorTokenSummary{
+			TokenAddress:      meta.Address,
+			Symbol:            meta.Symbol,
+			Name:              meta.Name,
+			Category:          meta.Category,
+			MintBurnSupported: meta.MintBurnSupported,
+		}
+	}
+	for _, r := range majorRows {
+		addr := strings.ToLower(r.TokenAddress)
+		meta, ok := majorTokenByAddr[addr]
+		if !ok {
+			continue
+		}
+		s := byAddr[addr]
+		ethP, btcP := priceFn(r.Day)
+		p := tokenPriceUSD(meta, ethP, btcP, wstethRatio)
+		s.Transfers += r.Transfers
+		s.ZeroValue += r.ZeroValue
+		if r.Senders > s.Senders {
+			s.Senders = r.Senders
+		}
+		if r.Receivers > s.Receivers {
+			s.Receivers = r.Receivers
+		}
+		s.VolumeToken += r.VolumeToken
+		s.VolumeUSD += r.VolumeToken * p
+		if meta.MintBurnSupported {
+			s.MintedToken += r.MintedToken
+			s.BurnedToken += r.BurnedToken
+			net := r.MintedToken - r.BurnedToken
+			s.NetIssuedToken += net
+			s.NetIssuedUSD += net * p
+		}
+	}
+	out := make([]MajorTokenSummary, 0, len(majorTokenCatalog))
+	for _, meta := range majorTokenCatalog {
+		out = append(out, *byAddr[meta.Address])
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].VolumeUSD != out[j].VolumeUSD {
+			return out[i].VolumeUSD > out[j].VolumeUSD
+		}
+		return out[i].Symbol < out[j].Symbol
+	})
+	return out
+}
+
 func (h *APIHandler) CryptoTokens(w http.ResponseWriter, r *http.Request) {
 	days, err := parseCryptoDays(r, cryptoTokenDefaultDays, cryptoTokenDaysAllowed)
 	if err != nil {
@@ -856,8 +1080,9 @@ func (h *APIHandler) CryptoTokens(w http.ResponseWriter, r *http.Request) {
 
 	now := time.Now().UTC()
 	start, end := cryptoWindowAt(days, now)
+	startStr, endStr := start.String(), end.String()
 	baseKey := fmt.Sprintf("opendata:crypto:tokens:%d", days)
-	key := fmt.Sprintf("%s:%s", baseKey, end)
+	key := fmt.Sprintf("%s:%s", baseKey, endStr)
 	if cached, ok := h.cache.Get(key); ok {
 		writeJSON(w, cached)
 		return
@@ -868,76 +1093,213 @@ func (h *APIHandler) CryptoTokens(w http.ResponseWriter, r *http.Request) {
 	}
 
 	v, err, _ := cryptoFlight.Do(key, func() (any, error) {
+		if cached, ok := h.cache.Get(key); ok {
+			return cached, nil
+		}
 		ctx, cancel := cryptoFetchContext(r)
 		defer cancel()
 
-		data := CryptoTokensData{
-			Days:      days,
-			TopTokens: []TokenRow{},
-			Daily:     []TokenDailyRow{},
-			Contracts: []ContractRow{},
-		}
-		var (
-			topTokens    []TokenRow
-			transfers    []TokenDailyRow
-			native       []CryptoActivityRow
-			contracts    []ContractRow
-			topErr       error
-			transfersErr error
-			nativeErr    error
-			contractsErr error
-		)
 		ready := h.cryptoReadyAsync(ctx, end, "eth")
+		store := h.payRiskStore()
 
-		done := make(chan struct{}, 4)
-		go func() {
-			topTokens, topErr = h.bq.GetTokenTop(ctx, start, end)
-			done <- struct{}{}
-		}()
-		go func() {
-			transfers, transfersErr = h.bq.GetTokenDaily(ctx, start, end)
-			done <- struct{}{}
-		}()
-		go func() {
-			native, nativeErr = h.bq.GetEthNativeTxs(ctx, start, end)
-			done <- struct{}{}
-		}()
-		go func() {
-			contracts, contractsErr = h.bq.GetContractsDaily(ctx, start, end)
-			done <- struct{}{}
-		}()
-		for i := 0; i < 4; i++ {
-			<-done
+		// 1. Check which settled days are already stored in SQLite.
+		var (
+			storedDaily []tokenEconomyDailyRow
+			storedMajor []tokenMajorDailyRow
+		)
+		storedDaySet := make(map[string]bool)
+		if store != nil {
+			if rows, err := store.loadTokenEconomyDaily(ctx, startStr, endStr); err == nil {
+				storedDaily = rows
+				for _, r := range rows {
+					storedDaySet[r.Day] = true
+				}
+			}
+			if rows, err := store.loadTokenMajorDaily(ctx, startStr, endStr); err == nil {
+				storedMajor = rows
+			}
 		}
+		missingStart, missingEnd, hasMissing := missingSettledRange(start, end, storedDaySet)
 
-		if topErr != nil && transfersErr != nil && contractsErr != nil {
-			return nil, fmt.Errorf("tokens top: %v; daily: %v; contracts: %w", topErr, transfersErr, contractsErr)
-		}
-		if topErr != nil {
-			slog.Warn("crypto tokens: top tokens query failed", "error", topErr)
-			data.Warnings = append(data.Warnings, "top_tokens: "+topErr.Error())
-		} else if topTokens != nil {
-			data.TopTokens = topTokens
-		}
-		if transfersErr != nil {
-			slog.Warn("crypto tokens: token daily query failed", "error", transfersErr)
-			data.Warnings = append(data.Warnings, "token_daily: "+transfersErr.Error())
-		}
-		if nativeErr != nil {
-			slog.Warn("crypto tokens: native txs query failed", "error", nativeErr)
-			data.Warnings = append(data.Warnings, "native_txs: "+nativeErr.Error())
-		}
-		if contractsErr != nil {
-			slog.Warn("crypto tokens: contracts query failed", "error", contractsErr)
-			data.Warnings = append(data.Warnings, "contracts: "+contractsErr.Error())
-		} else if contracts != nil {
-			data.Contracts = contracts
-		}
+		var (
+			top                          []TokenRow
+			freshDaily                   []tokenEconomyDailyRow
+			freshMajor                   []tokenMajorDailyRow
+			freshNative                  []CryptoActivityRow
+			freshContracts               []ContractRow
+			topErr, bundleErr, nativeErr error
+			contractsErr                 error
+		)
 
-		data.Daily = mergeTokenDaily(transfers, native)
+		var g errgroup.Group
+		g.Go(func() error {
+			top, topErr = h.bq.GetTokenTopTransfers(ctx, start, end)
+			return nil
+		})
+		if hasMissing {
+			g.Go(func() error {
+				freshDaily, freshMajor, bundleErr = h.bq.GetTokenDailyBundle(ctx, missingStart, missingEnd)
+				return nil
+			})
+			g.Go(func() error {
+				freshNative, nativeErr = h.bq.GetEthNativeTxs(ctx, missingStart, missingEnd)
+				return nil
+			})
+			g.Go(func() error {
+				freshContracts, contractsErr = h.bq.GetContractsDaily(ctx, missingStart, missingEnd)
+				return nil
+			})
+		}
+		_ = g.Wait()
+
 		st := <-ready
-		data.LastDayComplete = st.complete
-		data.LastDayProbeFailed = st.probeFailed
+
+		var warnings []string
+		recordErr := func(label string, err error) {
+			if err != nil {
+				slog.Warn("crypto tokens sub-query failed", "query", label, "days", days, "error", err)
+				warnings = append(warnings, label+": "+err.Error())
+			}
+		}
+		recordErr("top_tokens", topErr)
+		recordErr("token_daily_bundle", bundleErr)
+		recordErr("eth_native_txs", nativeErr)
+		recordErr("contracts_daily", contractsErr)
+		if len(warnings) == 4 {
+			return nil, fmt.Errorf("all crypto tokens queries failed: %s", strings.Join(warnings, "; "))
+		}
+
+		// 2. Persist newly fetched settled days (< end-1, or == end-1 when st.complete)
+		// into SQLite only when all source queries for that table succeeded.
+		if hasMissing && store != nil {
+			canSaveDaily := bundleErr == nil && nativeErr == nil && contractsErr == nil
+			canSaveMajor := bundleErr == nil
+			persistSettledTokenEconomyDays(ctx, store, end, st.complete, canSaveDaily, canSaveMajor, freshDaily, freshNative, freshContracts, freshMajor, now)
+		}
+
+		// 3. Merge stored + fresh daily, native, contracts, and major rows.
+		dailyByDay := make(map[string]tokenEconomyDailyRow, days)
+		contractsByDay := make(map[string]ContractRow, days)
+		for _, r := range storedDaily {
+			dailyByDay[r.Day] = r
+			contractsByDay[r.Day] = ContractRow{Date: r.Day, Contracts: r.Contracts, Erc20: r.ERC20, Erc721: r.ERC721}
+		}
+		freshNativeByDay := make(map[string]int64, len(freshNative))
+		for _, n := range freshNative {
+			freshNativeByDay[n.Date] = n.TxCount
+		}
+		for _, r := range freshDaily {
+			r.NativeTxs = freshNativeByDay[r.Day]
+			dailyByDay[r.Day] = r
+		}
+		for d, txCount := range freshNativeByDay {
+			if existing, ok := dailyByDay[d]; ok {
+				existing.NativeTxs = txCount
+				dailyByDay[d] = existing
+			} else {
+				dailyByDay[d] = tokenEconomyDailyRow{Day: d, NativeTxs: txCount}
+			}
+		}
+		for _, c := range freshContracts {
+			contractsByDay[c.Date] = c
+		}
+
+		var mergedDaily []TokenDailyRow
+		for d := range dailyByDay {
+			r := dailyByDay[d]
+			mergedDaily = append(mergedDaily, TokenDailyRow{
+				Date:               r.Day,
+				Transfers:          r.Transfers,
+				ZeroValueTransfers: r.ZeroValueTransfers,
+				NativeTxs:          r.NativeTxs,
+			})
+		}
+		sort.Slice(mergedDaily, func(i, j int) bool { return mergedDaily[i].Date < mergedDaily[j].Date })
+
+		var mergedContracts []ContractRow
+		for _, c := range contractsByDay {
+			mergedContracts = append(mergedContracts, c)
+		}
+		sort.Slice(mergedContracts, func(i, j int) bool { return mergedContracts[i].Date < mergedContracts[j].Date })
+
+		majorKey := func(day, addr string) string { return day + "|" + strings.ToLower(addr) }
+		majorMap := make(map[string]tokenMajorDailyRow, len(storedMajor)+len(freshMajor))
+		for _, m := range storedMajor {
+			majorMap[majorKey(m.Day, m.TokenAddress)] = m
+		}
+		for _, m := range freshMajor {
+			majorMap[majorKey(m.Day, m.TokenAddress)] = m
+		}
+		mergedMajor := make([]tokenMajorDailyRow, 0, len(majorMap))
+		for _, m := range majorMap {
+			mergedMajor = append(mergedMajor, m)
+		}
+		sort.Slice(mergedMajor, func(i, j int) bool {
+			if mergedMajor[i].Day != mergedMajor[j].Day {
+				return mergedMajor[i].Day < mergedMajor[j].Day
+			}
+			return mergedMajor[i].TokenAddress < mergedMajor[j].TokenAddress
+		})
+
+		// 4. Resolve top_tokens metadata from SQLite cache + BigQuery tokens_latest on miss.
+		if len(top) > 0 {
+			addrs := make([]string, len(top))
+			for i, t := range top {
+				addrs[i] = strings.ToLower(t.TokenAddress)
+			}
+			var metaMap map[string]tokenContractMeta
+			if store != nil {
+				metaMap, _ = store.loadTokenMetadata(ctx, addrs, now, tokenMetadataTTL)
+			}
+			if metaMap == nil {
+				metaMap = make(map[string]tokenContractMeta)
+			}
+			var missingAddrs []string
+			for _, a := range addrs {
+				if _, ok := metaMap[a]; !ok {
+					missingAddrs = append(missingAddrs, a)
+				}
+			}
+			if len(missingAddrs) > 0 {
+				fetched, mErr := h.bq.GetTokenMetadataBatch(ctx, missingAddrs)
+				if mErr != nil {
+					recordErr("token_metadata", mErr)
+				} else {
+					for _, m := range fetched {
+						metaMap[strings.ToLower(m.Address)] = m
+					}
+					if store != nil {
+						_ = store.upsertTokenMetadataBatch(ctx, missingAddrs, fetched, now)
+					}
+				}
+			}
+			applyTokenMetadata(top, metaMap)
+			enrichTopTokensRisk(ctx, store, top)
+		}
+
+		// 5. Compute USD volume & mint/burn rollups using onchain_prices_daily + wstETH ratio.
+		pricesByDay := h.loadPricesByDay(ctx, days)
+		wstethRatio, ratioWarn := h.fetchWstETHRatio(ctx)
+		if ratioWarn != "" {
+			warnings = append(warnings, ratioWarn)
+		}
+		var priceWarn string
+		mergedDaily, priceWarn = rollupMajorTokens(mergedDaily, mergedMajor, pricesByDay, wstethRatio)
+		if priceWarn != "" {
+			warnings = append(warnings, priceWarn)
+		}
+		majorSummaries := buildMajorTokenSummaries(mergedMajor, pricesByDay, wstethRatio)
+
+		data := CryptoTokensData{
+			Days:               days,
+			TopTokens:          nonNilSlice(top),
+			Daily:              nonNilSlice(mergedDaily),
+			Contracts:          nonNilSlice(mergedContracts),
+			MajorTokens:        nonNilSlice(majorSummaries),
+			Warnings:           warnings,
+			LastDayComplete:    st.complete,
+			LastDayProbeFailed: st.probeFailed,
+		}
 		h.cache.SetWithTTL(key, &data, cryptoResponseTTL(end, time.Now().UTC(), len(data.Warnings) > 0, data.LastDayComplete))
 		return &data, nil
 	})
@@ -946,6 +1308,13 @@ func (h *APIHandler) CryptoTokens(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, v)
+}
+
+func nonNilSlice[T any](s []T) []T {
+	if s == nil {
+		return []T{}
+	}
+	return s
 }
 
 // --- /mining ---

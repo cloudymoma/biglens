@@ -20,6 +20,7 @@ type APIHandler struct {
 	bundle *OKFBundle
 	res    ResourceAPI
 	risk   *addressRiskService
+	prices *cryptoPriceSyncer
 	sf     singleflight.Group
 }
 
