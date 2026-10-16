@@ -142,6 +142,10 @@ func openRiskStore(path string) (*riskStore, error) {
 		db.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
 	}
+	if _, err := db.Exec(tokenEconomySchema); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("apply token economy schema: %w", err)
+	}
 	if err := migrateRiskSchema(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate schema: %w", err)
