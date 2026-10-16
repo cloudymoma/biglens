@@ -50,6 +50,8 @@ var mimicHomoglyphs = map[rune]rune{
 	'Α': 'A', 'Β': 'B', 'Ε': 'E', 'Ζ': 'Z', 'Η': 'H',
 	'Ι': 'I', 'Κ': 'K', 'Μ': 'M', 'Ν': 'N', 'Ο': 'O',
 	'Ρ': 'P', 'Τ': 'T', 'Υ': 'Y', 'Χ': 'X',
+	// Lisu lookalikes (seen in on-chain counterfeit USDC/USDT symbols)
+	'ꓚ': 'C', 'ꓓ': 'D', 'ꓰ': 'E', 'ꓧ': 'H', 'ꓢ': 'S', 'ꓔ': 'T', 'ꓴ': 'U',
 	// Superscript / subscript zero
 	'⁰': '0', '₀': '0',
 }

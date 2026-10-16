@@ -538,6 +538,7 @@ func TestNormalizeMimicSymbol(t *testing.T) {
 		"USDC.e",
 		"\ufeffUSDC",
 		"ＵＳＤＣ0",
+		"U\u206fS\u206fD\ua4da", // U+206F format char + Lisu Letter Ca (ꓚ)
 	}
 	for _, in := range usdcCases {
 		if got := normalizeMimicSymbol(in); got != "USDC" {

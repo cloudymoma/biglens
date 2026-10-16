@@ -243,7 +243,7 @@ func (h *APIHandler) refreshMarketPulse(ctx context.Context, prev []TokenMarketR
 		bsCodes     = make([]string, len(majorTokenCatalog))
 		g           errgroup.Group
 	)
-	g.SetLimit(5)
+	g.SetLimit(6)
 	g.Go(func() error {
 		llamaPrices, llamaCode = fetchDefiLlamaPrices(ctx)
 		return nil
@@ -256,7 +256,9 @@ func (h *APIHandler) refreshMarketPulse(ctx context.Context, prev []TokenMarketR
 				bsCodes[i] = "not_configured"
 				return nil
 			}
-			bsInfos[i], bsCodes[i] = fetchBlockscoutAddress(ctx, bsURL, m.Address)
+			bctx, cancel := context.WithTimeout(ctx, 3500*time.Millisecond)
+			defer cancel()
+			bsInfos[i], bsCodes[i] = fetchBlockscoutAddress(bctx, bsURL, m.Address)
 			return nil
 		})
 	}
@@ -265,6 +267,13 @@ func (h *APIHandler) refreshMarketPulse(ctx context.Context, prev []TokenMarketR
 	var warnings []string
 	if llamaCode != "" {
 		warnings = append(warnings, "defillama: "+llamaCode)
+	}
+	seenBSWarn := make(map[string]bool)
+	for _, code := range bsCodes {
+		if code != "" && !seenBSWarn[code] {
+			seenBSWarn[code] = true
+			warnings = append(warnings, "blockscout: "+code)
+		}
 	}
 	at := now.UTC().Format(time.RFC3339)
 	rows := make([]TokenMarketRow, len(majorTokenCatalog))
@@ -283,6 +292,7 @@ func (h *APIHandler) refreshMarketPulse(ctx context.Context, prev []TokenMarketR
 			row.PriceUSD = 1.0
 		}
 		if bsCodes[i] != "" || llamaCode != "" {
+			row.Stale = true
 			if hasOld {
 				if row.PriceUSD == 0 {
 					row.PriceUSD = old.PriceUSD
@@ -296,7 +306,7 @@ func (h *APIHandler) refreshMarketPulse(ctx context.Context, prev []TokenMarketR
 				if row.MarketCapUSD == 0 {
 					row.MarketCapUSD = old.MarketCapUSD
 				}
-				row.Stale = true
+				row.UpdatedAt = old.UpdatedAt
 			}
 		}
 		rows[i] = row
@@ -345,9 +355,21 @@ func (h *APIHandler) CryptoTokensLive(w http.ResponseWriter, r *http.Request) {
 			go func() {
 				defer wg.Done()
 				supplyRows, supplyWarn = h.refreshSupplyMatrix(ctx, storedSupply, now)
-				if store != nil && len(supplyWarn) == 0 {
-					_ = store.upsertTokenSupplyCache(ctx, supplyRows, now)
-					supplyAsOf = now
+				if store != nil {
+					var fresh []TokenSupplyRow
+					for _, r := range supplyRows {
+						if !r.Stale && r.Error == "" && r.Supply > 0 {
+							fresh = append(fresh, r)
+						}
+					}
+					if len(fresh) > 0 {
+						dbCtx, dbCancel := context.WithTimeout(context.Background(), 3*time.Second)
+						_ = store.upsertTokenSupplyCache(dbCtx, fresh, now)
+						dbCancel()
+						if len(supplyWarn) == 0 {
+							supplyAsOf = now
+						}
+					}
 				}
 			}()
 		}
@@ -356,9 +378,21 @@ func (h *APIHandler) CryptoTokensLive(w http.ResponseWriter, r *http.Request) {
 			go func() {
 				defer wg.Done()
 				marketRows, marketWarn = h.refreshMarketPulse(ctx, storedMarket, now)
-				if store != nil && len(marketWarn) == 0 {
-					_ = store.upsertTokenMarketCache(ctx, marketRows, now)
-					marketAsOf = now
+				if store != nil {
+					var fresh []TokenMarketRow
+					for _, r := range marketRows {
+						if !r.Stale && r.PriceUSD > 0 {
+							fresh = append(fresh, r)
+						}
+					}
+					if len(fresh) > 0 {
+						dbCtx, dbCancel := context.WithTimeout(context.Background(), 3*time.Second)
+						_ = store.upsertTokenMarketCache(dbCtx, fresh, now)
+						dbCancel()
+						if len(marketWarn) == 0 {
+							marketAsOf = now
+						}
+					}
 				}
 			}()
 		}

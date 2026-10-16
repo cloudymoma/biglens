@@ -685,7 +685,12 @@ func mergeTokenDaily(transfers []TokenDailyRow, native []CryptoActivityRow) []To
 }
 
 func isImpersonatingStablecoinSymbol(sym string) bool {
-	return counterfeitSymbolRe.MatchString(strings.ToUpper(strings.TrimSpace(sym)))
+	upper := strings.ToUpper(strings.TrimSpace(sym))
+	if counterfeitSymbolRe.MatchString(upper) {
+		return true
+	}
+	norm := normalizeMimicSymbol(sym)
+	return counterfeitSymbolRe.MatchString(norm) || norm == "ETH" || norm == "WETH" || norm == "WBTC"
 }
 
 func applyTokenMetadata(top []TokenRow, meta map[string]tokenContractMeta) {

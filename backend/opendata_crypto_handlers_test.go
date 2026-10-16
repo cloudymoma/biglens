@@ -400,6 +400,12 @@ func TestEnrichTopTokensRiskAndMetadata(t *testing.T) {
 	if len(top[1].Risk) != 0 {
 		t.Errorf("official USDT Risk = %v, want empty", top[1].Risk)
 	}
+
+	for _, sym := range []string{"U\u206fS\u206fDΤ", "U\u206fS\u206fDꓚ", "Е\u206fΤН\u206f"} {
+		if !isImpersonatingStablecoinSymbol(sym) {
+			t.Errorf("isImpersonatingStablecoinSymbol(%q) = false, want true", sym)
+		}
+	}
 }
 
 func TestPersistSettledTokenEconomyDaysSkipsOnPartialFailure(t *testing.T) {
