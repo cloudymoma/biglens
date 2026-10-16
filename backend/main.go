@@ -204,6 +204,7 @@ func main() {
 	mux.Handle("/api/opendata/crypto/fees", h(api.CryptoFees))
 	mux.Handle("/api/opendata/crypto/whales", h(api.CryptoWhales))
 	mux.Handle("/api/opendata/crypto/tokens", h(api.CryptoTokens))
+	mux.Handle("/api/opendata/crypto/tokens/live", h(api.CryptoTokensLive))
 	mux.Handle("/api/opendata/crypto/mining", h(api.CryptoMining))
 	mux.Handle("/api/opendata/crypto/spot", h(api.CryptoSpot))
 	mux.Handle("/api/opendata/crypto/gas-pulse", h(api.CryptoGasPulse))
