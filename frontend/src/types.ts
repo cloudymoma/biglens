@@ -947,15 +947,27 @@ export interface TokenRow {
   token_address: string;
   symbol: string;
   name: string;
+  token_standard?: string;
+  decimals?: number;
+  proxy_standard?: string;
+  creator_address?: string;
+  created_at?: string;
   transfers: number;
+  zero_value_transfers: number;
   senders: number;
   receivers: number;
+  risk?: string[];
+  creator_risk?: string[];
 }
 
 export interface TokenDailyRow {
   date: string;
   transfers: number;
+  zero_value_transfers: number;
   native_txs: number;
+  stablecoin_usd: number;
+  eth_token_usd: number;
+  btc_token_usd: number;
 }
 
 export interface ContractRow {
@@ -965,13 +977,64 @@ export interface ContractRow {
   erc721: number;
 }
 
+export interface MajorTokenSummary {
+  token_address: string;
+  symbol: string;
+  name: string;
+  category: 'stablecoin' | 'eth' | 'btc';
+  transfers: number;
+  zero_value: number;
+  senders: number;
+  receivers: number;
+  volume_token: number;
+  volume_usd: number;
+  minted_token: number;
+  burned_token: number;
+  net_issued_token: number;
+  net_issued_usd: number;
+  mint_burn_supported: boolean;
+}
+
 export interface CryptoTokensData {
   days: number;
   top_tokens: TokenRow[];
   daily: TokenDailyRow[];
   contracts: ContractRow[];
+  major_tokens: MajorTokenSummary[];
+  warnings?: string[];
   last_day_complete?: boolean; // false: newest UTC day may still be ingesting
   last_day_probe_failed?: boolean; // true: completeness probe query errored
+}
+
+export interface TokenSupplyRow {
+  asset: string;
+  network: string;
+  network_label: string;
+  contract: string;
+  tier: string;
+  label: string;
+  supply: number;
+  updated_at: string;
+  stale?: boolean;
+  error?: string;
+}
+
+export interface TokenMarketRow {
+  address: string;
+  symbol: string;
+  price_usd: number;
+  holders_count: number;
+  volume_24h_usd: number;
+  market_cap_usd: number;
+  updated_at: string;
+  stale?: boolean;
+}
+
+export interface CryptoTokensLiveData {
+  supply_matrix: TokenSupplyRow[];
+  market_pulse: TokenMarketRow[];
+  as_of: string;
+  warnings?: string[];
 }
 
 export interface BtcMiningRow {

@@ -75,6 +75,7 @@ import type {
   GasLiveData,
   CryptoWhalesData,
   CryptoTokensData,
+  CryptoTokensLiveData,
   CryptoMiningData,
   CryptoSpotData,
   CryptoChain,
@@ -455,6 +456,15 @@ export async function fetchCryptoWhales(days: number, chain: CryptoChain): Promi
 export async function fetchCryptoTokens(days: number): Promise<CryptoTokensData> {
   const { data } = await axios.get('/api/opendata/crypto/tokens', { params: { days: String(days) } });
   return data;
+}
+
+export async function fetchCryptoTokensLive(): Promise<CryptoTokensLiveData | null> {
+  try {
+    const { data } = await axios.get('/api/opendata/crypto/tokens/live');
+    return data;
+  } catch {
+    return null;
+  }
 }
 
 export async function fetchCryptoMining(days: number): Promise<CryptoMiningData> {

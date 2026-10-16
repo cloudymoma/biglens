@@ -208,6 +208,7 @@ export const RISK_BADGES: Record<string, { label: string; color: string }> = {
   mew_darklist: { label: 'MEW', color: '#fb923c' },
   scam_lookalikes: { label: 'Lookalike', color: '#fb923c' },
   fake_token_deployers: { label: 'Fake-token deployer', color: '#fb923c' },
+  counterfeit_token: { label: 'Counterfeit', color: '#fb923c' },
 };
 
 // Display names for source ids returned by the backend.
