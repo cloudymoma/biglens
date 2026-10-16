@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/big"
+	"regexp"
 	"strings"
 	"time"
 
@@ -12,6 +13,8 @@ import (
 	"cloud.google.com/go/civil"
 	"google.golang.org/api/iterator"
 )
+
+var counterfeitSymbolRe = regexp.MustCompile(counterfeitSymbolPattern)
 
 const (
 	scamEthTokenTransfersTable = "`bigquery-public-data.goog_blockchain_ethereum_mainnet_us.token_transfers`"
@@ -21,9 +24,11 @@ const (
 
 	tronUSDTLogAddress = "0xa614f803b6fd780986a42c78ec9c7f77e6ded13c"
 
-	// counterfeitSymbolPredicate matches token symbols impersonating USDT /
-	// USDC; R2 and the serial-deployer corpus share it.
-	counterfeitSymbolPredicate = `REGEXP_CONTAINS(UPPER(symbol), r'^(USDT|USDC|USD₮)[^A-Z0-9]?$')`
+	// counterfeitSymbolPattern / counterfeitSymbolPredicate match token symbols
+	// impersonating USDT / USDC; shared by R2, the serial-deployer corpus, and
+	// Token Economy risk badge enrichment.
+	counterfeitSymbolPattern   = `^(USDT|USDC|USD₮)[^A-Z0-9]?$`
+	counterfeitSymbolPredicate = `REGEXP_CONTAINS(UPPER(symbol), r'` + counterfeitSymbolPattern + `')`
 
 	// scamFakeTokenDeployerMinContracts: the creator of at least this many
 	// counterfeit-symbol contracts is a serial deployer when counterfeit

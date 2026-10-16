@@ -6,6 +6,8 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -312,5 +314,152 @@ func TestFetchSpot(t *testing.T) {
 	}
 	if _, err := fetchSpot(context.Background(), "BAD"); err == nil {
 		t.Error("a zero price must be an error, not a $0 quote")
+	}
+}
+
+func TestEnrichTopTokensRiskAndMetadata(t *testing.T) {
+	ctx := context.Background()
+	store, err := openRiskStore(filepath.Join(t.TempDir(), "security.db"))
+	if err != nil {
+		t.Fatalf("openRiskStore: %v", err)
+	}
+	defer store.db.Close()
+
+	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+
+	// 1. Seed scam_fake_tokens and scam_fake_token_deployers using the real store methods.
+	if err := store.upsertFakeTokens(ctx, "eth", []fakeTokenRow{{
+		Chain:      "eth",
+		Contract:   "0x1111111111111111111111111111111111111111",
+		Symbol:     "USDT",
+		Creator:    "0xbad0000000000000000000000000000000000bad",
+		Transfers:  900,
+		Recipients: 450,
+		FirstSeen:  "2026-10-10",
+		LastSeen:   "2026-10-13",
+	}}); err != nil {
+		t.Fatalf("upsertFakeTokens: %v", err)
+	}
+	if err := store.applyScamBatchWithDeployers(ctx, scamEthSourceID, "eth", nil, []fakeTokenDeployerRow{{
+		Address:   "0xbad0000000000000000000000000000000000bad",
+		Contracts: 7,
+		FirstSeen: "2026-10-01",
+		LastSeen:  "2026-10-13",
+	}}, "2026-10-13", "2026-10-13", now); err != nil {
+		t.Fatalf("applyScamBatchWithDeployers: %v", err)
+	}
+
+	// 2. Seed token_contract_metadata.
+	meta := []tokenContractMeta{
+		{
+			Address:        "0x1111111111111111111111111111111111111111",
+			Symbol:         "USDT",
+			Name:           "Tether USD",
+			TokenStandard:  "ERC-20",
+			Decimals:       6,
+			CreatorAddress: "0xbad0000000000000000000000000000000000bad",
+			CreatedAt:      "2026-10-10",
+			Found:          true,
+		},
+		{
+			Address:        "0xdac17f958d2ee523a2206206994597c13d831ec7",
+			Symbol:         "USDT",
+			Name:           "Tether USD",
+			TokenStandard:  "ERC-20",
+			Decimals:       6,
+			CreatorAddress: "0x36928500bc1dcd7af6a2b4008875cc336b927d57",
+			CreatedAt:      "2017-11-28",
+			Found:          true,
+		},
+	}
+	if err := store.upsertTokenMetadataBatch(ctx, nil, meta, now); err != nil {
+		t.Fatalf("upsertTokenMetadataBatch: %v", err)
+	}
+
+	top := []TokenRow{
+		{TokenAddress: "0x1111111111111111111111111111111111111111", Transfers: 50000, ZeroValueTransfers: 45000},
+		{TokenAddress: "0xdac17f958d2ee523a2206206994597c13d831ec7", Transfers: 100000, ZeroValueTransfers: 12000},
+	}
+	metaMap, err := store.loadTokenMetadata(ctx, []string{
+		"0x1111111111111111111111111111111111111111",
+		"0xdac17f958d2ee523a2206206994597c13d831ec7",
+	}, now, 7*24*time.Hour)
+	if err != nil {
+		t.Fatalf("loadTokenMetadata: %v", err)
+	}
+
+	applyTokenMetadata(top, metaMap)
+	enrichTopTokensRisk(ctx, store, top)
+
+	if !slices.Contains(top[0].Risk, "counterfeit_token") {
+		t.Errorf("fake USDT Risk = %v, want counterfeit_token", top[0].Risk)
+	}
+	if !slices.Contains(top[0].CreatorRisk, "fake_token_deployers") {
+		t.Errorf("fake USDT CreatorRisk = %v, want fake_token_deployers", top[0].CreatorRisk)
+	}
+	if len(top[1].Risk) != 0 {
+		t.Errorf("official USDT Risk = %v, want empty", top[1].Risk)
+	}
+}
+
+func TestPersistSettledTokenEconomyDaysSkipsOnPartialFailure(t *testing.T) {
+	ctx := context.Background()
+	store, err := openRiskStore(filepath.Join(t.TempDir(), "security.db"))
+	if err != nil {
+		t.Fatalf("openRiskStore: %v", err)
+	}
+	defer store.db.Close()
+
+	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	// end is exclusive (< @end_date), so end = 2026-10-15 means the window's
+	// last day is end-1 = 2026-10-14, while 2026-10-13 is strictly settled (< end-1).
+	end := civil.Date{Year: 2026, Month: 10, Day: 15}
+	bundleDaily := []tokenEconomyDailyRow{
+		{Day: "2026-10-13", Transfers: 1000, ZeroValueTransfers: 100},
+		{Day: "2026-10-14", Transfers: 1200, ZeroValueTransfers: 120},
+	}
+	bundleMajor := []tokenMajorDailyRow{
+		{Day: "2026-10-13", TokenAddress: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", Transfers: 500, VolumeToken: 1000},
+		{Day: "2026-10-14", TokenAddress: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", Transfers: 600, VolumeToken: 1200},
+	}
+
+	// 1. Simulate contracts query failing (canSaveDaily = false, canSaveMajor = true, lastDayComplete = false).
+	// Neither daily row may be saved; only the settled 2026-10-13 major row (< end-1) may be saved.
+	persistSettledTokenEconomyDays(ctx, store, end, false, false, true, bundleDaily, nil, nil, bundleMajor, now)
+
+	gotDaily, err := store.loadTokenEconomyDaily(ctx, "2026-10-13", "2026-10-15")
+	if err != nil {
+		t.Fatalf("loadTokenEconomyDaily: %v", err)
+	}
+	if len(gotDaily) != 0 {
+		t.Fatalf("expected 0 daily rows saved when a source query failed, got %+v", gotDaily)
+	}
+	gotMajor, err := store.loadTokenMajorDaily(ctx, "2026-10-13", "2026-10-15")
+	if err != nil {
+		t.Fatalf("loadTokenMajorDaily: %v", err)
+	}
+	if len(gotMajor) != 1 || gotMajor[0].Day != "2026-10-13" {
+		t.Fatalf("expected only settled 2026-10-13 (< end-1) major row saved when lastDayComplete=false, got %+v", gotMajor)
+	}
+
+	// 2. All queries succeed, but lastDayComplete = false: 2026-10-13 (< end-1) is saved,
+	// while in-progress 2026-10-14 (== end-1) must NOT be saved.
+	persistSettledTokenEconomyDays(ctx, store, end, false, true, true, bundleDaily, nil, nil, bundleMajor, now)
+	gotDaily, err = store.loadTokenEconomyDaily(ctx, "2026-10-13", "2026-10-15")
+	if err != nil {
+		t.Fatalf("loadTokenEconomyDaily: %v", err)
+	}
+	if len(gotDaily) != 1 || gotDaily[0].Day != "2026-10-13" {
+		t.Fatalf("expected only 2026-10-13 (< end-1) daily row saved when lastDayComplete=false, got %+v", gotDaily)
+	}
+
+	// 3. Once lastDayComplete = true, 2026-10-14 (== end-1) is also saved.
+	persistSettledTokenEconomyDays(ctx, store, end, true, true, true, bundleDaily, nil, nil, bundleMajor, now)
+	gotDaily, err = store.loadTokenEconomyDaily(ctx, "2026-10-13", "2026-10-15")
+	if err != nil {
+		t.Fatalf("loadTokenEconomyDaily: %v", err)
+	}
+	if len(gotDaily) != 2 || gotDaily[1].Day != "2026-10-14" {
+		t.Fatalf("expected both 2026-10-13 and 2026-10-14 saved when lastDayComplete=true, got %+v", gotDaily)
 	}
 }

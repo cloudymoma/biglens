@@ -26,8 +26,10 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"cloud.google.com/go/civil"
@@ -627,30 +629,222 @@ type CryptoTokensData struct {
 	LastDayProbeFailed bool `json:"last_day_probe_failed,omitempty"`
 }
 
-// mergeTokenDaily zips transfer counts with native tx counts over the union
-// of dates (sorted), zero-filling either side. Inputs are not mutated.
+const tokenMetadataTTL = 7 * 24 * time.Hour
+
+// mergeTokenDaily zips transfer counts (including zero-value transfers) with
+// native tx counts over the union of dates (sorted), zero-filling either side.
+// Inputs are not mutated.
 func mergeTokenDaily(transfers []TokenDailyRow, native []CryptoActivityRow) []TokenDailyRow {
-	transferByDate := make(map[string]int64, len(transfers))
-	nativeByDate := make(map[string]int64, len(native))
-	dates := make(map[string]bool)
+	type pair struct {
+		transfers int64
+		zeroValue int64
+		native    int64
+	}
+	byDate := make(map[string]*pair, len(transfers))
+	touch := func(d string) *pair {
+		p, ok := byDate[d]
+		if !ok {
+			p = &pair{}
+			byDate[d] = p
+		}
+		return p
+	}
 	for _, r := range transfers {
-		transferByDate[r.Date] = r.Transfers
-		dates[r.Date] = true
+		p := touch(r.Date)
+		p.transfers = r.Transfers
+		p.zeroValue = r.ZeroValueTransfers
 	}
 	for _, r := range native {
-		nativeByDate[r.Date] = r.TxCount
-		dates[r.Date] = true
+		touch(r.Date).native = r.TxCount
 	}
-	sorted := make([]string, 0, len(dates))
-	for d := range dates {
-		sorted = append(sorted, d)
+	dates := make([]string, 0, len(byDate))
+	for d := range byDate {
+		dates = append(dates, d)
 	}
-	sort.Strings(sorted)
-	out := make([]TokenDailyRow, 0, len(sorted))
-	for _, d := range sorted {
-		out = append(out, TokenDailyRow{Date: d, Transfers: transferByDate[d], NativeTxs: nativeByDate[d]})
+	sort.Strings(dates)
+	out := make([]TokenDailyRow, len(dates))
+	for i, d := range dates {
+		p := byDate[d]
+		out[i] = TokenDailyRow{
+			Date:               d,
+			Transfers:          p.transfers,
+			ZeroValueTransfers: p.zeroValue,
+			NativeTxs:          p.native,
+		}
 	}
 	return out
+}
+
+func isImpersonatingStablecoinSymbol(sym string) bool {
+	return counterfeitSymbolRe.MatchString(strings.ToUpper(strings.TrimSpace(sym)))
+}
+
+func applyTokenMetadata(top []TokenRow, meta map[string]tokenContractMeta) {
+	for i := range top {
+		addr := strings.ToLower(top[i].TokenAddress)
+		if m, ok := meta[addr]; ok && m.Found {
+			top[i].Symbol = m.Symbol
+			top[i].Name = m.Name
+			top[i].TokenStandard = m.TokenStandard
+			top[i].Decimals = m.Decimals
+			top[i].ProxyStandard = m.ProxyStandard
+			top[i].CreatorAddress = m.CreatorAddress
+			top[i].CreatedAt = m.CreatedAt
+		}
+		if allow, ok := majorTokenByAddr[addr]; ok {
+			if top[i].Symbol == "" {
+				top[i].Symbol = allow.Symbol
+			}
+			if top[i].Name == "" {
+				top[i].Name = allow.Name
+			}
+			if top[i].Decimals == 0 {
+				top[i].Decimals = allow.Decimals
+			}
+		}
+	}
+}
+
+func enrichTopTokensRisk(ctx context.Context, store *riskStore, top []TokenRow) {
+	if store == nil || len(top) == 0 {
+		return
+	}
+	pool, _ := store.riskPoolEntries(ctx)
+	fakeSet, _ := store.fakeTokenSet(ctx, "eth")
+
+	var creators []string
+	for _, t := range top {
+		if t.CreatorAddress != "" {
+			creators = append(creators, strings.ToLower(t.CreatorAddress))
+		}
+	}
+	deployers, _ := store.fakeTokenDeployerHits(ctx, creators)
+
+	for i := range top {
+		addr := strings.ToLower(top[i].TokenAddress)
+		_, isAllowlisted := riskTokenAllowlist[addr]
+
+		var risk []string
+		if !isAllowlisted {
+			if fakeSet[addr] || isImpersonatingStablecoinSymbol(top[i].Symbol) {
+				risk = append(risk, "counterfeit_token")
+			}
+		}
+		for _, src := range pool[addr] {
+			if !slices.Contains(risk, src) {
+				risk = append(risk, src)
+			}
+		}
+		top[i].Risk = risk
+
+		if cAddr := strings.ToLower(top[i].CreatorAddress); cAddr != "" {
+			var cRisk []string
+			if _, ok := deployers[cAddr]; ok {
+				cRisk = append(cRisk, "fake_token_deployers")
+			}
+			for _, src := range pool[cAddr] {
+				if !slices.Contains(cRisk, src) {
+					cRisk = append(cRisk, src)
+				}
+			}
+			top[i].CreatorRisk = cRisk
+		}
+	}
+}
+
+// missingSettledRange returns the contiguous sub-range [missingStart, end) of
+// [start, end) not yet present in storedDays.
+func missingSettledRange(start, end civil.Date, storedDays map[string]bool) (civil.Date, civil.Date, bool) {
+	var firstMissing, lastMissing civil.Date
+	hasMissing := false
+	for d := start; d.Before(end); d = d.AddDays(1) {
+		if !storedDays[d.String()] {
+			if !hasMissing {
+				firstMissing = d
+				hasMissing = true
+			}
+			lastMissing = d
+		}
+	}
+	if !hasMissing {
+		return civil.Date{}, civil.Date{}, false
+	}
+	return firstMissing, lastMissing.AddDays(1), true
+}
+
+// persistSettledTokenEconomyDays saves settled days (< end-1, or == end-1 when
+// lastDayComplete is true, since end from cryptoWindowAt is an exclusive upper
+// bound) into SQLite. To prevent failed queries from being saved as permanent
+// zeros, token_economy_daily is only written when canSaveDaily is true (all
+// three daily queries succeeded), and token_major_daily is only written when
+// canSaveMajor is true (the bundle query succeeded).
+func persistSettledTokenEconomyDays(
+	ctx context.Context,
+	store *riskStore,
+	end civil.Date,
+	lastDayComplete bool,
+	canSaveDaily bool,
+	canSaveMajor bool,
+	bundleDaily []tokenEconomyDailyRow,
+	native []CryptoActivityRow,
+	contracts []ContractRow,
+	major []tokenMajorDailyRow,
+	now time.Time,
+) {
+	if store == nil {
+		return
+	}
+	lastDayStr := end.AddDays(-1).String()
+	isSettled := func(day string) bool {
+		if day < lastDayStr {
+			return true
+		}
+		return day == lastDayStr && lastDayComplete
+	}
+
+	if canSaveDaily {
+		byDay := make(map[string]*tokenEconomyDailyRow, len(bundleDaily))
+		touch := func(d string) *tokenEconomyDailyRow {
+			r, ok := byDay[d]
+			if !ok {
+				r = &tokenEconomyDailyRow{Day: d}
+				byDay[d] = r
+			}
+			return r
+		}
+		for _, b := range bundleDaily {
+			r := touch(b.Day)
+			r.Transfers = b.Transfers
+			r.ZeroValueTransfers = b.ZeroValueTransfers
+		}
+		for _, n := range native {
+			touch(n.Date).NativeTxs = n.TxCount
+		}
+		for _, c := range contracts {
+			r := touch(c.Date)
+			r.Contracts = c.Contracts
+			r.ERC20 = c.Erc20
+			r.ERC721 = c.Erc721
+		}
+		var dailyToStore []tokenEconomyDailyRow
+		for d, r := range byDay {
+			if isSettled(d) {
+				dailyToStore = append(dailyToStore, *r)
+			}
+		}
+		sort.Slice(dailyToStore, func(i, j int) bool { return dailyToStore[i].Day < dailyToStore[j].Day })
+		_ = store.upsertTokenEconomyDaily(ctx, dailyToStore, now)
+	}
+
+	if canSaveMajor {
+		var majorToStore []tokenMajorDailyRow
+		for _, m := range major {
+			if isSettled(m.Day) {
+				majorToStore = append(majorToStore, m)
+			}
+		}
+		_ = store.upsertTokenMajorDaily(ctx, majorToStore, now)
+	}
 }
 
 func (h *APIHandler) CryptoTokens(w http.ResponseWriter, r *http.Request) {
