@@ -17,12 +17,17 @@ export default function TokensLivePanel({
 }) {
   const [live, setLive] = useState<CryptoTokensLiveData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     let stale = false;
     fetchCryptoTokensLive()
       .then(d => { if (!stale) setLive(d); })
-      .catch(() => {})
+      .catch(e => {
+        if (!stale) {
+          setError(typeof e.response?.data === 'string' && e.response.data.trim() ? e.response.data.trim() : (e.message || 'request failed'));
+        }
+      })
       .finally(() => { if (!stale) setLoading(false); });
     return () => { stale = true; };
   }, []);
@@ -34,7 +39,13 @@ export default function TokensLivePanel({
       </div>
     );
   }
-  if (!live) return null;
+  if (error || !live) {
+    return (
+      <div className="rounded-2xl border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-xs text-amber-300">
+        Live supply unavailable: {error || 'empty response'}
+      </div>
+    );
+  }
 
   const supplyMatrix = live.supply_matrix ?? [];
   const marketPulse = live.market_pulse ?? [];

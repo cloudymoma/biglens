@@ -458,13 +458,9 @@ export async function fetchCryptoTokens(days: number): Promise<CryptoTokensData>
   return data;
 }
 
-export async function fetchCryptoTokensLive(): Promise<CryptoTokensLiveData | null> {
-  try {
-    const { data } = await axios.get('/api/opendata/crypto/tokens/live');
-    return data;
-  } catch {
-    return null;
-  }
+export async function fetchCryptoTokensLive(): Promise<CryptoTokensLiveData> {
+  const { data } = await axios.get('/api/opendata/crypto/tokens/live');
+  return data;
 }
 
 export async function fetchCryptoMining(days: number): Promise<CryptoMiningData> {
