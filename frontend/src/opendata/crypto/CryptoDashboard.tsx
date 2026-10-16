@@ -55,7 +55,7 @@ export default function CryptoDashboard() {
     pulse: <PulseTab />,
     fees: <FeesTab />,
     whales: <WhalesTab onInspect={inspectAddress} />,
-    tokens: <TokensTab />,
+    tokens: <TokensTab onInspect={inspectAddress} />,
     mining: <MiningTab />,
     payments: <PaymentCheckTab onInspect={inspectAddress} />,
     risk: <AddressRiskTab inspect={inspect} />,
