@@ -107,6 +107,10 @@ func main() {
 	prices := newCryptoPriceSyncer(bqCryptoPriceSource{client: bq.client}, rstore, cfg.CryptoPrices.initialDays(), time.Now)
 	api.prices = prices
 	go runAddressRiskSync(ctx, time.Hour, prices.syncOnce)
+	if api.btc != nil {
+		api.btc.prices = newBtcPriceSyncer(rstore, api.btc.settings, time.Now)
+		go runAddressRiskSync(ctx, time.Hour, api.btc.prices.syncOnce)
+	}
 	gasCfg := cfg.CryptoGas.withDefaults()
 	api.risk = newAddressRiskService(rstore, cfg.AddressRisk.rpcURLs())
 	api.risk.chainRPCs = map[string][]string{

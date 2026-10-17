@@ -294,6 +294,7 @@ type bitcoinService struct {
 	settings  btcSettings
 	read      btcReadStore
 	lastGood  *btcLastGood
+	prices    *btcPriceSyncer
 	starter   btcBaselineStarter
 	projectID string
 	now       func() time.Time
@@ -313,6 +314,7 @@ func newBitcoinService(cfg *Config) *bitcoinService {
 	return &bitcoinService{
 		settings:  s,
 		lastGood:  newBtcLastGood(),
+		prices:    newBtcPriceSyncer(nil, s, time.Now),
 		projectID: projectID,
 		now:       time.Now,
 	}
