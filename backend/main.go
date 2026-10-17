@@ -222,6 +222,7 @@ func main() {
 	mux.Handle("/api/opendata/crypto/address-risk/backfill", logMW(addressRiskBackfillHandler(api)))
 	mux.Handle("/api/opendata/crypto/payment-check/live", h(api.PaymentCheckLive))
 	mux.Handle("/api/opendata/crypto/payment-check/history", h(api.PaymentCheckHistory))
+	registerBitcoinRoutes(mux, api, h, logMW)
 	mux.Handle("/api/gcp_billing/config", h(api.BillingConfig))
 	mux.Handle("/api/gcp_billing/meta", h(api.BillingMeta))
 	mux.Handle("/api/gcp_billing/overview", h(api.BillingOverview))
