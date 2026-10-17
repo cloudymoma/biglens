@@ -22,6 +22,8 @@ type fakeDailyJob struct {
 	runErr       error
 	storeErr     error
 	panicOnRun   bool
+	attachJobID  string
+	onAttach     func()
 	readyCalls   []civil.Date
 	dryRunCalls  []fetchCall
 	runCalls     []fetchCall
@@ -47,21 +49,33 @@ func (f *fakeDailyJob) DryRun(_ context.Context, start, end civil.Date) (int64, 
 	return f.dryBytes, nil
 }
 
-func (f *fakeDailyJob) Run(_ context.Context, start, end civil.Date, maxBytes int64) (dailyResult, int64, error) {
+func (f *fakeDailyJob) Run(ctx context.Context, start, end civil.Date, maxBytes int64) (dailyResult, int64, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
+	attachID := f.attachJobID
+	onAttach := f.onAttach
 	f.runCalls = append(f.runCalls, fetchCall{start: start, end: end, maxBytes: maxBytes})
-	if f.panicOnRun {
+	panicOnRun := f.panicOnRun
+	runErr := f.runErr
+	runBilled := f.runBilled
+	res := f.runResult
+	f.mu.Unlock()
+
+	if attachID != "" {
+		syncAttachJob(ctx, attachID)
+		if onAttach != nil {
+			onAttach()
+		}
+	}
+	if panicOnRun {
 		panic("simulated job panic")
 	}
-	if f.runErr != nil {
-		return dailyResult{}, f.runBilled, f.runErr
+	if runErr != nil {
+		return dailyResult{}, runBilled, runErr
 	}
-	res := f.runResult
 	if res.Rows == 0 {
 		res.Rows = 10
 	}
-	billed := f.runBilled
+	billed := runBilled
 	if billed == 0 {
 		billed = 1 << 30
 	}
@@ -387,3 +401,400 @@ func TestScamRadarConfigDefaultsAndZeroDisable(t *testing.T) {
 		t.Errorf("custom scamRadarRetentionDays = %d, want 120", got)
 	}
 }
+
+type fakeSyncBudget struct {
+	mu           sync.Mutex
+	refuseErr    error
+	reservedID   string
+	reservedJob  string
+	reservedEst  int64
+	attachedJob  string
+	settledID    string
+	settledBytes int64
+	settledCalls int
+}
+
+func (b *fakeSyncBudget) reserve(_ context.Context, job string, bytes int64) (string, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.refuseErr != nil {
+		return "", b.refuseErr
+	}
+	b.reservedID = "res-1"
+	b.reservedJob = job
+	b.reservedEst = bytes
+	return b.reservedID, nil
+}
+
+func (b *fakeSyncBudget) attachJob(_ context.Context, id, bqJobID string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if id == b.reservedID {
+		b.attachedJob = bqJobID
+	}
+	return nil
+}
+
+func (b *fakeSyncBudget) settle(_ context.Context, id string, billed int64) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.settledID = id
+	b.settledBytes = billed
+	b.settledCalls++
+	return nil
+}
+
+type fakeSyncStopFlags struct {
+	mu       sync.Mutex
+	isStop   map[string]string
+	recs     map[string][]syncFailureRecord
+}
+
+func newFakeSyncStopFlags() *fakeSyncStopFlags {
+	return &fakeSyncStopFlags{
+		isStop: make(map[string]string),
+		recs:   make(map[string][]syncFailureRecord),
+	}
+}
+
+func (f *fakeSyncStopFlags) stopped(_ context.Context, job string) (string, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	r, ok := f.isStop[job]
+	return r, ok, nil
+}
+
+func (f *fakeSyncStopFlags) recordFailure(_ context.Context, job string, rec syncFailureRecord) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.recs[job] = append(f.recs[job], rec)
+	return nil
+}
+
+func (f *fakeSyncStopFlags) failures(_ context.Context, job string) ([]syncFailureRecord, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]syncFailureRecord, len(f.recs[job]))
+	copy(out, f.recs[job])
+	return out, nil
+}
+
+func (f *fakeSyncStopFlags) stop(_ context.Context, job, reason string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.isStop[job] = reason
+	return nil
+}
+
+func (f *fakeSyncStopFlags) clear(_ context.Context, job string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.isStop, job)
+	delete(f.recs, job)
+	return nil
+}
+
+func TestDailyBQSyncerDefaultsMatchScamRadar(t *testing.T) {
+	s, job, store := newTestDailySyncer(t, scamEthSourceID, at(6, 0), 30)
+	s.syncOnce(context.Background())
+
+	if len(job.runCalls) != 1 {
+		t.Fatalf("runCalls = %d, want 1", len(job.runCalls))
+	}
+	if job.runCalls[0].maxBytes != dailySyncColdStartMaxBytes {
+		t.Errorf("cold start maxBytes = %d, want %d", job.runCalls[0].maxBytes, dailySyncColdStartMaxBytes)
+	}
+	st, _ := store.getSyncState(context.Background(), scamEthSourceID)
+	if st.Cursor != "2026-09-25" {
+		t.Errorf("cursor = %q, want 2026-09-25", st.Cursor)
+	}
+}
+
+func TestDailyBQSyncerChunkCatchUp(t *testing.T) {
+	ctx := context.Background()
+	s, job, store := newTestDailySyncer(t, "btc_onchain", at(6, 0), 90)
+	s.maxWindowDays = 31
+	s.chunkCatchUp = true
+
+	// Tick 1: cold start 90 days ago -> clamped to 31 days.
+	s.syncOnce(ctx)
+	if len(job.runCalls) != 1 {
+		t.Fatalf("tick 1 runCalls = %d, want 1", len(job.runCalls))
+	}
+	w1 := job.runCalls[0]
+	if w1.end.DaysSince(w1.start) != 31 {
+		t.Errorf("tick 1 window days = %d, want 31 ([%v, %v))", w1.end.DaysSince(w1.start), w1.start, w1.end)
+	}
+
+	// Tick 2: next 31 days.
+	s.syncOnce(ctx)
+	if len(job.runCalls) != 2 {
+		t.Fatalf("tick 2 runCalls = %d, want 2", len(job.runCalls))
+	}
+	w2 := job.runCalls[1]
+	if w2.start != w1.end || w2.end.DaysSince(w2.start) != 31 {
+		t.Errorf("tick 2 window = [%v, %v), want start %v and 31 days", w2.start, w2.end, w1.end)
+	}
+
+	// Tick 3: remaining 28 days to syncToday.
+	s.syncOnce(ctx)
+	if len(job.runCalls) != 3 {
+		t.Fatalf("tick 3 runCalls = %d, want 3", len(job.runCalls))
+	}
+	w3 := job.runCalls[2]
+	if w3.end != syncToday {
+		t.Errorf("tick 3 end = %v, want %v", w3.end, syncToday)
+	}
+	st, _ := store.getSyncState(ctx, "btc_onchain")
+	if st.Cursor != "2026-09-25" {
+		t.Errorf("final cursor = %q, want 2026-09-25", st.Cursor)
+	}
+}
+
+func TestDailyBQSyncerMinWindowCadence(t *testing.T) {
+	ctx := context.Background()
+	cur := at(6, 0)
+	s, job, store := newTestDailySyncer(t, "btc_coinage", cur, 30)
+	s.now = func() time.Time { return cur }
+	s.minWindowDays = 7
+
+	// Cold start runs immediately even when minWindowDays = 7.
+	s.syncOnce(ctx)
+	if len(job.runCalls) != 1 {
+		t.Fatalf("cold start runCalls = %d, want 1", len(job.runCalls))
+	}
+
+	// 3 days later: incremental window is 3 days < 7 -> must not call Ready or Run.
+	cur = cur.Add(3 * 24 * time.Hour)
+	s.syncOnce(ctx)
+	if len(job.runCalls) != 1 || len(job.readyCalls) != 1 {
+		t.Fatalf("3d incremental ran early: readyCalls=%d runCalls=%d", len(job.readyCalls), len(job.runCalls))
+	}
+
+	// 7 days after cold start: window is 7 days -> runs!
+	cur = cur.Add(4 * 24 * time.Hour)
+	s.syncOnce(ctx)
+	if len(job.runCalls) != 2 {
+		t.Fatalf("7d incremental did not run: runCalls=%d, want 2", len(job.runCalls))
+	}
+	st, _ := store.getSyncState(ctx, "btc_coinage")
+	if st.Cursor != "2026-10-02" {
+		t.Errorf("cursor after 7d cadence = %q, want 2026-10-02", st.Cursor)
+	}
+}
+
+func TestDailyBQSyncerReserveSkip(t *testing.T) {
+	ctx := context.Background()
+	s, job, store := newTestDailySyncer(t, "btc_onchain", at(6, 0), 30)
+	s.budget = &fakeSyncBudget{refuseErr: errors.New("insufficient budget")}
+
+	s.syncOnce(ctx)
+
+	if len(job.runCalls) != 0 {
+		t.Fatalf("Run called %d times when reservation refused, want 0", len(job.runCalls))
+	}
+	st, _ := store.getSyncState(ctx, "btc_onchain")
+	if st.LastError != "over_budget" || st.Cursor != "" {
+		t.Errorf("sync_state = %+v, want over_budget and empty cursor", st)
+	}
+}
+
+func TestDailyBQSyncerDryRunSizedCap(t *testing.T) {
+	ctx := context.Background()
+	s, job, _ := newTestDailySyncer(t, "btc_onchain", at(6, 0), 30)
+	s.dryRunSizedCap = true
+	s.hardCapBytes = 256 << 30
+	job.dryBytes = 80 << 30 // 80 GiB * 1.25 = 100 GiB
+
+	s.syncOnce(ctx)
+
+	if len(job.runCalls) != 1 {
+		t.Fatalf("runCalls = %d, want 1", len(job.runCalls))
+	}
+	want := int64(100 << 30)
+	if job.runCalls[0].maxBytes != want {
+		t.Errorf("maxBytes = %d, want %d (1.25x dryRun)", job.runCalls[0].maxBytes, want)
+	}
+
+	// Small dryRun (< 1 GiB) clamps up to 1 GiB floor.
+	s2, job2, _ := newTestDailySyncer(t, "btc_onchain", at(6, 0), 7)
+	s2.dryRunSizedCap = true
+	s2.hardCapBytes = 256 << 30
+	job2.dryBytes = 200 << 20 // 200 MiB
+	s2.syncOnce(ctx)
+	if len(job2.runCalls) != 1 || job2.runCalls[0].maxBytes != 1<<30 {
+		t.Errorf("small dryRun maxBytes = %d, want %d (1 GiB floor)", job2.runCalls[0].maxBytes, int64(1<<30))
+	}
+}
+
+func TestDailyBQSyncerSettle(t *testing.T) {
+	ctx := context.Background()
+	s, job, _ := newTestDailySyncer(t, "btc_onchain", at(6, 0), 7)
+	budget := &fakeSyncBudget{}
+	s.budget = budget
+	s.dryRunSizedCap = true
+	job.dryBytes = 4 << 30
+	job.runBilled = 3 << 30
+	job.attachJobID = "bq-job-123"
+	var attachedBeforeComplete bool
+	job.onAttach = func() {
+		budget.mu.Lock()
+		attachedBeforeComplete = budget.attachedJob == "bq-job-123" && budget.settledCalls == 0
+		budget.mu.Unlock()
+	}
+
+	s.syncOnce(ctx)
+
+	if !attachedBeforeComplete {
+		t.Errorf("expected job ID to be attached before Run completed and settled")
+	}
+	if budget.settledCalls != 1 || budget.settledBytes != 3<<30 {
+		t.Errorf("settledCalls=%d settledBytes=%d, want 1 and %d", budget.settledCalls, budget.settledBytes, int64(3<<30))
+	}
+
+	// A failed Run that billed bytes still settles the reservation.
+	sFail, jobFail, _ := newTestDailySyncer(t, "btc_onchain", at(6, 0), 7)
+	budgetFail := &fakeSyncBudget{}
+	sFail.budget = budgetFail
+	jobFail.dryBytes = 4 << 30
+	jobFail.runBilled = 2 << 30
+	jobFail.runErr = suspiciousEmpty("2026-09-25", "txs")
+	sFail.syncOnce(ctx)
+	if budgetFail.settledCalls != 1 || budgetFail.settledBytes != 2<<30 {
+		t.Errorf("failed billed run settledCalls=%d settledBytes=%d, want 1 and %d",
+			budgetFail.settledCalls, budgetFail.settledBytes, int64(2<<30))
+	}
+}
+
+func TestDailyBQSyncerFailurePolicy(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("policy A stops on 4th billed failure within 24h", func(t *testing.T) {
+		cur := at(6, 0)
+		s, job, store := newTestDailySyncer(t, "btc_onchain", cur, 7)
+		s.now = func() time.Time { return cur }
+		flags := newFakeSyncStopFlags()
+		s.stopFlags = flags
+		s.failurePolicy = syncFailurePolicy{
+			maxBilledFailures: 4,
+			within:            24 * time.Hour,
+			backoff:           []time.Duration{3 * time.Hour, 6 * time.Hour, 12 * time.Hour},
+		}
+		job.runErr = suspiciousEmpty("2026-09-25", "contiguity_hole at height 975012")
+		job.runBilled = 40 << 20
+
+		// Unbilled events ("source not caught up", over_budget, unbilled BQ error) must never count.
+		job.ready = false
+		s.syncOnce(ctx)
+		job.ready = true
+		if recs, _ := flags.failures(ctx, "btc_onchain"); len(recs) != 0 {
+			t.Fatalf("readiness miss recorded a failure: %+v", recs)
+		}
+
+		// Failure 1 at 0h -> backoff 3h.
+		s.syncOnce(ctx)
+		if _, stopped, _ := flags.stopped(ctx, "btc_onchain"); stopped {
+			t.Fatal("stopped after 1st failure")
+		}
+		// At 2h: still backing off.
+		cur = cur.Add(2 * time.Hour)
+		s.syncOnce(ctx)
+		if len(job.runCalls) != 1 {
+			t.Fatalf("ran during 3h backoff: runCalls=%d", len(job.runCalls))
+		}
+		// Failure 2 at 3h -> backoff 6h.
+		cur = cur.Add(1 * time.Hour)
+		s.syncOnce(ctx)
+		if len(job.runCalls) != 2 {
+			t.Fatalf("runCalls at 3h = %d, want 2", len(job.runCalls))
+		}
+		// Failure 3 at 9h -> backoff 12h.
+		cur = cur.Add(6 * time.Hour)
+		s.syncOnce(ctx)
+		if len(job.runCalls) != 3 {
+			t.Fatalf("runCalls at 9h = %d, want 3", len(job.runCalls))
+		}
+		if _, stopped, _ := flags.stopped(ctx, "btc_onchain"); stopped {
+			t.Fatal("stopped after 3rd failure")
+		}
+		// Failure 4 at 21h -> stopped!
+		cur = cur.Add(12 * time.Hour)
+		s.syncOnce(ctx)
+		reason, stopped, _ := flags.stopped(ctx, "btc_onchain")
+		if !stopped || !strings.Contains(reason, "--bitcoin-bq-resume btc_onchain") {
+			t.Fatalf("stopped=%v reason=%q, want stopped with resume hint", stopped, reason)
+		}
+		st, _ := store.getSyncState(ctx, "btc_onchain")
+		if !strings.Contains(st.LastError, "stopped after 4 billed failures") {
+			t.Errorf("last_error = %q, want stop message", st.LastError)
+		}
+
+		// Subsequent ticks make no Ready/DryRun/Run calls while stopped.
+		readyBefore := len(job.readyCalls)
+		cur = cur.Add(24 * time.Hour)
+		s.syncOnce(ctx)
+		if len(job.readyCalls) != readyBefore || len(job.runCalls) != 4 {
+			t.Fatalf("stopped job made BQ calls: ready=%d (was %d) run=%d", len(job.readyCalls), readyBefore, len(job.runCalls))
+		}
+
+		// Clearing the flag resumes the job, and a success clears the failure list.
+		_ = flags.clear(ctx, "btc_onchain")
+		job.runErr = nil
+		s.syncOnce(ctx)
+		if len(job.runCalls) != 5 {
+			t.Fatalf("resumed job did not run: runCalls=%d, want 5", len(job.runCalls))
+		}
+		if recs, _ := flags.failures(ctx, "btc_onchain"); len(recs) != 0 {
+			t.Errorf("failures after success = %+v, want empty", recs)
+		}
+	})
+
+	t.Run("policy A 4 failures spread over >24h never stop", func(t *testing.T) {
+		cur := at(6, 0)
+		s, job, _ := newTestDailySyncer(t, "btc_onchain", cur, 7)
+		s.now = func() time.Time { return cur }
+		flags := newFakeSyncStopFlags()
+		s.stopFlags = flags
+		s.failurePolicy = syncFailurePolicy{
+			maxBilledFailures: 4,
+			within:            24 * time.Hour,
+			backoff:           []time.Duration{3 * time.Hour, 6 * time.Hour, 12 * time.Hour},
+		}
+		job.runErr = suspiciousEmpty("2026-09-25", "txs")
+		job.runBilled = 1 << 20
+
+		for i := 0; i < 4; i++ {
+			s.syncOnce(ctx)
+			cur = cur.Add(10 * time.Hour) // 0h, 10h, 20h, 30h -> at 30h, 0h is outside 24h window
+		}
+		if _, stopped, _ := flags.stopped(ctx, "btc_onchain"); stopped {
+			t.Fatal("expected 4 failures over 30h NOT to stop a 24h-window policy")
+		}
+	})
+
+	t.Run("policy B stops on 2nd consecutive billed failure including timeout", func(t *testing.T) {
+		cur := at(6, 0)
+		s, job, _ := newTestDailySyncer(t, "btc_coinage", cur, 7)
+		s.now = func() time.Time { return cur }
+		flags := newFakeSyncStopFlags()
+		s.stopFlags = flags
+		s.failurePolicy = syncFailurePolicy{
+			maxBilledFailures: 2,
+			backoff:           []time.Duration{6 * time.Hour},
+		}
+		// Timeout with 0 reported billed bytes still counts as billed.
+		job.runErr = context.DeadlineExceeded
+		job.runBilled = 0
+		s.syncOnce(ctx)
+		if _, stopped, _ := flags.stopped(ctx, "btc_coinage"); stopped {
+			t.Fatal("stopped on 1st failure")
+		}
+
+		cur = cur.Add(6 * time.Hour)
+		s.syncOnce(ctx)
+		if _, stopped, _ := flags.stopped(ctx, "btc_coinage"); !stopped {
+			t.Fatal("expected stop on 2nd consecutive failure")
+		}
+	})
+}
+

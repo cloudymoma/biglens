@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
+	"strings"
 	"time"
 
 	"cloud.google.com/go/civil"
@@ -94,6 +96,7 @@ type dailyResult struct {
 	TronEvents []stablecoinEvent
 	Days       []scamDayBatch
 	Deployers  []fakeTokenDeployerRow // scam_eth: serial-deployer snapshot
+	Payload    any                    // job-specific typed payload (e.g. Bitcoin rollup / coin-age)
 }
 
 type dailyJob interface {
@@ -102,6 +105,59 @@ type dailyJob interface {
 	DryRun(ctx context.Context, start, end civil.Date) (int64, error)
 	Run(ctx context.Context, start, end civil.Date, maxBytes int64) (dailyResult, int64, error)
 	Store(ctx context.Context, s *riskStore, r dailyResult, newFrom, cursor string, now time.Time) error
+}
+
+// syncBudget reserves estimated bytes before a job runs, attaches the BigQuery
+// job ID once submitted, and settles actual billed bytes on completion.
+type syncBudget interface {
+	reserve(ctx context.Context, job string, bytes int64) (string, error)
+	attachJob(ctx context.Context, id, bqJobID string) error
+	settle(ctx context.Context, id string, billed int64) error
+}
+
+// syncFailureRecord records one billed failure for cost-tiered stop policies.
+type syncFailureRecord struct {
+	At          time.Time `json:"at"`
+	Guard       string    `json:"guard,omitempty"`
+	DayOrHeight string    `json:"day_or_height,omitempty"`
+	Message     string    `json:"message"`
+	BilledBytes int64     `json:"billed_bytes"`
+}
+
+// syncStopFlags persists billed failure history and operator-resumable stop flags.
+type syncStopFlags interface {
+	stopped(ctx context.Context, job string) (string, bool, error)
+	recordFailure(ctx context.Context, job string, rec syncFailureRecord) error
+	failures(ctx context.Context, job string) ([]syncFailureRecord, error)
+	stop(ctx context.Context, job, reason string) error
+	clear(ctx context.Context, job string) error
+}
+
+// syncFailurePolicy configures when repeated billed failures stop a job.
+// Zero value keeps Scam Radar's legacy 6h billed backoff with no stop.
+type syncFailurePolicy struct {
+	maxBilledFailures int
+	within            time.Duration
+	backoff           []time.Duration
+}
+
+type syncJobAttachKey struct{}
+
+// withSyncJobAttach attaches a callback to ctx that jobs invoke with their
+// BigQuery job ID before waiting for completion.
+func withSyncJobAttach(ctx context.Context, fn func(bqJobID string)) context.Context {
+	return context.WithValue(ctx, syncJobAttachKey{}, fn)
+}
+
+// syncAttachJob reports the submitted BigQuery job ID to the enclosing syncer's
+// reservation, if any.
+func syncAttachJob(ctx context.Context, bqJobID string) {
+	if bqJobID == "" {
+		return
+	}
+	if fn, ok := ctx.Value(syncJobAttachKey{}).(func(string)); ok && fn != nil {
+		fn(bqJobID)
+	}
 }
 
 func safeEndForJob(ctx context.Context, job dailyJob, now time.Time, start civil.Date) (civil.Date, bool, error) {
@@ -123,25 +179,49 @@ func safeEndForJob(ctx context.Context, job dailyJob, now time.Time, start civil
 }
 
 type dailyBQSyncer struct {
-	store         *riskStore
-	job           dailyJob
-	now           func() time.Time
-	initialDays   int
-	retentionDays int
-	onChange      func()
-	retryAfter    time.Time
+	store            *riskStore
+	job              dailyJob
+	now              func() time.Time
+	initialDays      int
+	retentionDays    int
+	onChange         func()
+	retryAfter       time.Time
+	name             string
+	hardCapBytes     int64
+	dryRunSizedCap   bool
+	maxWindowDays    int
+	chunkCatchUp     bool
+	minWindowDays    int
+	timeout          time.Duration
+	prune            func(ctx context.Context, today civil.Date) error
+	budget           syncBudget
+	failurePolicy    syncFailurePolicy
+	stopFlags        syncStopFlags
+	unbilledFailures int
+}
+
+func (s *dailyBQSyncer) logName() string {
+	if s.name != "" {
+		return s.name
+	}
+	return "scam_radar"
 }
 
 func (s *dailyBQSyncer) syncOnce(ctx context.Context) {
 	sourceID := s.job.ID()
+	tag := s.logName()
 	defer func() {
 		if r := recover(); r != nil {
-			slog.Error("scam_radar sync panic", "source", sourceID, "panic", r)
+			slog.Error(tag+" sync panic", "source", sourceID, "panic", r)
 			_ = s.store.setSyncError(context.Background(), sourceID, "panic")
 		}
 	}()
 	t0 := time.Now()
-	tctx, cancel := context.WithTimeout(ctx, stablecoinSyncTimeout)
+	timeout := s.timeout
+	if timeout <= 0 {
+		timeout = stablecoinSyncTimeout
+	}
+	tctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	run, ok := s.sync(tctx)
@@ -150,10 +230,10 @@ func (s *dailyBQSyncer) syncOnce(ctx context.Context) {
 	}
 	if run.errCode != "" {
 		if err := s.store.setSyncError(ctx, sourceID, run.errCode); err != nil {
-			slog.Error("scam_radar sync state", "source", sourceID, "error", err)
+			slog.Error(tag+" sync state", "source", sourceID, "error", err)
 		}
 	}
-	slog.Info("scam_radar sync",
+	slog.Info(tag+" sync",
 		"source", sourceID,
 		"window_start", run.start.String(),
 		"window_end", run.end.String(),
@@ -172,6 +252,19 @@ func (s *dailyBQSyncer) sync(ctx context.Context) (stablecoinRun, bool) {
 		return stablecoinRun{}, false
 	}
 	sourceID := s.job.ID()
+	tag := s.logName()
+	if s.stopFlags != nil {
+		reason, stopped, err := s.stopFlags.stopped(ctx, sourceID)
+		if err != nil {
+			return stablecoinRun{errCode: "unavailable"}, true
+		}
+		if stopped {
+			if reason == "" {
+				reason = "stopped"
+			}
+			return stablecoinRun{errCode: reason}, false
+		}
+	}
 	st, err := s.store.getSyncState(ctx, sourceID)
 	if err != nil {
 		return stablecoinRun{errCode: "unavailable"}, true
@@ -195,11 +288,15 @@ func (s *dailyBQSyncer) sync(ctx context.Context) (stablecoinRun, bool) {
 		if !start.Before(today) || (!start.Before(today.AddDays(-1)) && now.Before(dayStart(today).Add(stablecoinFinality))) {
 			return stablecoinRun{}, false
 		}
+		if s.minWindowDays > 1 && today.DaysSince(start) < s.minWindowDays {
+			return stablecoinRun{}, false
+		}
 	}
 
 	end, ok, err := safeEndForJob(ctx, s.job, now, start)
 	if err != nil {
-		slog.Warn("scam_radar bigquery ready", "source", sourceID, "error", err)
+		slog.Warn(tag+" bigquery ready", "source", sourceID, "error", err)
+		s.applyUnbilledBackoff(now)
 		return stablecoinRun{start: start, errCode: bqErrCode(err)}, true
 	}
 	if !ok {
@@ -208,45 +305,198 @@ func (s *dailyBQSyncer) sync(ctx context.Context) (stablecoinRun, bool) {
 	if !start.Before(end) {
 		return stablecoinRun{}, false
 	}
-	if end.DaysSince(start) > stablecoinMaxWindowDays {
-		return stablecoinRun{start: start, end: end, errCode: "gap too large"}, true
+	if s.minWindowDays > 1 && newFrom == "" && end.DaysSince(start) < s.minWindowDays {
+		return stablecoinRun{}, false
+	}
+	maxWin := s.maxWindowDays
+	if maxWin <= 0 {
+		maxWin = stablecoinMaxWindowDays
+	}
+	if end.DaysSince(start) > maxWin {
+		if s.chunkCatchUp {
+			end = start.AddDays(maxWin)
+		} else {
+			return stablecoinRun{start: start, end: end, errCode: "gap too large"}, true
+		}
 	}
 
 	maxBytes := int64(dailySyncIncrementalMaxBytes)
 	if newFrom != "" {
 		maxBytes = dailySyncColdStartMaxBytes
-		if est, err := s.job.DryRun(ctx, start, end); err == nil {
-			slog.Info("scam_radar cold start",
-				"source", sourceID,
-				"window_start", start.String(),
-				"window_end", end.String(),
-				"estimated_bytes", est,
-				"estimated_usd", bytesToUSD(est),
-			)
+	}
+	if s.hardCapBytes > 0 {
+		maxBytes = s.hardCapBytes
+	}
+
+	var est int64
+	needDryRun := newFrom != "" || s.dryRunSizedCap || s.budget != nil
+	if needDryRun {
+		dEst, dErr := s.job.DryRun(ctx, start, end)
+		if dErr != nil {
+			if s.dryRunSizedCap || s.budget != nil {
+				slog.Warn(tag+" dry run", "source", sourceID, "error", dErr)
+				s.applyUnbilledBackoff(now)
+				return stablecoinRun{start: start, end: end, errCode: bqErrCode(dErr)}, true
+			}
+		} else {
+			est = dEst
+			if newFrom != "" {
+				slog.Info(tag+" cold start",
+					"source", sourceID,
+					"window_start", start.String(),
+					"window_end", end.String(),
+					"estimated_bytes", est,
+					"estimated_usd", bytesToUSD(est),
+				)
+			}
 		}
 	}
 
-	res, billed, err := s.job.Run(ctx, start, end, maxBytes)
-	if err != nil {
-		slog.Warn("scam_radar bigquery", "source", sourceID, "error", err)
-		if billed > 0 || errors.Is(err, context.DeadlineExceeded) {
-			s.retryAfter = now.Add(stablecoinBilledRetry)
+	if s.hardCapBytes > 0 && est > s.hardCapBytes {
+		return stablecoinRun{start: start, end: end, errCode: "over_budget"}, true
+	}
+	if s.dryRunSizedCap {
+		sized := int64(math.Ceil(float64(est) * 1.25))
+		if sized < 1<<30 {
+			sized = 1 << 30
 		}
-		return stablecoinRun{start: start, end: end, billed: billed, errCode: dailyRunErrCode(err)}, true
+		if s.hardCapBytes > 0 && sized > s.hardCapBytes {
+			sized = s.hardCapBytes
+		}
+		maxBytes = sized
+	}
+
+	var resID string
+	if s.budget != nil {
+		id, rErr := s.budget.reserve(ctx, sourceID, est)
+		if rErr != nil {
+			return stablecoinRun{start: start, end: end, errCode: "over_budget"}, true
+		}
+		resID = id
+	}
+
+	runCtx := ctx
+	if s.budget != nil && resID != "" {
+		runCtx = withSyncJobAttach(ctx, func(bqJobID string) {
+			_ = s.budget.attachJob(ctx, resID, bqJobID)
+		})
+	}
+
+	res, billed, err := s.job.Run(runCtx, start, end, maxBytes)
+	if s.budget != nil && resID != "" {
+		_ = s.budget.settle(ctx, resID, billed)
+	}
+	if err != nil {
+		slog.Warn(tag+" bigquery", "source", sourceID, "error", err)
+		errCode := dailyRunErrCode(err)
+		if billed > 0 || errors.Is(err, context.DeadlineExceeded) {
+			errCode = s.applyBilledFailure(ctx, sourceID, now, errCode, billed)
+		} else {
+			s.applyUnbilledBackoff(now)
+		}
+		return stablecoinRun{start: start, end: end, billed: billed, errCode: errCode}, true
 	}
 
 	cursor := end.AddDays(-1).String()
 	if err := s.job.Store(ctx, s.store, res, newFrom, cursor, s.now()); err != nil {
-		slog.Error("scam_radar store", "source", sourceID, "error", err)
-		s.retryAfter = now.Add(stablecoinBilledRetry)
-		return stablecoinRun{start: start, end: end, billed: billed, errCode: "unavailable"}, true
+		slog.Error(tag+" store", "source", sourceID, "error", err)
+		errCode := s.applyBilledFailure(ctx, sourceID, now, "unavailable", billed)
+		return stablecoinRun{start: start, end: end, billed: billed, errCode: errCode}, true
 	}
 
-	if err := s.store.pruneScam(ctx, s.retentionDays, today); err != nil {
-		slog.Warn("scam_radar prune", "source", sourceID, "error", err)
+	s.unbilledFailures = 0
+	if s.stopFlags != nil {
+		_ = s.stopFlags.clear(ctx, sourceID)
+	}
+
+	if s.prune != nil {
+		if err := s.prune(ctx, today); err != nil {
+			slog.Warn(tag+" prune", "source", sourceID, "error", err)
+		}
+	} else {
+		if err := s.store.pruneScam(ctx, s.retentionDays, today); err != nil {
+			slog.Warn(tag+" prune", "source", sourceID, "error", err)
+		}
 	}
 	if s.onChange != nil {
 		s.onChange()
 	}
 	return stablecoinRun{start: start, end: end, rows: res.Rows, billed: billed}, true
+}
+
+func (s *dailyBQSyncer) applyUnbilledBackoff(now time.Time) {
+	if s.failurePolicy.maxBilledFailures <= 0 {
+		return
+	}
+	s.unbilledFailures++
+	shift := s.unbilledFailures - 1
+	if shift > 5 {
+		shift = 5
+	}
+	d := time.Hour << shift
+	if d > 24*time.Hour {
+		d = 24 * time.Hour
+	}
+	s.retryAfter = now.Add(d)
+}
+
+func (s *dailyBQSyncer) applyBilledFailure(ctx context.Context, sourceID string, now time.Time, errCode string, billed int64) string {
+	if s.failurePolicy.maxBilledFailures <= 0 || s.stopFlags == nil {
+		s.retryAfter = now.Add(stablecoinBilledRetry)
+		return errCode
+	}
+	rec := syncFailureRecord{
+		At:          now,
+		Message:     errCode,
+		BilledBytes: billed,
+	}
+	_ = s.stopFlags.recordFailure(ctx, sourceID, rec)
+	all, err := s.stopFlags.failures(ctx, sourceID)
+	if err != nil {
+		s.retryAfter = now.Add(stablecoinBilledRetry)
+		return errCode
+	}
+	var active []syncFailureRecord
+	if s.failurePolicy.within > 0 {
+		cutoff := now.Add(-s.failurePolicy.within)
+		for _, f := range all {
+			if !f.At.Before(cutoff) {
+				active = append(active, f)
+			}
+		}
+	} else {
+		active = all
+	}
+	if len(active) >= s.failurePolicy.maxBilledFailures {
+		stopMsg := formatSyncStopMessage(sourceID, active, s.failurePolicy.within)
+		_ = s.stopFlags.stop(ctx, sourceID, stopMsg)
+		return stopMsg
+	}
+	backoff := stablecoinBilledRetry
+	if len(s.failurePolicy.backoff) > 0 {
+		idx := len(active) - 1
+		if idx >= len(s.failurePolicy.backoff) {
+			idx = len(s.failurePolicy.backoff) - 1
+		}
+		if idx >= 0 {
+			backoff = s.failurePolicy.backoff[idx]
+		}
+	}
+	s.retryAfter = now.Add(backoff)
+	return errCode
+}
+
+func formatSyncStopMessage(sourceID string, recs []syncFailureRecord, within time.Duration) string {
+	var msgs []string
+	for _, r := range recs {
+		msgs = append(msgs, r.Message)
+	}
+	summary := strings.Join(msgs, "; ")
+	if within > 0 && len(recs) >= 2 {
+		span := recs[len(recs)-1].At.Sub(recs[0].At).Round(time.Minute)
+		return fmt.Sprintf("stopped after %d billed failures in %s (%s) — investigate, then run --bitcoin-bq-resume %s",
+			len(recs), span, summary, sourceID)
+	}
+	return fmt.Sprintf("stopped after %d consecutive billed failures (%s) — investigate, then run --bitcoin-bq-resume %s",
+		len(recs), summary, sourceID)
 }
