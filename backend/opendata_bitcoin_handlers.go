@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -12,11 +13,32 @@ const (
 	btcLiveStatsKey   = "opendata:bitcoin:live:stats"
 	btcLiveDiffKey    = "opendata:bitcoin:live:diff"
 	btcLivePools1wKey = "opendata:bitcoin:live:pools:1w"
+	btcFeesStatsKeyFm = "opendata:bitcoin:fees:stats:%s"
+	btcFeesRatesKeyFm = "opendata:bitcoin:fees:rates:%s"
 
 	btcLiveStatsTTL   = 30 * time.Second
 	btcLiveDiffTTL    = 30 * time.Second
 	btcLivePools1wTTL = 10 * time.Minute
+	btcFeesTTL        = 60 * time.Second
 )
+
+type BtcFeesData struct {
+	AsOf           string                  `json:"as_of"`
+	Period         string                  `json:"period"`
+	PriceUSD       *float64                `json:"price_usd"`
+	Templates      []BtcTxTemplateCost     `json:"templates"`
+	Consolidation  BtcConsolidationSignal  `json:"consolidation"`
+	MempoolHistory []BtcMempoolStatPoint   `json:"mempool_history"`
+	BlockFeeRates  []BtcBlockFeeRatePoint  `json:"block_fee_rates"`
+	Sources        []BtcSourceStatus       `json:"sources"`
+}
+
+type BtcOnchainData struct {
+	Days    int              `json:"days"`
+	Rows    []BtcOnchainDay  `json:"rows"`
+	Status  BtcBQStatus      `json:"status"`
+	Sources []BtcSourceStatus `json:"sources"`
+}
 
 type BtcMetaProvider struct {
 	ID      string `json:"id"`
@@ -67,6 +89,8 @@ func bitcoinRoutes(h *APIHandler) []bitcoinRoute {
 	return []bitcoinRoute{
 		{Pattern: "/api/opendata/bitcoin/meta", Handler: h.BitcoinMeta, Gzip: true},
 		{Pattern: "/api/opendata/bitcoin/live", Handler: h.BitcoinLive, Gzip: true},
+		{Pattern: "/api/opendata/bitcoin/fees", Handler: h.BitcoinFees, Gzip: true},
+		{Pattern: "/api/opendata/bitcoin/onchain", Handler: h.BitcoinOnchain, Gzip: true},
 		{Pattern: "/api/opendata/bitcoin/onchain/baseline", Handler: h.BitcoinBaseline, Gzip: false},
 	}
 }
@@ -344,4 +368,180 @@ func (h *APIHandler) BitcoinBaseline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeError(w, "baseline starter not yet wired", http.StatusNotImplemented)
+}
+
+func parseBtcDaysParam(r *http.Request, defaultDays int) int {
+	raw := r.URL.Query().Get("days")
+	if raw == "" {
+		return defaultDays
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return defaultDays
+	}
+	if n < 7 {
+		return 7
+	}
+	if n > 730 {
+		return 730
+	}
+	return n
+}
+
+func (h *APIHandler) BitcoinFees(w http.ResponseWriter, r *http.Request) {
+	if h.btc == nil {
+		writeError(w, "bitcoin dashboard disabled", http.StatusNotFound)
+		return
+	}
+	s := h.btc
+	s.prices.touchAsync()
+	now := s.now().UTC()
+	ctx := r.Context()
+
+	period := r.URL.Query().Get("period")
+	switch period {
+	case "24h", "1w", "1m":
+	default:
+		period = "24h"
+	}
+	ratePeriod := period
+	if ratePeriod == "24h" {
+		ratePeriod = "1w"
+	}
+
+	var (
+		wg       sync.WaitGroup
+		memRaw   *btcLiveRaw
+		memErr   error
+		spotVal  any
+		spotSrc  BtcSourceStatus
+		statsVal any
+		statsSrc BtcSourceStatus
+		ratesVal any
+		ratesSrc BtcSourceStatus
+	)
+
+	if s.providerEnabled("mempool") {
+		wg.Go(func() { memRaw, memErr = h.gasLiveBtc(r) })
+		wg.Go(func() {
+			key := fmt.Sprintf(btcFeesStatsKeyFm, period)
+			statsVal, statsSrc = h.btcCachedSource(ctx, key, btcFeesTTL, "mempool", func(c context.Context) (any, string) {
+				return fetchMempoolStats(c, period)
+			})
+		})
+		wg.Go(func() {
+			key := fmt.Sprintf(btcFeesRatesKeyFm, ratePeriod)
+			ratesVal, ratesSrc = h.btcCachedSource(ctx, key, btcFeesTTL, "mempool", func(c context.Context) (any, string) {
+				return fetchBlockFeeRates(c, ratePeriod)
+			})
+		})
+	} else {
+		statsSrc = BtcSourceStatus{ID: "mempool", Label: "mempool.space", Status: "disabled", License: "fair use"}
+	}
+
+	wg.Go(func() {
+		spotVal, spotSrc = h.btcCachedSource(ctx, btcLiveStatsKey, btcLiveStatsTTL, "coinbase", func(c context.Context) (any, string) {
+			return fetchCoinbaseBTCStats(c)
+		})
+	})
+	wg.Wait()
+
+	var priceUSD *float64
+	if st, ok := spotVal.(*btcSpotStats); ok && st != nil {
+		p := st.PriceUSD
+		priceUSD = &p
+	} else if s.providerEnabled("mempool") {
+		if mp, code := fetchMempoolBTCPrice(ctx); code == "" && mp != nil {
+			priceUSD = mp
+		}
+	}
+
+	if memRaw != nil && memErr == nil {
+		s.lastGood.Set("opendata:bitcoin:live:memraw", memRaw, now.Format(time.RFC3339))
+	} else if prev, _, ok := s.lastGood.Get("opendata:bitcoin:live:memraw"); ok {
+		memRaw, _ = prev.(*btcLiveRaw)
+	}
+
+	var fastest, halfHour, economy, blocksToClear float64
+	if memRaw != nil {
+		fastest = memRaw.Fees.Fastest
+		halfHour = memRaw.Fees.HalfHour
+		economy = memRaw.Fees.Economy
+		blocksToClear = float64(memRaw.Mempool.Vsize) / btcBlockVB
+	}
+
+	memHistory := []BtcMempoolStatPoint{}
+	if pts, ok := statsVal.([]BtcMempoolStatPoint); ok && pts != nil {
+		memHistory = pts
+	}
+	blockRates := []BtcBlockFeeRatePoint{}
+	if pts, ok := ratesVal.([]BtcBlockFeeRatePoint); ok && pts != nil {
+		blockRates = pts
+	}
+
+	memSrc := statsSrc
+	if ratesSrc.Status == "error" && memSrc.Status == "ok" {
+		memSrc = ratesSrc
+	}
+
+	writeJSON(w, BtcFeesData{
+		AsOf:           now.Format(time.RFC3339),
+		Period:         period,
+		PriceUSD:       priceUSD,
+		Templates:      computeBtcTxTemplateCosts(fastest, halfHour, economy, priceUSD),
+		Consolidation:  consolidationSignal(economy, blocksToClear),
+		MempoolHistory: memHistory,
+		BlockFeeRates:  blockRates,
+		Sources:        []BtcSourceStatus{memSrc, spotSrc},
+	})
+}
+
+func (h *APIHandler) BitcoinOnchain(w http.ResponseWriter, r *http.Request) {
+	if h.btc == nil {
+		writeError(w, "bitcoin dashboard disabled", http.StatusNotFound)
+		return
+	}
+	s := h.btc
+	days := parseBtcDaysParam(r, 90)
+	now := s.now().UTC()
+	to := now.Format("2006-01-02")
+	from := now.AddDate(0, 0, -days).Format("2006-01-02")
+
+	status := BtcBQStatus{
+		Job:   btcOnchainJobID,
+		Jobs:  s.settings.Jobs,
+		State: "off",
+	}
+	rows := []BtcOnchainDay{}
+	bqSrc := BtcSourceStatus{
+		ID:      "bigquery",
+		Label:   "BigQuery crypto_bitcoin (SQLite)",
+		Status:  "disabled",
+		License: "public dataset (CC0)",
+	}
+
+	if s.read != nil {
+		ctx := r.Context()
+		if st, err := s.read.jobStatus(ctx, btcOnchainJobID); err == nil {
+			status = st
+		}
+		if loaded, err := s.read.onchainDays(ctx, from, to); err == nil && len(loaded) > 0 {
+			rows = loaded
+			bqSrc.Status = "ok"
+			bqSrc.AsOf = loaded[len(loaded)-1].Date
+		} else if status.SyncedThrough != "" {
+			bqSrc.Status = "ok"
+			bqSrc.AsOf = status.SyncedThrough
+		} else if s.settings.Jobs {
+			bqSrc.Status = "stale"
+			bqSrc.Error = status.State
+		}
+	}
+
+	writeJSON(w, BtcOnchainData{
+		Days:    days,
+		Rows:    rows,
+		Status:  status,
+		Sources: []BtcSourceStatus{bqSrc},
+	})
 }

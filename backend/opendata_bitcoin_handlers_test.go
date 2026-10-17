@@ -276,3 +276,201 @@ func TestBitcoinHandlersCannotStartJobs(t *testing.T) {
 		t.Errorf("POST /onchain/baseline with allow_ui:false = %d, want 403", postRec.Code)
 	}
 }
+
+func TestFoldMempoolStats(t *testing.T) {
+	vsizes := make([]float64, 39)
+	vsizes[0] = 39_158_473 // 0 sat/vB -> band_0_1_vmb = 39.158473
+	vsizes[1] = 884_625    // 1 sat/vB -> band_1_2_vmb = 0.884625
+	vsizes[2] = 500_000    // 2 sat/vB -> band_2_5_vmb
+	vsizes[4] = 300_000    // 4 sat/vB -> band_2_5_vmb (total 0.8)
+	vsizes[5] = 200_000    // 5 sat/vB -> band_5_10_vmb
+	vsizes[8] = 400_000    // 10 sat/vB -> band_10_50_vmb
+	vsizes[14] = 100_000   // 50 sat/vB -> band_50_plus_vmb
+
+	pt, err := foldMempoolStats("2026-10-16T00:00:00Z", vsizes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if math.Abs(pt.Band0To1VMB-39.158473) > 1e-6 {
+		t.Errorf("Band0To1VMB = %f, want 39.158473", pt.Band0To1VMB)
+	}
+	if math.Abs(pt.Band1To2VMB-0.884625) > 1e-6 {
+		t.Errorf("Band1To2VMB = %f, want 0.884625", pt.Band1To2VMB)
+	}
+	if math.Abs(pt.Band2To5VMB-0.8) > 1e-6 {
+		t.Errorf("Band2To5VMB = %f, want 0.8", pt.Band2To5VMB)
+	}
+	if math.Abs(pt.Band5To10VMB-0.2) > 1e-6 {
+		t.Errorf("Band5To10VMB = %f, want 0.2", pt.Band5To10VMB)
+	}
+	if math.Abs(pt.Band10To50VMB-0.4) > 1e-6 {
+		t.Errorf("Band10To50VMB = %f, want 0.4", pt.Band10To50VMB)
+	}
+	if math.Abs(pt.Band50PlusVMB-0.1) > 1e-6 {
+		t.Errorf("Band50PlusVMB = %f, want 0.1", pt.Band50PlusVMB)
+	}
+}
+
+func TestFoldMempoolStatsLen(t *testing.T) {
+	if _, err := foldMempoolStats("2026-10-16T00:00:00Z", make([]float64, 38)); err == nil {
+		t.Fatal("expected error for 38-element vsizes slice")
+	}
+}
+
+func TestTxCosts(t *testing.T) {
+	price := 80_000.0
+	costs := computeBtcTxTemplateCosts(10, 5, 2, &price)
+	if len(costs) != 6 {
+		t.Fatalf("len(costs) = %d, want 6", len(costs))
+	}
+	// Standard 140 vB at 10 sat/vB = 1,400 sats = $1.12; consolidation 3,442 vB at 2 sat/vB = 6,884 sats = $5.5072
+	std := costs[0]
+	if std.Vbytes != 140 || std.NextBlockSats != 1400 || std.NextBlockUSD == nil || math.Abs(*std.NextBlockUSD-1.12) > 1e-4 {
+		t.Errorf("standard template = %+v", std)
+	}
+	cons := costs[5]
+	if cons.Vbytes != 3442 || cons.EconomySats != 6884 || cons.EconomyUSD == nil || math.Abs(*cons.EconomyUSD-5.5072) > 1e-4 {
+		t.Errorf("consolidation template = %+v", cons)
+	}
+}
+
+func TestConsolidationSignal(t *testing.T) {
+	openSig := consolidationSignal(2.0, 1.5)
+	if !openSig.Open {
+		t.Errorf("expected open signal for economy=2.0, blocks=1.5: %+v", openSig)
+	}
+	closedFee := consolidationSignal(8.0, 1.5)
+	if closedFee.Open {
+		t.Errorf("expected closed signal when economy=8.0 > 5.0: %+v", closedFee)
+	}
+	closedBacklog := consolidationSignal(2.0, 5.0)
+	if closedBacklog.Open {
+		t.Errorf("expected closed signal when backlog=5.0 > 3.0: %+v", closedBacklog)
+	}
+}
+
+func TestBitcoinFeesPeriods(t *testing.T) {
+	statsRaw, err := os.ReadFile("testdata/bitcoin/mempool_statistics_24h.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ratesRaw, err := os.ReadFile("testdata/bitcoin/mempool_block_fee_rates_1w.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cbStatsRaw, err := os.ReadFile("testdata/bitcoin/coinbase_stats.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	memSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/v1/fees/precise":
+			w.Write([]byte(`{"fastestFee":2.5,"halfHourFee":2.0,"hourFee":1.5,"economyFee":1.1,"minimumFee":1.0}`))
+		case r.URL.Path == "/api/mempool":
+			w.Write([]byte(`{"count":42000,"vsize":2000000,"total_fee":50000000,"fee_histogram":[[2,1000000]]}`))
+		case r.URL.Path == "/api/v1/fees/mempool-blocks":
+			w.Write([]byte(`[{"blockVSize":1000000,"nTx":2500,"totalFees":10000000,"medianFee":2.5,"feeRange":[1,10]}]`))
+		case r.URL.Path == "/api/v1/blocks":
+			w.Write([]byte(`[{"height":971691,"timestamp":1760616000,"tx_count":3100,"size":1600000,"weight":3990000,"extras":{"medianFee":2.2,"totalFees":12000000}}]`))
+		case strings.HasPrefix(r.URL.Path, "/api/v1/statistics/"):
+			w.Write(statsRaw)
+		case strings.HasPrefix(r.URL.Path, "/api/v1/mining/blocks/fee-rates/"):
+			w.Write(ratesRaw)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer memSrv.Close()
+
+	cbSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(cbStatsRaw)
+	}))
+	defer cbSrv.Close()
+
+	origMempool := mempoolBaseURL
+	origCBStats := btcCoinbaseStatsURL
+	t.Cleanup(func() {
+		applyCryptoGasConfig(CryptoGasConfig{MempoolBaseURL: origMempool})
+		btcCoinbaseStatsURL = origCBStats
+	})
+	applyCryptoGasConfig(CryptoGasConfig{MempoolBaseURL: memSrv.URL})
+	btcCoinbaseStatsURL = cbSrv.URL
+
+	h := newTestBitcoinHandler(t)
+	for _, p := range []string{"24h", "1w", "1m"} {
+		req := httptest.NewRequest(http.MethodGet, "/api/opendata/bitcoin/fees?period="+p, nil)
+		rec := httptest.NewRecorder()
+		h.BitcoinFees(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("period %s status = %d", p, rec.Code)
+		}
+		var out BtcFeesData
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		if out.Period != p || len(out.Templates) != 6 || len(out.MempoolHistory) == 0 || len(out.BlockFeeRates) == 0 {
+			t.Errorf("period %s response incomplete: period=%s templates=%d hist=%d rates=%d",
+				p, out.Period, len(out.Templates), len(out.MempoolHistory), len(out.BlockFeeRates))
+		}
+	}
+}
+
+func TestBitcoinOnchainReadOnly(t *testing.T) {
+	ctx := context.Background()
+	h := newTestBitcoinHandler(t)
+	h.bq = nil // must never touch BigQuery
+	store := openTestRiskStore(t)
+	now := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	h.btc.now = func() time.Time { return now }
+	h.btc.read = newBtcReadStore(store, h.btc.settings, h.btc.now)
+
+	payload := btcRollupPayload{
+		CoverageStart: 971548,
+		Blocks: []btcBlockRow{
+			{Height: 971548, TS: "2026-10-14T00:05:00Z", Date: "2026-10-14", Bits: "17021ef0", TransactionCount: 2500, SubsidySats: 312_500_000},
+		},
+		Days: []BtcOnchainDay{
+			{Date: "2026-10-14", Blocks: 144, Txs: 450000, FeesSats: 303128842},
+		},
+	}
+	if err := store.applyBtcRollupBatch(ctx, payload, "2026-10-14", "2026-10-14", now); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/opendata/bitcoin/onchain?days=30", nil)
+	rec := httptest.NewRecorder()
+	h.BitcoinOnchain(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	var out BtcOnchainData
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Rows) != 1 || out.Rows[0].Date != "2026-10-14" || out.Status.SyncedThrough != "2026-10-14" {
+		t.Errorf("onchain response = %+v", out)
+	}
+}
+
+func TestBitcoinOnchainJobsOff(t *testing.T) {
+	h := newTestBitcoinHandler(t)
+	h.bq = nil
+	store := openTestRiskStore(t)
+	h.btc.read = newBtcReadStore(store, h.btc.settings, h.btc.now)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/opendata/bitcoin/onchain?days=90", nil)
+	rec := httptest.NewRecorder()
+	h.BitcoinOnchain(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	var out BtcOnchainData
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Status.State != "off" || out.Status.Jobs || len(out.Rows) != 0 {
+		t.Errorf("jobs off response = %+v, want state=off jobs=false rows=0", out)
+	}
+}
+
