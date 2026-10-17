@@ -39,6 +39,15 @@ export interface BtcBaselineStatus {
   cli_command: string;
 }
 
+export interface BtcBaselinePlan {
+  as_of: string;
+  estimated_bytes: number;
+  estimated_gib: number;
+  estimated_usd: number;
+  token?: string;
+  expires_at?: string;
+}
+
 export interface BtcDateRange {
   from: string;
   to: string;

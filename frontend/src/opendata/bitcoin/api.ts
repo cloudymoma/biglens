@@ -1,5 +1,6 @@
 import axios from 'axios';
 import type {
+  BtcBaselinePlan,
   BtcBaselineStatus,
   BtcFeesData,
   BtcHoldersData,
@@ -41,5 +42,20 @@ export const fetchBitcoinOnchainHolders = async (days: number): Promise<BtcOncha
 
 export const fetchBitcoinBaseline = async (): Promise<BtcBaselineStatus> => {
   const { data } = await axios.get<BtcBaselineStatus>('/api/opendata/bitcoin/onchain/baseline');
+  return data;
+};
+
+export const dryRunBitcoinBaseline = async (): Promise<BtcBaselinePlan> => {
+  const { data } = await axios.post<BtcBaselinePlan>('/api/opendata/bitcoin/onchain/baseline', {
+    action: 'dry_run',
+  });
+  return data;
+};
+
+export const confirmBitcoinBaseline = async (token: string): Promise<BtcBaselineStatus> => {
+  const { data } = await axios.post<BtcBaselineStatus>('/api/opendata/bitcoin/onchain/baseline', {
+    action: 'confirm',
+    token,
+  });
   return data;
 };

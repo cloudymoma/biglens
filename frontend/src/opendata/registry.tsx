@@ -54,10 +54,11 @@ export const OPEN_DATASETS: OpenDataset[] = [
     label: 'Bitcoin',
     icon: <Bitcoin size={16} />,
     description:
-      'A professional Bitcoin dashboard: fee market and block space — from free public APIs, plus ' +
-      'operator-enabled BigQuery analytics (tx-weighted fee percentiles, block-space composition, ' +
-      'OP_RETURN / Runes, witness share, script-type adoption, payment-size bands).',
-    sourceTable: 'mempool.space · Coinbase · Kraken · blockchain.com · Coin Metrics Community · bigquery-public-data.crypto_bitcoin (operator opt-in)',
+      'A professional Bitcoin dashboard: fee market and block space, holder behavior and exchange flows — from free ' +
+      'public APIs, plus operator-enabled BigQuery analytics (coin age, SOPR, realized cap, HODL waves, block-space ' +
+      'composition).',
+    sourceTable:
+      'mempool.space · Coinbase · Kraken · Coin Metrics Community · CoinGecko · blockchain.com · bigquery-public-data.crypto_bitcoin (operator opt-in)',
     component: BitcoinDashboard,
   },
   {

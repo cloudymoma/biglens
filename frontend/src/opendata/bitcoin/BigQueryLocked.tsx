@@ -13,8 +13,8 @@ export default function BigQueryLocked({
   onEnableDisplay?: () => void;
 }) {
   const canDisplay = Boolean(bigquery?.jobs || bigquery?.data_available);
-  const firstDay = bigquery?.costs?.first_day_usd ?? 1.41;
-  const steadyMonth = bigquery?.costs?.steady_month_usd ?? 3.62;
+  const firstDay = bigquery?.costs?.first_day_usd ?? 1.49;
+  const steadyMonth = bigquery?.costs?.steady_month_usd ?? 2.88;
 
   return (
     <div className="rounded-xl border border-dashed border-zinc-800 bg-zinc-900/40 p-6">
@@ -56,8 +56,9 @@ export default function BigQueryLocked({
 {`bitcoin:
   bigquery:
     jobs: true
-    coin_age_cadence_days: 7
-    monthly_budget_gib: 1024`}
+    monthly_budget_gib: 2048
+    coin_age:
+      cadence_days: 7`}
           </pre>
         </div>
       )}
