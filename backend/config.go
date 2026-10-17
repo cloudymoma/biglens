@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sync"
@@ -37,6 +38,7 @@ type Config struct {
 	CryptoGas    CryptoGasConfig    `yaml:"crypto_gas,omitempty"`
 	PaymentCheck PaymentCheckConfig `yaml:"payment_check,omitempty"`
 	CryptoPrices CryptoPricesConfig `yaml:"crypto_prices,omitempty"`
+	Bitcoin      BitcoinConfig      `yaml:"bitcoin,omitempty"`
 
 	// path is where this config was loaded from, so SaveConfig can write back.
 	path string
@@ -290,3 +292,115 @@ func (c CryptoPricesConfig) initialDays() int {
 	}
 	return min(max(*c.InitialDays, 0), 730)
 }
+
+type BitcoinConfig struct {
+	Enabled   *bool                 `yaml:"enabled,omitempty"`   // nil → true
+	Providers map[string]bool       `yaml:"providers,omitempty"` // missing key → btcDefaultProviders
+	BigQuery  BitcoinBigQueryConfig `yaml:"bigquery,omitempty"`
+}
+
+type BitcoinBigQueryConfig struct {
+	Jobs             bool `yaml:"jobs,omitempty"`               // default false: operator opt-in
+	InitialDays      *int `yaml:"initial_days,omitempty"`       // nil → 365; clamp [7, 730]
+	MonthlyBudgetGiB int  `yaml:"monthly_budget_gib,omitempty"` // ≤0 → 2048; covers jobs A, B and C
+	CoinAge          struct {
+		Enabled      *bool   `yaml:"enabled,omitempty"`        // nil → true
+		CadenceDays  int     `yaml:"cadence_days,omitempty"`   // ≤0 → 7; clamp [7, 30]
+		InitialDays  *int    `yaml:"initial_days,omitempty"`   // nil → 365; clamp [7, 730]
+		WhaleMinBTC  float64 `yaml:"whale_min_btc,omitempty"`  // ≤0 → 10 (sent to SQL as whale_min_sats)
+		WhalesPerDay int     `yaml:"whales_per_day,omitempty"` // ≤0 → 20; clamp [1, 100]
+	} `yaml:"coin_age,omitempty"`
+	UTXOBaseline struct {
+		AllowUI         bool `yaml:"allow_ui,omitempty"`          // default false: CLI only
+		MinIntervalDays int  `yaml:"min_interval_days,omitempty"` // ≤0 → 30; clamp [7, 365]
+	} `yaml:"utxo_baseline,omitempty"`
+}
+
+// btcDefaultProviders lists the M1–M3 providers; M4–M5 keys land with the tasks that first call them.
+var btcDefaultProviders = map[string]bool{
+	"mempool":        true,
+	"coinbase":       true,
+	"kraken":         true,
+	"coinmetrics":    true,
+	"coingecko":      true,
+	"blockchain_com": true,
+}
+
+type btcSettings struct {
+	Enabled             bool
+	Providers           map[string]bool
+	Jobs                bool
+	InitialDays         int
+	BudgetBytes         int64
+	CoinAgeEnabled      bool
+	CadenceDays         int
+	CoinAgeInitialDays  int
+	WhaleMinSats        int64
+	WhalesPerDay        int
+	BaselineAllowUI     bool
+	BaselineMinInterval time.Duration
+}
+
+func (c BitcoinConfig) settings() btcSettings {
+	providers := make(map[string]bool, len(btcDefaultProviders))
+	for k, v := range btcDefaultProviders {
+		providers[k] = v
+	}
+	for k, v := range c.Providers {
+		if _, ok := btcDefaultProviders[k]; ok {
+			providers[k] = v
+		}
+	}
+	initialDays := 365
+	if c.BigQuery.InitialDays != nil {
+		initialDays = min(max(*c.BigQuery.InitialDays, 7), 730)
+	}
+	budgetGiB := c.BigQuery.MonthlyBudgetGiB
+	if budgetGiB <= 0 {
+		budgetGiB = 2048
+	}
+	ca := c.BigQuery.CoinAge
+	cadenceDays := ca.CadenceDays
+	if cadenceDays <= 0 {
+		cadenceDays = 7
+	} else {
+		cadenceDays = min(max(cadenceDays, 7), 30)
+	}
+	caInitialDays := 365
+	if ca.InitialDays != nil {
+		caInitialDays = min(max(*ca.InitialDays, 7), 730)
+	}
+	whaleBTC := ca.WhaleMinBTC
+	if whaleBTC <= 0 {
+		whaleBTC = 10
+	}
+	whaleMinSats := int64(math.Round(whaleBTC * 100_000_000))
+	whalesPerDay := ca.WhalesPerDay
+	if whalesPerDay <= 0 {
+		whalesPerDay = 20
+	} else {
+		whalesPerDay = min(max(whalesPerDay, 1), 100)
+	}
+	ub := c.BigQuery.UTXOBaseline
+	intervalDays := ub.MinIntervalDays
+	if intervalDays <= 0 {
+		intervalDays = 30
+	} else {
+		intervalDays = min(max(intervalDays, 7), 365)
+	}
+	return btcSettings{
+		Enabled:             c.Enabled == nil || *c.Enabled,
+		Providers:           providers,
+		Jobs:                c.BigQuery.Jobs,
+		InitialDays:         initialDays,
+		BudgetBytes:         int64(budgetGiB) << 30,
+		CoinAgeEnabled:      ca.Enabled == nil || *ca.Enabled,
+		CadenceDays:         cadenceDays,
+		CoinAgeInitialDays:  caInitialDays,
+		WhaleMinSats:        whaleMinSats,
+		WhalesPerDay:        whalesPerDay,
+		BaselineAllowUI:     ub.AllowUI,
+		BaselineMinInterval: time.Duration(intervalDays) * 24 * time.Hour,
+	}
+}
+

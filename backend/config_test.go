@@ -354,3 +354,117 @@ func mustMarshalYAML(t *testing.T, v any) []byte {
 	}
 	return out
 }
+
+func TestBitcoinConfigDefaults(t *testing.T) {
+	got := BitcoinConfig{}.settings()
+	if !got.Enabled {
+		t.Errorf("Enabled = false, want true")
+	}
+	if got.Jobs {
+		t.Errorf("Jobs = true, want false (operator opt-in)")
+	}
+	if got.BudgetBytes != 2048<<30 {
+		t.Errorf("BudgetBytes = %d, want %d (2048 GiB)", got.BudgetBytes, int64(2048<<30))
+	}
+	if !got.CoinAgeEnabled {
+		t.Errorf("CoinAgeEnabled = false, want true")
+	}
+	if got.CadenceDays != 7 {
+		t.Errorf("CadenceDays = %d, want 7", got.CadenceDays)
+	}
+	if got.InitialDays != 365 || got.CoinAgeInitialDays != 365 {
+		t.Errorf("InitialDays = %d / %d, want 365 / 365", got.InitialDays, got.CoinAgeInitialDays)
+	}
+	if got.WhaleMinSats != 1_000_000_000 || got.WhalesPerDay != 20 {
+		t.Errorf("whales = %d sats / %d per day, want 1000000000 / 20", got.WhaleMinSats, got.WhalesPerDay)
+	}
+	if got.BaselineAllowUI {
+		t.Errorf("BaselineAllowUI = true, want false")
+	}
+	if got.BaselineMinInterval != 30*24*time.Hour {
+		t.Errorf("BaselineMinInterval = %v, want 720h", got.BaselineMinInterval)
+	}
+	wantProviders := map[string]bool{
+		"mempool":        true,
+		"coinbase":       true,
+		"kraken":         true,
+		"coinmetrics":    true,
+		"coingecko":      true,
+		"blockchain_com": true,
+	}
+	if !reflect.DeepEqual(got.Providers, wantProviders) {
+		t.Errorf("Providers = %v, want %v", got.Providers, wantProviders)
+	}
+	if strings.Contains(string(mustMarshalYAML(t, &Config{})), "bitcoin") {
+		t.Error("an absent bitcoin section must stay absent on save")
+	}
+}
+
+func TestBitcoinConfigClamps(t *testing.T) {
+	ptr := func(n int) *int { return &n }
+	var low BitcoinConfig
+	low.BigQuery.InitialDays = ptr(0)
+	low.BigQuery.CoinAge.CadenceDays = 1
+	low.BigQuery.CoinAge.InitialDays = ptr(0)
+	low.BigQuery.CoinAge.WhalesPerDay = 500
+	low.BigQuery.UTXOBaseline.MinIntervalDays = 1
+	sLow := low.settings()
+	if sLow.CadenceDays != 7 {
+		t.Errorf("cadence 1 -> %d, want 7", sLow.CadenceDays)
+	}
+	if sLow.InitialDays != 7 || sLow.CoinAgeInitialDays != 7 {
+		t.Errorf("initial 0 -> %d / %d, want 7 / 7", sLow.InitialDays, sLow.CoinAgeInitialDays)
+	}
+	if sLow.WhalesPerDay != 100 {
+		t.Errorf("whales_per_day 500 -> %d, want 100", sLow.WhalesPerDay)
+	}
+	if sLow.BaselineMinInterval != 7*24*time.Hour {
+		t.Errorf("interval 1 -> %v, want 7d", sLow.BaselineMinInterval)
+	}
+
+	var high BitcoinConfig
+	high.BigQuery.InitialDays = ptr(9999)
+	high.BigQuery.CoinAge.CadenceDays = 99
+	high.BigQuery.CoinAge.InitialDays = ptr(9999)
+	high.BigQuery.UTXOBaseline.MinIntervalDays = 999
+	sHigh := high.settings()
+	if sHigh.CadenceDays != 30 {
+		t.Errorf("cadence 99 -> %d, want 30", sHigh.CadenceDays)
+	}
+	if sHigh.InitialDays != 730 || sHigh.CoinAgeInitialDays != 730 {
+		t.Errorf("initial 9999 -> %d / %d, want 730 / 730", sHigh.InitialDays, sHigh.CoinAgeInitialDays)
+	}
+	if sHigh.BaselineMinInterval != 365*24*time.Hour {
+		t.Errorf("interval 999 -> %v, want 365d", sHigh.BaselineMinInterval)
+	}
+}
+
+func TestBitcoinConfigProviderOverride(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "conf.yaml")
+	src := `bitcoin:
+  providers:
+    coinmetrics: false
+  bigquery:
+    jobs: true
+    monthly_budget_gib: 1024
+`
+	if err := os.WriteFile(path, []byte(src), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := cfg.Bitcoin.settings()
+	if s.Providers["coinmetrics"] {
+		t.Errorf("coinmetrics should be false after override")
+	}
+	if !s.Providers["mempool"] || !s.Providers["coinbase"] || !s.Providers["kraken"] || !s.Providers["coingecko"] || !s.Providers["blockchain_com"] {
+		t.Errorf("unspecified providers lost defaults: %v", s.Providers)
+	}
+	if !s.Jobs || s.BudgetBytes != 1024<<30 {
+		t.Errorf("bigquery settings = jobs:%v budget:%d", s.Jobs, s.BudgetBytes)
+	}
+}
+

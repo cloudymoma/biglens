@@ -52,3 +52,35 @@ catalog:
 # of the 00/06/12/18 UTC sampled hours) and stored in address_risk.db_path.
 # crypto_prices:
 #   initial_days: 365                     # first-start backfill (days, max 730; 0 = off; 365 ≈ 125 GiB ≈ $0.8 once, then ~360–500 MiB/day)
+
+# Bitcoin dashboard (all optional; defaults shown). mempool.space URL: crypto_gas.mempool_base_url
+# bitcoin:
+#   enabled: true
+#   providers:                          # keyless public APIs; false = never called
+#     coinbase: true                    # spot price and daily candles
+#     kraken: true                      # price fallback
+#     coinmetrics: true                 # Community API, CC BY-NC 4.0 (non-commercial)
+#     coingecko: true                   # public treasuries (M4 adds spot tickers, derivatives, dominance)
+#     blockchain_com: true              # price history 2010–2015 (Coin Metrics PriceUSD is the fallback)
+#     # Added only if G1 approves M4–M5, by the task that first calls each provider:
+#     #   deribit, okx, hyperliquid, cftc, alternative_me (M4)
+#     #   binance (M4; auto: direct futures APIs, CoinGecko's Binance rows for 24 h after HTTP 451/403)
+#     #   bitnodes (≤ 4 snapshots/day), dbip (DB-IP Lite, CC BY 4.0, ≈ 11.5 MB/month in data/geo/) (M5)
+#     #   Coinbase INTX perps and CDE (US) futures arrive with M4 under the same coinbase key
+#   bigquery:
+#     jobs: false                       # OPERATOR OPT-IN. true = run Bitcoin BigQuery jobs billed to bigquery.project_id.
+#                                       # The dashboard switch only shows/hides panels; it never starts jobs.
+#     initial_days: 365                 # rollup cold start (7–730; 365 ≈ 88 GiB ≈ $0.54 once)
+#     monthly_budget_gib: 2048          # ceiling for ALL Bitcoin BigQuery jobs incl. the UTXO baseline (≈ $12.50)
+#     coin_age:
+#       enabled: true
+#       cadence_days: 7                 # 7–30; ≈ 102 GiB per run (weekly ≈ $2.75/month)
+#       initial_days: 365               # 7–730; history backfill ≈ 157 GiB ≈ $0.96 once
+#       whale_min_btc: 10
+#       whales_per_day: 20
+#     utxo_baseline:                    # ≈ 687 GiB ≈ $4.20 per run: ./biglens-server --bitcoin-utxo-baseline [--yes] [--force]
+#       allow_ui: false                 # true = also allow dry run → confirm from the dashboard
+#       min_interval_days: 30           # --force bypasses this, never the budget
+# A job stopped by repeated billed failures (Job A: 4 within 24 h; Job B: 2 in a row) resumes with:
+#   ./biglens-server --bitcoin-bq-resume <btc_onchain|btc_coinage>
+
