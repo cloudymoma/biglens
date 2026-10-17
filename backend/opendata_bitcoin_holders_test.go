@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"math"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestHolderEngineHandBuiltChain(t *testing.T) {
@@ -225,5 +227,267 @@ func TestLTHSTHSplit(t *testing.T) {
 	}
 	if hm.LTHRealizedPrice == nil || math.Abs(*hm.LTHRealizedPrice-40000) > 1e-6 {
 		t.Fatalf("LTHRealizedPrice = %v, want 40000", hm.LTHRealizedPrice)
+	}
+}
+
+func seedMaintenanceChain(t *testing.T, store *riskStore, now time.Time) {
+	t.Helper()
+	ctx := context.Background()
+	// Seed rollup for 2026-10-14 (T0-1) and 2026-10-15 (T0).
+	// On 2026-10-14: coinbase 50 BTC + 0.1 BTC fee = 5,010,000,000; spend 10 BTC from 2026-10-10; created = 59.9 BTC + 0.1 = 6,000,000,000.
+	// On 2026-10-15: coinbase 50 BTC = 5,000,000,000; spend 5 BTC from 2026-10-10; created = 5,500,000,000.
+	rollupPayload := btcRollupPayload{
+		CoverageStart: 1,
+		Blocks: []btcBlockRow{
+			{Height: 1, TS: "2026-10-14T12:00:00Z", Date: "2026-10-14", Bits: "17021ef0", TransactionCount: 100, SubsidySats: 5_000_000_000},
+			{Height: 2, TS: "2026-10-15T12:00:00Z", Date: "2026-10-15", Bits: "17021ef0", TransactionCount: 100, SubsidySats: 5_000_000_000},
+		},
+		Days: []BtcOnchainDay{
+			{
+				Date:                  "2026-10-14",
+				Blocks:                1,
+				ScheduledIssuanceSats: 5_000_000_000,
+				ClaimedIssuanceSats:   5_000_000_000,
+				CoinbaseSats:          5_010_000_000,
+				FeesSats:              10_000_000,
+				CreatedSats:           6_000_000_000,
+				OpretValueSats:        0,
+			},
+			{
+				Date:                  "2026-10-15",
+				Blocks:                1,
+				ScheduledIssuanceSats: 5_000_000_000,
+				ClaimedIssuanceSats:   5_000_000_000,
+				CoinbaseSats:          5_000_000_000,
+				FeesSats:              0,
+				CreatedSats:           5_500_000_000,
+				OpretValueSats:        0,
+			},
+		},
+	}
+	if err := store.applyBtcRollupBatch(ctx, rollupPayload, "2026-10-14", "2026-10-15", now); err != nil {
+		t.Fatal(err)
+	}
+
+	caPayload := btcCoinAgePayload{
+		Matrix: []btcSpentMatrixRow{
+			{SpendDay: "2026-10-14", CreateDay: "2026-10-10", Sats: 1_000_000_000, Inputs: 1},
+			{SpendDay: "2026-10-15", CreateDay: "2026-10-10", Sats: 500_000_000, Inputs: 1},
+		},
+		Days: []BtcCoinageDay{
+			coinageMetrics("2026-10-14", map[string]int64{"2026-10-10": 1_000_000_000}, nil, false),
+			coinageMetrics("2026-10-15", map[string]int64{"2026-10-10": 500_000_000}, nil, false),
+		},
+	}
+	if err := store.applyBtcCoinAgeBatch(ctx, caPayload, "2026-10-14", "2026-10-15", now); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMaintenanceAppliesPendingBaseline(t *testing.T) {
+	ctx := context.Background()
+	store := openTestRiskStore(t)
+	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	seedMaintenanceChain(t, store, now)
+
+	settings := (BitcoinConfig{}).settings()
+	settings.Jobs = true
+	budget := newBtcBudget(store, settings, func() time.Time { return now })
+	resID, err := budget.reserve(ctx, btcBaselineJobID, 1<<30)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate CLI baseline write at AsOf = 2026-10-15 (state after 2026-10-14):
+	// {2026-10-10: 4,000,000,000, 2026-10-14: 6,000,000,000} -> total 10,000,000,000 sats.
+	baseRows := []btcUTXOBaselineRow{
+		{CreateDay: "2026-10-10", Sats: 4_000_000_000, UTXOs: 4},
+		{CreateDay: "2026-10-14", Sats: 6_000_000_000, UTXOs: 6},
+	}
+	st, err := store.commitBtcBaseline(ctx, budget, settings, resID, "2026-10-15", baseRows, 1<<30, now, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !st.Pending || st.Generation != 1 {
+		t.Fatalf("after commitBtcBaseline: Pending=%v Gen=%d", st.Pending, st.Generation)
+	}
+
+	maint := newBtcHolderMaintenance(store, nil, func() time.Time { return now })
+	if err := maint.run(ctx); err != nil {
+		t.Fatalf("maint.run: %v", err)
+	}
+
+	// Pending flag must be cleared.
+	if _, hasPend, _ := store.getBtcKV(ctx, btcBaselinePendingKey); hasPend {
+		t.Fatalf("expected baseline_pending flag to be cleared after maintenance")
+	}
+
+	// UTXO state must be rolled forward through 2026-10-15:
+	// 2026-10-10: 4B - 0.5B = 3.5B; 2026-10-14: 6B; 2026-10-15: 5.5B -> total 15B.
+	asOf, err := store.getBtcUTXOStateAsOf(ctx)
+	if err != nil || asOf != "2026-10-15" {
+		t.Fatalf("utxo_state_as_of = %q, want 2026-10-15 (err=%v)", asOf, err)
+	}
+	uState, err := store.loadBtcUTXOState(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if uState.totalSats() != 15_000_000_000 {
+		t.Fatalf("uState totalSats = %d, want 15,000,000,000", uState.totalSats())
+	}
+
+	// Holder rows for 2026-10-13 (reconstructed backward before 2026-10-14),
+	// 2026-10-14 (init day), and 2026-10-15 (rolled forward) must be upserted.
+	rs := newBtcReadStore(store, settings, func() time.Time { return now })
+	hDays, err := rs.holderDays(ctx, "2026-10-13", "2026-10-15")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hDays) != 3 {
+		t.Fatalf("len(holderDays) = %d, want 3: %+v", len(hDays), hDays)
+	}
+	// On 2026-10-13 (before 2026-10-14): supply = 5,000,000,000.
+	// On 2026-10-14: supply = 10,000,000,000.
+	// On 2026-10-15: supply = 15,000,000,000.
+	if hDays[0].SupplySats != 5_000_000_000 || hDays[1].SupplySats != 10_000_000_000 || hDays[2].SupplySats != 15_000_000_000 {
+		t.Fatalf("holderDays supplies = [%d, %d, %d], want [5B, 10B, 15B]",
+			hDays[0].SupplySats, hDays[1].SupplySats, hDays[2].SupplySats)
+	}
+}
+
+func TestMaintenanceNeverRollsForwardOverPending(t *testing.T) {
+	ctx := context.Background()
+	store := openTestRiskStore(t)
+	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	seedMaintenanceChain(t, store, now)
+
+	// Pre-populate stale/corrupted UTXO state at 2026-10-14 (wrong 999 sats).
+	staleState := utxoState{"2026-10-10": 999}
+	if err := store.applyHolderMaintenanceTx(ctx, &staleState, "2026-10-14", 1, false, nil, nil, now); err != nil {
+		t.Fatal(err)
+	}
+
+	// Now write a new pending baseline (generation 2, AsOf 2026-10-15).
+	settings := (BitcoinConfig{}).settings()
+	settings.Jobs = true
+	budget := newBtcBudget(store, settings, func() time.Time { return now })
+	resID, err := budget.reserve(ctx, btcBaselineJobID, 1<<30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseRows := []btcUTXOBaselineRow{
+		{CreateDay: "2026-10-10", Sats: 4_000_000_000, UTXOs: 4},
+		{CreateDay: "2026-10-14", Sats: 6_000_000_000, UTXOs: 6},
+	}
+	if _, err := store.commitBtcBaseline(ctx, budget, settings, resID, "2026-10-15", baseRows, 1<<30, now, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// Maintenance must apply generation 2 instead of rolling forward from the stale 999-sat state.
+	maint := newBtcHolderMaintenance(store, nil, func() time.Time { return now })
+	if err := maint.run(ctx); err != nil {
+		t.Fatalf("maint.run: %v", err)
+	}
+	uState, err := store.loadBtcUTXOState(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if uState.totalSats() != 15_000_000_000 {
+		t.Fatalf("expected pending baseline to reset state to 15B sats, got %d", uState.totalSats())
+	}
+}
+
+func TestRecomputeHoldersUpsertOnly(t *testing.T) {
+	ctx := context.Background()
+	store := openTestRiskStore(t)
+	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+
+	// Seed an older holder row for 2026-01-01 that is no longer in the matrix.
+	oldRow := BtcHolderDay{
+		Date:               "2026-01-01",
+		BaselineGeneration: 1,
+		SupplySats:         1_000_000_000,
+		SupplyBTC:          10.0,
+		HODLWavesPct:       map[string]float64{"<1d": 100},
+	}
+	if err := store.applyHolderMaintenanceTx(ctx, nil, "", 1, false, []BtcHolderDay{oldRow}, nil, now); err != nil {
+		t.Fatal(err)
+	}
+
+	seedMaintenanceChain(t, store, now)
+	settings := (BitcoinConfig{}).settings()
+	settings.Jobs = true
+	budget := newBtcBudget(store, settings, func() time.Time { return now })
+	resID, err := budget.reserve(ctx, btcBaselineJobID, 1<<30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseRows := []btcUTXOBaselineRow{
+		{CreateDay: "2026-10-10", Sats: 4_000_000_000, UTXOs: 4},
+		{CreateDay: "2026-10-14", Sats: 6_000_000_000, UTXOs: 6},
+	}
+	if _, err := store.commitBtcBaseline(ctx, budget, settings, resID, "2026-10-15", baseRows, 1<<30, now, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	maint := newBtcHolderMaintenance(store, nil, func() time.Time { return now })
+	if err := maint.run(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	rs := newBtcReadStore(store, settings, func() time.Time { return now })
+	rows, err := rs.holderDays(ctx, "2026-01-01", "2026-01-01")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Date != "2026-01-01" || rows[0].SupplySats != 1_000_000_000 {
+		t.Fatalf("expected older 2026-01-01 holder row to be preserved (upsert-only), got %+v", rows)
+	}
+}
+
+func TestRecomputeWaitsForRollup(t *testing.T) {
+	ctx := context.Background()
+	store := openTestRiskStore(t)
+	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+
+	// State is at 2026-10-14. Coin-age has advanced to 2026-10-15, but rollup is still at 2026-10-14.
+	initState := utxoState{"2026-10-10": 4_000_000_000, "2026-10-14": 6_000_000_000}
+	if err := store.applyHolderMaintenanceTx(ctx, &initState, "2026-10-14", 1, false, nil, nil, now); err != nil {
+		t.Fatal(err)
+	}
+
+	rollupPayload := btcRollupPayload{
+		CoverageStart: 1,
+		Blocks: []btcBlockRow{
+			{Height: 1, TS: "2026-10-14T12:00:00Z", Date: "2026-10-14", Bits: "17021ef0", TransactionCount: 100, SubsidySats: 5_000_000_000},
+		},
+		Days: []BtcOnchainDay{
+			{Date: "2026-10-14", Blocks: 1, ScheduledIssuanceSats: 5_000_000_000, ClaimedIssuanceSats: 5_000_000_000, CoinbaseSats: 5_010_000_000, FeesSats: 10_000_000, CreatedSats: 6_000_000_000},
+		},
+	}
+	if err := store.applyBtcRollupBatch(ctx, rollupPayload, "2026-10-14", "2026-10-14", now); err != nil {
+		t.Fatal(err)
+	}
+	caPayload := btcCoinAgePayload{
+		Matrix: []btcSpentMatrixRow{
+			{SpendDay: "2026-10-15", CreateDay: "2026-10-10", Sats: 500_000_000, Inputs: 1},
+		},
+		Days: []BtcCoinageDay{
+			coinageMetrics("2026-10-15", map[string]int64{"2026-10-10": 500_000_000}, nil, false),
+		},
+	}
+	if err := store.applyBtcCoinAgeBatch(ctx, caPayload, "2026-10-15", "2026-10-15", now); err != nil {
+		t.Fatal(err)
+	}
+
+	maint := newBtcHolderMaintenance(store, nil, func() time.Time { return now })
+	if err := maint.run(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// Because rollup cursor is still 2026-10-14 (< 2026-10-15), state must stay at 2026-10-14.
+	asOf, _ := store.getBtcUTXOStateAsOf(ctx)
+	if asOf != "2026-10-14" {
+		t.Fatalf("expected UTXO state to wait for rollup at 2026-10-14, got %q", asOf)
 	}
 }

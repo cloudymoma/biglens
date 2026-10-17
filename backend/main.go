@@ -120,8 +120,11 @@ func main() {
 	if api.btc != nil {
 		api.btc.read = newBtcReadStore(rstore, api.btc.settings, time.Now)
 		api.btc.prices = newBtcPriceSyncer(rstore, api.btc.settings, time.Now)
+		if api.btc.settings.Jobs && api.btc.settings.BaselineAllowUI && rstore != nil {
+			api.btc.starter = newBtcBaselineRunner(rstore, api.btc.settings, bqBaselineSource{bq: bq}, time.Now)
+		}
 		go runAddressRiskSync(ctx, time.Hour, api.btc.prices.syncOnce)
-		if bqJobs := bitcoinSyncJobs(api.btc.settings, rstore, bq); len(bqJobs) > 0 {
+		if bqJobs := bitcoinSyncJobs(api.btc.settings, rstore, bq, api.btc.prices); len(bqJobs) > 0 {
 			go runAddressRiskSync(ctx, time.Hour, bqJobs...)
 		}
 	}

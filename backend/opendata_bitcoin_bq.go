@@ -892,11 +892,17 @@ func newBitcoinJobs(settings btcSettings, store *riskStore, client *BQClient) *b
 // bitcoinSyncJobs returns the background BigQuery sync functions for Bitcoin.
 // When bitcoin.bigquery.jobs is false (the default) or store/client is nil, it
 // returns nil without constructing any syncers or touching BigQuery.
-func bitcoinSyncJobs(settings btcSettings, store *riskStore, client *BQClient) []func(context.Context) {
+func bitcoinSyncJobs(settings btcSettings, store *riskStore, client *BQClient, prices ...*btcPriceSyncer) []func(context.Context) {
 	jobs := newBitcoinJobs(settings, store, client)
 	if jobs == nil {
 		return nil
 	}
+	var priceSyncer *btcPriceSyncer
+	if len(prices) > 0 {
+		priceSyncer = prices[0]
+	}
+	maint := newBtcHolderMaintenance(store, priceSyncer, jobs.now)
+
 	expGiB, warn := btcFeasibility(settings, btcEstRollup1dBytes, btcEstCoinAgeRunBytes)
 	if warn != "" {
 		slog.Warn("bitcoin bigquery feasibility", "warning", warn, "expected_gib", expGiB)
@@ -935,7 +941,7 @@ func bitcoinSyncJobs(settings btcSettings, store *riskStore, client *BQClient) [
 		}
 		coinAgeSyncer := &dailyBQSyncer{
 			store:          store,
-			job:            newBtcCoinAgeJob(store, client, settings, nil),
+			job:            newBtcCoinAgeJob(store, client, settings, maint.runOnce),
 			now:            jobs.now,
 			initialDays:    settings.CoinAgeInitialDays,
 			name:           btcCoinageJobID,
@@ -951,6 +957,7 @@ func bitcoinSyncJobs(settings btcSettings, store *riskStore, client *BQClient) [
 		}
 		out = append(out, coinAgeSyncer.syncOnce)
 	}
+	out = append(out, maint.runOnce)
 	return out
 }
 

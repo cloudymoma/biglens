@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"sync"
@@ -46,10 +49,22 @@ type BtcFeesData struct {
 }
 
 type BtcOnchainData struct {
-	Days    int              `json:"days"`
-	Rows    []BtcOnchainDay  `json:"rows"`
-	Status  BtcBQStatus      `json:"status"`
+	Days    int               `json:"days"`
+	Rows    []BtcOnchainDay   `json:"rows"`
+	Status  BtcBQStatus       `json:"status"`
 	Sources []BtcSourceStatus `json:"sources"`
+}
+
+type BtcOnchainHoldersData struct {
+	Days          int               `json:"days"`
+	Coinage       []BtcCoinageDay   `json:"coinage"`
+	Holders       []BtcHolderDay    `json:"holders"`
+	Whales        []BtcWhaleRevival `json:"whales"`
+	CoinageStatus BtcBQStatus       `json:"coinage_status"`
+	OnchainStatus BtcBQStatus       `json:"onchain_status"`
+	Baseline      BtcBaselineStatus `json:"baseline"`
+	PriceCoverage BtcPriceCoverage  `json:"price_coverage"`
+	Sources       []BtcSourceStatus `json:"sources"`
 }
 
 type BtcMetaProvider struct {
@@ -104,6 +119,7 @@ func bitcoinRoutes(h *APIHandler) []bitcoinRoute {
 		{Pattern: "/api/opendata/bitcoin/holders", Handler: h.BitcoinHolders, Gzip: true},
 		{Pattern: "/api/opendata/bitcoin/fees", Handler: h.BitcoinFees, Gzip: true},
 		{Pattern: "/api/opendata/bitcoin/onchain", Handler: h.BitcoinOnchain, Gzip: true},
+		{Pattern: "/api/opendata/bitcoin/onchain/holders", Handler: h.BitcoinOnchainHolders, Gzip: true},
 		{Pattern: "/api/opendata/bitcoin/onchain/baseline", Handler: h.BitcoinBaseline, Gzip: false},
 	}
 }
@@ -357,6 +373,7 @@ func (h *APIHandler) BitcoinBaseline(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
 		if s.read != nil {
 			if st, err := s.read.baselineStatus(r.Context()); err == nil {
+				st.CMSplyCurBTC = s.latestCMSplyCurBTC()
 				writeJSON(w, st)
 				return
 			}
@@ -365,6 +382,7 @@ func (h *APIHandler) BitcoinBaseline(w http.ResponseWriter, r *http.Request) {
 			AllowUI:         s.settings.BaselineAllowUI,
 			MinIntervalDays: int(s.settings.BaselineMinInterval.Hours() / 24),
 			CLICommand:      "./biglens-server --bitcoin-utxo-baseline",
+			CMSplyCurBTC:    s.latestCMSplyCurBTC(),
 		})
 		return
 	}
@@ -376,11 +394,67 @@ func (h *APIHandler) BitcoinBaseline(w http.ResponseWriter, r *http.Request) {
 		writeError(w, "UTXO baseline UI trigger is disabled (set bitcoin.bigquery.utxo_baseline.allow_ui: true or use --bitcoin-utxo-baseline CLI)", http.StatusForbidden)
 		return
 	}
-	if s.starter == nil {
+	if !s.settings.Jobs || s.starter == nil {
 		writeError(w, "Bitcoin BigQuery jobs are disabled", http.StatusForbidden)
 		return
 	}
-	writeError(w, "baseline starter not yet wired", http.StatusNotImplemented)
+	var req struct {
+		Action string `json:"action"`
+		Token  string `json:"token"`
+	}
+	if r.Body != nil {
+		defer r.Body.Close()
+		if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req); err != nil {
+			writeError(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+	}
+	switch req.Action {
+	case "dry_run":
+		plan, err := s.starter.dryRun(r.Context())
+		if err != nil {
+			writeBtcBaselineError(w, err)
+			return
+		}
+		writeJSON(w, plan)
+	case "confirm":
+		if req.Token == "" {
+			writeError(w, "missing token", http.StatusBadRequest)
+			return
+		}
+		if err := s.starter.confirm(r.Context(), req.Token); err != nil {
+			writeBtcBaselineError(w, err)
+			return
+		}
+		if s.read != nil {
+			if st, err := s.read.baselineStatus(r.Context()); err == nil {
+				writeJSON(w, st)
+				return
+			}
+		}
+		writeJSON(w, BtcBaselineStatus{
+			Available:       true,
+			Pending:         true,
+			AllowUI:         s.settings.BaselineAllowUI,
+			MinIntervalDays: int(s.settings.BaselineMinInterval.Hours() / 24),
+			CLICommand:      "./biglens-server --bitcoin-utxo-baseline",
+		})
+	default:
+		writeError(w, "invalid action (expected dry_run or confirm)", http.StatusBadRequest)
+	}
+}
+
+func writeBtcBaselineError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, errBtcJobsDisabled):
+		writeError(w, err.Error(), http.StatusForbidden)
+	case errors.Is(err, errBtcBaselineBadToken):
+		writeError(w, err.Error(), http.StatusBadRequest)
+	case errors.Is(err, errBtcBaselineInterval), errors.Is(err, errBtcBaselineInFlight), errors.Is(err, errBtcOverBudget):
+		writeError(w, err.Error(), http.StatusTooManyRequests)
+	default:
+		writeError(w, err.Error(), http.StatusInternalServerError)
+	}
 }
 
 func parseBtcDaysParam(r *http.Request, defaultDays int) int {
@@ -618,6 +692,118 @@ func (h *APIHandler) BitcoinHolders(w http.ResponseWriter, r *http.Request) {
 		Flows:      flows,
 		Treasuries: treasuries,
 		Sources:    []BtcSourceStatus{cmSrc, treasuriesSrc},
+	})
+}
+
+func (s *bitcoinService) latestCMSplyCurBTC() *float64 {
+	if s == nil || s.lastGood == nil {
+		return nil
+	}
+	v, _, ok := s.lastGood.Get(btcHoldersCMKey)
+	if !ok {
+		return nil
+	}
+	rows, ok := v.([]BtcCMMetricRow)
+	if !ok {
+		return nil
+	}
+	for i := len(rows) - 1; i >= 0; i-- {
+		if rows[i].SplyCur != nil && *rows[i].SplyCur > 0 {
+			val := *rows[i].SplyCur
+			return &val
+		}
+	}
+	return nil
+}
+
+func (h *APIHandler) BitcoinOnchainHolders(w http.ResponseWriter, r *http.Request) {
+	if h.btc == nil {
+		writeError(w, "bitcoin dashboard disabled", http.StatusNotFound)
+		return
+	}
+	s := h.btc
+	days := parseBtcDaysParam(r, 90)
+	now := s.now().UTC()
+	to := now.Format("2006-01-02")
+	from := now.AddDate(0, 0, -days).Format("2006-01-02")
+
+	coinageStatus := BtcBQStatus{
+		Job:   btcCoinageJobID,
+		Jobs:  s.settings.Jobs,
+		State: "off",
+	}
+	onchainStatus := BtcBQStatus{
+		Job:   btcOnchainJobID,
+		Jobs:  s.settings.Jobs,
+		State: "off",
+	}
+	baseline := BtcBaselineStatus{
+		AllowUI:         s.settings.BaselineAllowUI,
+		MinIntervalDays: int(s.settings.BaselineMinInterval.Hours() / 24),
+		CLICommand:      "./biglens-server --bitcoin-utxo-baseline",
+		CMSplyCurBTC:    s.latestCMSplyCurBTC(),
+	}
+	coinage := []BtcCoinageDay{}
+	holders := []BtcHolderDay{}
+	whales := []BtcWhaleRevival{}
+	bqSrc := BtcSourceStatus{
+		ID:      "bigquery",
+		Label:   "BigQuery crypto_bitcoin (SQLite)",
+		Status:  "disabled",
+		License: "public dataset (CC0)",
+	}
+
+	if s.read != nil {
+		ctx := r.Context()
+		if st, err := s.read.jobStatus(ctx, btcCoinageJobID); err == nil {
+			coinageStatus = st
+		}
+		if st, err := s.read.jobStatus(ctx, btcOnchainJobID); err == nil {
+			onchainStatus = st
+		}
+		if bs, err := s.read.baselineStatus(ctx); err == nil {
+			bs.CMSplyCurBTC = s.latestCMSplyCurBTC()
+			baseline = bs
+		}
+		if cd, err := s.read.coinageDays(ctx, from, to); err == nil && len(cd) > 0 {
+			coinage = cd
+			bqSrc.Status = "ok"
+			bqSrc.AsOf = cd[len(cd)-1].Date
+		}
+		if hd, err := s.read.holderDays(ctx, from, to); err == nil && len(hd) > 0 {
+			holders = hd
+			bqSrc.Status = "ok"
+			if bqSrc.AsOf == "" || hd[len(hd)-1].Date > bqSrc.AsOf {
+				bqSrc.AsOf = hd[len(hd)-1].Date
+			}
+		}
+		if wr, err := s.read.whaleRevivals(ctx, from, to); err == nil && len(wr) > 0 {
+			whales = wr
+		}
+		if bqSrc.Status != "ok" {
+			if coinageStatus.SyncedThrough != "" {
+				bqSrc.Status = "ok"
+				bqSrc.AsOf = coinageStatus.SyncedThrough
+			} else if baseline.Available {
+				bqSrc.Status = "ok"
+				bqSrc.AsOf = baseline.AsOf
+			} else if s.settings.Jobs {
+				bqSrc.Status = "stale"
+				bqSrc.Error = coinageStatus.State
+			}
+		}
+	}
+
+	writeJSON(w, BtcOnchainHoldersData{
+		Days:          days,
+		Coinage:       coinage,
+		Holders:       holders,
+		Whales:        whales,
+		CoinageStatus: coinageStatus,
+		OnchainStatus: onchainStatus,
+		Baseline:      baseline,
+		PriceCoverage: s.prices.priceCoverage(),
+		Sources:       []BtcSourceStatus{bqSrc},
 	})
 }
 

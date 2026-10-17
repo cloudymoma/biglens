@@ -1,13 +1,21 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"maps"
+	"strconv"
+	"sync"
+	"time"
 
 	"cloud.google.com/go/civil"
 )
 
-const btcHolderSchemaVersion = 1
+const (
+	btcHolderSchemaVersion    = 1
+	btcUTXOStateGenerationKey = "utxo_state_generation"
+)
 
 // utxoState maps creation day ("YYYY-MM-DD") to unspent satoshis.
 type utxoState map[string]int64
@@ -255,3 +263,454 @@ func holderMetrics(day string, gen int64, u utxoState, prices map[string]float64
 	}
 	return out
 }
+
+func blockHolderDayMetrics(hm *BtcHolderDay, reason string) {
+	hm.Blocked = reason
+	hm.RealizedCapUSD = nil
+	hm.RealizedPriceUSD = nil
+	hm.LTHRealizedPrice = nil
+	hm.STHRealizedPrice = nil
+	hm.MVRV = nil
+	hm.SupplyInProfitPct = nil
+}
+
+// btcHolderMaintenance coordinates local UTXO state resets from a pending
+// baseline, daily roll-forwards through min(coinage_cursor, rollup_cursor),
+// and upsert-only holder/coinage metric recomputation. It never queries BigQuery.
+type btcHolderMaintenance struct {
+	store  *riskStore
+	prices *btcPriceSyncer
+	now    func() time.Time
+	mu     sync.Mutex
+}
+
+func newBtcHolderMaintenance(store *riskStore, prices *btcPriceSyncer, now func() time.Time) *btcHolderMaintenance {
+	if now == nil {
+		now = time.Now
+	}
+	return &btcHolderMaintenance{
+		store:  store,
+		prices: prices,
+		now:    now,
+	}
+}
+
+func (m *btcHolderMaintenance) runOnce(ctx context.Context) {
+	if m == nil {
+		return
+	}
+	_ = m.run(ctx)
+}
+
+func (m *btcHolderMaintenance) run(ctx context.Context) error {
+	if m == nil || m.store == nil || m.store.db == nil {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := m.store.ensureBtcBQSchema(ctx); err != nil {
+		return err
+	}
+
+	var closePrices map[string]float64
+	var priceComplete bool
+	if m.prices != nil {
+		closePrices = m.prices.closes("", "")
+		priceComplete = m.prices.priceCoverage().Complete
+	}
+
+	matrixByDay, err := m.store.loadBtcSpentMatrixByRange(ctx, "", "")
+	if err != nil {
+		return err
+	}
+	onchainByDay, err := m.store.loadBtcOnchainDaysMap(ctx)
+	if err != nil {
+		return err
+	}
+
+	var coinageUpdates []BtcCoinageDay
+	for d, spent := range matrixByDay {
+		coinageUpdates = append(coinageUpdates, coinageMetrics(d, spent, closePrices, priceComplete))
+	}
+
+	// Check raw baseline_pending first: never roll forward over a pending baseline.
+	rawPend, hasPendKey, err := m.store.getBtcKV(ctx, btcBaselinePendingKey)
+	if err != nil {
+		return err
+	}
+	if hasPendKey && rawPend != "" {
+		var pend btcPendingBaseline
+		if err := json.Unmarshal([]byte(rawPend), &pend); err != nil || pend.Generation <= 0 || pend.AsOf == "" {
+			return fmt.Errorf("invalid baseline_pending payload: %q", rawPend)
+		}
+		return m.applyPendingBaseline(ctx, pend, matrixByDay, onchainByDay, closePrices, priceComplete, coinageUpdates)
+	}
+
+	return m.rollForwardExisting(ctx, matrixByDay, onchainByDay, closePrices, priceComplete, coinageUpdates)
+}
+
+func (m *btcHolderMaintenance) minSyncedCursor(ctx context.Context) string {
+	var curA, curB string
+	if stA, errA := m.store.getSyncState(ctx, btcOnchainJobID); errA == nil && stA.Cursor != "" {
+		curA = stA.Cursor
+	} else {
+		_ = m.store.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(day), '') FROM btc_onchain_daily`).Scan(&curA)
+	}
+	if stB, errB := m.store.getSyncState(ctx, btcCoinageJobID); errB == nil && stB.Cursor != "" {
+		curB = stB.Cursor
+	} else {
+		_ = m.store.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(spend_day), '') FROM btc_spent_age_daily`).Scan(&curB)
+	}
+	if curA == "" || curB == "" {
+		return ""
+	}
+	if curA < curB {
+		return curA
+	}
+	return curB
+}
+
+func (m *btcHolderMaintenance) applyPendingBaseline(
+	ctx context.Context,
+	pend btcPendingBaseline,
+	matrixByDay map[string]map[string]int64,
+	onchainByDay map[string]BtcOnchainDay,
+	closePrices map[string]float64,
+	priceComplete bool,
+	coinageUpdates []BtcCoinageDay,
+) error {
+	baseMap, err := m.store.loadBtcBaselineGeneration(ctx, pend.Generation)
+	if err != nil {
+		return err
+	}
+	if len(baseMap) == 0 {
+		return fmt.Errorf("empty baseline for generation %d", pend.Generation)
+	}
+	t0Date, err := civil.ParseDate(pend.AsOf)
+	if err != nil {
+		return err
+	}
+	initDate := t0Date.AddDays(-1)
+	initDayStr := initDate.String()
+
+	uInit := initFromBaseline(baseMap, pend.AsOf, matrixByDay[initDayStr])
+
+	holderByDay := make(map[string]BtcHolderDay)
+
+	// 1. Reconstruct backward from initDate (T0 - 1) over days where matrix & rollup exist.
+	uBack := uInit.clone()
+	for cur := initDate; ; cur = cur.AddDays(-1) {
+		dStr := cur.String()
+		hm := holderMetrics(dStr, pend.Generation, uBack, closePrices, priceComplete)
+		if bErr := checkBucketSigns(uBack, dStr); bErr != nil {
+			blockHolderDayMetrics(&hm, bErr.Error())
+		}
+		oc, hasOC := onchainByDay[dStr]
+		spent, hasMat := matrixByDay[dStr]
+		if hasOC {
+			if warn, iErr := checkIssuanceBound(oc.ClaimedIssuanceSats, oc.ScheduledIssuanceSats); iErr != nil {
+				blockHolderDayMetrics(&hm, iErr.Error())
+			} else if warn != "" {
+				hm.Warnings = append(hm.Warnings, warn)
+			}
+		}
+		if hasOC && hasMat {
+			prevState := uBack.clone()
+			applyDay(prevState, dStr, spent, oc.CreatedSats, false)
+			if sErr := checkSupplyIdentity(prevState.totalSats(), uBack.totalSats(), oc.CoinbaseSats, oc.FeesSats, oc.OpretValueSats); sErr != nil {
+				blockHolderDayMetrics(&hm, sErr.Error())
+			}
+			holderByDay[dStr] = hm
+			uBack = prevState
+		} else {
+			holderByDay[dStr] = hm
+			break
+		}
+	}
+
+	// 2. Roll forward from T0 through min(coinage_cursor, rollup_cursor).
+	uFwd := uInit.clone()
+	finalAsOf := initDayStr
+	targetCursor := m.minSyncedCursor(ctx)
+	if targetCursor >= pend.AsOf {
+		if targetDate, err := civil.ParseDate(targetCursor); err == nil {
+			for cur := t0Date; !cur.After(targetDate); cur = cur.AddDays(1) {
+				dStr := cur.String()
+				oc, hasOC := onchainByDay[dStr]
+				if !hasOC {
+					break
+				}
+				spent := matrixByDay[dStr]
+				prevSum := uFwd.totalSats()
+				applyDay(uFwd, dStr, spent, oc.CreatedSats, true)
+				nextSum := uFwd.totalSats()
+
+				hm := holderMetrics(dStr, pend.Generation, uFwd, closePrices, priceComplete)
+				if sErr := checkSupplyIdentity(prevSum, nextSum, oc.CoinbaseSats, oc.FeesSats, oc.OpretValueSats); sErr != nil {
+					blockHolderDayMetrics(&hm, sErr.Error())
+				}
+				if warn, iErr := checkIssuanceBound(oc.ClaimedIssuanceSats, oc.ScheduledIssuanceSats); iErr != nil {
+					blockHolderDayMetrics(&hm, iErr.Error())
+				} else if warn != "" {
+					hm.Warnings = append(hm.Warnings, warn)
+				}
+				if bErr := checkBucketSigns(uFwd, dStr); bErr != nil {
+					blockHolderDayMetrics(&hm, bErr.Error())
+				}
+				holderByDay[dStr] = hm
+				finalAsOf = dStr
+			}
+		}
+	}
+
+	holderUpdates := make([]BtcHolderDay, 0, len(holderByDay))
+	for _, hm := range holderByDay {
+		holderUpdates = append(holderUpdates, hm)
+	}
+
+	if err := m.store.applyHolderMaintenanceTx(ctx, &uFwd, finalAsOf, pend.Generation, true, holderUpdates, coinageUpdates, m.now().UTC()); err != nil {
+		return err
+	}
+	_ = m.store.pruneBtcBaselineGenerations(ctx, pend.Generation)
+	return nil
+}
+
+func (m *btcHolderMaintenance) rollForwardExisting(
+	ctx context.Context,
+	matrixByDay map[string]map[string]int64,
+	onchainByDay map[string]BtcOnchainDay,
+	closePrices map[string]float64,
+	priceComplete bool,
+	coinageUpdates []BtcCoinageDay,
+) error {
+	asOf, err := m.store.getBtcUTXOStateAsOf(ctx)
+	if err != nil || asOf == "" {
+		if len(coinageUpdates) > 0 {
+			return m.store.applyHolderMaintenanceTx(ctx, nil, "", 0, false, nil, coinageUpdates, m.now().UTC())
+		}
+		return err
+	}
+	genStr, _, _ := m.store.getBtcKV(ctx, btcUTXOStateGenerationKey)
+	gen, _ := strconv.ParseInt(genStr, 10, 64)
+	if gen <= 0 {
+		if latestGen, ok, _ := m.store.latestBtcBaselineGeneration(ctx); ok {
+			gen = latestGen
+		} else {
+			gen = 1
+		}
+	}
+
+	targetCursor := m.minSyncedCursor(ctx)
+	if targetCursor <= asOf {
+		if len(coinageUpdates) > 0 {
+			return m.store.applyHolderMaintenanceTx(ctx, nil, "", 0, false, nil, coinageUpdates, m.now().UTC())
+		}
+		return nil
+	}
+
+	asOfDate, err1 := civil.ParseDate(asOf)
+	targetDate, err2 := civil.ParseDate(targetCursor)
+	if err1 != nil || err2 != nil {
+		return nil
+	}
+
+	u, err := m.store.loadBtcUTXOState(ctx)
+	if err != nil {
+		return err
+	}
+
+	var holderUpdates []BtcHolderDay
+	finalAsOf := asOf
+	for cur := asOfDate.AddDays(1); !cur.After(targetDate); cur = cur.AddDays(1) {
+		dStr := cur.String()
+		oc, hasOC := onchainByDay[dStr]
+		if !hasOC {
+			break
+		}
+		spent := matrixByDay[dStr]
+		prevSum := u.totalSats()
+		applyDay(u, dStr, spent, oc.CreatedSats, true)
+		nextSum := u.totalSats()
+
+		hm := holderMetrics(dStr, gen, u, closePrices, priceComplete)
+		if sErr := checkSupplyIdentity(prevSum, nextSum, oc.CoinbaseSats, oc.FeesSats, oc.OpretValueSats); sErr != nil {
+			blockHolderDayMetrics(&hm, sErr.Error())
+		}
+		if warn, iErr := checkIssuanceBound(oc.ClaimedIssuanceSats, oc.ScheduledIssuanceSats); iErr != nil {
+			blockHolderDayMetrics(&hm, iErr.Error())
+		} else if warn != "" {
+			hm.Warnings = append(hm.Warnings, warn)
+		}
+		if bErr := checkBucketSigns(u, dStr); bErr != nil {
+			blockHolderDayMetrics(&hm, bErr.Error())
+		}
+		holderUpdates = append(holderUpdates, hm)
+		finalAsOf = dStr
+	}
+
+	if finalAsOf == asOf && len(holderUpdates) == 0 && len(coinageUpdates) == 0 {
+		return nil
+	}
+	var statePtr *utxoState
+	if finalAsOf != asOf {
+		statePtr = &u
+	}
+	return m.store.applyHolderMaintenanceTx(ctx, statePtr, finalAsOf, gen, false, holderUpdates, coinageUpdates, m.now().UTC())
+}
+
+func (s *riskStore) loadBtcUTXOState(ctx context.Context) (utxoState, error) {
+	if err := s.ensureBtcBQSchema(ctx); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT create_day, sats FROM btc_utxo_state`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	u := make(utxoState)
+	for rows.Next() {
+		var cd string
+		var sats int64
+		if err := rows.Scan(&cd, &sats); err != nil {
+			return nil, err
+		}
+		if sats != 0 {
+			u[cd] = sats
+		}
+	}
+	return u, rows.Err()
+}
+
+func (s *riskStore) loadBtcOnchainDaysMap(ctx context.Context) (map[string]BtcOnchainDay, error) {
+	if err := s.ensureBtcBQSchema(ctx); err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT payload FROM btc_onchain_daily`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]BtcOnchainDay)
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		var d BtcOnchainDay
+		if err := json.Unmarshal([]byte(p), &d); err != nil {
+			return nil, err
+		}
+		out[d.Date] = d
+	}
+	return out, rows.Err()
+}
+
+func (s *riskStore) applyHolderMaintenanceTx(
+	ctx context.Context,
+	newState *utxoState,
+	newAsOf string,
+	gen int64,
+	clearPending bool,
+	holderDays []BtcHolderDay,
+	coinageDays []BtcCoinageDay,
+	now time.Time,
+) error {
+	if err := s.ensureBtcBQSchema(ctx); err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if newState != nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM btc_utxo_state`); err != nil {
+			return err
+		}
+		stStmt, err := tx.PrepareContext(ctx, `INSERT INTO btc_utxo_state (create_day, sats) VALUES (?, ?)`)
+		if err != nil {
+			return err
+		}
+		defer stStmt.Close()
+		for cd, sats := range *newState {
+			if sats == 0 {
+				continue
+			}
+			if _, err := stStmt.ExecContext(ctx, cd, sats); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO btc_kv (k, v) VALUES (?, ?)
+ON CONFLICT(k) DO UPDATE SET v = excluded.v`, btcUTXOStateAsOfKey, newAsOf); err != nil {
+			return err
+		}
+		if gen > 0 {
+			if _, err := tx.ExecContext(ctx, `
+INSERT INTO btc_kv (k, v) VALUES (?, ?)
+ON CONFLICT(k) DO UPDATE SET v = excluded.v`, btcUTXOStateGenerationKey, strconv.FormatInt(gen, 10)); err != nil {
+				return err
+			}
+		}
+	}
+
+	if clearPending {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM btc_kv WHERE k = ?`, btcBaselinePendingKey); err != nil {
+			return err
+		}
+	}
+
+	at := now.UTC().Format(time.RFC3339)
+
+	if len(holderDays) > 0 {
+		hStmt, err := tx.PrepareContext(ctx, `
+INSERT INTO btc_holder_daily (day, version, payload, baseline_generation, computed_at)
+VALUES (?, ?, ?, ?, ?)
+ON CONFLICT(day) DO UPDATE SET
+  version = excluded.version,
+  payload = excluded.payload,
+  baseline_generation = excluded.baseline_generation,
+  computed_at = excluded.computed_at`)
+		if err != nil {
+			return err
+		}
+		defer hStmt.Close()
+		for _, hd := range holderDays {
+			p, err := json.Marshal(hd)
+			if err != nil {
+				return err
+			}
+			if _, err := hStmt.ExecContext(ctx, hd.Date, btcHolderSchemaVersion, string(p), hd.BaselineGeneration, at); err != nil {
+				return err
+			}
+		}
+	}
+
+	if len(coinageDays) > 0 {
+		cStmt, err := tx.PrepareContext(ctx, `
+INSERT INTO btc_coinage_daily (day, version, payload, computed_at)
+VALUES (?, ?, ?, ?)
+ON CONFLICT(day) DO UPDATE SET
+  version = excluded.version,
+  payload = excluded.payload,
+  computed_at = excluded.computed_at`)
+		if err != nil {
+			return err
+		}
+		defer cStmt.Close()
+		for _, cd := range coinageDays {
+			p, err := json.Marshal(cd)
+			if err != nil {
+				return err
+			}
+			if _, err := cStmt.ExecContext(ctx, cd.Date, btcCoinAgeSchemaVersion, string(p), at); err != nil {
+				return err
+			}
+		}
+	}
+
+	return tx.Commit()
+}
+

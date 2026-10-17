@@ -474,3 +474,115 @@ func TestBitcoinOnchainJobsOff(t *testing.T) {
 	}
 }
 
+func TestBitcoinOnchainHoldersReadOnly(t *testing.T) {
+	ctx := context.Background()
+	h := newTestBitcoinHandler(t)
+	h.bq = nil // must never touch BigQuery
+	store := openTestRiskStore(t)
+	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	h.btc.now = func() time.Time { return now }
+	h.btc.read = newBtcReadStore(store, h.btc.settings, h.btc.now)
+
+	seedMaintenanceChain(t, store, now)
+	settings := h.btc.settings
+	settings.Jobs = true
+	budget := newBtcBudget(store, settings, func() time.Time { return now })
+	resID, err := budget.reserve(ctx, btcBaselineJobID, 1<<30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseRows := []btcUTXOBaselineRow{
+		{CreateDay: "2026-10-10", Sats: 4_000_000_000, UTXOs: 4},
+		{CreateDay: "2026-10-14", Sats: 6_000_000_000, UTXOs: 6},
+	}
+	if _, err := store.commitBtcBaseline(ctx, budget, settings, resID, "2026-10-15", baseRows, 1<<30, now, nil); err != nil {
+		t.Fatal(err)
+	}
+	maint := newBtcHolderMaintenance(store, h.btc.prices, func() time.Time { return now })
+	if err := maint.run(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/opendata/bitcoin/onchain/holders?days=30", nil)
+	rec := httptest.NewRecorder()
+	h.BitcoinOnchainHolders(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var out BtcOnchainHoldersData
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Coinage) != 2 || len(out.Holders) != 3 || !out.Baseline.Available || out.Baseline.Pending {
+		t.Fatalf("onchain holders response = %+v", out)
+	}
+}
+
+func TestBitcoinBaselineEndpoint(t *testing.T) {
+	store := openTestRiskStore(t)
+	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+
+	h := newTestBitcoinHandler(t)
+	h.bq = nil
+	h.btc.now = func() time.Time { return now }
+	h.btc.read = newBtcReadStore(store, h.btc.settings, h.btc.now)
+
+	// 1. Default allow_ui: false -> POST returns 403.
+	req403 := httptest.NewRequest(http.MethodPost, "/api/opendata/bitcoin/onchain/baseline", strings.NewReader(`{"action":"dry_run"}`))
+	rec403 := httptest.NewRecorder()
+	h.BitcoinBaseline(rec403, req403)
+	if rec403.Code != http.StatusForbidden {
+		t.Fatalf("POST with allow_ui:false = %d, want 403", rec403.Code)
+	}
+
+	// 2. Enable allow_ui + jobs and wire a fake starter.
+	h.btc.settings.Jobs = true
+	h.btc.settings.BaselineAllowUI = true
+	h.btc.read = newBtcReadStore(store, h.btc.settings, h.btc.now)
+	fakeSrc := &fakeBaselineSource{
+		dryBytes: 687 * (1 << 30),
+		billed:   687 * (1 << 30),
+		rows:     []btcUTXOBaselineRow{{CreateDay: "2026-10-14", Sats: 2_000_000_000_000_000, UTXOs: 100}},
+	}
+	h.btc.starter = newBtcBaselineRunner(store, h.btc.settings, fakeSrc, func() time.Time { return now })
+
+	// Dry run mints a token.
+	dryReq := httptest.NewRequest(http.MethodPost, "/api/opendata/bitcoin/onchain/baseline", strings.NewReader(`{"action":"dry_run"}`))
+	dryRec := httptest.NewRecorder()
+	h.BitcoinBaseline(dryRec, dryReq)
+	if dryRec.Code != http.StatusOK {
+		t.Fatalf("POST dry_run = %d, body = %s", dryRec.Code, dryRec.Body.String())
+	}
+	var plan btcBaselinePlan
+	if err := json.Unmarshal(dryRec.Body.Bytes(), &plan); err != nil {
+		t.Fatal(err)
+	}
+	if plan.Token == "" {
+		t.Fatalf("expected non-empty token from dry_run")
+	}
+
+	// Confirm with the token builds the baseline and returns status.
+	confBody := `{"action":"confirm","token":"` + plan.Token + `"}`
+	confReq := httptest.NewRequest(http.MethodPost, "/api/opendata/bitcoin/onchain/baseline", strings.NewReader(confBody))
+	confRec := httptest.NewRecorder()
+	h.BitcoinBaseline(confRec, confReq)
+	if confRec.Code != http.StatusOK {
+		t.Fatalf("POST confirm = %d, body = %s", confRec.Code, confRec.Body.String())
+	}
+	var st BtcBaselineStatus
+	if err := json.Unmarshal(confRec.Body.Bytes(), &st); err != nil {
+		t.Fatal(err)
+	}
+	if !st.Available || st.Generation != 1 || !st.Pending {
+		t.Fatalf("POST confirm status = %+v", st)
+	}
+
+	// Reusing the same token returns 400 Bad Request.
+	reuseReq := httptest.NewRequest(http.MethodPost, "/api/opendata/bitcoin/onchain/baseline", strings.NewReader(confBody))
+	reuseRec := httptest.NewRecorder()
+	h.BitcoinBaseline(reuseRec, reuseReq)
+	if reuseRec.Code != http.StatusBadRequest {
+		t.Fatalf("POST confirm reuse = %d, want 400", reuseRec.Code)
+	}
+}
+
