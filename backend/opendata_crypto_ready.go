@@ -49,10 +49,24 @@ func cryptoReadySQL(chain string) (string, error) {
 WHERE block_timestamp >= TIMESTAMP(@end_date) AND block_timestamp < TIMESTAMP_ADD(TIMESTAMP(@end_date), INTERVAL 2 HOUR)`, nil
 }
 
+func cryptoReadyAtSQL(chain string) (string, error) {
+	table, ok := cryptoReadyTables[chain]
+	if !ok {
+		return "", fmt.Errorf("unknown crypto chain %q", chain)
+	}
+	return `SELECT MAX(block_timestamp) AS t FROM ` + table + `
+WHERE block_timestamp >= @at AND block_timestamp < TIMESTAMP_ADD(@at, INTERVAL 2 HOUR)`, nil
+}
+
 // cryptoDayComplete reports whether the newest probed row proves the UTC day
 // before end complete (any row at or after end 00:00 UTC).
 func cryptoDayComplete(t bigquery.NullTimestamp, end civil.Date) bool {
 	return t.Valid && !t.Timestamp.Before(end.In(time.UTC))
+}
+
+// cryptoTimestampComplete reports whether the newest probed row is at or after at.
+func cryptoTimestampComplete(t bigquery.NullTimestamp, at time.Time) bool {
+	return t.Valid && !t.Timestamp.Before(at.UTC())
 }
 
 type cryptoReadyRow struct {
@@ -67,6 +81,22 @@ func (b *BQClient) cryptoLatestRowTime(ctx context.Context, chain string, end ci
 	}
 	q := b.client.Query(sql)
 	q.Parameters = []bigquery.QueryParameter{{Name: "end_date", Value: end}}
+	q.MaxBytesBilled = cryptoReadyMaxBytesBilled
+	rows, err := collectRows[cryptoReadyRow](q, ctx)
+	if err != nil || len(rows) == 0 {
+		return bigquery.NullTimestamp{}, err
+	}
+	return rows[0].T, nil
+}
+
+// cryptoLatestRowTimeAt probes whether a row exists in the 2-hour window starting at `at`.
+func (b *BQClient) cryptoLatestRowTimeAt(ctx context.Context, chain string, at time.Time) (bigquery.NullTimestamp, error) {
+	sql, err := cryptoReadyAtSQL(chain)
+	if err != nil {
+		return bigquery.NullTimestamp{}, err
+	}
+	q := b.client.Query(sql)
+	q.Parameters = []bigquery.QueryParameter{{Name: "at", Value: at.UTC()}}
 	q.MaxBytesBilled = cryptoReadyMaxBytesBilled
 	rows, err := collectRows[cryptoReadyRow](q, ctx)
 	if err != nil || len(rows) == 0 {

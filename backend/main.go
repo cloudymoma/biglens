@@ -21,6 +21,7 @@ func main() {
 	since := flag.String("since", "", "backfill from this date, YYYY-MM-DD (default 2017-11-28: full history)")
 	sinceDays := flag.Int("since-days", 0, "backfill the last N days (dev only; excludes --since)")
 	yes := flag.Bool("yes", false, "run the backfill; without it only a dry-run estimate is printed")
+	btcResume := flag.String("bitcoin-bq-resume", "", "clear the stop flag for a Bitcoin BigQuery job (btc_onchain or btc_coinage) and exit")
 	flag.Parse()
 
 	cfg, err := LoadConfig("conf.yaml")
@@ -29,6 +30,10 @@ func main() {
 		if err != nil {
 			log.Fatalf("failed to load config: %v", err)
 		}
+	}
+
+	if *btcResume != "" {
+		os.Exit(runBtcResumeCLI(context.Background(), cfg, *btcResume))
 	}
 
 	logDir := "logs"
@@ -108,6 +113,7 @@ func main() {
 	api.prices = prices
 	go runAddressRiskSync(ctx, time.Hour, prices.syncOnce)
 	if api.btc != nil {
+		api.btc.read = newBtcReadStore(rstore, api.btc.settings, time.Now)
 		api.btc.prices = newBtcPriceSyncer(rstore, api.btc.settings, time.Now)
 		go runAddressRiskSync(ctx, time.Hour, api.btc.prices.syncOnce)
 	}
