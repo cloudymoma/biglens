@@ -21,14 +21,22 @@ type APIHandler struct {
 	res    ResourceAPI
 	risk   *addressRiskService
 	prices *cryptoPriceSyncer
+	btc    *bitcoinService
 	sf     singleflight.Group
 }
 
 func NewAPIHandler(bq *BQClient) *APIHandler {
+	var cfg *Config
+	var bundlePath string
+	if bq != nil && bq.config != nil {
+		cfg = bq.config
+		bundlePath = bq.config.Catalog.BundlePath
+	}
 	return &APIHandler{
 		bq:     bq,
 		cache:  NewCache(10 * time.Minute),
-		bundle: NewOKFBundle(bq.config.Catalog.BundlePath),
+		bundle: NewOKFBundle(bundlePath),
+		btc:    newBitcoinService(cfg),
 	}
 }
 
