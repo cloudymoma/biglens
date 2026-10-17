@@ -269,6 +269,89 @@ GDELT 是*新闻报道*的索引，而非经核实事件的登记册。每行是
 站点的网络均值，并非物理意义上的全球平均；默认日期会跳过尚在回填中的最新
 1–2 天。
 
+### Bitcoin（比特币情报看板）
+
+独立的比特币专业分析看板，结合免密钥（keyless）公共 API 与可选开启的
+`bigquery-public-data.crypto_bitcoin` 链上精确核算。顶部常驻 30 秒刷新的实时行情与
+链上脉搏条（Ticker），下方包含两个按需挂载的标签页：
+
+| 标签页 | 公共 API 面板（始终免费） | BigQuery 链上面板（管理员显式开启，只读本地 SQLite） |
+|---|---|---|
+| **Holders & Flows（持仓与资金流）** | **交易所资金流与余额**（Coin Metrics Community 的 `FlowInExUSD`、`FlowOutExUSD`、净流量、交易所持仓 `SplyExNtv` 及占流通供应比例；当日 `flash` 行标注 `Provisional`）、**上市公司比特币金库 Top 20**（CoinGecko 披露持仓明细 + CSV 导出） | **UTXO 基线与供应量对账卡片**、**销毁币天（CDD）与休眠度（Dormancy）**、**老币复活量**（≥ 1 年 / 2 年 / 5 年）、**花费输出账龄分布**（12 个账龄分档）、**SOPR**（全量 / 剔除当日的 aSOPR / STH / LTH，受价格完整性门控）、**休眠巨鲸唤醒榜**（每日 Top 20，≥ 10 BTC 且账龄 ≥ 1 年 + CSV 导出），以及基于 UTXO 基线的 **HODL Waves**、**长短期持有者供应量（LTH/STH 155 天分界）**、**实现市值（Realized Cap）与分群实现价格**、**盈利供应占比（Supply in Profit %）** 与 **BigLens 链上 MVRV** |
+| **Fees & Block Space（手续费与区块空间）** | 内嵌实时 **GasLiveBar**（`btc` 模式）、**UTXO 归集窗口信号**（经济费率 ≤ 5 sat/vB 且内存池积压 ≤ 3 个区块）、**交易成本计算器**（6 种标准模板：140 vB 普通转账至 3,442 vB 的 50 输入归集）、**内存池历史积压**（折叠自 mempool.space 39 档费率直方图的 6 个区间）、**已出块费率分位数**（p10–p90） | **每日按交易加权费率分位数与矿工手续费收入**、**区块空间虚拟字节（vB）构成**（普通支付、UTXO 归集、批量代发、类铭文见证启发式、Runes 符文、OP_RETURN、coinbase）、**见证字节占比与 OP_RETURN / Runestone 统计**、**脚本类型采用率**（P2TR、P2WPKH、P2WSH、P2SH、P2PKH、Pay-to-Anchor）与 **输出金额分档分布** |
+
+#### 公共 API 数据源与许可证
+
+6 个公共数据源均无需 API Key，可在 `conf.yaml` 的 `bitcoin.providers` 下逐一开关：
+
+| 数据源 | 配置键 | 用途 | 许可证 / 条款 |
+|---|---|---|---|
+| **mempool.space** | `mempool` | 实时费率、内存池 vMB 分布、区块费率分位数、难度调整预测、近 1 周算力 | 公共 API（合理使用 fair use） |
+| **Coinbase Exchange** | `coinbase` | 实时 BTC-USD 现货统计及 2015-07-20 起的日线 OHLCV（主力价格源） | 公开市场数据 |
+| **Kraken** | `kraken` | 日线 BTC-USD 增量回退源 | 公开市场数据 |
+| **Coin Metrics Community** | `coinmetrics` | 交易所流入/流出、交易所持币余额、参考流通量（`SplyCur`）、历史价格回退 | **CC BY-NC 4.0（非商业署名）** —— 商业部署须在配置中设 `bitcoin.providers.coinmetrics: false` |
+| **CoinGecko** | `coingecko` | 上市公司比特币金库持仓（`/companies/public_treasury/bitcoin`） | 需保留来源署名 |
+| **blockchain.com** | `blockchain_com` | 早期历史日收盘价冷启动（`2010-08-18` 至 `2015-07-19`） | 公开图表数据 |
+
+每日 USD 收盘价（存于 `data/security.db` 的 `btc_price_daily` 表）完全通过 HTTP
+同步（不消耗任何 BigQuery 额度）。依赖历史成本基础的估值指标（SOPR、实现市值、
+实现价格、LTH/STH 实现价格、MVRV、盈利供应占比）受**价格完整性门控**：若自
+`2010-08-18` 起存在任何缺失日期，相关字段会返回 `null` 并标注
+`blocked: "price_history_incomplete (...)"`，绝不静默少算。
+
+#### BigQuery 费用控制、跨进程预算预留与 CLI 命令
+
+- **面板展示与后台计费严格分离。** `conf.yaml` 中 `bitcoin.bigquery.jobs` 默认为
+  `false`。所有 HTTP 处理函数仅持有只读 SQLite 接口（`btcReadStore`），无法创建或
+  唤醒任何 BigQuery 作业。页面右上角的 **BigQuery Panels** 开关仅保存在浏览器本地
+  `localStorage` 中，只决定是否展示已落盘的 SQLite 数据（读取成本 `$0`），任何访客
+  都无法通过网页触发 BigQuery 消费。
+- **实测成本与共享月度预算。** 三个 Bitcoin BigQuery 作业共享同一个月度预算上限
+  `bitcoin.bigquery.monthly_budget_gib`（默认 `2048` GiB，按 `$6.25/TiB` 折算约
+  `$12.50/月`）：
+  - **作业 A（`btc_onchain` 每日区块空间汇总，A1 + 逐块 A2）：** 365 天冷启动约
+    88 GiB（约 `$0.54`，按 31 天分块追赶），日常增量约 0.65 GiB/天（约 `$0.12/月`）。
+  - **作业 B（`btc_coinage` 每周花费输出账龄矩阵 + 休眠巨鲸）：** 365 天冷启动约
+    157 GiB（约 `$0.96`），之后按默认每周运行一次（`cadence_days: 7`）每次约
+    102 GiB（约 `$2.75/月`）。首日冷启动合计约 `$1.49`，日常稳态合计约 `$2.88/月`。
+  - **作业 C（`btc_utxo_baseline` 全量未花费 UTXO 创世日基线快照）：** 每次约
+    687 GiB（约 `$4.20`），默认仅能由管理员通过 CLI 触发。
+- **跨进程事务级预算预留。** 无论是服务端后台任务还是 CLI 进程，在发起 BigQuery
+  查询前都会先在 SQLite `BEGIN IMMEDIATE` 事务中向 `btc_reservations` 写入 dry-run
+  字节预留，并在作业提交后立即绑定 `bq_job_id`、结束后将实际 `totalBytesBilled`
+  结算进 `btc_budget`。若进程在查询中途崩溃，`recoverStale` 会通过 BigQuery 作业
+  元数据（`0` 字节计费）自动查出实际账单完成结算或释放预留。
+- **6 小时时间戳倒序余量与整数聪（satoshi）精确核算。** 比特币区块时间戳只需晚于前
+  11 个区块的中位时间（MTP-11），且最多可超前真实时间 2 小时，因此 UTC 午夜附近的
+  父子区块可能跨天倒序。作业 A 与作业 B 会等待数据源入库跨过 `window_end + 6h`
+  （每日数据约在 `06:20 UTC` 落盘），对逐块 A2 查询两侧各扩展 `6h` 以校验整个窗口内
+  区块高度连续无缺口，且全程以 `INT64` 整数聪（satoshis）存储与运算，使供应恒等式
+  （$\Delta\sum U_t = \text{coinbase}_t - \text{fees}_t - \text{op\_return}_t$）、
+  账龄矩阵合计守恒与发行上限校验达到零浮点误差的精确相等。
+- **按成本分级的熔断策略与手动恢复。** 未产生计费的跳过（如数据源尚未追上、`over_budget`、
+  dry-run 报错）不计入失败次数。产生计费的失败（含超时与扫描后守护条件拦截）按单次
+  成本分级熔断：
+  - **作业 A（`btc_onchain`）：** 指数退避 `3h → 6h → 12h`，24 小时内累计 **4** 次计费失败后停止。
+  - **作业 B（`btc_coinage`）：** 退避 `6h`，连续 **2** 次计费失败后停止。
+  排查原因后可通过管理员命令行一键清除停止标记并恢复调度：
+  ```bash
+  ./biglens-server --bitcoin-bq-resume btc_onchain
+  ./biglens-server --bitcoin-bq-resume btc_coinage
+  ```
+- **CLI UTXO 基线构建与原子交接。** 币天销毁、休眠度、老币复活、花费账龄占比、SOPR
+  与休眠巨鲸仅需作业 B 即可展示。若需解锁全量持仓分布指标（HODL Waves、LTH/STH 供应量、
+  实现市值/实现价格、盈利供应占比、BigLens MVRV），请在管理员终端执行基线构建：
+  ```bash
+  ./biglens-server --bitcoin-utxo-baseline                # 免费 dry-run：打印预估扫描 GiB 与美元费用
+  ./biglens-server --bitcoin-utxo-baseline --yes          # 预留预算、执行查询并写入新基线代次
+  ./biglens-server --bitcoin-utxo-baseline --yes --force  # 绕过 30 天最短间隔限制（绝不绕过月度预算上限）
+  ```
+  CLI 会在单个 SQLite 事务中写入新代次基线、设置 `baseline_pending` 并结算预算；
+  运行中的服务端每小时执行一次纯本地 `btcHolderMaintenance`，原子应用挂起基线（包含跨
+  $T_0$ 午夜时间戳倒序修正 $U_{\text{init}}[c] = \text{baseline}[c] - S_{T_0-1}[c],\ c \ge T_0$）、
+  向前回溯并向后递推至 $\min(\text{coinage\_cursor}, \text{rollup\_cursor})$、清除
+  `baseline_pending` 标记并清理旧代次基线。
+
 ### Crypto Pulse（链上加密数据）
 
 涵盖比特币、以太坊、Arbitrum、Optimism、Base、Polygon、TRON 与 Solana 的链上

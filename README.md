@@ -310,6 +310,105 @@ BigQuery public table syncs periodically, the default date automatically selects
 the freshest day with settled coverage (≥3,000 `TMAX` stations) and shades the
 provisional 4-day tail on the trend chart.
 
+### Bitcoin
+
+A dedicated Bitcoin intelligence dashboard combining keyless public APIs with
+optional, operator-controlled on-chain accounting over
+`bigquery-public-data.crypto_bitcoin`. A 30-second live ticker strip sits above
+two lazily-mounted tabs:
+
+| Tab | Public API Panels (always free) | BigQuery On-Chain Panels (operator opt-in, read from SQLite) |
+|---|---|---|
+| **Holders & Flows** | **Exchange Flows & Balance** (`FlowInExUSD`, `FlowOutExUSD`, net flow, `SplyExNtv` and % of supply from Coin Metrics Community; `flash` rows flagged `Provisional`), **Public Corporate Treasuries** (top 20 companies + CSV export via CoinGecko) | **UTXO Baseline & Supply Reconciliation** card, **Coin Days Destroyed (CDD) & Dormancy**, **Revived Old Supply** (≥ 1Y / 2Y / 5Y), **Spent-Output Age Shares** (12 age bands), **SOPR** (All / aSOPR excl. `<1d` / STH / LTH, price-gated), **Dormant Whale Revivals** (top 20/day, ≥ 10 BTC, age ≥ 1Y + CSV export), plus baseline-backed **HODL Waves**, **LTH/STH Supply** (155-day split), **Realized Cap & Realized Price Cohorts**, **Supply in Profit %**, and **BigLens On-Chain MVRV** |
+| **Fees & Block Space** | Embedded live **GasLiveBar** (`btc` mode), **UTXO Consolidation Window** detector (economy fee ≤ 5 sat/vB and backlog ≤ 3 blocks), **Transaction Cost Calculator** (6 templates from 140 vB transfer to 3,442 vB 50-in consolidation), **Mempool Backlog History** (6 fee bands from mempool.space 39-level histogram), **Mined-Block Fee Rate Percentiles** (p10–p90) | **Daily Tx-Weighted Fee Rate Percentiles & Miner Fee Revenue**, **Block-Space VByte Composition** (standard payment, consolidation, batch payout, inscription-like witness heuristic, Runes, OP_RETURN, coinbase), **Witness Share & OP_RETURN / Runestone Telemetry**, **Script-Type Adoption** (P2TR, P2WPKH, P2WSH, P2SH, P2PKH, Pay-to-Anchor), and **Output Payment-Size Bands** |
+
+#### Public API providers & licenses
+
+All six public providers are keyless and can be toggled individually under
+`bitcoin.providers` in `conf.yaml`:
+
+| Provider | Config Key | Used For | License / Terms |
+|---|---|---|---|
+| **mempool.space** | `mempool` | Live fees, mempool vMB histogram, block fee-rate percentiles, difficulty retarget, 1w hashrate | Public API (fair use) |
+| **Coinbase Exchange** | `coinbase` | Live BTC-USD spot stats and daily OHLCV candles (primary price source from 2015-07-20) | Public market data |
+| **Kraken** | `kraken` | Fallback daily BTC-USD OHLCV increment | Public market data |
+| **Coin Metrics Community** | `coinmetrics` | Exchange inflows/outflows, exchange BTC supply, reference supply (`SplyCur`), historical price fallback | **CC BY-NC 4.0 (non-commercial)** — commercial deployments must set `bitcoin.providers.coinmetrics: false` |
+| **CoinGecko** | `coingecko` | Public company Bitcoin treasuries (`/companies/public_treasury/bitcoin`) | Attribution required |
+| **blockchain.com** | `blockchain_com` | Historical daily BTC-USD bootstrap (`2010-08-18` to `2015-07-19`) | Public chart data |
+
+Daily USD closes (`btc_price_daily` in `data/security.db`) are synced via HTTP
+only (zero BigQuery cost). Valuation metrics that depend on historical cost basis
+(SOPR, Realized Cap, Realized Price, LTH/STH Realized Price, MVRV, Supply in
+Profit) are **price-gated**: if any day since `2010-08-18` is missing, those
+fields return `null` with `blocked: "price_history_incomplete (...)"` rather
+than silently undercounting.
+
+#### BigQuery controls, budget reservations & CLI commands
+
+- **Strict separation of display vs. spending.** `bitcoin.bigquery.jobs`
+  defaults to `false` in `conf.yaml`. HTTP handlers hold only a read-only SQLite
+  interface (`btcReadStore`) and never construct or trigger BigQuery jobs. The
+  **BigQuery Panels** switch in the dashboard header is a browser-local display
+  preference (`localStorage`): toggling it shows or hides panels backed by
+  local SQLite tables (`$0` read cost) and can never start a query.
+- **Measured costs & shared monthly budget.** All three Bitcoin BigQuery jobs
+  share `bitcoin.bigquery.monthly_budget_gib` (default `2048` GiB ≈ `$12.50/month`
+  at `$6.25/TiB`):
+  - **Job A (`btc_onchain` daily rollup, A1 + per-block A2):** ~88 GiB (~`$0.54`)
+    for a 365-day cold start (caught up in 31-day chunks), then ~0.65 GiB/day
+    (~`$0.12/month`).
+  - **Job B (`btc_coinage` weekly spent-output age matrix + dormant whales):**
+    ~157 GiB (~`$0.96`) for a 365-day cold start, then ~102 GiB per weekly run
+    (`cadence_days: 7`, ~`$2.75/month`). Combined first-day backfill is ~`$1.49`
+    and steady-state operation is ~`$2.88/month`.
+  - **Job C (`btc_utxo_baseline` full unspent UTXO snapshot by creation day):**
+    ~687 GiB (~`$4.20` per run), operator-triggered via CLI.
+- **Cross-process atomic reservations.** Before any BigQuery query runs, both the
+  server and CLI reserve the dry-run bytes inside a `BEGIN IMMEDIATE` SQLite
+  transaction (`btc_reservations`), attach the BigQuery job ID before waiting,
+  and settle actual `totalBytesBilled` into `btc_budget` on completion. If a
+  process crashes mid-query, `recoverStale` inspects the attached BigQuery job
+  metadata (`0` bytes billed) and settles or releases the reservation.
+- **6-hour timestamp-inversion slack & exact satoshi accounting.** Because
+  Bitcoin block timestamps only need to exceed the median of the previous 11
+  blocks (MTP-11) and can lead wall-clock time by up to 2 hours, blocks around
+  UTC midnight can invert across day boundaries. Job A and Job B wait until the
+  source has ingested past `window_end + 6h` (settling each UTC day around
+  `~06:20 UTC`), pad the per-block A2 scan by `±6h` to verify height contiguity
+  across the window, and store all on-chain amounts as exact `INT64` satoshis
+  so the supply identity ($\Delta\sum U_t = \text{coinbase}_t - \text{fees}_t - \text{op\_return}_t$),
+  coin-age matrix totals, and issuance bounds hold with zero floating-point
+  tolerance.
+- **Cost-tiered failure policy & manual resume.** Unbilled checks ("source not
+  caught up", `over_budget`, dry-run errors) never count as failures. Billed
+  failures (including timeouts and post-scan guard failures) use cost-tiered
+  circuit breakers:
+  - **Job A (`btc_onchain`):** backs off `3h → 6h → 12h` and stops after **4**
+    billed failures within 24 hours.
+  - **Job B (`btc_coinage`):** backs off `6h` and stops after **2** consecutive
+    billed failures.
+  Clear a stopped job from the operator shell:
+  ```bash
+  ./biglens-server --bitcoin-bq-resume btc_onchain
+  ./biglens-server --bitcoin-bq-resume btc_coinage
+  ```
+- **CLI UTXO baseline & atomic handoff.** Coin-age panels (CDD, dormancy,
+  revived supply, spent-age shares, SOPR, dormant whales) work as soon as Job B
+  runs. To unlock full-supply cohort metrics (HODL waves, LTH/STH supply,
+  Realized Cap/Price, Supply in Profit, BigLens MVRV), build the UTXO baseline:
+  ```bash
+  ./biglens-server --bitcoin-utxo-baseline                # free dry run: prints estimated GiB and USD
+  ./biglens-server --bitcoin-utxo-baseline --yes          # reserve budget, run query, and stage baseline
+  ./biglens-server --bitcoin-utxo-baseline --yes --force  # bypass the 30-day min_interval_days lock (never bypasses budget)
+  ```
+  The CLI writes the new baseline generation and sets `baseline_pending` in a
+  single SQLite transaction; the running server's hourly `btcHolderMaintenance`
+  loop atomically initializes `btc_utxo_state` (applying the cross-boundary
+  midnight-inversion correction $U_{\text{init}}[c] = \text{baseline}[c] - S_{T_0-1}[c]$
+  for $c \ge T_0$), reconstructs backward and rolls forward through
+  $\min(\text{coinage\_cursor}, \text{rollup\_cursor})$, clears `baseline_pending`,
+  and prunes older generations.
+
 ### Crypto Pulse
 
 On-chain financial fundamentals and live payment/risk telemetry across Bitcoin,
