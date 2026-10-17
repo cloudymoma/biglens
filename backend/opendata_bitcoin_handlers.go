@@ -10,17 +10,29 @@ import (
 )
 
 const (
-	btcLiveStatsKey   = "opendata:bitcoin:live:stats"
-	btcLiveDiffKey    = "opendata:bitcoin:live:diff"
-	btcLivePools1wKey = "opendata:bitcoin:live:pools:1w"
-	btcFeesStatsKeyFm = "opendata:bitcoin:fees:stats:%s"
-	btcFeesRatesKeyFm = "opendata:bitcoin:fees:rates:%s"
+	btcLiveStatsKey         = "opendata:bitcoin:live:stats"
+	btcLiveDiffKey          = "opendata:bitcoin:live:diff"
+	btcLivePools1wKey       = "opendata:bitcoin:live:pools:1w"
+	btcFeesStatsKeyFm       = "opendata:bitcoin:fees:stats:%s"
+	btcFeesRatesKeyFm       = "opendata:bitcoin:fees:rates:%s"
+	btcHoldersCMKey         = "opendata:bitcoin:holders:cm"
+	btcHoldersTreasuriesKey = "opendata:bitcoin:holders:treasuries"
 
 	btcLiveStatsTTL   = 30 * time.Second
 	btcLiveDiffTTL    = 30 * time.Second
 	btcLivePools1wTTL = 10 * time.Minute
 	btcFeesTTL        = 60 * time.Second
+	btcCoinMetricsTTL = 1 * time.Hour
+	btcTreasuriesTTL  = 6 * time.Hour
 )
+
+type BtcHoldersData struct {
+	AsOf       string                 `json:"as_of"`
+	Days       int                    `json:"days"`
+	Flows      []BtcExchangeFlowPoint `json:"flows"`
+	Treasuries *BtcTreasuriesSummary  `json:"treasuries"`
+	Sources    []BtcSourceStatus      `json:"sources"`
+}
 
 type BtcFeesData struct {
 	AsOf           string                  `json:"as_of"`
@@ -89,6 +101,7 @@ func bitcoinRoutes(h *APIHandler) []bitcoinRoute {
 	return []bitcoinRoute{
 		{Pattern: "/api/opendata/bitcoin/meta", Handler: h.BitcoinMeta, Gzip: true},
 		{Pattern: "/api/opendata/bitcoin/live", Handler: h.BitcoinLive, Gzip: true},
+		{Pattern: "/api/opendata/bitcoin/holders", Handler: h.BitcoinHolders, Gzip: true},
 		{Pattern: "/api/opendata/bitcoin/fees", Handler: h.BitcoinFees, Gzip: true},
 		{Pattern: "/api/opendata/bitcoin/onchain", Handler: h.BitcoinOnchain, Gzip: true},
 		{Pattern: "/api/opendata/bitcoin/onchain/baseline", Handler: h.BitcoinBaseline, Gzip: false},
@@ -545,3 +558,66 @@ func (h *APIHandler) BitcoinOnchain(w http.ResponseWriter, r *http.Request) {
 		Sources: []BtcSourceStatus{bqSrc},
 	})
 }
+
+func (h *APIHandler) BitcoinHolders(w http.ResponseWriter, r *http.Request) {
+	if h.btc == nil {
+		writeError(w, "bitcoin dashboard disabled", http.StatusNotFound)
+		return
+	}
+	s := h.btc
+	s.prices.touchAsync()
+	now := s.now().UTC()
+	ctx := r.Context()
+
+	days := parseBtcDaysParam(r, 90)
+	switch days {
+	case 30, 90, 365:
+	default:
+		if days < 60 {
+			days = 30
+		} else if days <= 180 {
+			days = 90
+		} else {
+			days = 365
+		}
+	}
+
+	var (
+		wg            sync.WaitGroup
+		cmVal         any
+		cmSrc         BtcSourceStatus
+		treasuriesVal any
+		treasuriesSrc BtcSourceStatus
+	)
+
+	startDate := now.AddDate(0, 0, -400).Format("2006-01-02")
+	wg.Go(func() {
+		cmVal, cmSrc = h.btcCachedSource(ctx, btcHoldersCMKey, btcCoinMetricsTTL, "coinmetrics", func(c context.Context) (any, string) {
+			return fetchCMAssetMetrics(c, startDate)
+		})
+	})
+	wg.Go(func() {
+		treasuriesVal, treasuriesSrc = h.btcCachedSource(ctx, btcHoldersTreasuriesKey, btcTreasuriesTTL, "coingecko", func(c context.Context) (any, string) {
+			return fetchCGTreasuries(c)
+		})
+	})
+	wg.Wait()
+
+	flows := []BtcExchangeFlowPoint{}
+	if rows, ok := cmVal.([]BtcCMMetricRow); ok && len(rows) > 0 {
+		flows = cmRowsToExchangeFlows(rows, days, now)
+	}
+	var treasuries *BtcTreasuriesSummary
+	if t, ok := treasuriesVal.(*BtcTreasuriesSummary); ok {
+		treasuries = t
+	}
+
+	writeJSON(w, BtcHoldersData{
+		AsOf:       now.Format(time.RFC3339),
+		Days:       days,
+		Flows:      flows,
+		Treasuries: treasuries,
+		Sources:    []BtcSourceStatus{cmSrc, treasuriesSrc},
+	})
+}
+
