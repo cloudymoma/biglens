@@ -118,12 +118,12 @@ FROM whales`
 }
 
 type btcCoinAgeRawRow struct {
-	Kind      string              `bigquery:"kind"`
-	SpendDay  string              `bigquery:"spend_day"`
-	CreateDay string              `bigquery:"create_day"`
-	Sats      int64               `bigquery:"sats"`
-	N         int64               `bigquery:"n"`
-	SpendTx   bigquery.NullString `bigquery:"spend_tx"`
+	Kind      string                 `bigquery:"kind"`
+	SpendDay  string                 `bigquery:"spend_day"`
+	CreateDay string                 `bigquery:"create_day"`
+	Sats      int64                  `bigquery:"sats"`
+	N         int64                  `bigquery:"n"`
+	SpendTx   bigquery.NullString    `bigquery:"spend_tx"`
 	SpentAt   bigquery.NullTimestamp `bigquery:"spent_at"`
 }
 
@@ -433,11 +433,11 @@ func coinageMetrics(spendDay string, spent map[string]int64, prices map[string]f
 	sd, _ := civil.ParseDate(spendDay)
 	bandSats := make(map[string]int64, len(btcAgeBands))
 	var (
-		totalSpent   int64
-		cddSatDays   int64
-		revived1y    int64
-		revived2y    int64
-		revived5y    int64
+		totalSpent int64
+		cddSatDays int64
+		revived1y  int64
+		revived2y  int64
+		revived5y  int64
 	)
 
 	for cDay, sats := range spent {

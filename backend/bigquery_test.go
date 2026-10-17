@@ -310,7 +310,3 @@ func TestListJobsSQLAndFilters(t *testing.T) {
 		t.Errorf("StorageCoreCacheKey should ignore TimeRange and UserEmail")
 	}
 }
-
-
-
-

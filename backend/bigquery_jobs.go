@@ -148,7 +148,6 @@ func (b *BQClient) GetErrorOverview(ctx context.Context, filters QueryFilters) (
 	return es, fu, nil
 }
 
-
 // --- Widget 4.3: Performance Insights ---
 
 // perfInsightFlags is the shared SELECT fragment deriving one boolean per

@@ -581,4 +581,3 @@ func (h *APIHandler) GdeltIndustry(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, v)
 }
-

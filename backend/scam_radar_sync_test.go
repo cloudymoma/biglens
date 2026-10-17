@@ -12,22 +12,23 @@ import (
 )
 
 type fakeDailyJob struct {
-	mu           sync.Mutex
-	id           string
-	ready        bool
-	readyErr     error
-	dryBytes     int64
-	runResult    dailyResult
-	runBilled    int64
-	runErr       error
-	storeErr     error
-	panicOnRun   bool
-	attachJobID  string
-	onAttach     func()
-	readyCalls   []civil.Date
-	dryRunCalls  []fetchCall
-	runCalls     []fetchCall
-	storeApplied int
+	mu                sync.Mutex
+	id                string
+	ready             bool
+	readyErr          error
+	dryBytes          int64
+	runResult         dailyResult
+	runBilled         int64
+	runErr            error
+	storeErr          error
+	panicOnRun        bool
+	blockUntilCtxDone bool
+	attachJobID       string
+	onAttach          func()
+	readyCalls        []civil.Date
+	dryRunCalls       []fetchCall
+	runCalls          []fetchCall
+	storeApplied      int
 }
 
 func (f *fakeDailyJob) ID() string { return f.id }
@@ -55,6 +56,7 @@ func (f *fakeDailyJob) Run(ctx context.Context, start, end civil.Date, maxBytes 
 	onAttach := f.onAttach
 	f.runCalls = append(f.runCalls, fetchCall{start: start, end: end, maxBytes: maxBytes})
 	panicOnRun := f.panicOnRun
+	blockUntilDone := f.blockUntilCtxDone
 	runErr := f.runErr
 	runBilled := f.runBilled
 	res := f.runResult
@@ -68,6 +70,10 @@ func (f *fakeDailyJob) Run(ctx context.Context, start, end civil.Date, maxBytes 
 	}
 	if panicOnRun {
 		panic("simulated job panic")
+	}
+	if blockUntilDone {
+		<-ctx.Done()
+		return dailyResult{}, runBilled, ctx.Err()
 	}
 	if runErr != nil {
 		return dailyResult{}, runBilled, runErr
@@ -445,9 +451,9 @@ func (b *fakeSyncBudget) settle(_ context.Context, id string, billed int64) erro
 }
 
 type fakeSyncStopFlags struct {
-	mu       sync.Mutex
-	isStop   map[string]string
-	recs     map[string][]syncFailureRecord
+	mu     sync.Mutex
+	isStop map[string]string
+	recs   map[string][]syncFailureRecord
 }
 
 func newFakeSyncStopFlags() *fakeSyncStopFlags {
@@ -798,3 +804,105 @@ func TestDailyBQSyncerFailurePolicy(t *testing.T) {
 	})
 }
 
+func TestDailyBQSyncerRealTimeoutSettlesAndStops(t *testing.T) {
+	ctx := context.Background()
+	cur := at(6, 0)
+	s, job, store := newTestDailySyncer(t, btcCoinageJobID, cur, 7)
+	s.now = func() time.Time { return cur }
+
+	settings := (BitcoinConfig{}).settings()
+	settings.BudgetBytes = 1000 << 30 // 1,000 GiB
+	if err := store.ensureBtcBQSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	budget := newBtcBudget(store, settings, func() time.Time { return cur })
+	flags := newBtcStopFlags(store)
+
+	s.budget = budget
+	s.stopFlags = flags
+	s.dryRunSizedCap = true
+	s.hardCapBytes = 256 << 30
+	s.timeout = 150 * time.Millisecond
+	s.failurePolicy = btcJobFailurePolicy(btcCoinageJobID)
+
+	job.dryBytes = 100 << 30 // est = 100 GiB -> maxBytes = 125 GiB
+	job.runBilled = 0
+	job.blockUntilCtxDone = true
+	job.attachJobID = "bq-job-timeout-1"
+
+	var reservedWhileInFlight int64
+	job.onAttach = func() {
+		if st, err := budget.status(context.Background(), cur); err == nil {
+			reservedWhileInFlight = st.ReservedBytes
+		}
+	}
+
+	// First real timeout: Run blocks until tctx expires.
+	s.syncOnce(ctx)
+
+	if reservedWhileInFlight != 125<<30 {
+		t.Errorf("reservedWhileInFlight = %d, want %d (1.25x dryRun maxBytes)", reservedWhileInFlight, int64(125<<30))
+	}
+	bSt1, err := budget.status(ctx, cur)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bSt1.ReservedBytes != 0 {
+		t.Errorf("ReservedBytes after 1st timeout = %d, want 0", bSt1.ReservedBytes)
+	}
+	if bSt1.SettledBytes != 100<<30 {
+		t.Errorf("SettledBytes after 1st timeout = %d, want %d (est settled on timeout with billed==0)", bSt1.SettledBytes, int64(100<<30))
+	}
+	recs1, err := flags.failures(ctx, btcCoinageJobID)
+	if err != nil || len(recs1) != 1 || recs1[0].BilledBytes != 100<<30 {
+		t.Fatalf("SQLite failures after 1st timeout = %+v, err=%v; want 1 record with 100 GiB", recs1, err)
+	}
+	if _, stopped, _ := flags.stopped(ctx, btcCoinageJobID); stopped {
+		t.Fatal("stopped after 1st timeout, want retry after 6h")
+	}
+
+	// Second real timeout 6 hours later -> must settle another 100 GiB and stop in SQLite.
+	cur = cur.Add(6 * time.Hour)
+	job.attachJobID = "bq-job-timeout-2"
+	s.syncOnce(ctx)
+
+	bSt2, err := budget.status(ctx, cur)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bSt2.ReservedBytes != 0 || bSt2.SettledBytes != 200<<30 {
+		t.Errorf("budget after 2nd timeout = %+v, want reserved=0 settled=200 GiB", bSt2)
+	}
+	reason, stopped, err := flags.stopped(ctx, btcCoinageJobID)
+	if err != nil || !stopped || !strings.Contains(reason, "--bitcoin-bq-resume btc_coinage") {
+		t.Fatalf("SQLite stopped after 2nd timeout: stopped=%v reason=%q err=%v", stopped, reason, err)
+	}
+	syncSt, _ := store.getSyncState(ctx, btcCoinageJobID)
+	if !strings.Contains(syncSt.LastError, "stopped after 2 consecutive billed failures") {
+		t.Errorf("sync_state.LastError after 2nd timeout = %q, want stop message", syncSt.LastError)
+	}
+}
+
+func TestDailyBQSyncerReservesMaxBytesCap(t *testing.T) {
+	ctx := context.Background()
+	cur := at(6, 0)
+	s, job, store := newTestDailySyncer(t, btcCoinageJobID, cur, 7)
+
+	settings := (BitcoinConfig{}).settings()
+	settings.BudgetBytes = 90 << 30 // 90 GiB budget
+	s.budget = newBtcBudget(store, settings, func() time.Time { return cur })
+	s.dryRunSizedCap = true
+	s.hardCapBytes = 256 << 30
+	// est = 80 GiB fits under 90 GiB, but MaxBytesBilled = 1.25 * 80 GiB = 100 GiB exceeds 90 GiB.
+	job.dryBytes = 80 << 30
+
+	s.syncOnce(ctx)
+
+	if len(job.runCalls) != 0 {
+		t.Fatalf("Run called %d times when MaxBytesBilled (100 GiB) exceeds 90 GiB budget, want 0", len(job.runCalls))
+	}
+	st, _ := store.getSyncState(ctx, btcCoinageJobID)
+	if st.LastError != "over_budget" {
+		t.Errorf("LastError = %q, want over_budget", st.LastError)
+	}
+}

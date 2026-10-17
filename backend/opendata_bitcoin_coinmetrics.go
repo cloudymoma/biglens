@@ -47,21 +47,21 @@ type BtcExchangeFlowPoint struct {
 }
 
 type cmRawAssetRow struct {
-	Asset           string `json:"asset"`
-	Time            string `json:"time"`
-	AdrActCnt       string `json:"AdrActCnt"`
-	CapMVRVCur      string `json:"CapMVRVCur"`
-	FeeTotNtv       string `json:"FeeTotNtv"`
-	FlowInExUSD     string `json:"FlowInExUSD"`
-	FlowInStatus    string `json:"FlowInExUSD-status"`
-	FlowOutExUSD    string `json:"FlowOutExUSD"`
-	FlowOutStatus   string `json:"FlowOutExUSD-status"`
-	IssTotNtv       string `json:"IssTotNtv"`
-	PriceUSD        string `json:"PriceUSD"`
-	SplyCur         string `json:"SplyCur"`
-	SplyExNtv       string `json:"SplyExNtv"`
-	SplyExStatus    string `json:"SplyExNtv-status"`
-	TxCnt           string `json:"TxCnt"`
+	Asset         string `json:"asset"`
+	Time          string `json:"time"`
+	AdrActCnt     string `json:"AdrActCnt"`
+	CapMVRVCur    string `json:"CapMVRVCur"`
+	FeeTotNtv     string `json:"FeeTotNtv"`
+	FlowInExUSD   string `json:"FlowInExUSD"`
+	FlowInStatus  string `json:"FlowInExUSD-status"`
+	FlowOutExUSD  string `json:"FlowOutExUSD"`
+	FlowOutStatus string `json:"FlowOutExUSD-status"`
+	IssTotNtv     string `json:"IssTotNtv"`
+	PriceUSD      string `json:"PriceUSD"`
+	SplyCur       string `json:"SplyCur"`
+	SplyExNtv     string `json:"SplyExNtv"`
+	SplyExStatus  string `json:"SplyExNtv-status"`
+	TxCnt         string `json:"TxCnt"`
 }
 
 type cmRawAssetResponse struct {

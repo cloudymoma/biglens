@@ -1266,4 +1266,3 @@ func (b *BQClient) GetGdeltIndustryConsolidated(ctx context.Context, start, end 
 	r := rows[0]
 	return r.Daily, r.Orgs, r.Subtopics, r.Outlets, r.Articles, nil
 }
-

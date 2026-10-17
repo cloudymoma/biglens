@@ -56,7 +56,7 @@ func TestIndicatorMayerWMA200HalvingPuell(t *testing.T) {
 	}
 
 	dates := []string{"2024-04-20", "2024-04-21", "2026-10-16"}
-	 overlay := halvingOverlay(dates, []float64{64000, 65280, 82064})
+	overlay := halvingOverlay(dates, []float64{64000, 65280, 82064})
 	if len(overlay) == 0 {
 		t.Fatal("expected halving overlay cycle")
 	}

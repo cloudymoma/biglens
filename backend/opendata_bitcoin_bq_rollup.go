@@ -303,8 +303,10 @@ func (j *btcOnchainJob) Run(ctx context.Context, start, end civil.Date, maxBytes
 	}
 
 	remCap := maxBytes - a2Billed
-	if remCap < 1<<30 {
+	if maxBytes <= 0 {
 		remCap = 1 << 30
+	} else if remCap <= 0 {
+		return dailyResult{}, a2Billed, errBtcOverBudget
 	}
 	a1Rows, a1Billed, err := j.src.FetchRollup(ctx, start, end, remCap)
 	totalBilled := a2Billed + a1Billed
@@ -380,9 +382,9 @@ func validateBtcBlocksA2(start, end civil.Date, a2Rows []btcBlockRow, existing m
 	}
 
 	var (
-		hasInWin   bool
-		hMinInWin  int64
-		hMaxInWin  int64
+		hasInWin  bool
+		hMinInWin int64
+		hMaxInWin int64
 	)
 	for _, r := range a2Rows {
 		if _, dup := seenInA2[r.Height]; dup {

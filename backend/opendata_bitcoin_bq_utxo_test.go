@@ -30,6 +30,9 @@ func (f *fakeBaselineSource) FetchBaseline(ctx context.Context, end civil.Date, 
 	if f.onFetch != nil {
 		f.onFetch()
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, 0, err
+	}
 	return f.rows, f.billed, nil
 }
 
@@ -221,6 +224,13 @@ func TestBtcBaselineHandoffAtomic(t *testing.T) {
 	if v, ok, _ := store.getBtcKV(ctx, btcLastBaselineAtKey); ok || v != "" {
 		t.Fatalf("expected no last_baseline_at after rollback, got %q", v)
 	}
+	bSt, err := runner.budget.status(ctx, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bSt.ReservedBytes != 0 || bSt.SettledBytes != 100<<30 {
+		t.Fatalf("budget after commit failure = %+v, want reserved=0 and settled=%d (100 GiB)", bSt, int64(100<<30))
+	}
 }
 
 func TestBtcBaselineRequiresJobs(t *testing.T) {
@@ -297,5 +307,71 @@ func TestBtcBaselineReconciliation(t *testing.T) {
 	_, delta2, suspect2 := reconcileBtcBaseline(499_800_000_000, 100, 10_000, 5_000)
 	if delta2 == nil || !suspect2 {
 		t.Fatalf("expected suspect=true for >0.01%% deviation, got delta=%v suspect=%v", delta2, suspect2)
+	}
+}
+
+func TestBtcBaselineConfirmSurvivesCallerCancel(t *testing.T) {
+	ctx := context.Background()
+	store := newTestRiskStore(t)
+	s := (BitcoinConfig{}).settings()
+	s.Jobs = true
+	s.BaselineAllowUI = true
+	now := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
+
+	callerCtx, callerCancel := context.WithCancel(ctx)
+	defer callerCancel()
+
+	src := &fakeBaselineSource{
+		dryBytes: 100 << 30,
+		rows:     []btcUTXOBaselineRow{{CreateDay: "2020-01-01", Sats: 100_000_000, UTXOs: 1}},
+		billed:   98 << 30,
+		onFetch: func() {
+			// Simulate browser disconnect / HTTP write timeout while FetchBaseline is running.
+			callerCancel()
+		},
+	}
+	runner := newBtcBaselineRunner(store, s, src, func() time.Time { return now })
+	plan, err := runner.dryRun(ctx)
+	if err != nil {
+		t.Fatalf("dryRun: %v", err)
+	}
+
+	if err := runner.confirm(callerCtx, plan.Token); err != nil {
+		t.Fatalf("confirm failed when caller context canceled mid-query: %v", err)
+	}
+	if gen, ok, _ := store.latestBtcBaselineGeneration(ctx); !ok || gen != 1 {
+		t.Fatalf("latestBtcBaselineGeneration = %d, %v; want 1, true", gen, ok)
+	}
+	bSt, err := runner.budget.status(ctx, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bSt.ReservedBytes != 0 || bSt.SettledBytes != 98<<30 {
+		t.Fatalf("budget after confirm = %+v, want reserved=0 settled=98 GiB", bSt)
+	}
+}
+
+func TestBtcBaselineReservesSizedMaxCap(t *testing.T) {
+	ctx := context.Background()
+	store := newTestRiskStore(t)
+	s := (BitcoinConfig{}).settings()
+	s.Jobs = true
+	s.BaselineAllowUI = true
+	// Budget is 800 GiB: dryBytes (687 GiB) < 800 GiB, but MaxBytesBilled (ceil(1.25 * 687 GiB) = 858.75 GiB) > 800 GiB.
+	s.BudgetBytes = 800 << 30
+	now := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
+
+	src := &fakeBaselineSource{
+		dryBytes: 687 << 30,
+		rows:     []btcUTXOBaselineRow{{CreateDay: "2020-01-01", Sats: 100_000_000, UTXOs: 1}},
+		billed:   687 << 30,
+	}
+	runner := newBtcBaselineRunner(store, s, src, func() time.Time { return now })
+
+	if _, err := runner.dryRun(ctx); !errors.Is(err, errBtcOverBudget) {
+		t.Fatalf("dryRun when maxCap (858.75 GiB) > budget (800 GiB) = %v, want errBtcOverBudget", err)
+	}
+	if _, _, err := runner.runCLI(ctx, true, true); !errors.Is(err, errBtcOverBudget) {
+		t.Fatalf("runCLI when maxCap (858.75 GiB) > budget (800 GiB) = %v, want errBtcOverBudget", err)
 	}
 }

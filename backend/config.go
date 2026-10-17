@@ -403,4 +403,3 @@ func (c BitcoinConfig) settings() btcSettings {
 		BaselineMinInterval: time.Duration(intervalDays) * 24 * time.Hour,
 	}
 }
-

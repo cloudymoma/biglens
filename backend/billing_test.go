@@ -461,4 +461,3 @@ func TestBillingServiceGroupingAndTailRollup(t *testing.T) {
 		t.Errorf("unexpected rollupBillingGroupRows result: %+v", rolled)
 	}
 }
-

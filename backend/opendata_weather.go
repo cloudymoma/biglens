@@ -250,4 +250,3 @@ func (b *BQClient) GetWeatherDashboardConsolidated(ctx context.Context, start, s
 	}
 	return b0.Stations, b0.Daily, nil
 }
-

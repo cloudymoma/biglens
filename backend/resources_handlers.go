@@ -304,19 +304,25 @@ func (h *APIHandler) ResourcesOverview(w http.ResponseWriter, r *http.Request) {
 	h.resServe(w, r, "overview", func(ctx context.Context, project string) (any, error) {
 		d := ResOverviewData{FetchedAt: resNow()}
 		var (
-			assets                          []AssetItem
-			vms                             []VMInstance
-			buckets                         []BucketInfo
-			vpcs                            []VPCInfo
-			fws                             []FirewallInfo
-			assetsErr, storageErr           error
-			instErr, netErr, fwErr          error
-			wg                              sync.WaitGroup
+			assets                 []AssetItem
+			vms                    []VMInstance
+			buckets                []BucketInfo
+			vpcs                   []VPCInfo
+			fws                    []FirewallInfo
+			assetsErr, storageErr  error
+			instErr, netErr, fwErr error
+			wg                     sync.WaitGroup
 		)
 		wg.Add(5)
 		go func() { defer wg.Done(); assets, d.Truncated, assetsErr = h.resAllAssets(ctx, project) }()
-		go func() { defer wg.Done(); vms, instErr = resListCached(h, ctx, project, "instances", h.res.ListInstances) }()
-		go func() { defer wg.Done(); buckets, storageErr = resListCached(h, ctx, project, "buckets", h.res.ListBuckets) }()
+		go func() {
+			defer wg.Done()
+			vms, instErr = resListCached(h, ctx, project, "instances", h.res.ListInstances)
+		}()
+		go func() {
+			defer wg.Done()
+			buckets, storageErr = resListCached(h, ctx, project, "buckets", h.res.ListBuckets)
+		}()
 		go func() { defer wg.Done(); vpcs, netErr = resListCached(h, ctx, project, "networks", h.res.ListNetworks) }()
 		go func() { defer wg.Done(); fws, fwErr = resListCached(h, ctx, project, "firewalls", h.res.ListFirewalls) }()
 		wg.Wait()
@@ -505,21 +511,30 @@ func (h *APIHandler) ResourcesExplorer(w http.ResponseWriter, r *http.Request) {
 func (h *APIHandler) ResourcesInsights(w http.ResponseWriter, r *http.Request) {
 	h.resServe(w, r, "insights", func(ctx context.Context, project string) (any, error) {
 		var (
-			vms                                           []VMInstance
-			disks                                         []DiskInfo
-			buckets                                       []BucketInfo
-			vpcs                                          []VPCInfo
-			addrs                                         []AddressInfo
-			fws                                           []FirewallInfo
+			vms                                                 []VMInstance
+			disks                                               []DiskInfo
+			buckets                                             []BucketInfo
+			vpcs                                                []VPCInfo
+			addrs                                               []AddressInfo
+			fws                                                 []FirewallInfo
 			instErr, diskErr, bucketErr, netErr, addrErr, fwErr error
-			wg                                            sync.WaitGroup
+			wg                                                  sync.WaitGroup
 		)
 		wg.Add(6)
-		go func() { defer wg.Done(); vms, instErr = resListCached(h, ctx, project, "instances", h.res.ListInstances) }()
+		go func() {
+			defer wg.Done()
+			vms, instErr = resListCached(h, ctx, project, "instances", h.res.ListInstances)
+		}()
 		go func() { defer wg.Done(); disks, diskErr = resListCached(h, ctx, project, "disks", h.res.ListDisks) }()
-		go func() { defer wg.Done(); buckets, bucketErr = resListCached(h, ctx, project, "buckets", h.res.ListBuckets) }()
+		go func() {
+			defer wg.Done()
+			buckets, bucketErr = resListCached(h, ctx, project, "buckets", h.res.ListBuckets)
+		}()
 		go func() { defer wg.Done(); vpcs, netErr = resListCached(h, ctx, project, "networks", h.res.ListNetworks) }()
-		go func() { defer wg.Done(); addrs, addrErr = resListCached(h, ctx, project, "addresses", h.res.ListAddresses) }()
+		go func() {
+			defer wg.Done()
+			addrs, addrErr = resListCached(h, ctx, project, "addresses", h.res.ListAddresses)
+		}()
 		go func() { defer wg.Done(); fws, fwErr = resListCached(h, ctx, project, "firewalls", h.res.ListFirewalls) }()
 		wg.Wait()
 

@@ -713,4 +713,3 @@ ON CONFLICT(day) DO UPDATE SET
 
 	return tx.Commit()
 }
-

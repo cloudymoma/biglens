@@ -229,9 +229,11 @@ func (s *dailyBQSyncer) syncOnce(ctx context.Context) {
 		return
 	}
 	if run.errCode != "" {
-		if err := s.store.setSyncError(ctx, sourceID, run.errCode); err != nil {
+		bctx, bCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		if err := s.store.setSyncError(bctx, sourceID, run.errCode); err != nil {
 			slog.Error(tag+" sync state", "source", sourceID, "error", err)
 		}
+		bCancel()
 	}
 	slog.Info(tag+" sync",
 		"source", sourceID,
@@ -368,7 +370,7 @@ func (s *dailyBQSyncer) sync(ctx context.Context) (stablecoinRun, bool) {
 
 	var resID string
 	if s.budget != nil {
-		id, rErr := s.budget.reserve(ctx, sourceID, est)
+		id, rErr := s.budget.reserve(ctx, sourceID, maxBytes)
 		if rErr != nil {
 			return stablecoinRun{start: start, end: end, errCode: "over_budget"}, true
 		}
@@ -378,19 +380,26 @@ func (s *dailyBQSyncer) sync(ctx context.Context) (stablecoinRun, bool) {
 	runCtx := ctx
 	if s.budget != nil && resID != "" {
 		runCtx = withSyncJobAttach(ctx, func(bqJobID string) {
-			_ = s.budget.attachJob(ctx, resID, bqJobID)
+			actx, aCancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+			defer aCancel()
+			_ = s.budget.attachJob(actx, resID, bqJobID)
 		})
 	}
 
 	res, billed, err := s.job.Run(runCtx, start, end, maxBytes)
+	bctx, bCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer bCancel()
+	if err != nil && billed == 0 && (errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)) && est > 0 {
+		billed = est
+	}
 	if s.budget != nil && resID != "" {
-		_ = s.budget.settle(ctx, resID, billed)
+		_ = s.budget.settle(bctx, resID, billed)
 	}
 	if err != nil {
 		slog.Warn(tag+" bigquery", "source", sourceID, "error", err)
 		errCode := dailyRunErrCode(err)
 		if billed > 0 || errors.Is(err, context.DeadlineExceeded) {
-			errCode = s.applyBilledFailure(ctx, sourceID, now, errCode, billed)
+			errCode = s.applyBilledFailure(bctx, sourceID, now, errCode, billed)
 		} else {
 			s.applyUnbilledBackoff(now)
 		}
@@ -398,23 +407,23 @@ func (s *dailyBQSyncer) sync(ctx context.Context) (stablecoinRun, bool) {
 	}
 
 	cursor := end.AddDays(-1).String()
-	if err := s.job.Store(ctx, s.store, res, newFrom, cursor, s.now()); err != nil {
+	if err := s.job.Store(bctx, s.store, res, newFrom, cursor, s.now()); err != nil {
 		slog.Error(tag+" store", "source", sourceID, "error", err)
-		errCode := s.applyBilledFailure(ctx, sourceID, now, "unavailable", billed)
+		errCode := s.applyBilledFailure(bctx, sourceID, now, "unavailable", billed)
 		return stablecoinRun{start: start, end: end, billed: billed, errCode: errCode}, true
 	}
 
 	s.unbilledFailures = 0
 	if s.stopFlags != nil {
-		_ = s.stopFlags.clear(ctx, sourceID)
+		_ = s.stopFlags.clear(bctx, sourceID)
 	}
 
 	if s.prune != nil {
-		if err := s.prune(ctx, today); err != nil {
+		if err := s.prune(bctx, today); err != nil {
 			slog.Warn(tag+" prune", "source", sourceID, "error", err)
 		}
 	} else {
-		if err := s.store.pruneScam(ctx, s.retentionDays, today); err != nil {
+		if err := s.store.pruneScam(bctx, s.retentionDays, today); err != nil {
 			slog.Warn(tag+" prune", "source", sourceID, "error", err)
 		}
 	}

@@ -133,4 +133,3 @@ func TestSensitiveColumnsSQL(t *testing.T) {
 		}
 	}
 }
-

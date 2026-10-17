@@ -585,4 +585,3 @@ func TestBitcoinBaselineEndpoint(t *testing.T) {
 		t.Fatalf("POST confirm reuse = %d, want 400", reuseRec.Code)
 	}
 }
-

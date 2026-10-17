@@ -22,9 +22,9 @@ const (
 )
 
 var (
-	errBtcJobsDisabled         = errors.New("bitcoin_jobs_disabled")
-	errBtcBaselineBadToken     = errors.New("invalid_or_expired_token")
-	btcGenesisBlockTimestamp   = time.Date(2009, 1, 3, 18, 15, 5, 0, time.UTC)
+	errBtcJobsDisabled       = errors.New("bitcoin_jobs_disabled")
+	errBtcBaselineBadToken   = errors.New("invalid_or_expired_token")
+	btcGenesisBlockTimestamp = time.Date(2009, 1, 3, 18, 15, 5, 0, time.UTC)
 )
 
 func btcUTXOBaselineSQL() string {
@@ -107,11 +107,13 @@ type btcBaselineTokenEntry struct {
 }
 
 type btcBaselineRunner struct {
-	store    *riskStore
-	settings btcSettings
-	budget   *btcBudget
-	src      btcBaselineQuerySource
-	now      func() time.Time
+	store     *riskStore
+	settings  btcSettings
+	budget    *btcBudget
+	src       btcBaselineQuerySource
+	now       func() time.Time
+	timeout   time.Duration
+	jobLookup func(jobID string) (int64, bool, error)
 
 	// Test hook invoked inside the handoff transaction before Commit.
 	beforeCommit func() error
@@ -130,8 +132,20 @@ func newBtcBaselineRunner(store *riskStore, settings btcSettings, src btcBaselin
 		budget:   newBtcBudget(store, settings, now),
 		src:      src,
 		now:      now,
+		timeout:  btcBaselineTimeout,
 		tokens:   make(map[string]btcBaselineTokenEntry),
 	}
+}
+
+func btcBaselineSizedCap(dryBytes int64) int64 {
+	maxCap := int64(math.Ceil(float64(dryBytes) * 1.25))
+	if maxCap < 1<<30 {
+		maxCap = 1 << 30
+	}
+	if maxCap > btcBaselineHardCapBytes {
+		maxCap = btcBaselineHardCapBytes
+	}
+	return maxCap
 }
 
 func (r *btcBaselineRunner) resolveEndDate(ctx context.Context) (civil.Date, error) {
@@ -161,6 +175,13 @@ func (r *btcBaselineRunner) checkPreconditions(ctx context.Context, force bool) 
 		return err
 	}
 	now := r.now().UTC()
+	lookup := r.jobLookup
+	if lookup == nil {
+		if bqSrc, ok := r.src.(bqBaselineSource); ok && bqSrc.bq != nil {
+			lookup = bqLookupJobBytes(ctx, bqSrc.bq.client)
+		}
+	}
+	_ = r.budget.recoverStale(ctx, now, lookup)
 	nowStr := now.Format(time.RFC3339)
 
 	var active int64
@@ -202,11 +223,12 @@ func (r *btcBaselineRunner) dryRun(ctx context.Context) (btcBaselinePlan, error)
 	if dryBytes > btcBaselineHardCapBytes {
 		return btcBaselinePlan{}, errBtcOverBudget
 	}
+	maxCap := btcBaselineSizedCap(dryBytes)
 	bStatus, err := r.budget.status(ctx, r.now().UTC())
 	if err != nil {
 		return btcBaselinePlan{}, err
 	}
-	if dryBytes > bStatus.RemainingBytes {
+	if maxCap > bStatus.RemainingBytes {
 		return btcBaselinePlan{}, errBtcOverBudget
 	}
 
@@ -276,11 +298,12 @@ func (r *btcBaselineRunner) runCLI(ctx context.Context, yes, force bool) (btcBas
 	if err != nil {
 		return btcBaselinePlan{}, BtcBaselineStatus{}, err
 	}
+	maxCap := btcBaselineSizedCap(dryBytes)
 	bStatus, err := r.budget.status(ctx, r.now().UTC())
 	if err != nil {
 		return btcBaselinePlan{}, BtcBaselineStatus{}, err
 	}
-	if dryBytes > btcBaselineHardCapBytes || dryBytes > bStatus.RemainingBytes {
+	if dryBytes > btcBaselineHardCapBytes || maxCap > bStatus.RemainingBytes {
 		return btcBaselinePlan{}, BtcBaselineStatus{}, errBtcOverBudget
 	}
 
@@ -303,44 +326,47 @@ func (r *btcBaselineRunner) execute(ctx context.Context, endDate civil.Date, dry
 	if !r.settings.Enabled || !r.settings.Jobs {
 		return BtcBaselineStatus{}, errBtcJobsDisabled
 	}
+	if dryBytes > btcBaselineHardCapBytes {
+		return BtcBaselineStatus{}, errBtcOverBudget
+	}
+	baseCtx := context.WithoutCancel(ctx)
 	minInterval := r.settings.BaselineMinInterval
 	if force {
 		minInterval = 0
 	}
-	ttl := btcBaselineTimeout + btcReservationGrace
-	resID, err := r.budget.reserveWithOpts(ctx, btcBaselineJobID, dryBytes, btcBaselineHardCapBytes, ttl, minInterval)
+	timeout := r.timeout
+	if timeout <= 0 {
+		timeout = btcBaselineTimeout
+	}
+	maxCap := btcBaselineSizedCap(dryBytes)
+	ttl := timeout + btcReservationGrace
+	resID, err := r.budget.reserveWithOpts(baseCtx, btcBaselineJobID, maxCap, btcBaselineHardCapBytes, ttl, minInterval)
 	if err != nil {
 		return BtcBaselineStatus{}, err
 	}
 
-	maxCap := int64(math.Ceil(float64(dryBytes) * 1.25))
-	if maxCap < 1<<30 {
-		maxCap = 1 << 30
-	}
-	if maxCap > btcBaselineHardCapBytes {
-		maxCap = btcBaselineHardCapBytes
-	}
-	rctx, cancel := context.WithTimeout(ctx, btcBaselineTimeout)
+	rctx, cancel := context.WithTimeout(baseCtx, timeout)
 	defer cancel()
 	rctx = withSyncJobAttach(rctx, func(bqJobID string) {
-		_ = r.budget.attachJob(rctx, resID, bqJobID)
+		_ = r.budget.attachJob(baseCtx, resID, bqJobID)
 	})
 
 	rows, billed, runErr := r.src.FetchBaseline(rctx, endDate, maxCap)
 	if runErr != nil {
-		if errors.Is(runErr, context.DeadlineExceeded) && billed == 0 && dryBytes > 0 {
+		if (errors.Is(runErr, context.DeadlineExceeded) || errors.Is(runErr, context.Canceled)) && billed == 0 && dryBytes > 0 {
 			billed = dryBytes
 		}
-		_ = r.budget.settle(context.Background(), resID, billed)
+		_ = r.budget.settle(baseCtx, resID, billed)
 		return BtcBaselineStatus{}, runErr
 	}
 	if len(rows) == 0 {
-		_ = r.budget.settle(context.Background(), resID, billed)
+		_ = r.budget.settle(baseCtx, resID, billed)
 		return BtcBaselineStatus{}, suspiciousEmpty(endDate.String(), "utxo baseline rows")
 	}
 
-	st, err := r.store.commitBtcBaseline(ctx, r.budget, r.settings, resID, endDate.String(), rows, billed, r.now().UTC(), r.beforeCommit)
+	st, err := r.store.commitBtcBaseline(baseCtx, r.budget, r.settings, resID, endDate.String(), rows, billed, r.now().UTC(), r.beforeCommit)
 	if err != nil {
+		_ = r.budget.settle(baseCtx, resID, billed)
 		return BtcBaselineStatus{}, err
 	}
 	return st, nil

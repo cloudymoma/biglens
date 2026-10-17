@@ -30,11 +30,11 @@ type btcMempoolPool struct {
 }
 
 type btcMempoolPoolsSummary struct {
-	Pools                  []btcMempoolPool `json:"pools"`
-	BlockCount             int64            `json:"blockCount"`
-	LastEstimatedHashrate  float64          `json:"lastEstimatedHashrate"`
-	LastEstimatedHashrate3d float64         `json:"lastEstimatedHashrate3d"`
-	LastEstimatedHashrate1w float64         `json:"lastEstimatedHashrate1w"`
+	Pools                   []btcMempoolPool `json:"pools"`
+	BlockCount              int64            `json:"blockCount"`
+	LastEstimatedHashrate   float64          `json:"lastEstimatedHashrate"`
+	LastEstimatedHashrate3d float64          `json:"lastEstimatedHashrate3d"`
+	LastEstimatedHashrate1w float64          `json:"lastEstimatedHashrate1w"`
 }
 
 func btcMempoolEndpoint(path string) string {
@@ -142,15 +142,15 @@ const (
 )
 
 type BtcTxTemplateCost struct {
-	ID           string   `json:"id"`
-	Label        string   `json:"label"`
-	Vbytes       int64    `json:"vbytes"`
-	NextBlockSats int64   `json:"next_block_sats"`
-	NextBlockUSD *float64 `json:"next_block_usd"`
-	HalfHourSats int64    `json:"half_hour_sats"`
-	HalfHourUSD  *float64 `json:"half_hour_usd"`
-	EconomySats  int64    `json:"economy_sats"`
-	EconomyUSD   *float64 `json:"economy_usd"`
+	ID            string   `json:"id"`
+	Label         string   `json:"label"`
+	Vbytes        int64    `json:"vbytes"`
+	NextBlockSats int64    `json:"next_block_sats"`
+	NextBlockUSD  *float64 `json:"next_block_usd"`
+	HalfHourSats  int64    `json:"half_hour_sats"`
+	HalfHourUSD   *float64 `json:"half_hour_usd"`
+	EconomySats   int64    `json:"economy_sats"`
+	EconomyUSD    *float64 `json:"economy_usd"`
 }
 
 type BtcConsolidationSignal struct {
@@ -163,24 +163,24 @@ type BtcConsolidationSignal struct {
 }
 
 type BtcMempoolStatPoint struct {
-	TS           string  `json:"ts"`
-	TotalVMB     float64 `json:"total_vmb"`
-	Band0To1VMB  float64 `json:"band_0_1_vmb"`
-	Band1To2VMB  float64 `json:"band_1_2_vmb"`
-	Band2To5VMB  float64 `json:"band_2_5_vmb"`
-	Band5To10VMB float64 `json:"band_5_10_vmb"`
+	TS            string  `json:"ts"`
+	TotalVMB      float64 `json:"total_vmb"`
+	Band0To1VMB   float64 `json:"band_0_1_vmb"`
+	Band1To2VMB   float64 `json:"band_1_2_vmb"`
+	Band2To5VMB   float64 `json:"band_2_5_vmb"`
+	Band5To10VMB  float64 `json:"band_5_10_vmb"`
 	Band10To50VMB float64 `json:"band_10_50_vmb"`
 	Band50PlusVMB float64 `json:"band_50_plus_vmb"`
 }
 
 type BtcBlockFeeRatePoint struct {
-	TS       string  `json:"ts"`
-	AvgHeight int64  `json:"avg_height"`
-	P10SatVB float64 `json:"p10_sat_vb"`
-	P25SatVB float64 `json:"p25_sat_vb"`
-	P50SatVB float64 `json:"p50_sat_vb"`
-	P75SatVB float64 `json:"p75_sat_vb"`
-	P90SatVB float64 `json:"p90_sat_vb"`
+	TS        string  `json:"ts"`
+	AvgHeight int64   `json:"avg_height"`
+	P10SatVB  float64 `json:"p10_sat_vb"`
+	P25SatVB  float64 `json:"p25_sat_vb"`
+	P50SatVB  float64 `json:"p50_sat_vb"`
+	P75SatVB  float64 `json:"p75_sat_vb"`
+	P90SatVB  float64 `json:"p90_sat_vb"`
 }
 
 var btcTxTemplates = []struct {

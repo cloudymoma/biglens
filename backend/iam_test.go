@@ -104,4 +104,3 @@ func TestIAMQueriesAndRollups(t *testing.T) {
 		t.Errorf("exfilSignalsSQL missing per-signal QUALIFY:\n%s", exSQL)
 	}
 }
-

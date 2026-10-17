@@ -467,4 +467,3 @@ func TestBitcoinConfigProviderOverride(t *testing.T) {
 		t.Errorf("bigquery settings = jobs:%v budget:%d", s.Jobs, s.BudgetBytes)
 	}
 }
-

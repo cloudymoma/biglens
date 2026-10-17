@@ -34,8 +34,8 @@ func TestBtcBudgetReservationAcrossHandles(t *testing.T) {
 	}
 
 	var (
-		wg      sync.WaitGroup
-		id1, id2 string
+		wg         sync.WaitGroup
+		id1, id2   string
 		err1, err2 error
 	)
 	wg.Add(2)
@@ -107,6 +107,71 @@ func TestBtcReservationStaleRecovery(t *testing.T) {
 	}
 	if st.SettledBytes != 40<<30 {
 		t.Errorf("SettledBytes after recovery = %d, want %d (40 GiB)", st.SettledBytes, int64(40<<30))
+	}
+}
+
+func TestBitcoinSyncJobsRecoversStaleReservations(t *testing.T) {
+	ctx := context.Background()
+	store := newTestRiskStore(t)
+	settings := (BitcoinConfig{}).settings()
+	settings.Jobs = true
+	settings.BudgetBytes = 1000 << 30
+	t0 := time.Date(2026, 10, 17, 10, 0, 0, 0, time.UTC)
+
+	jobs := newBitcoinJobs(settings, store, &BQClient{})
+	if jobs == nil {
+		t.Fatal("expected non-nil btcJobs when Jobs=true")
+	}
+	jobs.now = func() time.Time { return t0 }
+	jobs.budget.now = jobs.now
+
+	// 1. Reservation with an attached BigQuery job ID (process crashed mid-query).
+	idWithJob, err := jobs.budget.reserve(ctx, btcCoinageJobID, 125<<30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := jobs.budget.attachJob(ctx, idWithJob, "bq-job-crashed-1"); err != nil {
+		t.Fatal(err)
+	}
+	// 2. Reservation without a BigQuery job ID (process crashed before q.Run).
+	if _, err := jobs.budget.reserve(ctx, btcOnchainJobID, 2<<30); err != nil {
+		t.Fatal(err)
+	}
+
+	// Advance 2 hours past TTL expiry.
+	later := t0.Add(2 * time.Hour)
+	jobs.now = func() time.Time { return later }
+	jobs.budget.now = jobs.now
+
+	// Even before recoverStaleOnce runs, a reservation with an attached bq_job_id
+	// must NOT vanish from ReservedBytes when its TTL expires.
+	preSt, err := jobs.budget.status(ctx, later)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preSt.ReservedBytes != 125<<30 {
+		t.Errorf("ReservedBytes before recovery = %d, want %d (submitted job must stay accounted until settled)",
+			preSt.ReservedBytes, int64(125<<30))
+	}
+
+	// Wire jobLookup and run the production recovery step exposed by bitcoinSyncJobs.
+	jobs.jobLookup = func(jobID string) (int64, bool, error) {
+		if jobID == "bq-job-crashed-1" {
+			return 95 << 30, true, nil
+		}
+		return 0, false, nil
+	}
+	jobs.recoverStaleOnce(ctx)
+
+	postSt, err := jobs.budget.status(ctx, later)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if postSt.ReservedBytes != 0 {
+		t.Errorf("ReservedBytes after recoverStaleOnce = %d, want 0", postSt.ReservedBytes)
+	}
+	if postSt.SettledBytes != 95<<30 {
+		t.Errorf("SettledBytes after recoverStaleOnce = %d, want %d (95 GiB)", postSt.SettledBytes, int64(95<<30))
 	}
 }
 

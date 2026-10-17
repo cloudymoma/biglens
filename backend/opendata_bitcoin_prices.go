@@ -19,10 +19,10 @@ const (
 	btcPriceCoinbaseStart    = "2015-07-20"
 	btcCoinbaseMaxCandleDays = 300
 
-	defaultBlockchainPriceURL = "https://api.blockchain.info/charts/market-price?timespan=all&sampled=false&format=json"
+	defaultBlockchainPriceURL  = "https://api.blockchain.info/charts/market-price?timespan=all&sampled=false&format=json"
 	defaultCoinMetricsPriceURL = "https://community-api.coinmetrics.io/v4/timeseries/asset-metrics?assets=btc&metrics=PriceUSD&frequency=1d&page_size=10000&start_time=2010-08-18&end_time=2015-07-25"
-	defaultCoinbaseCandlesURL = "https://api.exchange.coinbase.com/products/BTC-USD/candles"
-	defaultKrakenOHLCURL      = "https://api.kraken.com/0/public/OHLC?pair=XBTUSD&interval=1440"
+	defaultCoinbaseCandlesURL  = "https://api.exchange.coinbase.com/products/BTC-USD/candles"
+	defaultKrakenOHLCURL       = "https://api.kraken.com/0/public/OHLC?pair=XBTUSD&interval=1440"
 )
 
 type BtcDateRange struct {
@@ -49,13 +49,13 @@ type btcPriceSyncer struct {
 	coinbaseCandlesURL string
 	krakenOHLCURL      string
 
-	touched   atomic.Bool
-	warming   atomic.Bool
-	syncMu    sync.Mutex
-	mu        sync.RWMutex
-	loaded    bool
-	byDay     map[string]btcPriceDay
-	lastSync  time.Time
+	touched  atomic.Bool
+	warming  atomic.Bool
+	syncMu   sync.Mutex
+	mu       sync.RWMutex
+	loaded   bool
+	byDay    map[string]btcPriceDay
+	lastSync time.Time
 }
 
 func newBtcPriceSyncer(store *riskStore, settings btcSettings, now func() time.Time) *btcPriceSyncer {

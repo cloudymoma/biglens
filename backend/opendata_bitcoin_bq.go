@@ -267,7 +267,7 @@ func (b *btcBudget) reserveWithOpts(ctx context.Context, job string, bytes, hard
 	}
 	var reserved int64
 	if err := tx.QueryRowContext(ctx,
-		`SELECT COALESCE(SUM(bytes), 0) FROM btc_reservations WHERE expires_at > ?`,
+		`SELECT COALESCE(SUM(bytes), 0) FROM btc_reservations WHERE expires_at > ? OR bq_job_id != ''`,
 		nowStr,
 	).Scan(&reserved); err != nil {
 		return "", err
@@ -304,8 +304,8 @@ func (b *btcBudget) attachJob(ctx context.Context, id, bqJobID string) error {
 		return err
 	}
 	_, err = b.store.db.ExecContext(ctx,
-		`UPDATE btc_reservations SET bq_job_id = ? WHERE id = ?`,
-		bqJobID, idNum,
+		`UPDATE btc_reservations SET bq_job_id = CASE WHEN bq_job_id = '' THEN ? ELSE bq_job_id || ',' || ? END WHERE id = ?`,
+		bqJobID, bqJobID, idNum,
 	)
 	return err
 }
@@ -435,7 +435,7 @@ func (b *btcBudget) status(ctx context.Context, now time.Time) (BtcBudgetStatus,
 		return BtcBudgetStatus{}, err
 	}
 	if err := b.store.db.QueryRowContext(ctx,
-		`SELECT COALESCE(SUM(bytes), 0) FROM btc_reservations WHERE expires_at > ?`,
+		`SELECT COALESCE(SUM(bytes), 0) FROM btc_reservations WHERE expires_at > ? OR bq_job_id != ''`,
 		nowStr,
 	).Scan(&reserved); err != nil {
 		return BtcBudgetStatus{}, err
@@ -867,12 +867,13 @@ ORDER BY spend_day DESC, sats DESC`, from, to)
 // btcJobs holds the operator-enabled Bitcoin BigQuery job runners. It is never
 // constructed when bitcoin.bigquery.jobs is false.
 type btcJobs struct {
-	settings btcSettings
-	store    *riskStore
-	bq       *BQClient
-	budget   *btcBudget
-	flags    *btcStopFlags
-	now      func() time.Time
+	settings  btcSettings
+	store     *riskStore
+	bq        *BQClient
+	budget    *btcBudget
+	flags     *btcStopFlags
+	now       func() time.Time
+	jobLookup func(jobID string) (int64, bool, error)
 }
 
 func newBitcoinJobs(settings btcSettings, store *riskStore, client *BQClient) *btcJobs {
@@ -886,6 +887,59 @@ func newBitcoinJobs(settings btcSettings, store *riskStore, client *BQClient) *b
 		budget:   newBtcBudget(store, settings, time.Now),
 		flags:    newBtcStopFlags(store),
 		now:      time.Now,
+	}
+}
+
+func (j *btcJobs) recoverStaleOnce(ctx context.Context) {
+	if j == nil || j.budget == nil {
+		return
+	}
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	lookup := j.jobLookup
+	if lookup == nil && j.bq != nil {
+		lookup = bqLookupJobBytes(rctx, j.bq.client)
+	}
+	if err := j.budget.recoverStale(rctx, j.now().UTC(), lookup); err != nil {
+		slog.Warn("bitcoin bigquery recover stale reservations", "error", err)
+	}
+}
+
+// bqLookupJobBytes queries BigQuery job metadata (jobs.get, 0 bytes billed) to
+// recover actual TotalBytesBilled for one or more comma-separated job IDs attached
+// to a stale reservation.
+func bqLookupJobBytes(ctx context.Context, client *bigquery.Client) func(jobID string) (int64, bool, error) {
+	return func(jobID string) (int64, bool, error) {
+		if client == nil {
+			return 0, false, fmt.Errorf("nil bigquery client")
+		}
+		var total int64
+		for _, part := range strings.Split(jobID, ",") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			job, err := client.JobFromID(ctx, part)
+			if err != nil {
+				return 0, false, err
+			}
+			st := job.LastStatus()
+			if st == nil {
+				st, err = job.Status(ctx)
+				if err != nil {
+					return 0, false, err
+				}
+			}
+			if !st.Done() {
+				return 0, false, nil
+			}
+			if st.Statistics != nil {
+				if qs, ok := st.Statistics.Details.(*bigquery.QueryStatistics); ok {
+					total += qs.TotalBytesBilled
+				}
+			}
+		}
+		return total, true, nil
 	}
 }
 
@@ -931,7 +985,7 @@ func bitcoinSyncJobs(settings btcSettings, store *riskStore, client *BQClient, p
 		failurePolicy:  btcJobFailurePolicy(btcOnchainJobID),
 		stopFlags:      jobs.flags,
 	}
-	out := []func(context.Context){rollupSyncer.syncOnce}
+	out := []func(context.Context){jobs.recoverStaleOnce, rollupSyncer.syncOnce}
 
 	if settings.CoinAgeEnabled {
 		retentionDays := settings.CoinAgeInitialDays + 30

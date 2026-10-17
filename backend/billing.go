@@ -417,4 +417,3 @@ func rollupBillingGroupRows(rows []BillingGroupRow, limit int, otherLabel string
 		Credits: math.Round(otherCredits*100) / 100,
 	})
 }
-

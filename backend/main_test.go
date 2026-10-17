@@ -68,5 +68,3 @@ func TestStaticFileHandlerCacheHeaders(t *testing.T) {
 		t.Errorf("GET /assets/... (404) Cache-Control = %q, want %q", got, "no-store")
 	}
 }
-
-

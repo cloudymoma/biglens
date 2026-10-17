@@ -94,16 +94,16 @@ type BtcBaselineStatus struct {
 
 // BtcBudgetStatus summarizes the monthly Bitcoin BigQuery budget and active reservations.
 type BtcBudgetStatus struct {
-	Month           string  `json:"month"`
-	BudgetBytes     int64   `json:"budget_bytes"`
-	BudgetGiB       float64 `json:"budget_gib"`
-	SettledBytes    int64   `json:"settled_bytes"`
-	MonthBilledGiB  float64 `json:"month_billed_gib"`
-	ReservedBytes   int64   `json:"reserved_bytes"`
-	ReservedGiB     float64 `json:"reserved_gib"`
-	RemainingBytes  int64   `json:"remaining_bytes"`
-	ExpectedGiB     float64 `json:"expected_gib"`
-	Warning         string  `json:"warning,omitempty"`
+	Month          string  `json:"month"`
+	BudgetBytes    int64   `json:"budget_bytes"`
+	BudgetGiB      float64 `json:"budget_gib"`
+	SettledBytes   int64   `json:"settled_bytes"`
+	MonthBilledGiB float64 `json:"month_billed_gib"`
+	ReservedBytes  int64   `json:"reserved_bytes"`
+	ReservedGiB    float64 `json:"reserved_gib"`
+	RemainingBytes int64   `json:"remaining_bytes"`
+	ExpectedGiB    float64 `json:"expected_gib"`
+	Warning        string  `json:"warning,omitempty"`
 }
 
 type BtcLiveData struct {
@@ -143,12 +143,12 @@ type BtcHalving struct {
 }
 
 type btcBaselinePlan struct {
-	AsOf          string  `json:"as_of"`
-	EstimatedBytes int64  `json:"estimated_bytes"`
-	EstimatedGiB  float64 `json:"estimated_gib"`
-	EstimatedUSD  float64 `json:"estimated_usd"`
-	Token         string  `json:"token,omitempty"`
-	ExpiresAt     string  `json:"expires_at,omitempty"`
+	AsOf           string  `json:"as_of"`
+	EstimatedBytes int64   `json:"estimated_bytes"`
+	EstimatedGiB   float64 `json:"estimated_gib"`
+	EstimatedUSD   float64 `json:"estimated_usd"`
+	Token          string  `json:"token,omitempty"`
+	ExpiresAt      string  `json:"expires_at,omitempty"`
 }
 
 // btcReadStore is the read-only SQLite interface exposed to HTTP handlers.
@@ -169,62 +169,62 @@ type btcBaselineStarter interface {
 
 // Placeholder structs for btcReadStore methods implemented in M2 and M3.
 type BtcOnchainDay struct {
-	Date                  string   `json:"date"`
-	Blocks                int64    `json:"blocks"`
-	EmptyBlocks           int64    `json:"empty_blocks"`
-	ScheduledIssuanceSats int64    `json:"scheduled_issuance_sats"`
-	ClaimedIssuanceSats   int64    `json:"claimed_issuance_sats"`
-	AvgDifficulty         float64  `json:"avg_difficulty"`
-	ImpliedHashrateEHs    float64  `json:"implied_hashrate_ehs"`
-	Txs                   int64    `json:"txs"`
-	CoinbaseTxs           int64    `json:"coinbase_txs"`
-	Vbytes                int64    `json:"vbytes"`
-	Bytes                 int64    `json:"bytes"`
-	WitnessBytes          int64    `json:"witness_bytes"`
-	WitnessSharePct       float64  `json:"witness_share_pct"`
-	FeesSats              int64    `json:"fees_sats"`
-	CoinbaseSats          int64    `json:"coinbase_sats"`
-	CreatedSats           int64    `json:"created_sats"`
-	OpretValueSats        int64    `json:"opret_value_sats"`
-	FeeSharePct           float64  `json:"fee_share_pct"`
-	FeeP10SatVB           float64  `json:"fee_p10_sat_vb"`
-	FeeP25SatVB           float64  `json:"fee_p25_sat_vb"`
-	FeeP50SatVB           float64  `json:"fee_p50_sat_vb"`
-	FeeP75SatVB           float64  `json:"fee_p75_sat_vb"`
-	FeeP90SatVB           float64  `json:"fee_p90_sat_vb"`
-	VbPayment             int64    `json:"vb_payment"`
-	VbConsolidation       int64    `json:"vb_consolidation"`
-	VbBatch               int64    `json:"vb_batch"`
-	VbInscriptionLike     int64    `json:"vb_inscription_like"`
-	VbRunes               int64    `json:"vb_runes"`
-	VbOpReturn            int64    `json:"vb_op_return"`
-	VbCoinbase            int64    `json:"vb_coinbase"`
-	OpretOutputs          int64    `json:"opret_outputs"`
-	OpretBytes            int64    `json:"opret_bytes"`
-	Runestones            int64    `json:"runestones"`
-	OpretLarge            int64    `json:"opret_large"`
-	OutP2TR               int64    `json:"out_p2tr"`
-	OutP2WPKH             int64    `json:"out_p2wpkh"`
-	OutP2WSH              int64    `json:"out_p2wsh"`
-	OutP2SH               int64    `json:"out_p2sh"`
-	OutP2PKH              int64    `json:"out_p2pkh"`
-	OutAnchor             int64    `json:"out_anchor"`
-	OutAll                int64    `json:"out_all"`
-	InP2TR                int64    `json:"in_p2tr"`
-	InP2WPKH              int64    `json:"in_p2wpkh"`
-	InP2WSH               int64    `json:"in_p2wsh"`
-	InP2SH                int64    `json:"in_p2sh"`
-	InP2PKH               int64    `json:"in_p2pkh"`
-	InAnchor              int64    `json:"in_anchor"`
-	InAll                 int64    `json:"in_all"`
-	BandLt0001            int64    `json:"band_lt_0_001"`
-	Band0001To001         int64    `json:"band_0_001_0_01"`
-	Band001To01           int64    `json:"band_0_01_0_1"`
-	Band01To1             int64    `json:"band_0_1_1"`
-	Band1To10             int64    `json:"band_1_10"`
-	Band10To100           int64    `json:"band_10_100"`
-	BandGe100             int64    `json:"band_ge_100"`
-	ActiveAddresses       int64    `json:"active_addresses"`
+	Date                  string    `json:"date"`
+	Blocks                int64     `json:"blocks"`
+	EmptyBlocks           int64     `json:"empty_blocks"`
+	ScheduledIssuanceSats int64     `json:"scheduled_issuance_sats"`
+	ClaimedIssuanceSats   int64     `json:"claimed_issuance_sats"`
+	AvgDifficulty         float64   `json:"avg_difficulty"`
+	ImpliedHashrateEHs    float64   `json:"implied_hashrate_ehs"`
+	Txs                   int64     `json:"txs"`
+	CoinbaseTxs           int64     `json:"coinbase_txs"`
+	Vbytes                int64     `json:"vbytes"`
+	Bytes                 int64     `json:"bytes"`
+	WitnessBytes          int64     `json:"witness_bytes"`
+	WitnessSharePct       float64   `json:"witness_share_pct"`
+	FeesSats              int64     `json:"fees_sats"`
+	CoinbaseSats          int64     `json:"coinbase_sats"`
+	CreatedSats           int64     `json:"created_sats"`
+	OpretValueSats        int64     `json:"opret_value_sats"`
+	FeeSharePct           float64   `json:"fee_share_pct"`
+	FeeP10SatVB           float64   `json:"fee_p10_sat_vb"`
+	FeeP25SatVB           float64   `json:"fee_p25_sat_vb"`
+	FeeP50SatVB           float64   `json:"fee_p50_sat_vb"`
+	FeeP75SatVB           float64   `json:"fee_p75_sat_vb"`
+	FeeP90SatVB           float64   `json:"fee_p90_sat_vb"`
+	VbPayment             int64     `json:"vb_payment"`
+	VbConsolidation       int64     `json:"vb_consolidation"`
+	VbBatch               int64     `json:"vb_batch"`
+	VbInscriptionLike     int64     `json:"vb_inscription_like"`
+	VbRunes               int64     `json:"vb_runes"`
+	VbOpReturn            int64     `json:"vb_op_return"`
+	VbCoinbase            int64     `json:"vb_coinbase"`
+	OpretOutputs          int64     `json:"opret_outputs"`
+	OpretBytes            int64     `json:"opret_bytes"`
+	Runestones            int64     `json:"runestones"`
+	OpretLarge            int64     `json:"opret_large"`
+	OutP2TR               int64     `json:"out_p2tr"`
+	OutP2WPKH             int64     `json:"out_p2wpkh"`
+	OutP2WSH              int64     `json:"out_p2wsh"`
+	OutP2SH               int64     `json:"out_p2sh"`
+	OutP2PKH              int64     `json:"out_p2pkh"`
+	OutAnchor             int64     `json:"out_anchor"`
+	OutAll                int64     `json:"out_all"`
+	InP2TR                int64     `json:"in_p2tr"`
+	InP2WPKH              int64     `json:"in_p2wpkh"`
+	InP2WSH               int64     `json:"in_p2wsh"`
+	InP2SH                int64     `json:"in_p2sh"`
+	InP2PKH               int64     `json:"in_p2pkh"`
+	InAnchor              int64     `json:"in_anchor"`
+	InAll                 int64     `json:"in_all"`
+	BandLt0001            int64     `json:"band_lt_0_001"`
+	Band0001To001         int64     `json:"band_0_001_0_01"`
+	Band001To01           int64     `json:"band_0_01_0_1"`
+	Band01To1             int64     `json:"band_0_1_1"`
+	Band1To10             int64     `json:"band_1_10"`
+	Band10To100           int64     `json:"band_10_100"`
+	BandGe100             int64     `json:"band_ge_100"`
+	ActiveAddresses       int64     `json:"active_addresses"`
 	FeeQ                  []float64 `json:"-"`
 }
 

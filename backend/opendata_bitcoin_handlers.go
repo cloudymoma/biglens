@@ -38,14 +38,14 @@ type BtcHoldersData struct {
 }
 
 type BtcFeesData struct {
-	AsOf           string                  `json:"as_of"`
-	Period         string                  `json:"period"`
-	PriceUSD       *float64                `json:"price_usd"`
-	Templates      []BtcTxTemplateCost     `json:"templates"`
-	Consolidation  BtcConsolidationSignal  `json:"consolidation"`
-	MempoolHistory []BtcMempoolStatPoint   `json:"mempool_history"`
-	BlockFeeRates  []BtcBlockFeeRatePoint  `json:"block_fee_rates"`
-	Sources        []BtcSourceStatus       `json:"sources"`
+	AsOf           string                 `json:"as_of"`
+	Period         string                 `json:"period"`
+	PriceUSD       *float64               `json:"price_usd"`
+	Templates      []BtcTxTemplateCost    `json:"templates"`
+	Consolidation  BtcConsolidationSignal `json:"consolidation"`
+	MempoolHistory []BtcMempoolStatPoint  `json:"mempool_history"`
+	BlockFeeRates  []BtcBlockFeeRatePoint `json:"block_fee_rates"`
+	Sources        []BtcSourceStatus      `json:"sources"`
 }
 
 type BtcOnchainData struct {
@@ -806,4 +806,3 @@ func (h *APIHandler) BitcoinOnchainHolders(w http.ResponseWriter, r *http.Reques
 		Sources:       []BtcSourceStatus{bqSrc},
 	})
 }
-

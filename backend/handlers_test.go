@@ -113,4 +113,3 @@ func TestParseEmailsNormalizesAndSorts(t *testing.T) {
 		t.Errorf("iamCacheKey should distinguish timezones")
 	}
 }
-
