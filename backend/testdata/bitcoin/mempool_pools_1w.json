@@ -1,0 +1,152 @@
+{
+  "pools": [
+    {
+      "poolId": 112,
+      "name": "Foundry USA",
+      "link": "https://foundrydigital.com",
+      "blockCount": 267,
+      "rank": 1,
+      "emptyBlocks": 0,
+      "slug": "foundryusa",
+      "avgMatchRate": 99,
+      "avgFeeDelta": "-0.01878645",
+      "poolUniqueId": 111
+    },
+    {
+      "poolId": 45,
+      "name": "AntPool",
+      "link": "https://www.antpool.com",
+      "blockCount": 243,
+      "rank": 2,
+      "emptyBlocks": 0,
+      "slug": "antpool",
+      "avgMatchRate": 98.27,
+      "avgFeeDelta": "-0.04878673",
+      "poolUniqueId": 44
+    },
+    {
+      "poolId": 37,
+      "name": "F2Pool",
+      "link": "https://www.f2pool.com",
+      "blockCount": 184,
+      "rank": 3,
+      "emptyBlocks": 0,
+      "slug": "f2pool",
+      "avgMatchRate": 99.57,
+      "avgFeeDelta": "-0.05426484",
+      "poolUniqueId": 36
+    },
+    {
+      "poolId": 74,
+      "name": "ViaBTC",
+      "link": "https://viabtc.com",
+      "blockCount": 107,
+      "rank": 4,
+      "emptyBlocks": 0,
+      "slug": "viabtc",
+      "avgMatchRate": 99.53,
+      "avgFeeDelta": "-0.02833954",
+      "poolUniqueId": 73
+    },
+    {
+      "poolId": 116,
+      "name": "MARA Pool",
+      "link": "https://marapool.com",
+      "blockCount": 63,
+      "rank": 5,
+      "emptyBlocks": 1,
+      "slug": "marapool",
+      "avgMatchRate": 99.11,
+      "avgFeeDelta": "-0.03877916",
+      "poolUniqueId": 115
+    },
+    {
+      "poolId": 5,
+      "name": "Luxor",
+      "link": "https://mining.luxor.tech",
+      "blockCount": 48,
+      "rank": 6,
+      "emptyBlocks": 0,
+      "slug": "luxor",
+      "avgMatchRate": 97.35,
+      "avgFeeDelta": "-0.05334240",
+      "poolUniqueId": 4
+    },
+    {
+      "poolId": 103,
+      "name": "SpiderPool",
+      "link": "https://www.spiderpool.com",
+      "blockCount": 48,
+      "rank": 7,
+      "emptyBlocks": 0,
+      "slug": "spiderpool",
+      "avgMatchRate": 99.65,
+      "avgFeeDelta": "-0.08225745",
+      "poolUniqueId": 102
+    },
+    {
+      "poolId": 142,
+      "name": "SECPOOL",
+      "link": "https://www.secpool.com",
+      "blockCount": 41,
+      "rank": 8,
+      "emptyBlocks": 0,
+      "slug": "secpool",
+      "avgMatchRate": 98.39,
+      "avgFeeDelta": "-0.05734601",
+      "poolUniqueId": 141
+    },
+    {
+      "poolId": 143,
+      "name": "OCEAN",
+      "link": "https://ocean.xyz/",
+      "blockCount": 32,
+      "rank": 9,
+      "emptyBlocks": 0,
+      "slug": "ocean",
+      "avgMatchRate": 96.13,
+      "avgFeeDelta": "-0.12324111",
+      "poolUniqueId": 142
+    },
+    {
+      "poolId": 44,
+      "name": "Braiins Pool",
+      "link": "https://braiins.com/pool",
+      "blockCount": 19,
+      "rank": 10,
+      "emptyBlocks": 0,
+      "slug": "braiinspool",
+      "avgMatchRate": 99.01,
+      "avgFeeDelta": "-0.07769319",
+      "poolUniqueId": 43
+    },
+    {
+      "poolId": 106,
+      "name": "Binance Pool",
+      "link": "https://pool.binance.com",
+      "blockCount": 10,
+      "rank": 11,
+      "emptyBlocks": 0,
+      "slug": "binancepool",
+      "avgMatchRate": 96.46,
+      "avgFeeDelta": "-0.11345553",
+      "poolUniqueId": 105
+    },
+    {
+      "poolId": 1,
+      "name": "Unknown",
+      "link": "https://learnmeabitcoin.com/technical/coinbase-transaction",
+      "blockCount": 9,
+      "rank": 12,
+      "emptyBlocks": 0,
+      "slug": "unknown",
+      "avgMatchRate": 99.7,
+      "avgFeeDelta": "-0.02893097",
+      "poolUniqueId": 0
+    }
+  ],
+  "blockCount": 1086,
+  "lastEstimatedHashrate": 1.00180125043007e+21,
+  "lastEstimatedHashrate3d": 1.003781779712875e+21,
+  "lastEstimatedHashrate1w": 1.029532427987555e+21
+}

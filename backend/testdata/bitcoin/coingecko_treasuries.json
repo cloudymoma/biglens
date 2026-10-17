@@ -1,0 +1,232 @@
+{
+  "total_holdings": 1302063.2192943657,
+  "total_value_usd": 106248774059.94724,
+  "market_cap_dominance": 6.2,
+  "companies": [
+    {
+      "name": "Strategy",
+      "symbol": "MSTR.US",
+      "country": "US",
+      "total_holdings": 848250.0,
+      "total_entry_value_usd": 64536394091.0,
+      "total_current_value_usd": 69217470596.54482,
+      "percentage_of_total_supply": 4.039
+    },
+    {
+      "name": "Metaplanet",
+      "symbol": "3350.T",
+      "country": "JP",
+      "total_holdings": 44000.0,
+      "total_entry_value_usd": 3896249023.48,
+      "total_current_value_usd": 3590414036.2487144,
+      "percentage_of_total_supply": 0.21
+    },
+    {
+      "name": "Twenty One Capital",
+      "symbol": "XXI.US",
+      "country": "US",
+      "total_holdings": 43514.0,
+      "total_entry_value_usd": 0.0,
+      "total_current_value_usd": 3550756281.2119675,
+      "percentage_of_total_supply": 0.207
+    },
+    {
+      "name": "MARA Holdings",
+      "symbol": "MARA.US",
+      "country": "US",
+      "total_holdings": 35577.0,
+      "total_entry_value_usd": 0.0,
+      "total_current_value_usd": 2903094549.2641025,
+      "percentage_of_total_supply": 0.169
+    },
+    {
+      "name": "Strive",
+      "symbol": "ASST.US",
+      "country": "US",
+      "total_holdings": 32773.0,
+      "total_entry_value_usd": 2931182689.0,
+      "total_current_value_usd": 2674287254.7722526,
+      "percentage_of_total_supply": 0.156
+    },
+    {
+      "name": "Bitcoin Standard Treasury Company",
+      "symbol": "CEPO.US",
+      "country": "US",
+      "total_holdings": 30021.0,
+      "total_entry_value_usd": 0.0,
+      "total_current_value_usd": 2449723176.8686967,
+      "percentage_of_total_supply": 0.143
+    },
+    {
+      "name": "Bullish",
+      "symbol": "BLSH.US",
+      "country": "US",
+      "total_holdings": 23800.0,
+      "total_entry_value_usd": 0.0,
+      "total_current_value_usd": 1942087592.3345318,
+      "percentage_of_total_supply": 0.113
+    },
+    {
+      "name": "Galaxy Digital Holdings Ltd",
+      "symbol": "GLXY.US",
+      "country": "US",
+      "total_holdings": 21084.0,
+      "total_entry_value_usd": 1307858000.0,
+      "total_current_value_usd": 1720461125.9151795,
+      "percentage_of_total_supply": 0.1
+    },
+    {
+      "name": "Space Exploration Technologies Corp.",
+      "symbol": "SPCX",
+      "country": "US",
+      "total_holdings": 18712.0,
+      "total_entry_value_usd": 661000000.0,
+      "total_current_value_usd": 1526905169.2337716,
+      "percentage_of_total_supply": 0.089
+    },
+    {
+      "name": "Coinbase Global",
+      "symbol": "COIN.US",
+      "country": "US",
+      "total_holdings": 17311.0,
+      "total_entry_value_usd": 1213691000.0,
+      "total_current_value_usd": 1412583122.306852,
+      "percentage_of_total_supply": 0.082
+    },
+    {
+      "name": "Riot Platforms",
+      "symbol": "RIOT.US",
+      "country": "US",
+      "total_holdings": 15680.0,
+      "total_entry_value_usd": 0.0,
+      "total_current_value_usd": 1279493002.0086327,
+      "percentage_of_total_supply": 0.075
+    },
+    {
+      "name": "Hut 8 Mining Corp",
+      "symbol": "HUT.US",
+      "country": "US",
+      "total_holdings": 13696.0,
+      "total_entry_value_usd": 0.0,
+      "total_current_value_usd": 1117597969.101418,
+      "percentage_of_total_supply": 0.065
+    },
+    {
+      "name": "CleanSpark",
+      "symbol": "CLSK.US",
+      "country": "US",
+      "total_holdings": 13470.0,
+      "total_entry_value_usd": 0.0,
+      "total_current_value_usd": 1099156297.0061405,
+      "percentage_of_total_supply": 0.064
+    },
+    {
+      "name": "Tesla",
+      "symbol": "TSLA.US",
+      "country": "US",
+      "total_holdings": 11509.0,
+      "total_entry_value_usd": 386000000.0,
+      "total_current_value_usd": 939138071.4360558,
+      "percentage_of_total_supply": 0.055
+    },
+    {
+      "name": "Trump Media & Technology Group Corp.",
+      "symbol": "DJT.US",
+      "country": "US",
+      "total_holdings": 9542.16,
+      "total_entry_value_usd": 1131024300.0,
+      "total_current_value_usd": 778643300.002978,
+      "percentage_of_total_supply": 0.045
+    },
+    {
+      "name": "Block",
+      "symbol": "XYZ.US",
+      "country": "US",
+      "total_holdings": 9032.0,
+      "total_entry_value_usd": 0.0,
+      "total_current_value_usd": 737014081.2590543,
+      "percentage_of_total_supply": 0.043
+    },
+    {
+      "name": "American Bitcoin",
+      "symbol": "ABTC.US",
+      "country": "US",
+      "total_holdings": 7500.0,
+      "total_entry_value_usd": 0.0,
+      "total_current_value_usd": 612002392.5423945,
+      "percentage_of_total_supply": 0.036
+    },
+    {
+      "name": "GD Culture Group",
+      "symbol": "GDC.US",
+      "country": "CN",
+      "total_holdings": 7500.0,
+      "total_entry_value_usd": 841504760.0,
+      "total_current_value_usd": 612002392.5423945,
+      "percentage_of_total_supply": 0.036
+    },
+    {
+      "name": "Next Technology Holding",
+      "symbol": "NXTT.US",
+      "country": "CN",
+      "total_holdings": 5833.0,
+      "total_entry_value_usd": 183073667.0,
+      "total_current_value_usd": 475974660.7599716,
+      "percentage_of_total_supply": 0.028
+    },
+    {
+      "name": "Silvia (formerly ProCap Financial)",
+      "symbol": "BRR.US",
+      "country": "US",
+      "total_holdings": 5130.0,
+      "total_entry_value_usd": 0.0,
+      "total_current_value_usd": 418609636.49899787,
+      "percentage_of_total_supply": 0.024
+    },
+    {
+      "name": "Gemini Space Station",
+      "symbol": "GEMI.US",
+      "country": "US",
+      "total_holdings": 4827.0,
+      "total_entry_value_usd": 235186000.0,
+      "total_current_value_usd": 393884739.8402851,
+      "percentage_of_total_supply": 0.023
+    },
+    {
+      "name": "Nakamoto Inc (formerly KindlyMD)",
+      "symbol": "NAKA.US",
+      "country": "US",
+      "total_holdings": 4467.0,
+      "total_entry_value_usd": 0.0,
+      "total_current_value_usd": 364508624.9982502,
+      "percentage_of_total_supply": 0.021
+    },
+    {
+      "name": "Boyaa Interactive International Limited",
+      "symbol": "434.HK",
+      "country": "HK",
+      "total_holdings": 4091.0,
+      "total_entry_value_usd": 278654374.0,
+      "total_current_value_usd": 333826905.0521248,
+      "percentage_of_total_supply": 0.019
+    },
+    {
+      "name": "OranjeBTC",
+      "symbol": "OBTC3.SA",
+      "country": "BR",
+      "total_holdings": 3950.0,
+      "total_entry_value_usd": 407708669.3949999,
+      "total_current_value_usd": 322321260.0723278,
+      "percentage_of_total_supply": 0.019
+    },
+    {
+      "name": "BitGo Holdings",
+      "symbol": "BTGO.US",
+      "country": "US",
+      "total_holdings": 3854.0,
+      "total_entry_value_usd": 257424000.0,
+      "total_current_value_usd": 314487629.44778514,
+      "percentage_of_total_supply": 0.018
+    }
+  ]
+}
