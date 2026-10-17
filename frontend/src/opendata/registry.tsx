@@ -1,10 +1,11 @@
 import React from 'react';
-import { TrendingUp, Globe2, CloudSun, Bitcoin, Megaphone } from 'lucide-react';
+import { TrendingUp, Globe2, CloudSun, Bitcoin, Coins, Megaphone } from 'lucide-react';
 import GoogleTrendsDashboard from './GoogleTrendsDashboard';
 import SemDashboard from './sem/SemDashboard';
 import GdeltDashboard from './gdelt/GdeltDashboard';
 import WeatherDashboard from './WeatherDashboard';
 import CryptoDashboard from './crypto/CryptoDashboard';
+import BitcoinDashboard from './bitcoin/BitcoinDashboard';
 
 // Registry of BigQuery Open Data dashboards. To add a new public dataset:
 // build its component in this directory, add an entry here, and expose its
@@ -49,9 +50,20 @@ export const OPEN_DATASETS: OpenDataset[] = [
     component: WeatherDashboard,
   },
   {
+    id: 'bitcoin',
+    label: 'Bitcoin',
+    icon: <Bitcoin size={16} />,
+    description:
+      'A professional Bitcoin dashboard: fee market and block space — from free public APIs, plus ' +
+      'operator-enabled BigQuery analytics (tx-weighted fee percentiles, block-space composition, ' +
+      'OP_RETURN / Runes, witness share, script-type adoption, payment-size bands).',
+    sourceTable: 'mempool.space · Coinbase · Kraken · blockchain.com · Coin Metrics Community · bigquery-public-data.crypto_bitcoin (operator opt-in)',
+    component: BitcoinDashboard,
+  },
+  {
     id: 'crypto',
     label: 'Crypto Pulse',
-    icon: <Bitcoin size={16} />,
+    icon: <Coins size={16} />,
     description:
       'On-chain fundamentals for Bitcoin and Ethereum: network activity, fee markets, ' +
       'whale flows and the ERC-20 token economy — native units, no fiat prices, updated daily — ' +

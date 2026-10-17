@@ -7,6 +7,7 @@ import BitcoinTicker from './BitcoinTicker';
 import BigQuerySwitch from './BigQuerySwitch';
 import BigQueryStatusChip from './BigQueryStatusChip';
 import SourceBadge from './SourceBadge';
+import FeesTab from './FeesTab';
 
 const WINDOWS = [
   { label: '30D', days: 30 },
@@ -15,7 +16,17 @@ const WINDOWS = [
   { label: '1Y', days: 365 },
 ] as const;
 
+type BitcoinTabID = 'fees';
+
+const TABS: { id: BitcoinTabID; label: string }[] = [
+  { id: 'fees', label: 'Fees & Block Space' },
+];
+
 export default function BitcoinDashboard() {
+  const [activeTab, setActiveTab] = useState<BitcoinTabID>('fees');
+  const [mountedTabs, setMountedTabs] = useState<Record<BitcoinTabID, boolean>>({
+    fees: true,
+  });
   const [days, setDays] = useState<number>(90);
   const [refreshTick, setRefreshTick] = useState<number>(0);
 
@@ -24,6 +35,11 @@ export default function BitcoinDashboard() {
 
   const bqControl = useBitcoinBigQuery(metaPoll.data);
   const bigquery = metaPoll.data?.bigquery ?? null;
+
+  const selectTab = (id: BitcoinTabID) => {
+    setActiveTab(id);
+    setMountedTabs(prev => (prev[id] ? prev : { ...prev, [id]: true }));
+  };
 
   return (
     <div className="space-y-6 p-6 text-zinc-100">
@@ -79,10 +95,35 @@ export default function BitcoinDashboard() {
       {/* Live Ticker Strip */}
       <BitcoinTicker live={livePoll.data} loading={livePoll.loading} />
 
-      {/* Main Content Area (tabs added in M2/M3) */}
-      <div className="rounded-xl border border-zinc-800/80 bg-zinc-900/40 p-6 text-xs text-zinc-400">
-        Selected window: {days} days · BigQuery panels: {bqControl.show ? 'Visible' : 'Hidden'}
+      {/* Tab Bar */}
+      <div className="flex flex-wrap items-center gap-1.5 border-b border-zinc-800/80 pb-2">
+        {TABS.map(tab => (
+          <button
+            key={tab.id}
+            type="button"
+            onClick={() => selectTab(tab.id)}
+            className={`rounded-lg px-3.5 py-1.5 text-xs font-semibold transition ${
+              activeTab === tab.id
+                ? 'bg-amber-500/15 text-amber-300 ring-1 ring-amber-500/30'
+                : 'text-zinc-400 hover:bg-zinc-800/60 hover:text-zinc-200'
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
       </div>
+
+      {/* Lazy-mounted Tab Panels */}
+      {mountedTabs.fees && (
+        <div className={activeTab === 'fees' ? 'block' : 'hidden'}>
+          <FeesTab
+            days={days}
+            bqControl={bqControl}
+            bigquery={bigquery}
+            refreshTick={refreshTick}
+          />
+        </div>
+      )}
 
       {/* Sources Footer */}
       {livePoll.data?.sources && livePoll.data.sources.length > 0 && (
