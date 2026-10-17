@@ -6,11 +6,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"cloud.google.com/go/bigquery"
+	"cloud.google.com/go/civil"
+	"google.golang.org/api/iterator"
 )
 
 const (
@@ -882,4 +887,122 @@ func newBitcoinJobs(settings btcSettings, store *riskStore, client *BQClient) *b
 		flags:    newBtcStopFlags(store),
 		now:      time.Now,
 	}
+}
+
+// bitcoinSyncJobs returns the background BigQuery sync functions for Bitcoin.
+// When bitcoin.bigquery.jobs is false (the default) or store/client is nil, it
+// returns nil without constructing any syncers or touching BigQuery.
+func bitcoinSyncJobs(settings btcSettings, store *riskStore, client *BQClient) []func(context.Context) {
+	jobs := newBitcoinJobs(settings, store, client)
+	if jobs == nil {
+		return nil
+	}
+	expGiB, warn := btcFeasibility(settings, btcEstRollup1dBytes, btcEstCoinAgeRunBytes)
+	if warn != "" {
+		slog.Warn("bitcoin bigquery feasibility", "warning", warn, "expected_gib", expGiB)
+	} else {
+		slog.Info("bitcoin bigquery jobs enabled",
+			"initial_days", settings.InitialDays,
+			"cadence_days", settings.CadenceDays,
+			"expected_month_gib", expGiB,
+			"budget_gib", float64(settings.BudgetBytes)/float64(1<<30),
+		)
+	}
+
+	rollupSyncer := &dailyBQSyncer{
+		store:          store,
+		job:            newBtcOnchainJob(store, client),
+		now:            jobs.now,
+		initialDays:    settings.InitialDays,
+		name:           btcOnchainJobID,
+		hardCapBytes:   256 << 30,
+		dryRunSizedCap: true,
+		maxWindowDays:  31,
+		chunkCatchUp:   true,
+		timeout:        10 * time.Minute,
+		prune:          func(context.Context, civil.Date) error { return nil },
+		budget:         jobs.budget,
+		failurePolicy:  btcJobFailurePolicy(btcOnchainJobID),
+		stopFlags:      jobs.flags,
+	}
+	return []func(context.Context){rollupSyncer.syncOnce}
+}
+
+func btcApplyQueryLabels(q *bigquery.Query, jobLabel string) {
+	applyQueryDefaults(q)
+	if q.Labels == nil {
+		q.Labels = make(map[string]string)
+	}
+	q.Labels["app"] = "biglens"
+	q.Labels["feature"] = "bitcoin"
+	if jobLabel != "" {
+		q.Labels["job"] = jobLabel
+	}
+}
+
+func btcDryRunQuery(ctx context.Context, client *bigquery.Client, sqlText, jobLabel string, params []bigquery.QueryParameter) (int64, error) {
+	if client == nil {
+		return 0, fmt.Errorf("nil bigquery client")
+	}
+	q := client.Query(sqlText)
+	q.Parameters = params
+	q.DryRun = true
+	btcApplyQueryLabels(q, jobLabel)
+	job, err := q.Run(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return job.LastStatus().Statistics.TotalBytesProcessed, nil
+}
+
+func btcRunQuery[T any](ctx context.Context, client *bigquery.Client, sqlText, jobLabel string, params []bigquery.QueryParameter, maxBytes int64) ([]T, int64, error) {
+	if client == nil {
+		return nil, 0, fmt.Errorf("nil bigquery client")
+	}
+	q := client.Query(sqlText)
+	q.Parameters = params
+	q.MaxBytesBilled = maxBytes
+	btcApplyQueryLabels(q, jobLabel)
+	job, err := q.Run(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+	syncAttachJob(ctx, job.ID())
+	status, err := job.Wait(ctx)
+	if err != nil {
+		cctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = job.Cancel(cctx)
+		var billed int64
+		if st, sErr := job.Status(cctx); sErr == nil && st != nil && st.Statistics != nil {
+			if qs, ok := st.Statistics.Details.(*bigquery.QueryStatistics); ok {
+				billed = qs.TotalBytesBilled
+			}
+		}
+		cancel()
+		return nil, billed, err
+	}
+	if err := status.Err(); err != nil {
+		return nil, 0, err
+	}
+	var billed int64
+	if qs, ok := status.Statistics.Details.(*bigquery.QueryStatistics); ok {
+		billed = qs.TotalBytesBilled
+	}
+	it, err := job.Read(ctx)
+	if err != nil {
+		return nil, billed, err
+	}
+	var out []T
+	for {
+		var r T
+		err := it.Next(&r)
+		if err == iterator.Done {
+			break
+		}
+		if err != nil {
+			return nil, billed, err
+		}
+		out = append(out, r)
+	}
+	return out, billed, nil
 }

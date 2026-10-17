@@ -116,6 +116,9 @@ func main() {
 		api.btc.read = newBtcReadStore(rstore, api.btc.settings, time.Now)
 		api.btc.prices = newBtcPriceSyncer(rstore, api.btc.settings, time.Now)
 		go runAddressRiskSync(ctx, time.Hour, api.btc.prices.syncOnce)
+		if bqJobs := bitcoinSyncJobs(api.btc.settings, rstore, bq); len(bqJobs) > 0 {
+			go runAddressRiskSync(ctx, time.Hour, bqJobs...)
+		}
 	}
 	gasCfg := cfg.CryptoGas.withDefaults()
 	api.risk = newAddressRiskService(rstore, cfg.AddressRisk.rpcURLs())

@@ -146,6 +146,21 @@ func TestNewBitcoinJobsDisabled(t *testing.T) {
 	}
 }
 
+func TestBitcoinJobsNotWiredWhenDisabled(t *testing.T) {
+	store := newTestRiskStore(t)
+	s := (BitcoinConfig{}).settings() // Jobs defaults to false
+	if fns := bitcoinSyncJobs(s, store, &BQClient{}); len(fns) != 0 {
+		t.Fatalf("bitcoinSyncJobs with jobs:false returned %d funcs, want 0", len(fns))
+	}
+	s.Jobs = true
+	if fns := bitcoinSyncJobs(s, nil, &BQClient{}); len(fns) != 0 {
+		t.Fatalf("bitcoinSyncJobs with nil store returned %d funcs, want 0", len(fns))
+	}
+	if fns := bitcoinSyncJobs(s, store, &BQClient{}); len(fns) == 0 {
+		t.Fatal("bitcoinSyncJobs with jobs:true and valid store/client returned 0 funcs")
+	}
+}
+
 func TestBtcResumeCLI(t *testing.T) {
 	ctx := context.Background()
 	store := newTestRiskStore(t)
