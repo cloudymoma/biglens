@@ -21,6 +21,8 @@ func main() {
 	since := flag.String("since", "", "backfill from this date, YYYY-MM-DD (default 2017-11-28: full history)")
 	sinceDays := flag.Int("since-days", 0, "backfill the last N days (dev only; excludes --since)")
 	yes := flag.Bool("yes", false, "run the backfill; without it only a dry-run estimate is printed")
+	force := flag.Bool("force", false, "bypass the minimum interval lock for --bitcoin-utxo-baseline (never bypasses budget)")
+	btcBaseline := flag.Bool("bitcoin-utxo-baseline", false, "build the Bitcoin UTXO baseline from BigQuery (dry run unless --yes), then exit")
 	btcResume := flag.String("bitcoin-bq-resume", "", "clear the stop flag for a Bitcoin BigQuery job (btc_onchain or btc_coinage) and exit")
 	flag.Parse()
 
@@ -67,6 +69,9 @@ func main() {
 
 	if *backfill {
 		os.Exit(runBackfillCLI(ctx, cfg, bqStablecoinSource{client: bq.client}, *since, *sinceDays, *yes))
+	}
+	if *btcBaseline {
+		os.Exit(runBtcBaselineCLI(ctx, cfg, bq, *yes, *force))
 	}
 
 	applyCryptoGasConfig(cfg.CryptoGas)
