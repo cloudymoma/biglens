@@ -925,7 +925,33 @@ func bitcoinSyncJobs(settings btcSettings, store *riskStore, client *BQClient) [
 		failurePolicy:  btcJobFailurePolicy(btcOnchainJobID),
 		stopFlags:      jobs.flags,
 	}
-	return []func(context.Context){rollupSyncer.syncOnce}
+	out := []func(context.Context){rollupSyncer.syncOnce}
+
+	if settings.CoinAgeEnabled {
+		retentionDays := settings.CoinAgeInitialDays + 30
+		stateAsOf := func() string {
+			v, _ := store.getBtcUTXOStateAsOf(context.Background())
+			return v
+		}
+		coinAgeSyncer := &dailyBQSyncer{
+			store:          store,
+			job:            newBtcCoinAgeJob(store, client, settings, nil),
+			now:            jobs.now,
+			initialDays:    settings.CoinAgeInitialDays,
+			name:           btcCoinageJobID,
+			hardCapBytes:   256 << 30,
+			dryRunSizedCap: true,
+			maxWindowDays:  731,
+			minWindowDays:  settings.CadenceDays,
+			timeout:        30 * time.Minute,
+			prune:          pruneBtcCoinAge(store, retentionDays, stateAsOf),
+			budget:         jobs.budget,
+			failurePolicy:  btcJobFailurePolicy(btcCoinageJobID),
+			stopFlags:      jobs.flags,
+		}
+		out = append(out, coinAgeSyncer.syncOnce)
+	}
+	return out
 }
 
 func btcApplyQueryLabels(q *bigquery.Query, jobLabel string) {
