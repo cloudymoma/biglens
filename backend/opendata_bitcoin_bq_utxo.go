@@ -181,7 +181,9 @@ func (r *btcBaselineRunner) checkPreconditions(ctx context.Context, force bool) 
 			lookup = bqLookupJobBytes(ctx, bqSrc.bq.client)
 		}
 	}
-	_ = r.budget.recoverStale(ctx, now, lookup)
+	if err := r.budget.recoverStale(ctx, now, lookup); err != nil {
+		return err
+	}
 	nowStr := now.Format(time.RFC3339)
 
 	var active int64

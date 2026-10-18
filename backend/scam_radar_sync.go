@@ -407,7 +407,7 @@ func (s *dailyBQSyncer) sync(ctx context.Context) (stablecoinRun, bool) {
 	}
 
 	cursor := end.AddDays(-1).String()
-	if err := s.job.Store(bctx, s.store, res, newFrom, cursor, s.now()); err != nil {
+	if err := s.job.Store(ctx, s.store, res, newFrom, cursor, s.now()); err != nil {
 		slog.Error(tag+" store", "source", sourceID, "error", err)
 		errCode := s.applyBilledFailure(bctx, sourceID, now, "unavailable", billed)
 		return stablecoinRun{start: start, end: end, billed: billed, errCode: errCode}, true
@@ -419,11 +419,11 @@ func (s *dailyBQSyncer) sync(ctx context.Context) (stablecoinRun, bool) {
 	}
 
 	if s.prune != nil {
-		if err := s.prune(bctx, today); err != nil {
+		if err := s.prune(ctx, today); err != nil {
 			slog.Warn(tag+" prune", "source", sourceID, "error", err)
 		}
 	} else {
-		if err := s.store.pruneScam(bctx, s.retentionDays, today); err != nil {
+		if err := s.store.pruneScam(ctx, s.retentionDays, today); err != nil {
 			slog.Warn(tag+" prune", "source", sourceID, "error", err)
 		}
 	}

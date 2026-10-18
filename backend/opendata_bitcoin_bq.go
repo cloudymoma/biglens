@@ -360,10 +360,11 @@ ON CONFLICT(month, job) DO UPDATE SET billed_bytes = btc_budget.billed_bytes + e
 	return nil
 }
 
-// recoverStale settles or releases expired reservations. When a reservation has
-// a BigQuery job ID, lookup queries the job's metadata (0 bytes billed) to
-// settle actual totalBytesBilled if the job finished; reservations without a
-// job ID are released.
+// recoverStale settles expired reservations. When a reservation has a BigQuery
+// job ID, lookup queries the job's metadata (0 bytes billed) to settle actual
+// totalBytesBilled if the job finished; reservations without a job ID (e.g. a
+// crash between query submission and attachJob) settle their reserved bytes
+// conservatively so spend cannot be under-counted.
 func (b *btcBudget) recoverStale(ctx context.Context, now time.Time, lookup func(jobID string) (billed int64, done bool, err error)) error {
 	if b == nil || b.store == nil || b.store.db == nil {
 		return nil
@@ -373,7 +374,7 @@ func (b *btcBudget) recoverStale(ctx context.Context, now time.Time, lookup func
 	}
 	nowStr := now.UTC().Format(time.RFC3339)
 	rows, err := b.store.db.QueryContext(ctx,
-		`SELECT id, bq_job_id FROM btc_reservations WHERE expires_at <= ? ORDER BY id`,
+		`SELECT id, bq_job_id, bytes FROM btc_reservations WHERE expires_at <= ? ORDER BY id`,
 		nowStr,
 	)
 	if err != nil {
@@ -382,11 +383,12 @@ func (b *btcBudget) recoverStale(ctx context.Context, now time.Time, lookup func
 	type staleRow struct {
 		id      int64
 		bqJobID string
+		bytes   int64
 	}
 	var stale []staleRow
 	for rows.Next() {
 		var r staleRow
-		if err := rows.Scan(&r.id, &r.bqJobID); err != nil {
+		if err := rows.Scan(&r.id, &r.bqJobID, &r.bytes); err != nil {
 			rows.Close()
 			return err
 		}
@@ -397,7 +399,7 @@ func (b *btcBudget) recoverStale(ctx context.Context, now time.Time, lookup func
 	for _, r := range stale {
 		idStr := strconv.FormatInt(r.id, 10)
 		if r.bqJobID == "" {
-			if err := b.settle(ctx, idStr, 0); err != nil {
+			if err := b.settle(ctx, idStr, r.bytes); err != nil {
 				return err
 			}
 			continue

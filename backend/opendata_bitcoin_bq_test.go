@@ -81,7 +81,7 @@ func TestBtcReservationStaleRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Reservation 2: no job ID -> released with 0 billed bytes.
+	// Reservation 2: no job ID -> settles its reserved 10 GiB conservatively.
 	if _, err := b.reserve(ctx, btcOnchainJobID, 10<<30); err != nil {
 		t.Fatal(err)
 	}
@@ -105,8 +105,8 @@ func TestBtcReservationStaleRecovery(t *testing.T) {
 	if st.ReservedBytes != 0 {
 		t.Errorf("ReservedBytes after recovery = %d, want 0", st.ReservedBytes)
 	}
-	if st.SettledBytes != 40<<30 {
-		t.Errorf("SettledBytes after recovery = %d, want %d (40 GiB)", st.SettledBytes, int64(40<<30))
+	if st.SettledBytes != 50<<30 {
+		t.Errorf("SettledBytes after recovery = %d, want %d (40 GiB + 10 GiB)", st.SettledBytes, int64(50<<30))
 	}
 }
 
@@ -133,7 +133,7 @@ func TestBitcoinSyncJobsRecoversStaleReservations(t *testing.T) {
 	if err := jobs.budget.attachJob(ctx, idWithJob, "bq-job-crashed-1"); err != nil {
 		t.Fatal(err)
 	}
-	// 2. Reservation without a BigQuery job ID (process crashed before q.Run).
+	// 2. Reservation without a BigQuery job ID (process crashed before attachJob).
 	if _, err := jobs.budget.reserve(ctx, btcOnchainJobID, 2<<30); err != nil {
 		t.Fatal(err)
 	}
@@ -170,8 +170,8 @@ func TestBitcoinSyncJobsRecoversStaleReservations(t *testing.T) {
 	if postSt.ReservedBytes != 0 {
 		t.Errorf("ReservedBytes after recoverStaleOnce = %d, want 0", postSt.ReservedBytes)
 	}
-	if postSt.SettledBytes != 95<<30 {
-		t.Errorf("SettledBytes after recoverStaleOnce = %d, want %d (95 GiB)", postSt.SettledBytes, int64(95<<30))
+	if postSt.SettledBytes != 97<<30 {
+		t.Errorf("SettledBytes after recoverStaleOnce = %d, want %d (95 GiB + 2 GiB)", postSt.SettledBytes, int64(97<<30))
 	}
 }
 
