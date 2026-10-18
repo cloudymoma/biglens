@@ -348,3 +348,135 @@ export interface BtcOnchainHoldersData {
   price_coverage: BtcPriceCoverage;
   sources: BtcSourceStatus[];
 }
+
+export interface BtcVenueRow {
+  venue: string;
+  kind: 'cex_offshore' | 'cex_us' | 'dex' | 'regulated_futures' | string;
+  spot_24h_usd: number | null;
+  depth_2pct_usd: number | null;
+  spread_pct: number | null;
+  deriv_24h_usd: number | null;
+  oi_usd: number | null;
+  oi_btc: number | null;
+  funding_8h_pct: number | null;
+  funding_apr_pct: number | null;
+  premium_pct: number | null;
+  weekly?: boolean;
+  sources: BtcSourceStatus[];
+}
+
+export interface BtcVenueRatio {
+  venue: string;
+  spot_24h_usd: number;
+  deriv_24h_usd: number;
+  ratio: number | null;
+}
+
+export interface BtcMarketsRatios {
+  curated_spot_24h_usd: number | null;
+  curated_deriv_24h_usd: number | null;
+  major_deriv_spot: number | null;
+  all_reported_spot_24h_usd: number | null;
+  all_reported_deriv_24h_usd: number | null;
+  all_reported_deriv_spot: number | null;
+  all_reported_unverified: boolean;
+  per_venue: BtcVenueRatio[] | null;
+  note?: string;
+}
+
+export interface BtcOIShare {
+  venue: string;
+  kind: string;
+  oi_usd: number;
+  oi_btc: number;
+  share_pct: number;
+  weekly?: boolean;
+  via?: string;
+}
+
+export interface BtcBasisPoint {
+  venue: string;
+  instrument: string;
+  expiry: string;
+  days_to_expiry: number;
+  future_price: number;
+  spot_index: number;
+  basis_apr_pct: number;
+  oi_usd: number;
+  volume_24h_usd: number;
+}
+
+export interface BtcDVOLPoint {
+  date: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+}
+
+export interface BtcOKXRubikPoint {
+  date: string;
+  oi_usd: number;
+  volume_24h_usd: number;
+}
+
+export interface BtcCFTCWeekPoint {
+  report_date: string;
+  market_name: string;
+  contract_code: string;
+  contract_size_btc: number;
+  open_interest_contracts: number;
+  open_interest_btc: number;
+  asset_managers_net_btc: number;
+  leveraged_funds_net_btc: number;
+  dealers_net_btc: number;
+  other_reportables_net_btc: number;
+}
+
+export interface BtcCFTCSummary {
+  as_of_report_date: string;
+  cme_oi_btc: number;
+  cme_micro_oi_btc: number;
+  cde_oi_btc: number;
+  total_cme_reg_btc: number;
+  cme_history: BtcCFTCWeekPoint[] | null;
+  latest_by_market: BtcCFTCWeekPoint[] | null;
+}
+
+export interface BtcMarketDailyPoint {
+  date: string;
+  major_deriv_spot: number | null;
+  all_reported_deriv_spot: number | null;
+  total_oi_usd: number | null;
+  oi_to_mcap_pct: number | null;
+  dex_share_pct: number | null;
+  us_regulated_share_pct: number | null;
+  funding_oi_weighted_apr: number | null;
+  dvol: number | null;
+  rv30: number | null;
+  vrp: number | null;
+}
+
+export interface BtcMarketsData {
+  as_of: string;
+  price_usd: number | null;
+  market_cap_usd: number | null;
+  total_oi_usd: number | null;
+  venues: BtcVenueRow[];
+  ratios: BtcMarketsRatios;
+  oi_shares: BtcOIShare[] | null;
+  oi_to_mcap_pct: number | null;
+  dex_share_pct: number | null;
+  us_regulated_share_pct: number | null;
+  funding_oi_weighted_apr: number | null;
+  basis: BtcBasisPoint[] | null;
+  dvol: BtcDVOLPoint[] | null;
+  dvol_latest: number | null;
+  rv30: number | null;
+  vrp: number | null;
+  cot: BtcCFTCSummary | null;
+  history: BtcMarketDailyPoint[] | null;
+  okx_rubik: BtcOKXRubikPoint[] | null;
+  caveats: string[];
+  sources: BtcSourceStatus[];
+}

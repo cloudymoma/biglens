@@ -54,11 +54,12 @@ export const OPEN_DATASETS: OpenDataset[] = [
     label: 'Bitcoin',
     icon: <Bitcoin size={16} />,
     description:
-      'A professional Bitcoin dashboard: fee market and block space, holder behavior and exchange flows — from free ' +
-      'public APIs, plus operator-enabled BigQuery analytics (coin age, SOPR, realized cap, HODL waves, block-space ' +
-      'composition).',
+      'A professional Bitcoin dashboard: spot and derivatives market structure across Binance, OKX, Coinbase, Kraken, ' +
+      'Hyperliquid, Deribit and CME, valuation cycles, fee market and block space, holder behavior and exchange flows — ' +
+      'from free public APIs, plus operator-enabled BigQuery analytics (coin age, SOPR, realized cap, HODL waves, ' +
+      'block-space composition).',
     sourceTable:
-      'mempool.space · Coinbase · Kraken · Coin Metrics Community · CoinGecko · blockchain.com · bigquery-public-data.crypto_bitcoin (operator opt-in)',
+      'mempool.space · Coinbase (Exchange / INTX / CDE) · Kraken · Deribit · OKX · Binance Futures · Hyperliquid · CFTC COT · Coin Metrics Community · CoinGecko · alternative.me · blockchain.com · bigquery-public-data.crypto_bitcoin (operator opt-in)',
     component: BitcoinDashboard,
   },
   {

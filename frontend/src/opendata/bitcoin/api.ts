@@ -5,6 +5,7 @@ import type {
   BtcFeesData,
   BtcHoldersData,
   BtcLiveData,
+  BtcMarketsData,
   BtcMetaData,
   BtcOnchainData,
   BtcOnchainHoldersData,
@@ -17,6 +18,11 @@ export const fetchBitcoinMeta = async (): Promise<BtcMetaData> => {
 
 export const fetchBitcoinLive = async (): Promise<BtcLiveData> => {
   const { data } = await axios.get<BtcLiveData>('/api/opendata/bitcoin/live');
+  return data;
+};
+
+export const fetchBitcoinMarkets = async (): Promise<BtcMarketsData> => {
+  const { data } = await axios.get<BtcMarketsData>('/api/opendata/bitcoin/markets');
   return data;
 };
 
