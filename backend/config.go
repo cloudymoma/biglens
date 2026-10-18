@@ -328,6 +328,7 @@ var btcDefaultProviders = map[string]bool{
 	"okx":            true,
 	"binance":        true,
 	"hyperliquid":    true,
+	"cftc":           true,
 }
 
 type btcSettings struct {

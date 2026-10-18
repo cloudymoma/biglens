@@ -34,11 +34,18 @@ Captured on `2026-10-17T09:28:28Z` (`User-Agent: biglens/1.0`). Each fixture is 
 | `deribit_perp_ticker.json` | Deribit | `https://www.deribit.com/api/v2/public/ticker?instrument_name=BTC-PERPETUAL` | Single `BTC-PERPETUAL` ticker (`open_interest` and `stats.volume_usd` in USD) (315 B) | Public market data |
 | `deribit_futures_summary.json` | Deribit | `https://www.deribit.com/api/v2/public/get_book_summary_by_currency?currency=BTC&kind=future` | Trimmed to `BTC-PERPETUAL` + 3 dated expiries (`BTC-30OCT26`, `BTC-27NOV26`, `BTC-25DEC26`) (769 B) | Public market data |
 | `deribit_dvol.json` | Deribit | `https://www.deribit.com/api/v2/public/get_volatility_index_data?currency=BTC&resolution=86400` | 3 daily `[ts_ms, open, high, low, close]` DVOL candles (235 B) | Public market data |
+| `coingecko_global.json` | CoinGecko | `https://api.coingecko.com/api/v3/global` | Trimmed to `total_market_cap.usd`, `total_volume.usd`, `market_cap_percentage.btc` (280 B) | Public API (attribution required) |
+| `coingecko_bitcoin.json` | CoinGecko | `https://api.coingecko.com/api/v3/coins/bitcoin?localization=false&tickers=false&market_data=true` | Trimmed to `market_data.{current_price,market_cap,total_volume,price_change_percentage_24h}` (286 B) | Public API (attribution required) |
+| `coingecko_tickers_curated.json` | CoinGecko | `https://api.coingecko.com/api/v3/coins/bitcoin/tickers?exchange_ids=binance,gdax,okex,kraken,bybit_spot&depth=true` | 10 valid Binance pairs + 2 excluded (anomaly/stale) + Coinbase/OKX/Kraken/Bybit pairs with ±2 % depth (4.3 KB) | Public API (attribution required) |
+| `coingecko_derivatives.json` | CoinGecko | `https://api.coingecko.com/api/v3/derivatives` | Trimmed to 10 BTC-index rows across 9 venues (incl. long-tail WEEX/Tapbit) + 1 expired BTC future + 1 ETH row (3.4 KB) | Public API (attribution required) |
+| `cftc_tff_btc.json` | CFTC Socrata | `https://publicreporting.cftc.gov/resource/gpe5-46if.json` | 5 rows covering CME 5 BTC (3 weeks), CME Micro 0.10 BTC, and Coinbase CDE Nano 0.01 BTC (2.4 KB) | Public domain |
 
-## 1.1 Hand-Checked Venue Semantics (Task 4.1)
+## 1.1 Hand-Checked Venue Semantics (Tasks 4.1–4.2)
 
 - **Coinbase INTX (`BTC-PERP`):** `notional_24hr` and `qty_24hr` report the current rolling 24h window and can legitimately return `"0"` while `avg_daily_notional` / `avg_daily_qty` are non-zero 30d averages. When `notional_24hr == 0`, the adapter sets INTX 24h volume to `nil` (never substituting `avg_daily_notional`).
 - **Coinbase CDE (`BIP-20DEC30-CDE`):** `future_product_details.contract_size` is `"0.01"` BTC (`open_interest: "173743"` contracts = `1,737.43 BTC`; `volume_24h` is in 0.01 BTC contracts). `funding_interval` is `"3600s"` (1 hour), so `funding_rate: "0.00001"` annualizes as `0.00001 × 8760 × 100 = 8.76 %` APR.
+- **CoinGecko `/derivatives` fallback rows:** `open_interest` and `converted_volume.usd` are in USD notional. `funding_rate` is reported in percentage points per interval; for verified 8h-interval venues (`binance`, `bybit`, `okx`, `deribit`), `funding_8h_pct = funding_rate` and `funding_apr_pct = funding_rate × (8760 / 8)`. Unverified venue funding rates in fallback rows are omitted (`nil`).
+- **CFTC Traders in Financial Futures (`gpe5-46if`):** Contract sizes: `BITCOIN - CHICAGO MERCANTILE EXCHANGE` (`133741`) = `5.0 BTC`; `MICRO BITCOIN - CHICAGO MERCANTILE EXCHANGE` (`133742`) = `0.1 BTC`; `BITCOIN NANO - COINBASE DERIVATIVES, LLC` (`133001`) = `0.01 BTC`.
 
 ## 2. `mempool.space` 39-Entry Fee Levels (`mempoolStatsFeeLevels`)
 

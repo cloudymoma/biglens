@@ -1,0 +1,18 @@
+{
+  "id": "bitcoin",
+  "symbol": "btc",
+  "name": "Bitcoin",
+  "market_data": {
+    "current_price": {
+      "usd": 81484.0
+    },
+    "market_cap": {
+      "usd": 1636250000000.0
+    },
+    "total_volume": {
+      "usd": 27390000000.0
+    },
+    "price_change_percentage_24h": 1.13
+  },
+  "last_updated": "2026-10-17T00:00:00.000Z"
+}

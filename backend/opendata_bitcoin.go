@@ -291,6 +291,7 @@ var btcProviderRegistry = []btcProviderDef{
 	{ID: "hyperliquid", Label: "Hyperliquid", License: "public market data"},
 	{ID: "coinmetrics", Label: "Coin Metrics Community", License: "CC BY-NC 4.0 (non-commercial)"},
 	{ID: "coingecko", Label: "CoinGecko", License: "attribution required"},
+	{ID: "cftc", Label: "CFTC Commitments of Traders", License: "public domain"},
 	{ID: "blockchain_com", Label: "blockchain.com", License: "public chart data"},
 }
 
