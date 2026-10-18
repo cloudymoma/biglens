@@ -1,0 +1,33 @@
+{
+  "jsonrpc": "2.0",
+  "result": [
+    {
+      "instrument_name": "BTC-PERPETUAL",
+      "mark_price": 81484.0,
+      "estimated_delivery_price": 81450.0,
+      "open_interest": 825400000.0,
+      "volume_usd": 1420000000.0
+    },
+    {
+      "instrument_name": "BTC-30OCT26",
+      "mark_price": 81720.0,
+      "estimated_delivery_price": 81450.0,
+      "open_interest": 64200000.0,
+      "volume_usd": 38500000.0
+    },
+    {
+      "instrument_name": "BTC-27NOV26",
+      "mark_price": 82150.0,
+      "estimated_delivery_price": 81450.0,
+      "open_interest": 112000000.0,
+      "volume_usd": 54000000.0
+    },
+    {
+      "instrument_name": "BTC-25DEC26",
+      "mark_price": 82950.0,
+      "estimated_delivery_price": 81450.0,
+      "open_interest": 248000000.0,
+      "volume_usd": 124000000.0
+    }
+  ]
+}

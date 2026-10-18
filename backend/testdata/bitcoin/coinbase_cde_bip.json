@@ -1,0 +1,21 @@
+{
+  "product_id": "BIP-20DEC30-CDE",
+  "price": "81484.0",
+  "price_percentage_change_24h": "1.13",
+  "volume_24h": "0",
+  "base_name": "Bitcoin",
+  "quote_name": "US Dollar",
+  "product_type": "FUTURE",
+  "future_product_details": {
+    "venue": "cde",
+    "contract_code": "BIP",
+    "contract_expiry": "2030-12-20T16:00:00Z",
+    "contract_size": "0.01",
+    "contract_root_unit": "BTC",
+    "ContractExpiryType": "PERPETUAL_STYLE",
+    "open_interest": "173743",
+    "funding_rate": "0.00001",
+    "funding_interval": "3600s",
+    "funding_time": "2026-10-17T01:00:00Z"
+  }
+}

@@ -384,16 +384,8 @@ func TestBitcoinConfigDefaults(t *testing.T) {
 	if got.BaselineMinInterval != 30*24*time.Hour {
 		t.Errorf("BaselineMinInterval = %v, want 720h", got.BaselineMinInterval)
 	}
-	wantProviders := map[string]bool{
-		"mempool":        true,
-		"coinbase":       true,
-		"kraken":         true,
-		"coinmetrics":    true,
-		"coingecko":      true,
-		"blockchain_com": true,
-	}
-	if !reflect.DeepEqual(got.Providers, wantProviders) {
-		t.Errorf("Providers = %v, want %v", got.Providers, wantProviders)
+	if !reflect.DeepEqual(got.Providers, btcDefaultProviders) {
+		t.Errorf("Providers = %v, want %v", got.Providers, btcDefaultProviders)
 	}
 	if strings.Contains(string(mustMarshalYAML(t, &Config{})), "bitcoin") {
 		t.Error("an absent bitcoin section must stay absent on save")

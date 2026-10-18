@@ -1,0 +1,27 @@
+{
+  "instrument_id": "149264167780483072",
+  "instrument_uuid": "b3469e0b-222c-4f8a-9f68-1f9e44d7e5e0",
+  "symbol": "BTC-PERP",
+  "type": "PERP",
+  "mode": "STANDARD",
+  "base_asset_name": "BTC",
+  "quote_asset_name": "USDC",
+  "base_increment": "0.0001",
+  "quote_increment": "0.1",
+  "price_band_percent": "0.05",
+  "market_order_percent": "0.02",
+  "qty_24hr": "0",
+  "notional_24hr": "0",
+  "avg_daily_qty": "18420.5",
+  "avg_daily_notional": "1498250000.0",
+  "open_interest": "1031.39",
+  "quote": {
+    "best_bid_price": "81483.5",
+    "best_ask_price": "81484.5",
+    "trade_price": "81484.0",
+    "mark_price": "81484.0",
+    "index_price": "81450.0",
+    "predicted_funding": "0.000008",
+    "timestamp": "2026-10-17T00:00:00Z"
+  }
+}

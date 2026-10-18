@@ -57,16 +57,18 @@ catalog:
 # bitcoin:
 #   enabled: true
 #   providers:                          # keyless public APIs; false = never called
-#     coinbase: true                    # spot price and daily candles
-#     kraken: true                      # price fallback
+#     coinbase: true                    # spot price, daily candles, INTX perps, CDE (US) futures
+#     kraken: true                      # spot price fallback and Kraken Futures
+#     deribit: true                     # BTC-PERPETUAL, dated futures, DVOL
+#     okx: true                         # BTC-USDT-SWAP ticker, OI, funding, rubik history
+#     binance: true                     # auto: direct USD-M/COIN-M APIs, CoinGecko rows for 24 h after HTTP 451/403
+#     hyperliquid: true                 # on-chain perps (metaAndAssetCtxs, fundingHistory)
 #     coinmetrics: true                 # Community API, CC BY-NC 4.0 (non-commercial)
 #     coingecko: true                   # public treasuries (M4 adds spot tickers, derivatives, dominance)
 #     blockchain_com: true              # price history 2010–2015 (Coin Metrics PriceUSD is the fallback)
-#     # Added only if G1 approves M4–M5, by the task that first calls each provider:
-#     #   deribit, okx, hyperliquid, cftc, alternative_me (M4)
-#     #   binance (M4; auto: direct futures APIs, CoinGecko's Binance rows for 24 h after HTTP 451/403)
+#     # Added by subsequent M4–M5 tasks:
+#     #   cftc, alternative_me (M4)
 #     #   bitnodes (≤ 4 snapshots/day), dbip (DB-IP Lite, CC BY 4.0, ≈ 11.5 MB/month in data/geo/) (M5)
-#     #   Coinbase INTX perps and CDE (US) futures arrive with M4 under the same coinbase key
 #   bigquery:
 #     jobs: false                       # OPERATOR OPT-IN. true = run Bitcoin BigQuery jobs billed to bigquery.project_id.
 #                                       # The dashboard switch only shows/hides panels; it never starts jobs.

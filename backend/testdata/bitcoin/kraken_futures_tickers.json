@@ -1,0 +1,36 @@
+{
+  "result": "success",
+  "serverTime": "2026-10-17T00:00:00.000Z",
+  "tickers": [
+    {
+      "tag": "perpetual",
+      "pair": "XBT:USD",
+      "symbol": "PF_XBTUSD",
+      "markPrice": 81484.0,
+      "bid": 81483.5,
+      "ask": 81484.5,
+      "vol24h": 4250.5,
+      "volumeQuote": 346347742.0,
+      "openInterest": 2850.0,
+      "indexPrice": 81450.0,
+      "last": 81484.0,
+      "fundingRate": 0.00104352,
+      "relativeFundingRate": 0.00001280821917808219,
+      "suspended": false
+    },
+    {
+      "tag": "semiannual",
+      "pair": "XBT:USD",
+      "symbol": "FF_XBTUSD_261225",
+      "markPrice": 82950.0,
+      "bid": 82940.0,
+      "ask": 82960.0,
+      "vol24h": 120.0,
+      "volumeQuote": 9954000.0,
+      "openInterest": 410.0,
+      "indexPrice": 81450.0,
+      "last": 82950.0,
+      "suspended": false
+    }
+  ]
+}

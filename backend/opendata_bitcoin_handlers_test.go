@@ -68,8 +68,8 @@ func TestBitcoinMeta(t *testing.T) {
 		math.Abs(meta.BigQuery.Costs.UTXOBaselineUSD-4.20) > 1e-6 {
 		t.Errorf("Costs = %+v", meta.BigQuery.Costs)
 	}
-	if len(meta.Providers) != 6 {
-		t.Errorf("Providers len = %d, want 6 (M1–M3 scope)", len(meta.Providers))
+	if len(meta.Providers) != len(btcProviderRegistry) {
+		t.Errorf("Providers len = %d, want %d", len(meta.Providers), len(btcProviderRegistry))
 	}
 }
 

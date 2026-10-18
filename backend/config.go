@@ -316,7 +316,7 @@ type BitcoinBigQueryConfig struct {
 	} `yaml:"utxo_baseline,omitempty"`
 }
 
-// btcDefaultProviders lists the M1–M3 providers; M4–M5 keys land with the tasks that first call them.
+// btcDefaultProviders lists the M1–M3 and M4 Task 4.1 providers; remaining M4–M5 keys land with the tasks that first call them.
 var btcDefaultProviders = map[string]bool{
 	"mempool":        true,
 	"coinbase":       true,
@@ -324,6 +324,10 @@ var btcDefaultProviders = map[string]bool{
 	"coinmetrics":    true,
 	"coingecko":      true,
 	"blockchain_com": true,
+	"deribit":        true,
+	"okx":            true,
+	"binance":        true,
+	"hyperliquid":    true,
 }
 
 type btcSettings struct {

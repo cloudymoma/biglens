@@ -280,11 +280,15 @@ type btcProviderDef struct {
 	License string `json:"license,omitempty"`
 }
 
-// btcProviderRegistry lists the M1–M3 providers in display order.
+// btcProviderRegistry lists the active Bitcoin providers in display order.
 var btcProviderRegistry = []btcProviderDef{
 	{ID: "mempool", Label: "mempool.space", License: "fair use"},
-	{ID: "coinbase", Label: "Coinbase Exchange", License: "public market data"},
+	{ID: "coinbase", Label: "Coinbase (Exchange / INTX / CDE)", License: "public market data"},
 	{ID: "kraken", Label: "Kraken", License: "public market data"},
+	{ID: "deribit", Label: "Deribit", License: "public market data"},
+	{ID: "okx", Label: "OKX", License: "public market data"},
+	{ID: "binance", Label: "Binance Futures (auto)", License: "public market data"},
+	{ID: "hyperliquid", Label: "Hyperliquid", License: "public market data"},
 	{ID: "coinmetrics", Label: "Coin Metrics Community", License: "CC BY-NC 4.0 (non-commercial)"},
 	{ID: "coingecko", Label: "CoinGecko", License: "attribution required"},
 	{ID: "blockchain_com", Label: "blockchain.com", License: "public chart data"},

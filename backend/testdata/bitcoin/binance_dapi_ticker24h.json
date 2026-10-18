@@ -1,0 +1,18 @@
+[
+  {
+    "symbol": "BTCUSD_PERP",
+    "pair": "BTCUSD",
+    "priceChange": "910.5",
+    "priceChangePercent": "1.130",
+    "weightedAvgPrice": "81115.20",
+    "lastPrice": "81484.0",
+    "openPrice": "80573.5",
+    "highPrice": "82160.0",
+    "lowPrice": "80110.0",
+    "volume": "14825000",
+    "baseVolume": "18276.4731",
+    "openTime": 1760572800000,
+    "closeTime": 1760659200000,
+    "count": 612480
+  }
+]
