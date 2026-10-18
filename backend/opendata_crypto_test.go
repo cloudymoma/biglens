@@ -63,8 +63,6 @@ func TestCryptoFeeSQLPartitionFilters(t *testing.T) {
 	}{
 		{"btc fees+coinbase", btcFeesSQL(), []string{
 			"block_timestamp >= TIMESTAMP(@start_date)", "APPROX_QUANTILES", "virtual_size", "is_coinbase", "coinbase_btc"}},
-		{"btc coinbase", btcCoinbaseSQL(), []string{
-			"block_timestamp >= TIMESTAMP(@start_date)", "is_coinbase", "output_value"}},
 		{"eth fees+burn+blocks", ethFeesSQL(), []string{
 			"block_timestamp >= TIMESTAMP(@start_date)", "number >= @start_block",
 			"receipt_gas_used", "receipt_blob_gas_used", "base_fee_per_gas", "SAFE_DIVIDE"}},
@@ -80,20 +78,6 @@ func TestCryptoFeeSQLPartitionFilters(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-func TestCryptoMiningSQLPartitionFilters(t *testing.T) {
-	sql := btcMiningBlocksSQL()
-	// Partition guard plus the bits→difficulty decode: exponent from the
-	// first 2 hex chars, mantissa from the last 6, 65535/mantissa * 256^(29-e).
-	for _, want := range []string{
-		"timestamp >= TIMESTAMP(@start_date)", "crypto_bitcoin.blocks",
-		"SUBSTR(bits, 1, 2)", "SUBSTR(bits, 3, 6)", "65535", "POW(256, 29",
-	} {
-		if !strings.Contains(sql, want) {
-			t.Errorf("btc mining blocks: missing %q in SQL:\n%s", want, sql)
-		}
 	}
 }
 

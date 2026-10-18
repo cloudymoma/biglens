@@ -26,7 +26,6 @@ func applyCryptoGasConfig(c CryptoGasConfig) {
 	tronTxByIDURL = tron + "/wallet/gettransactionbyid"
 
 	coinbase := strings.TrimRight(c.CoinbaseBaseURL, "/")
-	btcSpotURL = coinbase + "/v2/prices/BTC-USD/spot"
 	spotURLFormat = coinbase + "/v2/prices/%s-USD/spot"
 
 	rpcs := map[string][]string{"eth": c.EthRPCURLs, "arb": c.ArbitrumRPCURLs, "op": c.OptimismRPCURLs, "base": c.BaseRPCURLs}

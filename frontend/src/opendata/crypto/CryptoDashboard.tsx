@@ -5,7 +5,6 @@ import PulseTab from './PulseTab';
 import FeesTab from './FeesTab';
 import WhalesTab from './WhalesTab';
 import TokensTab from './TokensTab';
-import MiningTab from './MiningTab';
 import PaymentCheckTab from './PaymentCheckTab';
 import AddressRiskTab from './AddressRiskTab';
 
@@ -14,7 +13,6 @@ const TABS = [
   { id: 'fees', label: 'Fee Market' },
   { id: 'whales', label: 'Whales & Flow' },
   { id: 'tokens', label: 'Token Economy' },
-  { id: 'mining', label: 'Mining Economics' },
   { id: 'payments', label: 'Payment Check' },
   { id: 'risk', label: 'Address Risk' },
 ] as const;
@@ -56,7 +54,6 @@ export default function CryptoDashboard() {
     fees: <FeesTab />,
     whales: <WhalesTab onInspect={inspectAddress} />,
     tokens: <TokensTab onInspect={inspectAddress} />,
-    mining: <MiningTab />,
     payments: <PaymentCheckTab onInspect={inspectAddress} />,
     risk: <AddressRiskTab inspect={inspect} />,
   };

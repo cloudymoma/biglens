@@ -42,7 +42,6 @@ const (
 	cryptoWhalesMaxBytesBilled        int64 = 80 << 30  // 80 GiB  (90d ETH whales ~36.7 GiB)
 	cryptoTokensMaxBytesBilled        int64 = 40 << 30  // 40 GiB  (30d token_top ~15.1 GiB)
 	cryptoTokenMetadataMaxBytesBilled int64 = 4 << 30   // 4 GiB   (unpartitioned tokens_latest ~1.70 GiB)
-	cryptoMiningMaxBytesBilled        int64 = 16 << 30  // 16 GiB  (365d BTC mining ~4.7 GiB)
 	cryptoBlocksMaxBytesBilled        int64 = 2 << 30   // 2 GiB   (pruned blocks/contracts < 500 MiB)
 )
 
@@ -365,23 +364,6 @@ type BtcCoinbaseRow struct {
 	CoinbaseBTC float64 `json:"coinbase_btc" bigquery:"coinbase_btc"`
 }
 
-func btcCoinbaseSQL() string {
-	return fmt.Sprintf(`
-		SELECT
-			FORMAT_DATE('%%Y-%%m-%%d', DATE(block_timestamp)) AS date,
-			ROUND(CAST(SUM(output_value) AS FLOAT64) / 1e8, 4) AS coinbase_btc
-		FROM %s
-		WHERE is_coinbase AND %s
-		GROUP BY date ORDER BY date`, btcTxTable, btcTxWindow)
-}
-
-func (b *BQClient) GetBtcCoinbase(ctx context.Context, start, end civil.Date) ([]BtcCoinbaseRow, error) {
-	q := b.client.Query(btcCoinbaseSQL())
-	q.Parameters = cryptoDateParams(start, end)
-	q.MaxBytesBilled = cryptoMiningMaxBytesBilled
-	return collectRows[BtcCoinbaseRow](q, ctx)
-}
-
 // EthFeeRow is one day's ETH fee economics; the gas price average is
 // gas-weighted. BurnedETH/TipsETH are computed alongside blocks in ethFeesSQL
 // (or filled by mergeEthFees when called separately).
@@ -464,37 +446,6 @@ func (b *BQClient) GetEthBurn(ctx context.Context, start, end civil.Date) ([]Eth
 	q.Parameters = cryptoEthBlockParams(start, end)
 	q.MaxBytesBilled = cryptoBlocksMaxBytesBilled
 	return collectRows[EthBurnRow](q, ctx)
-}
-
-// --- /mining: daily block production, difficulty, network hashrate ---
-
-// BtcMiningBlockRow is one day's block count and average difficulty. The
-// blocks table has no difficulty column; it is decoded in SQL from the
-// compact `bits` header (8 hex chars, no 0x prefix): exponent = first 2
-// chars, mantissa = last 6, difficulty = 65535/mantissa * 256^(29-exponent).
-type BtcMiningBlockRow struct {
-	Date       string  `json:"date" bigquery:"date"`
-	Blocks     int64   `json:"blocks" bigquery:"blocks"`
-	Difficulty float64 `json:"difficulty" bigquery:"difficulty"`
-}
-
-func btcMiningBlocksSQL() string {
-	return fmt.Sprintf(`
-		SELECT
-			FORMAT_DATE('%%Y-%%m-%%d', DATE(timestamp)) AS date,
-			COUNT(*) AS blocks,
-			AVG(SAFE_DIVIDE(65535, CAST(CONCAT('0x', SUBSTR(bits, 3, 6)) AS INT64))
-				* POW(256, 29 - CAST(CONCAT('0x', SUBSTR(bits, 1, 2)) AS INT64))) AS difficulty
-		FROM %s
-		WHERE %s
-		GROUP BY date ORDER BY date`, btcBlocksTable, btcBlockWindow)
-}
-
-func (b *BQClient) GetBtcMiningBlocks(ctx context.Context, start, end civil.Date) ([]BtcMiningBlockRow, error) {
-	q := b.client.Query(btcMiningBlocksSQL())
-	q.Parameters = cryptoDateParams(start, end)
-	q.MaxBytesBilled = cryptoBlocksMaxBytesBilled
-	return collectRows[BtcMiningBlockRow](q, ctx)
 }
 
 // --- /whales: largest transfers, top receivers, whale trend, concentration ---

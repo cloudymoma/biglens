@@ -1037,20 +1037,6 @@ export interface CryptoTokensLiveData {
   warnings?: string[];
 }
 
-export interface BtcMiningRow {
-  date: string;
-  blocks: number;
-  hashrate_ehs: number;
-  revenue_btc: number;
-}
-
-export interface CryptoMiningData {
-  days: number;
-  daily: BtcMiningRow[];
-  last_day_complete?: boolean; // false: newest UTC day may still be ingesting
-  last_day_probe_failed?: boolean; // true: completeness probe query errored
-}
-
 export interface CryptoSpotData {
   price_usd: number;
   as_of: string;

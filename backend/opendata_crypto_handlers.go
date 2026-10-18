@@ -6,8 +6,6 @@ package main
 //	GET /api/opendata/crypto/fees?days=7|30|90|365     (Task 4)
 //	GET /api/opendata/crypto/whales?days=7|30|90&chain=btc|eth (Task 6)
 //	GET /api/opendata/crypto/tokens?days=7|30          (Task 8)
-//	GET /api/opendata/crypto/mining?days=7|30|90|365
-//	GET /api/opendata/crypto/spot                      (Coinbase proxy, not BigQuery)
 //	GET /api/opendata/crypto/gas-pulse                 (72h, 7 chains; opendata_crypto_gas_handlers.go)
 //	GET /api/opendata/crypto/gas-live                  (BTC/TRON live bars, 30s; opendata_crypto_gas_live_handlers.go)
 //	GET /api/opendata/crypto/prices?days=7|30|90|365   (on-chain USD from SQLite, never BigQuery; opendata_crypto_prices.go)
@@ -127,30 +125,6 @@ func (h *APIHandler) getCachedBtcBlocks(ctx context.Context, start, end civil.Da
 		return nil, err
 	}
 	return v.([]CryptoBlockRow), nil
-}
-
-// getCachedBtcCoinbase shares BTC coinbase revenue between /fees and /mining.
-func (h *APIHandler) getCachedBtcCoinbase(ctx context.Context, start, end civil.Date) ([]BtcCoinbaseRow, error) {
-	qKey := fmt.Sprintf("opendata:crypto:q:btc_coinbase:%s:%s", start, end)
-	if cached, ok := h.cache.Get(qKey); ok {
-		return cached.([]BtcCoinbaseRow), nil
-	}
-	v, err, _ := cryptoFlight.Do(qKey, func() (any, error) {
-		ready := h.cryptoReadyAsync(ctx, end, "btc")
-		rows, err := h.bq.GetBtcCoinbase(ctx, start, end)
-		if err != nil {
-			return nil, err
-		}
-		if rows == nil {
-			rows = []BtcCoinbaseRow{}
-		}
-		h.cache.SetWithTTL(qKey, rows, cryptoResponseTTL(end, time.Now().UTC(), false, (<-ready).complete))
-		return rows, nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return v.([]BtcCoinbaseRow), nil
 }
 
 // --- /pulse ---
@@ -454,13 +428,6 @@ func (h *APIHandler) CryptoFees(w http.ResponseWriter, r *http.Request) {
 			data.Warnings = append(data.Warnings, "btc_fees: "+btcFeeErr.Error())
 		} else {
 			data.BTC = mergeBtcFees(btcFees, nil)
-			// Populate the shared coinbase cache so /mining can reuse it without a BigQuery scan.
-			cbRows := make([]BtcCoinbaseRow, 0, len(btcFees))
-			for _, f := range btcFees {
-				cbRows = append(cbRows, BtcCoinbaseRow{Date: f.Date, CoinbaseBTC: f.CoinbaseBTC})
-			}
-			cbKey := fmt.Sprintf("opendata:crypto:q:btc_coinbase:%s:%s", start, end)
-			h.cache.SetWithTTL(cbKey, cbRows, cryptoResponseTTL(end, time.Now().UTC(), false, btcSt.complete))
 		}
 		if btcBlocksErr != nil {
 			slog.Warn("crypto fees: btc blocks query failed", "error", btcBlocksErr)
@@ -1322,126 +1289,31 @@ func nonNilSlice[T any](s []T) []T {
 	return s
 }
 
-// --- /mining ---
-
-// BtcMiningRow is one day's mining economics inputs. HashrateEhs is the
-// implied network hashrate in EH/s; RevenueBTC is total coinbase output
-// (subsidy + fees). The per-rig break-even math stays in the frontend so
-// price/electricity inputs recompute without re-querying.
-type BtcMiningRow struct {
-	Date        string  `json:"date"`
-	Blocks      int64   `json:"blocks"`
-	HashrateEhs float64 `json:"hashrate_ehs"`
-	RevenueBTC  float64 `json:"revenue_btc"`
-}
-
-type CryptoMiningData struct {
-	Days  int            `json:"days"`
-	Daily []BtcMiningRow `json:"daily"`
-	// LastDayComplete / LastDayProbeFailed: see CryptoPulseData (probes Bitcoin).
-	LastDayComplete    bool `json:"last_day_complete"`
-	LastDayProbeFailed bool `json:"last_day_probe_failed,omitempty"`
-}
-
-// mergeBtcMining joins daily block stats with coinbase revenue by date and
-// derives hashrate = difficulty * 2^32 * blocks / 86400 (using the actual
-// daily block count reflects Poisson block-finding luck, ~±8% 1σ at 144
-// blocks/day; the frontend KPI smooths this with a 7-day average). Inputs are
-// not mutated; days missing from blocks are dropped (no hashrate to show).
-func mergeBtcMining(blocks []BtcMiningBlockRow, coinbase []BtcCoinbaseRow) []BtcMiningRow {
-	const twoTo32 = 4294967296.0
-	revenue := make(map[string]float64, len(coinbase))
-	for _, c := range coinbase {
-		revenue[c.Date] = c.CoinbaseBTC
-	}
-	out := make([]BtcMiningRow, 0, len(blocks))
-	for _, b := range blocks {
-		hs := b.Difficulty * twoTo32 * float64(b.Blocks) / 86400 / 1e18
-		out = append(out, BtcMiningRow{
-			Date:        b.Date,
-			Blocks:      b.Blocks,
-			HashrateEhs: hs,
-			RevenueBTC:  revenue[b.Date],
-		})
-	}
-	return out
-}
-
-func (h *APIHandler) CryptoMining(w http.ResponseWriter, r *http.Request) {
-	days, err := parseCryptoDays(r, cryptoDefaultDays, cryptoPulseDaysAllowed)
-	if err != nil {
-		writeError(w, err.Error(), http.StatusBadRequest)
+func registerCryptoRoutes(mux *http.ServeMux, api *APIHandler, prices *cryptoPriceSyncer, gzWrap func(http.HandlerFunc) http.Handler, logOnly func(http.Handler) http.Handler) {
+	if api == nil {
 		return
 	}
-
-	now := time.Now().UTC()
-	start, end := cryptoWindowAt(days, now)
-	baseKey := fmt.Sprintf("opendata:crypto:mining:%d", days)
-	key := fmt.Sprintf("%s:%s", baseKey, end)
-	if cached, ok := h.cache.Get(key); ok {
-		writeJSON(w, cached)
-		return
-	}
-	if cached, ok := h.cache.Get(baseKey); ok {
-		writeJSON(w, cached)
-		return
-	}
-
-	v, err, _ := cryptoFlight.Do(key, func() (any, error) {
-		ctx, cancel := cryptoFetchContext(r)
-		defer cancel()
-
-		var (
-			blocks      []BtcMiningBlockRow
-			coinbase    []BtcCoinbaseRow
-			blocksErr   error
-			coinbaseErr error
-		)
-		ready := h.cryptoReadyAsync(ctx, end, "btc")
-
-		done := make(chan struct{}, 2)
-		go func() {
-			blocks, blocksErr = h.bq.GetBtcMiningBlocks(ctx, start, end)
-			done <- struct{}{}
-		}()
-		go func() {
-			coinbase, coinbaseErr = h.getCachedBtcCoinbase(ctx, start, end)
-			done <- struct{}{}
-		}()
-		<-done
-		<-done
-
-		if blocksErr != nil {
-			return nil, blocksErr
-		}
-		if coinbaseErr != nil {
-			return nil, coinbaseErr
-		}
-
-		st := <-ready
-		data := CryptoMiningData{
-			Days:               days,
-			Daily:              mergeBtcMining(blocks, coinbase),
-			LastDayComplete:    st.complete,
-			LastDayProbeFailed: st.probeFailed,
-		}
-		h.cache.SetWithTTL(key, &data, cryptoResponseTTL(end, time.Now().UTC(), false, data.LastDayComplete))
-		return &data, nil
-	})
-	if err != nil {
-		writeError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, v)
+	mux.Handle("/api/opendata/crypto/pulse", gzWrap(api.CryptoPulse))
+	mux.Handle("/api/opendata/crypto/fees", gzWrap(api.CryptoFees))
+	mux.Handle("/api/opendata/crypto/whales", gzWrap(api.CryptoWhales))
+	mux.Handle("/api/opendata/crypto/tokens", gzWrap(api.CryptoTokens))
+	mux.Handle("/api/opendata/crypto/tokens/live", gzWrap(api.CryptoTokensLive))
+	mux.Handle("/api/opendata/crypto/gas-pulse", gzWrap(api.CryptoGasPulse))
+	mux.Handle("/api/opendata/crypto/gas-live", gzWrap(api.CryptoGasLive))
+	mux.Handle("/api/opendata/crypto/prices", gzWrap(cryptoPricesHandler(prices)))
+	mux.Handle("/api/opendata/crypto/address-risk/lookup", gzWrap(api.AddressRiskLookup))
+	mux.Handle("/api/opendata/crypto/address-risk/sources", gzWrap(api.AddressRiskSources))
+	mux.Handle("/api/opendata/crypto/address-risk/overview", gzWrap(api.AddressRiskOverview))
+	mux.Handle("/api/opendata/crypto/address-risk/scam-radar", gzWrap(api.AddressRiskScamRadar))
+	mux.Handle("/api/opendata/crypto/address-risk/keys", logOnly(addressRiskKeysHandler(api)))
+	mux.Handle("/api/opendata/crypto/address-risk/backfill", logOnly(addressRiskBackfillHandler(api)))
+	mux.Handle("/api/opendata/crypto/payment-check/live", gzWrap(api.PaymentCheckLive))
+	mux.Handle("/api/opendata/crypto/payment-check/history", gzWrap(api.PaymentCheckHistory))
 }
 
-// --- /spot ---
+// --- Coinbase spot helper (used by gas live bar) ---
 
-// btcSpotURL is a var so tests can point it at an httptest server. Coinbase's
-// spot endpoint is free and keyless; the 10-minute cache keeps us well under
-// any rate limit and the frontend treats failure as "type the price yourself".
 var (
-	btcSpotURL     = "https://api.coinbase.com/v2/prices/BTC-USD/spot"
 	spotURLFormat  = "https://api.coinbase.com/v2/prices/%s-USD/spot"
 	spotHTTPClient = &http.Client{Timeout: 5 * time.Second}
 )
@@ -1450,10 +1322,6 @@ type CryptoSpotData struct {
 	PriceUSD float64 `json:"price_usd"`
 	AsOf     string  `json:"as_of"`
 	Source   string  `json:"source"`
-}
-
-func fetchBtcSpot(ctx context.Context) (*CryptoSpotData, error) {
-	return fetchSpotURL(ctx, btcSpotURL)
 }
 
 // fetchSpot returns the Coinbase USD spot price for base (e.g. "TRX").
@@ -1491,27 +1359,4 @@ func fetchSpotURL(ctx context.Context, url string) (*CryptoSpotData, error) {
 		AsOf:     time.Now().UTC().Format(time.RFC3339),
 		Source:   "coinbase",
 	}, nil
-}
-
-func (h *APIHandler) CryptoSpot(w http.ResponseWriter, r *http.Request) {
-	const key = "opendata:crypto:spot"
-	if cached, ok := h.cache.Get(key); ok {
-		writeJSON(w, cached)
-		return
-	}
-	v, err, _ := cryptoFlight.Do(key, func() (any, error) {
-		ctx, cancel := cryptoFetchContext(r)
-		defer cancel()
-		data, err := fetchBtcSpot(ctx)
-		if err != nil {
-			return nil, err
-		}
-		h.cache.Set(key, data)
-		return data, nil
-	})
-	if err != nil {
-		writeError(w, err.Error(), http.StatusBadGateway)
-		return
-	}
-	writeJSON(w, v)
 }

@@ -11,7 +11,7 @@ import (
 func saveGasEndpoints(t *testing.T) {
 	t.Helper()
 	urls := []*string{&mempoolFeesURL, &mempoolStatsURL, &mempoolProjectedURL, &mempoolRecentURL,
-		&tronEnergyPricesURL, &tronBandwidthPricesURL, &tronTxByIDURL, &btcSpotURL, &spotURLFormat}
+		&tronEnergyPricesURL, &tronBandwidthPricesURL, &tronTxByIDURL, &spotURLFormat}
 	saved := make([]string, len(urls))
 	for i, p := range urls {
 		saved[i] = *p
@@ -41,7 +41,6 @@ func TestApplyCryptoGasConfig(t *testing.T) {
 		{tronEnergyPricesURL, "https://tron.example/wallet/getenergyprices"},
 		{tronBandwidthPricesURL, "https://tron.example/wallet/getbandwidthprices"},
 		{tronTxByIDURL, "https://tron.example/wallet/gettransactionbyid"},
-		{btcSpotURL, "https://cb.example/v2/prices/BTC-USD/spot"},
 		{spotURLFormat, "https://cb.example/v2/prices/%s-USD/spot"},
 	}
 	for _, c := range checks {

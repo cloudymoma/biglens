@@ -76,8 +76,6 @@ import type {
   CryptoWhalesData,
   CryptoTokensData,
   CryptoTokensLiveData,
-  CryptoMiningData,
-  CryptoSpotData,
   CryptoChain,
 } from './types';
 
@@ -461,22 +459,6 @@ export async function fetchCryptoTokens(days: number): Promise<CryptoTokensData>
 export async function fetchCryptoTokensLive(): Promise<CryptoTokensLiveData> {
   const { data } = await axios.get('/api/opendata/crypto/tokens/live');
   return data;
-}
-
-export async function fetchCryptoMining(days: number): Promise<CryptoMiningData> {
-  const { data } = await axios.get('/api/opendata/crypto/mining', { params: { days: String(days) } });
-  return data;
-}
-
-// Spot price is a convenience default for the mining calculator; on failure
-// the tab falls back to manual input, so errors resolve to null here.
-export async function fetchCryptoSpot(): Promise<CryptoSpotData | null> {
-  try {
-    const { data } = await axios.get('/api/opendata/crypto/spot');
-    return data;
-  } catch {
-    return null;
-  }
 }
 
 // opts.bqProfile opts this Ethereum lookup into the BigQuery profile (bq=1);

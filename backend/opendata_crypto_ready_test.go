@@ -249,7 +249,6 @@ var cryptoDailyEndpoints = []cryptoDailyEndpoint{
 	{"whales btc", func(h *APIHandler) http.HandlerFunc { return h.CryptoWhales }, "days=7&chain=btc", "opendata:crypto:whales:btc:7:%s", []string{"btc"}},
 	{"whales eth", func(h *APIHandler) http.HandlerFunc { return h.CryptoWhales }, "days=7&chain=eth", "opendata:crypto:whales:eth:7:%s", []string{"eth"}},
 	{"tokens", func(h *APIHandler) http.HandlerFunc { return h.CryptoTokens }, "days=7", "opendata:crypto:tokens:7:%s", []string{"eth"}},
-	{"mining", func(h *APIHandler) http.HandlerFunc { return h.CryptoMining }, "days=7", "opendata:crypto:mining:7:%s", []string{"btc"}},
 }
 
 var cryptoProbeTables = map[string]string{
@@ -366,18 +365,17 @@ func body2string(v any) string {
 	return string(b)
 }
 
-// Shared BTC sub-results (/pulse+/fees blocks, /fees→/mining coinbase) must
-// not outlive an incomplete latest day either.
+// Shared BTC sub-results (/pulse+/fees blocks) must not outlive an incomplete
+// latest day either.
 func TestCryptoSharedBtcCachesFollowReadiness(t *testing.T) {
 	_, end := cryptoWindowAt(7, time.Now().UTC())
 	start := end.AddDays(-7)
 	fake := &scriptedBQ{respond: probeScript(end, map[string]bool{"crypto_bitcoin.transactions": true}, nil)}
 	h := newScriptedBQHandler(t, fake)
 
-	getDaily(t, h, cryptoDailyEndpoints[1]) // /fees writes btc_blocks and btc_coinbase
+	getDaily(t, h, cryptoDailyEndpoints[1]) // /fees writes btc_blocks
 	for _, key := range []string{
 		"opendata:crypto:q:btc_blocks:" + start.String() + ":" + end.String(),
-		"opendata:crypto:q:btc_coinbase:" + start.String() + ":" + end.String(),
 	} {
 		if got := cacheTTLLeft(h.cache, key); !ttlNear(got, cryptoIncompleteTTL) {
 			t.Errorf("%s TTL = %v, want ~%v while BTC's latest day is incomplete", key, got, cryptoIncompleteTTL)
