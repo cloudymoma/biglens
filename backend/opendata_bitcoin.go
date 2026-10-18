@@ -297,9 +297,11 @@ var btcProviderRegistry = []btcProviderDef{
 
 type bitcoinService struct {
 	settings  btcSettings
+	store     *riskStore
 	read      btcReadStore
 	lastGood  *btcLastGood
 	prices    *btcPriceSyncer
+	binance   *binanceAdapter
 	starter   btcBaselineStarter
 	projectID string
 	now       func() time.Time
@@ -320,6 +322,7 @@ func newBitcoinService(cfg *Config) *bitcoinService {
 		settings:  s,
 		lastGood:  newBtcLastGood(),
 		prices:    newBtcPriceSyncer(nil, s, time.Now),
+		binance:   newBinanceAdapter(nil, time.Now),
 		projectID: projectID,
 		now:       time.Now,
 	}

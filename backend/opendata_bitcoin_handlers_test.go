@@ -207,20 +207,70 @@ func TestBitcoinLivePartial(t *testing.T) {
 	}
 }
 
+func stubAllBtcUpstreams(t *testing.T, url string) {
+	t.Helper()
+	origMempool := mempoolBaseURL
+	origCBStats := btcCoinbaseStatsURL
+	origCM := btcCoinMetricsBaseURL
+	origCGTreas := btcCGTreasuriesURL
+	origCGGlobal := btcCGGlobalURL
+	origCGBtc := btcCGBitcoinURL
+	origCGTick := btcCGTickersBaseURL
+	origCGDeriv := btcCGDerivativesURL
+	origFapi := btcBinanceFapiBaseURL
+	origDapi := btcBinanceDapiBaseURL
+	origOKX := btcOKXBaseURL
+	origINTX := btcCoinbaseINTXPerpURL
+	origCDE := btcCoinbaseCDEBIPURL
+	origKraken := btcKrakenFuturesTickURL
+	origHL := btcHyperliquidInfoURL
+	origDeribit := btcDeribitBaseURL
+	origCFTC := btcCFTCTFFBaseURL
+	t.Cleanup(func() {
+		applyCryptoGasConfig(CryptoGasConfig{MempoolBaseURL: origMempool})
+		btcCoinbaseStatsURL = origCBStats
+		btcCoinMetricsBaseURL = origCM
+		btcCGTreasuriesURL = origCGTreas
+		btcCGGlobalURL = origCGGlobal
+		btcCGBitcoinURL = origCGBtc
+		btcCGTickersBaseURL = origCGTick
+		btcCGDerivativesURL = origCGDeriv
+		btcBinanceFapiBaseURL = origFapi
+		btcBinanceDapiBaseURL = origDapi
+		btcOKXBaseURL = origOKX
+		btcCoinbaseINTXPerpURL = origINTX
+		btcCoinbaseCDEBIPURL = origCDE
+		btcKrakenFuturesTickURL = origKraken
+		btcHyperliquidInfoURL = origHL
+		btcDeribitBaseURL = origDeribit
+		btcCFTCTFFBaseURL = origCFTC
+		resetBtcCGRateLimitForTest()
+	})
+	applyCryptoGasConfig(CryptoGasConfig{MempoolBaseURL: url})
+	btcCoinbaseStatsURL = url
+	btcCoinMetricsBaseURL = url
+	btcCGTreasuriesURL = url
+	btcCGGlobalURL = url
+	btcCGBitcoinURL = url
+	btcCGTickersBaseURL = url
+	btcCGDerivativesURL = url
+	btcBinanceFapiBaseURL = url
+	btcBinanceDapiBaseURL = url
+	btcOKXBaseURL = url
+	btcCoinbaseINTXPerpURL = url
+	btcCoinbaseCDEBIPURL = url
+	btcKrakenFuturesTickURL = url
+	btcHyperliquidInfoURL = url
+	btcDeribitBaseURL = url
+	btcCFTCTFFBaseURL = url
+}
+
 func TestBitcoinHandlersNeverQueryBigQuery(t *testing.T) {
 	failSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
 	}))
 	defer failSrv.Close()
-
-	origMempool := mempoolBaseURL
-	origCBStats := btcCoinbaseStatsURL
-	t.Cleanup(func() {
-		applyCryptoGasConfig(CryptoGasConfig{MempoolBaseURL: origMempool})
-		btcCoinbaseStatsURL = origCBStats
-	})
-	applyCryptoGasConfig(CryptoGasConfig{MempoolBaseURL: failSrv.URL})
-	btcCoinbaseStatsURL = failSrv.URL
+	stubAllBtcUpstreams(t, failSrv.URL)
 
 	h := newTestBitcoinHandler(t)
 	// h.bq is explicitly nil: any attempt to dereference h.bq panics and fails the test.
@@ -243,15 +293,7 @@ func TestBitcoinHandlersCannotStartJobs(t *testing.T) {
 		w.WriteHeader(http.StatusBadGateway)
 	}))
 	defer failSrv.Close()
-
-	origMempool := mempoolBaseURL
-	origCBStats := btcCoinbaseStatsURL
-	t.Cleanup(func() {
-		applyCryptoGasConfig(CryptoGasConfig{MempoolBaseURL: origMempool})
-		btcCoinbaseStatsURL = origCBStats
-	})
-	applyCryptoGasConfig(CryptoGasConfig{MempoolBaseURL: failSrv.URL})
-	btcCoinbaseStatsURL = failSrv.URL
+	stubAllBtcUpstreams(t, failSrv.URL)
 
 	h := newTestBitcoinHandler(t)
 	h.bq = nil
