@@ -11,9 +11,15 @@ import type {
   BtcMiningPeriod,
   BtcOnchainData,
   BtcOnchainHoldersData,
+  BtcOverviewData,
   BtcValuationData,
   BtcValuationRange,
 } from './types';
+
+export const fetchBitcoinOverview = async (): Promise<BtcOverviewData> => {
+  const { data } = await axios.get<BtcOverviewData>('/api/opendata/bitcoin/overview');
+  return data;
+};
 
 export const fetchBitcoinMeta = async (): Promise<BtcMetaData> => {
   const { data } = await axios.get<BtcMetaData>('/api/opendata/bitcoin/meta');

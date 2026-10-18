@@ -11,6 +11,7 @@ import FeesTab from './FeesTab';
 import HoldersTab from './HoldersTab';
 import MarketsTab from './MarketsTab';
 import MiningTab from './MiningTab';
+import OverviewTab from './OverviewTab';
 import ValuationTab from './ValuationTab';
 
 const WINDOWS = [
@@ -20,9 +21,10 @@ const WINDOWS = [
   { label: '1Y', days: 365 },
 ] as const;
 
-type BitcoinTabID = 'markets' | 'valuation' | 'holders' | 'fees' | 'mining';
+type BitcoinTabID = 'overview' | 'markets' | 'valuation' | 'holders' | 'fees' | 'mining';
 
 const TABS: { id: BitcoinTabID; label: string }[] = [
+  { id: 'overview', label: 'Overview' },
   { id: 'markets', label: 'Markets' },
   { id: 'valuation', label: 'Valuation' },
   { id: 'holders', label: 'Holders & Flows' },
@@ -31,9 +33,10 @@ const TABS: { id: BitcoinTabID; label: string }[] = [
 ];
 
 export default function BitcoinDashboard() {
-  const [activeTab, setActiveTab] = useState<BitcoinTabID>('markets');
+  const [activeTab, setActiveTab] = useState<BitcoinTabID>('overview');
   const [mountedTabs, setMountedTabs] = useState<Record<BitcoinTabID, boolean>>({
-    markets: true,
+    overview: true,
+    markets: false,
     valuation: false,
     holders: false,
     fees: false,
@@ -126,6 +129,15 @@ export default function BitcoinDashboard() {
       </div>
 
       {/* Lazy-mounted Tab Panels */}
+      {mountedTabs.overview && (
+        <div className={activeTab === 'overview' ? 'block' : 'hidden'}>
+          <OverviewTab
+            bqControl={bqControl}
+            bigquery={bigquery}
+            refreshTick={refreshTick}
+          />
+        </div>
+      )}
       {mountedTabs.markets && (
         <div className={activeTab === 'markets' ? 'block' : 'hidden'}>
           <MarketsTab refreshTick={refreshTick} />

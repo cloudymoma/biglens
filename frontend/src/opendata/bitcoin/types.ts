@@ -724,3 +724,101 @@ export interface BtcMiningData {
   sources: BtcSourceStatus[];
 }
 
+export interface BtcOverviewConcentration {
+  pool_period: string;
+  pool_nakamoto: BtcConcentrationMetric;
+  pool_hhi: BtcConcentrationMetric;
+  node_reachable: number;
+  node_clearnet: number;
+  node_clearnet_share_pct: number | null;
+  node_country_nakamoto?: BtcConcentrationMetric;
+  node_asn_nakamoto?: BtcConcentrationMetric;
+  node_asn_hhi?: BtcConcentrationMetric;
+  node_cloud_share?: BtcConcentrationMetric;
+}
+
+export interface BtcOverviewCards {
+  close_usd: number | null;
+  market_cap_usd: number | null;
+  dominance_pct: number | null;
+  drawdown_pct: number | null;
+  ath_usd: number | null;
+  ath_date?: string;
+  rv30: number | null;
+  dvol: number | null;
+  vrp: number | null;
+  funding_oi_weighted_apr: number | null;
+  total_oi_usd: number | null;
+  major_deriv_spot: number | null;
+  all_reported_deriv_spot: number | null;
+  all_reported_unverified: boolean;
+  mayer: number | null;
+  mayer_pctl_since_2011: number | null;
+  cm_mvrv: number | null;
+  cm_mvrv_pctl_since_2011: number | null;
+  biglens_mvrv?: number | null;
+  mvrv_delta_pct?: number | null;
+  realized_price_blocked?: string;
+  hashprice_usd_per_ph_day: number | null;
+  hashprice_btc_per_ph_day: number | null;
+  exchange_net_flow_7d_usd: number | null;
+  exchange_net_flow_7d_btc: number | null;
+  exchange_flow_flash?: boolean;
+  concentration: BtcOverviewConcentration;
+}
+
+export interface BtcRegimeSignal {
+  id: string;
+  label: string;
+  state: string;
+  summary: string;
+  rule: string;
+}
+
+export interface BtcOverviewSupply {
+  tip_height: number;
+  scheduled_supply_btc: number;
+  max_supply_btc: number;
+  mined_pct: number;
+  subsidy_btc: number;
+  annual_issuance_btc: number;
+  annual_inflation_pct: number;
+  exchange_balance_btc: number | null;
+  exchange_balance_pct: number | null;
+  treasuries_btc: number | null;
+  treasuries_pct: number | null;
+  treasuries_companies: number;
+}
+
+export interface BtcOverviewSentiment {
+  fear_greed_value?: number | null;
+  fear_greed_class?: string;
+  fear_greed_history: BtcFnGPoint[];
+}
+
+export interface BtcVerificationRow {
+  id: string;
+  label: string;
+  date?: string;
+  unit: string;
+  api_label: string;
+  api_value: number | null;
+  chain_label: string;
+  chain_value: number | null;
+  delta_pct?: number | null;
+  status: string;
+  note?: string;
+}
+
+export interface BtcOverviewData {
+  as_of: string;
+  cards: BtcOverviewCards;
+  price_chart: BtcValuationPoint[];
+  signals: BtcRegimeSignal[];
+  supply: BtcOverviewSupply;
+  sentiment: BtcOverviewSentiment;
+  verification: BtcVerificationRow[];
+  sources: BtcSourceStatus[];
+}
+
+
