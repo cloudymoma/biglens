@@ -10,6 +10,7 @@ import SourceBadge from './SourceBadge';
 import FeesTab from './FeesTab';
 import HoldersTab from './HoldersTab';
 import MarketsTab from './MarketsTab';
+import ValuationTab from './ValuationTab';
 
 const WINDOWS = [
   { label: '30D', days: 30 },
@@ -18,10 +19,11 @@ const WINDOWS = [
   { label: '1Y', days: 365 },
 ] as const;
 
-type BitcoinTabID = 'markets' | 'holders' | 'fees';
+type BitcoinTabID = 'markets' | 'valuation' | 'holders' | 'fees';
 
 const TABS: { id: BitcoinTabID; label: string }[] = [
   { id: 'markets', label: 'Markets' },
+  { id: 'valuation', label: 'Valuation' },
   { id: 'holders', label: 'Holders & Flows' },
   { id: 'fees', label: 'Fees & Block Space' },
 ];
@@ -30,6 +32,7 @@ export default function BitcoinDashboard() {
   const [activeTab, setActiveTab] = useState<BitcoinTabID>('markets');
   const [mountedTabs, setMountedTabs] = useState<Record<BitcoinTabID, boolean>>({
     markets: true,
+    valuation: false,
     holders: false,
     fees: false,
   });
@@ -123,6 +126,15 @@ export default function BitcoinDashboard() {
       {mountedTabs.markets && (
         <div className={activeTab === 'markets' ? 'block' : 'hidden'}>
           <MarketsTab refreshTick={refreshTick} />
+        </div>
+      )}
+      {mountedTabs.valuation && (
+        <div className={activeTab === 'valuation' ? 'block' : 'hidden'}>
+          <ValuationTab
+            bqControl={bqControl}
+            bigquery={bigquery}
+            refreshTick={refreshTick}
+          />
         </div>
       )}
       {mountedTabs.holders && (

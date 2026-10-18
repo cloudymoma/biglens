@@ -480,3 +480,83 @@ export interface BtcMarketsData {
   caveats: string[];
   sources: BtcSourceStatus[];
 }
+
+export type BtcValuationRange = '1y' | '4y' | 'all';
+
+export interface BtcFnGPoint {
+  date: string;
+  value: number;
+  classification: string;
+}
+
+export interface BtcHalvingCyclePoint {
+  day: number;
+  date: string;
+  indexed: number;
+  price: number;
+}
+
+export interface BtcHalvingCycleSeries {
+  epoch: number;
+  halving_date: string;
+  label: string;
+  base_price: number;
+  points: BtcHalvingCyclePoint[];
+}
+
+export interface BtcValuationPoint {
+  date: string;
+  close_usd: number;
+  sma200?: number | null;
+  wma200?: number | null;
+  wma200_monthly_pct?: number | null;
+  mayer?: number | null;
+  drawdown_pct: number;
+  cm_mvrv?: number | null;
+  biglens_mvrv?: number | null;
+  mvrv_delta_pct?: number | null;
+  puell_cm?: number | null;
+  puell_chain?: number | null;
+  realized_price_usd?: number | null;
+  sth_realized_price_usd?: number | null;
+  lth_realized_price_usd?: number | null;
+}
+
+export interface BtcValuationLatest {
+  date: string;
+  close_usd: number | null;
+  ath_usd: number | null;
+  ath_date?: string;
+  drawdown_pct: number | null;
+  sma200: number | null;
+  wma200: number | null;
+  wma200_monthly_pct: number | null;
+  mayer: number | null;
+  mayer_pctl_since_2011: number | null;
+  cm_mvrv: number | null;
+  cm_mvrv_pctl_since_2011: number | null;
+  biglens_mvrv?: number | null;
+  mvrv_delta_pct?: number | null;
+  puell_cm: number | null;
+  puell_chain?: number | null;
+  realized_price_usd?: number | null;
+  sth_realized_price_usd?: number | null;
+  lth_realized_price_usd?: number | null;
+  realized_price_blocked?: string;
+  halving_cycle_day?: number | null;
+  fear_greed_value?: number | null;
+  fear_greed_class?: string;
+}
+
+export interface BtcValuationData {
+  as_of: string;
+  range: BtcValuationRange;
+  warming_up: boolean;
+  price_coverage: BtcPriceCoverage;
+  latest: BtcValuationLatest;
+  series: BtcValuationPoint[];
+  cycles: BtcHalvingCycleSeries[];
+  fear_greed: BtcFnGPoint[];
+  sources: BtcSourceStatus[];
+}
+

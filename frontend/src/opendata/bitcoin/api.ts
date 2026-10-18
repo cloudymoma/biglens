@@ -9,6 +9,8 @@ import type {
   BtcMetaData,
   BtcOnchainData,
   BtcOnchainHoldersData,
+  BtcValuationData,
+  BtcValuationRange,
 } from './types';
 
 export const fetchBitcoinMeta = async (): Promise<BtcMetaData> => {
@@ -23,6 +25,11 @@ export const fetchBitcoinLive = async (): Promise<BtcLiveData> => {
 
 export const fetchBitcoinMarkets = async (): Promise<BtcMarketsData> => {
   const { data } = await axios.get<BtcMarketsData>('/api/opendata/bitcoin/markets');
+  return data;
+};
+
+export const fetchBitcoinValuation = async (range: BtcValuationRange): Promise<BtcValuationData> => {
+  const { data } = await axios.get<BtcValuationData>('/api/opendata/bitcoin/valuation', { params: { range } });
   return data;
 };
 
