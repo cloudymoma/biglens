@@ -315,33 +315,70 @@ provisional 4-day tail on the trend chart.
 A dedicated Bitcoin intelligence dashboard combining keyless public APIs with
 optional, operator-controlled on-chain accounting over
 `bigquery-public-data.crypto_bitcoin`. A 30-second live ticker strip sits above
-two lazily-mounted tabs:
+six lazily-mounted tabs:
 
 | Tab | Public API Panels (always free) | BigQuery On-Chain Panels (operator opt-in, read from SQLite) |
 |---|---|---|
+| **Overview** | **10 Headline KPI Cards** (Market Cap + Dominance, Drawdown from ATH, RV30 vs. Deribit DVOL + VRP, OI-weighted Funding APR + Curated OI, Curated vs. All-Reported Derivatives/Spot Ratio, Mayer Multiple + percentile since 2011, Coin Metrics MVRV + percentile, Hashprice USD & BTC per PH/s/day, 7d Exchange Net Flow, and a two-row **Concentration** card showing pool Nakamoto/HHI and clearnet node Country/ASN Nakamoto in separate rows with their own denominator and method), **1Y Log Price + 200DMA + 200WMA**, **7 Descriptive Regime Indicators** (Trend, Valuation, Miner Hash Ribbon, Leverage, Volatility, Consolidation Fee Window, Exchange Flows), **Supply, Issuance & Custodial Footprint**, and **Market Sentiment (Fear & Greed Index)** | **Realized Price** overlay on the 1Y log price chart (baseline-gated) and the **API vs. On-Chain Verification Table** (8 metrics cross-checking mempool.space & Coin Metrics against BigQuery `crypto_bitcoin` rollups + CSV export; circulating supply and MVRV show `needs baseline` until a UTXO baseline exists) |
+| **Markets** | **Spot Exchange Table** (curated major venues: Coinbase, Kraken, Binance, OKX, Bitstamp, Bybit, Upbit with ±2% order-book depth for Coinbase/Kraken/Binance/OKX, plus collapsible all-reported venues labeled `unverified`), **Derivatives Venue Table** (Binance `BTCUSDT`/`BTCUSD_PERP`, OKX, Bybit, Hyperliquid, Deribit, Coinbase INTX, CME reference with OI, 24h volume, funding rate + annualized APR, basis %; CoinGecko-sourced funding suppressed unless unit-verified), **Dated Futures Basis Curve** (Deribit, OKX, Binance Coin-M), **8h Funding History** (OKX, Binance, Deribit), **Realized vs. Implied Volatility (RV30 / RV90 / Deribit DVOL)**, and **CFTC COT CME Bitcoin Positioning** (Dealer, Asset Manager, Leveraged Funds, Other Reportables net contracts & % of OI + CSV exports) | *(Pure market-structure tab — zero BigQuery dependency)* |
+| **Valuation** | **Long-Term Cycle Chart (`1y` / `5y` / `all`)** (log price, 200DMA, 200WMA, 4-year halving vertical markers), **Mayer Multiple** with historical percentile bands (`0.8` / `1.4` / `2.4`), **MVRV Ratio** (`Coin Metrics CapMVRVCur` primary curve + percentile since 2011), **Hash Ribbon** (30d vs. 60d hashrate SMA with capitulation shading and recovery signals), **Puell Multiple** (daily issuance USD ÷ 365d MA from mempool.space), **Halving Epoch Progress & Post-Halving Indexed Return Curves** (Epochs 2, 3, 4, 5 indexed to `1.0` at each halving day), and **Return Seasonality Heatmap** (monthly & quarterly returns since 2011) | **BigLens On-Chain Realized Price** overlay on the cycle chart, **BigLens On-Chain MVRV** comparison curve & Δ badge against Coin Metrics, and **Puell Multiple On-Chain Cross-Check** badge |
 | **Holders & Flows** | **Exchange Flows & Balance** (`FlowInExUSD`, `FlowOutExUSD`, net flow, `SplyExNtv` and % of supply from Coin Metrics Community; `flash` rows flagged `Provisional`), **Public Corporate Treasuries** (top 20 companies + CSV export via CoinGecko) | **UTXO Baseline & Supply Reconciliation** card, **Coin Days Destroyed (CDD) & Dormancy**, **Revived Old Supply** (≥ 1Y / 2Y / 5Y), **Spent-Output Age Shares** (12 age bands), **SOPR** (All / aSOPR excl. `<1d` / STH / LTH, price-gated), **Dormant Whale Revivals** (top 20/day, ≥ 10 BTC, age ≥ 1Y + CSV export), plus baseline-backed **HODL Waves**, **LTH/STH Supply** (155-day split), **Realized Cap & Realized Price Cohorts**, **Supply in Profit %**, and **BigLens On-Chain MVRV** |
 | **Fees & Block Space** | Embedded live **GasLiveBar** (`btc` mode), **UTXO Consolidation Window** detector (economy fee ≤ 5 sat/vB and backlog ≤ 3 blocks), **Transaction Cost Calculator** (6 templates from 140 vB transfer to 3,442 vB 50-in consolidation), **Mempool Backlog History** (6 fee bands from mempool.space 39-level histogram), **Mined-Block Fee Rate Percentiles** (p10–p90) | **Daily Tx-Weighted Fee Rate Percentiles & Miner Fee Revenue**, **Block-Space VByte Composition** (standard payment, consolidation, batch payout, inscription-like witness heuristic, Runes, OP_RETURN, coinbase), **Witness Share & OP_RETURN / Runestone Telemetry**, **Script-Type Adoption** (P2TR, P2WPKH, P2WSH, P2SH, P2PKH, Pay-to-Anchor), and **Output Payment-Size Bands** |
+| **Mining & Security** | **Hashrate (`3m` / `1y` / `3y`) & Difficulty Ribbon**, **Miner Revenue Composition** (subsidy vs. fees in BTC & USD, fee share of security budget), **Hashprice** (`$/PH/day` and `BTC/PH/day`), **Interactive Rig Economics & Shutdown Price Calculator** (S19 XP, S21, S21 Pro, M60S + custom rig with editable electricity $/kWh, PUE, pool fee %, BTC price override), **Mining Pool Attribution** (`24h` / `3d` / `1w` / `1m` / `1y` with pool Nakamoto coefficient & HHI), and **Reachable Node Distribution** (Bitnodes + DB-IP Lite: IPv4 / IPv6 / Tor `.onion` / I2P / CJDNS mix, client families & top versions, clearnet world choropleth map, top 20 ASNs with cloud-provider classification, and clearnet Country / ASN Nakamoto & HHI chips + CSV exports) | **On-Chain Miner Verification** badges comparing mempool.space 7d hashrate, daily block count, and miner revenue against BigQuery `crypto_bitcoin` rollups |
 
 #### Public API providers & licenses
 
-All six public providers are keyless and can be toggled individually under
+All 14 public providers are keyless and can be toggled individually under
 `bitcoin.providers` in `conf.yaml`:
 
 | Provider | Config Key | Used For | License / Terms |
 |---|---|---|---|
-| **mempool.space** | `mempool` | Live fees, mempool vMB histogram, block fee-rate percentiles, difficulty retarget, 1w hashrate | Public API (fair use) |
-| **Coinbase Exchange** | `coinbase` | Live BTC-USD spot stats and daily OHLCV candles (primary price source from 2015-07-20) | Public market data |
-| **Kraken** | `kraken` | Fallback daily BTC-USD OHLCV increment | Public market data |
-| **Coin Metrics Community** | `coinmetrics` | Exchange inflows/outflows, exchange BTC supply, reference supply (`SplyCur`), historical price fallback | **CC BY-NC 4.0 (non-commercial)** — commercial deployments must set `bitcoin.providers.coinmetrics: false` |
-| **CoinGecko** | `coingecko` | Public company Bitcoin treasuries (`/companies/public_treasury/bitcoin`) | Attribution required |
+| **mempool.space** | `mempool` | Live fees, mempool vMB histogram, block fee-rate percentiles, difficulty retarget, hashrate (`1w`/`3m`/`1y`/`3y`), mining pools, daily reward stats | Public API (fair use) |
+| **Coinbase (Exchange / INTX / CDE)** | `coinbase` | Live BTC-USD spot stats, ±2% book depth, daily OHLCV candles (primary price source from 2015-07-20), INTX perpetual | Public market data |
+| **Kraken** | `kraken` | Spot stats, ±2% book depth, fallback daily BTC-USD OHLCV increment | Public market data |
+| **Coin Metrics Community** | `coinmetrics` | Exchange inflows/outflows, exchange BTC supply (`SplyExNtv`), reference supply (`SplyCur`), MVRV (`CapMVRVCur`), active addresses (`AdrActCnt`), historical price fallback | **CC BY-NC 4.0 (non-commercial, attribution required)** — commercial deployments must set `bitcoin.providers.coinmetrics: false` |
+| **CoinGecko** | `coingecko` | Global market cap & dominance, ATH, multi-venue spot & derivatives tickers (`/coins/bitcoin/tickers`, `/derivatives` stream-decoded), public company Bitcoin treasuries (`/companies/public_treasury/bitcoin`) | Attribution required ("Data powered by CoinGecko") |
 | **blockchain.com** | `blockchain_com` | Historical daily BTC-USD bootstrap (`2010-08-18` to `2015-07-19`) | Public chart data |
+| **Deribit** | `deribit` | `BTC-PERPETUAL`, dated futures basis curve, 8h funding history, and 30d implied volatility index (`DVOL`) | Public market data |
+| **OKX** | `okx` | Spot (`BTC-USDT`), ±2% book depth, `BTC-USDT-SWAP` / `BTC-USD-SWAP`, dated futures basis curve, 8h funding history | Public market data |
+| **Binance (`auto` / `direct` / `coingecko_only` / `off`)** | `binance` | Spot (`BTCUSDT`), ±2% book depth, USDT-M (`fapi`) & Coin-M (`dapi`) perpetuals and dated futures, 8h funding history | Public market data; `auto` mode switches to `coingecko_only` for 24h on HTTP `451` / `403` |
+| **Hyperliquid** | `hyperliquid` | On-chain BTC perpetual (`metaAndAssetCtxs`: mark/oracle price, OI, 24h volume, 1h funding rate normalized to 8h & APR) | Public API |
+| **CFTC Commitments of Traders (Socrata)** | `cftc` | Weekly CME Bitcoin futures (`133741`) Traders in Financial Futures positioning (Dealer, Asset Manager, Leveraged Funds, Other Reportables) | Public domain (U.S. Government) |
+| **alternative.me** | `alternative_me` | Daily Crypto Fear & Greed Index (0–100 + 30d history) | Attribution required ("Source: alternative.me") |
+| **Bitnodes** | `bitnodes` | Reachable Bitcoin P2P node snapshots (`snapshots/latest/` with allowlisted redirect to `btcnodes.io`) | Public API |
+| **DB-IP Lite** | `dbip` | Monthly MMDB (`dbip-country-lite`, `dbip-asn-lite`) for local clearnet node country & ASN/cloud classification | **CC BY 4.0** — requires attribution *"IP geolocation by DB-IP"* Linking to [db-ip.com](https://db-ip.com) |
 
-Daily USD closes (`btc_price_daily` in `data/security.db`) are synced via HTTP
-only (zero BigQuery cost). Valuation metrics that depend on historical cost basis
-(SOPR, Realized Cap, Realized Price, LTH/STH Realized Price, MVRV, Supply in
-Profit) are **price-gated**: if any day since `2010-08-18` is missing, those
-fields return `null` with `blocked: "price_history_incomplete (...)"` rather
-than silently undercounting.
+- **Binance regional fallback (`auto` mode).** Binance endpoints (`api.binance.com`,
+  `fapi.binance.com`, `dapi.binance.com`) return HTTP `451` in some regions. When
+  `bitcoin.providers.binance` is set to `"auto"` (the default), BigLens probes
+  direct endpoints first and, upon receiving HTTP `451` or `403`, automatically
+  caches a 24-hour regional cooldown and serves Binance spot and derivatives rows
+  from CoinGecko's aggregated feeds (badged `Binance (via CoinGecko)` in the UI;
+  ±2% direct order-book depth and Binance dated-futures curve points are omitted
+  while in fallback mode).
+- **Historical price gate.** Daily USD closes (`btc_price_daily` in
+  `data/security.db`) are synced via HTTP only (zero BigQuery cost). Valuation
+  metrics that depend on historical cost basis (SOPR, Realized Cap, Realized
+  Price, LTH/STH Realized Price, MVRV, Supply in Profit) are **price-gated**: if
+  any day since `2010-08-18` is missing, those fields return `null` with
+  `blocked: "price_history_incomplete (...)"` rather than silently undercounting.
+- **Node-distribution caveats & concentration presentation rule.**
+  1. Bitnodes measures **reachable listening nodes** (nodes accepting inbound TCP
+     connections), not the full population of private/non-listening full nodes.
+  2. **Tor (`.onion`), I2P (`.b32.i2p`), and CJDNS (`fc00::/8`)** nodes have no
+     physical IP geolocation or ASN; country and ASN breakdowns apply strictly to
+     **clearnet (`IPv4 + IPv6`)** nodes, and the clearnet share of all reachable
+     nodes is displayed on every chip.
+  3. **ASN / cloud hosting ≠ operator ownership** (a node running on AWS, Hetzner,
+     or OVHcloud is operated by a user renting infrastructure, not by the hosting
+     provider), and DB-IP Lite country resolution is approximate.
+  4. **Separate layers, never merged:** Mining pool attribution (% of blocks mined)
+     and reachable node distribution (% of clearnet listening nodes) measure
+     different protocol layers with different denominators and biases. Every
+     Nakamoto coefficient ($N_{51} = \min\{k : \sum_{i=1}^{k} s_i > 0.50\}$) and
+     Herfindahl–Hirschman Index ($\text{HHI} = \sum_i (100 \cdot s_i)^2 \in [0, 10000]$)
+     travels with its `denominator`, `unit`, `coverage_pct`, and `method`, sits in
+     its own row, and is never combined or ranked against the other layer.
 
 #### BigQuery controls, budget reservations & CLI commands
 
@@ -364,11 +401,14 @@ than silently undercounting.
   - **Job C (`btc_utxo_baseline` full unspent UTXO snapshot by creation day):**
     ~687 GiB (~`$4.20` per run), operator-triggered via CLI.
 - **Cross-process atomic reservations.** Before any BigQuery query runs, both the
-  server and CLI reserve the dry-run bytes inside a `BEGIN IMMEDIATE` SQLite
+  server and CLI reserve the query's `MaximumBytesBilled` upper bound (`1.25×`
+  dry-run estimate, capped by `max_gib_per_run`) inside a `BEGIN IMMEDIATE` SQLite
   transaction (`btc_reservations`), attach the BigQuery job ID before waiting,
-  and settle actual `totalBytesBilled` into `btc_budget` on completion. If a
-  process crashes mid-query, `recoverStale` inspects the attached BigQuery job
-  metadata (`0` bytes billed) and settles or releases the reservation.
+  and settle actual `totalBytesBilled` into `btc_budget` on completion using a
+  cancellation-detached context. Hourly `recoverStale` inspects any expired
+  reservation via BigQuery `jobs.get` (`0` bytes billed) to settle actual billed
+  bytes—or conservatively settles `reserved_bytes` if the process crashed before
+  a job ID was recorded.
 - **6-hour timestamp-inversion slack & exact satoshi accounting.** Because
   Bitcoin block timestamps only need to exceed the median of the previous 11
   blocks (MTP-11) and can lead wall-clock time by up to 2 hours, blocks around
@@ -418,7 +458,9 @@ Ethereum, Arbitrum, Optimism, Base, Polygon, TRON and Solana, powered by
 that trail the chain head by seconds — Bitcoin by about one block — see
 [Data source notes](#data-source-notes-2026-sqd-migration); daily analytical
 endpoints align to settled complete UTC days) plus live public RPCs and indexers.
-Seven lazily-loaded tabs:
+Six lazily-loaded tabs (Bitcoin mining economics, rig profitability, pool attribution,
+and node distribution now live in the dedicated **[Bitcoin](#bitcoin)** dashboard's
+**Mining & Security** tab):
 
 | Tab | Widgets |
 |---|---|
@@ -426,12 +468,11 @@ Seven lazily-loaded tabs:
 | **Fee Market** | **72h Gas Pulse** (default): last 72 complete UTC hours for Bitcoin, Ethereum, Arbitrum, Optimism, Polygon, TRON and Solana — hourly fee band + load chart, latest-hour 72h percentile, 72h low/high/median, all-time base-fee records (incremental BigQuery scan from a pre-seeded baseline, refreshed daily; stale records and failed refreshes are flagged on the cards with the date the records are verified through) and TRON energy price history (TronGrid). Selecting Bitcoin or TRON adds a live bar refreshed every 30s (paused while the tab is hidden): BTC precise fee tiers (sub-1 sat/vB, USD per 140 vB transfer) and mempool backlog by fee band (mempool.space), or the TRX burned by a USDT transfer to an existing vs. new address (TronGrid prices, Coinbase spot). The Bitcoin bar also shows a block conveyor (next three projected blocks vs. the five latest mined), and selecting Ethereum, Arbitrum or Optimism shows an L1-vs-L2 ladder: full cost of an ETH and a USDC transfer on Ethereum, Arbitrum One, Optimism and Base — L2 execution plus unpadded L1 data fee (GasPriceOracle / NodeInterface) — with USD and savings vs. L1. Transfer profiles are measured daily rather than assumed — USDT energy and bandwidth from the last 24h of TRON transfers (BigQuery + TronGrid), USDC transfer gas as the 6h median on Ethereum — and every endpoint can be overridden in an optional `crypto_gas` section of `conf.yaml` (Ethereum RPCs are tried in order). **Daily Economics**: BTC median sat/vB vs ETH avg gwei trend, BTC miner revenue (subsidy vs fees), ETH EIP-1559 burned vs tips, congestion-vs-fee scatter, with `≈ $` equivalents at the on-chain daily price |
 | **Whales & Flow** | Top 50 largest transfers (explorer links), whale-sized tx trend (≥100 BTC / ≥1,000 ETH), top receiving addresses, top-1% value concentration (among value-bearing txs) |
 | **Token Economy** | Top 25 token contracts by Transfer event count (ERC-20 & ERC-721), token vs native activity, new contract deployments, token movement treemap |
-| **Mining Economics** | Network hashrate (7d avg + 1d implied), miner revenue, yield per TH/s, rig economics for the latest day, shutdown price by rig (editable electricity, PUE, pool fee, BTC price, custom rig) |
 | **Payment Check** | Live receiving-address verification for USDT, USDC, ETH, TRX, BTC and SOL across Ethereum, Arbitrum, Optimism, Base, TRON, Bitcoin and Solana — finality-graded balances, latest incoming settlement progress (`DANGER` / `SOFT` / `SAFE` → `FINALIZED`), official vs. bridged/counterfeit token verification, 7-day transfer history with address-poisoning & BIP-125 RBF detection, independent payer risk screening, and an EIP-7702 delegation alert for your own EVM address — see [Payment Check](#payment-check-receiving-address-verification) below |
 | **Address Risk** | Multi-chain address risk-clue lookup (Ethereum, Arbitrum, Optimism, Base, TRON, Bitcoin, Solana), live issuer & SPL freeze checks, EIP-7702 delegation detection, serial counterfeit-deployer intelligence, an opt-in BigQuery address profile (Ethereum), freeze-history overview, **Scam Radar** (30-day ETH/TRON address-poisoning & fake-token intelligence, top counterfeit contracts and deployers, BTC explicit RBF share), and sources table — see [Address Risk](#address-risk-multi-chain-address-risk-clues) below |
 
 Ranges: 7/30/90 days everywhere, plus 1 year for the slim aggregate trends
-(pulse, fees, mining); token queries cap at 30 days. Daily endpoints align their
+(pulse, fees); token queries cap at 30 days. Daily endpoints align their
 window to settled UTC days (with a 20-minute post-midnight ingest buffer) and
 cache results until the next UTC day rollover — but only after a cheap per-chain
 readiness probe (~2–8 MB, cached 5 minutes) confirms the source has ingested past
