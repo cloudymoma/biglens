@@ -377,3 +377,118 @@ func fetchBlockFeeRates(ctx context.Context, period string) ([]BtcBlockFeeRatePo
 	}
 	return out, ""
 }
+
+type btcMempoolHashratePoint struct {
+	Timestamp   int64   `json:"timestamp"`
+	AvgHashrate float64 `json:"avgHashrate"`
+}
+
+type btcMempoolDifficultyPoint struct {
+	Time       int64   `json:"time"`
+	Height     int64   `json:"height"`
+	Difficulty float64 `json:"difficulty"`
+	Adjustment float64 `json:"adjustment"`
+}
+
+type btcMempoolHashrateResp struct {
+	Hashrates         []btcMempoolHashratePoint   `json:"hashrates"`
+	Difficulty        []btcMempoolDifficultyPoint `json:"difficulty"`
+	CurrentHashrate   float64                     `json:"currentHashrate"`
+	CurrentDifficulty float64                     `json:"currentDifficulty"`
+}
+
+type btcMempoolBlockRewardPt struct {
+	AvgHeight  int64   `json:"avgHeight"`
+	Timestamp  int64   `json:"timestamp"`
+	AvgRewards float64 `json:"avgRewards"`
+}
+
+// BtcRewardStats144 summarizes miner rewards and fee share over the last 144 blocks.
+type BtcRewardStats144 struct {
+	StartBlock      int64   `json:"start_block"`
+	EndBlock        int64   `json:"end_block"`
+	TotalRewardSats int64   `json:"total_reward_sats"`
+	TotalRewardBTC  float64 `json:"total_reward_btc"`
+	TotalFeeSats    int64   `json:"total_fee_sats"`
+	TotalFeeBTC     float64 `json:"total_fee_btc"`
+	SubsidySats     int64   `json:"subsidy_sats"`
+	SubsidyBTC      float64 `json:"subsidy_btc"`
+	FeeSharePct     float64 `json:"fee_share_pct"`
+	TotalTx         int64   `json:"total_tx"`
+}
+
+func normalizeMempoolMiningPeriod(period string) string {
+	switch strings.ToLower(strings.TrimSpace(period)) {
+	case "3m", "1y", "3y":
+		return strings.ToLower(strings.TrimSpace(period))
+	default:
+		return "1y"
+	}
+}
+
+func fetchMempoolMiningHashrate(ctx context.Context, period string) (*btcMempoolHashrateResp, string) {
+	p := normalizeMempoolMiningPeriod(period)
+	var out btcMempoolHashrateResp
+	if code := btcGetJSON(ctx, btcMempoolEndpoint("/api/v1/mining/hashrate/"+p), btcDefaultMaxBody, &out); code != "" {
+		return nil, code
+	}
+	return &out, ""
+}
+
+func fetchMempoolBlockRewards(ctx context.Context, period string) ([]btcMempoolBlockRewardPt, string) {
+	p := normalizeMempoolMiningPeriod(period)
+	var out []btcMempoolBlockRewardPt
+	if code := btcGetJSON(ctx, btcMempoolEndpoint("/api/v1/mining/blocks/rewards/"+p), btcDefaultMaxBody, &out); code != "" {
+		return nil, code
+	}
+	return out, ""
+}
+
+func parseMempoolFlexInt64(v any) int64 {
+	switch x := v.(type) {
+	case string:
+		x = strings.TrimSpace(x)
+		if n, err := strconv.ParseInt(x, 10, 64); err == nil {
+			return n
+		}
+		if f, err := strconv.ParseFloat(x, 64); err == nil {
+			return int64(math.Round(f))
+		}
+	case float64:
+		return int64(math.Round(x))
+	}
+	return 0
+}
+
+func fetchMempoolRewardStats144(ctx context.Context) (*BtcRewardStats144, string) {
+	var raw struct {
+		StartBlock  int64 `json:"startBlock"`
+		EndBlock    int64 `json:"endBlock"`
+		TotalReward any   `json:"totalReward"`
+		TotalFee    any   `json:"totalFee"`
+		TotalTx     any   `json:"totalTx"`
+	}
+	if code := btcGetJSON(ctx, btcMempoolEndpoint("/api/v1/mining/reward-stats/144"), btcDefaultMaxBody, &raw); code != "" {
+		return nil, code
+	}
+	rewardSats := parseMempoolFlexInt64(raw.TotalReward)
+	feeSats := parseMempoolFlexInt64(raw.TotalFee)
+	txs := parseMempoolFlexInt64(raw.TotalTx)
+	if rewardSats <= 0 {
+		return nil, "bad_response"
+	}
+	subSats := max(rewardSats-feeSats, 0)
+	feeShare := float64(feeSats) / float64(rewardSats) * 100.0
+	return &BtcRewardStats144{
+		StartBlock:      raw.StartBlock,
+		EndBlock:        raw.EndBlock,
+		TotalRewardSats: rewardSats,
+		TotalRewardBTC:  float64(rewardSats) / 1e8,
+		TotalFeeSats:    feeSats,
+		TotalFeeBTC:     float64(feeSats) / 1e8,
+		SubsidySats:     subSats,
+		SubsidyBTC:      float64(subSats) / 1e8,
+		FeeSharePct:     feeShare,
+		TotalTx:         txs,
+	}, ""
+}

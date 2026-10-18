@@ -120,6 +120,7 @@ func bitcoinRoutes(h *APIHandler) []bitcoinRoute {
 		{Pattern: "/api/opendata/bitcoin/valuation", Handler: h.BitcoinValuation, Gzip: true},
 		{Pattern: "/api/opendata/bitcoin/holders", Handler: h.BitcoinHolders, Gzip: true},
 		{Pattern: "/api/opendata/bitcoin/fees", Handler: h.BitcoinFees, Gzip: true},
+		{Pattern: "/api/opendata/bitcoin/mining", Handler: h.BitcoinMining, Gzip: true},
 		{Pattern: "/api/opendata/bitcoin/onchain", Handler: h.BitcoinOnchain, Gzip: true},
 		{Pattern: "/api/opendata/bitcoin/onchain/holders", Handler: h.BitcoinOnchainHolders, Gzip: true},
 		{Pattern: "/api/opendata/bitcoin/onchain/baseline", Handler: h.BitcoinBaseline, Gzip: false},
