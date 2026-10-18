@@ -7,6 +7,8 @@ import type {
   BtcLiveData,
   BtcMarketsData,
   BtcMetaData,
+  BtcMiningData,
+  BtcMiningPeriod,
   BtcOnchainData,
   BtcOnchainHoldersData,
   BtcValuationData,
@@ -30,6 +32,11 @@ export const fetchBitcoinMarkets = async (): Promise<BtcMarketsData> => {
 
 export const fetchBitcoinValuation = async (range: BtcValuationRange): Promise<BtcValuationData> => {
   const { data } = await axios.get<BtcValuationData>('/api/opendata/bitcoin/valuation', { params: { range } });
+  return data;
+};
+
+export const fetchBitcoinMining = async (period: BtcMiningPeriod): Promise<BtcMiningData> => {
+  const { data } = await axios.get<BtcMiningData>('/api/opendata/bitcoin/mining', { params: { period } });
   return data;
 };
 

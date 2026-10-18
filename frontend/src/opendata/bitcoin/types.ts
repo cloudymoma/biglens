@@ -560,3 +560,167 @@ export interface BtcValuationData {
   sources: BtcSourceStatus[];
 }
 
+export type BtcMiningPeriod = '3m' | '1y' | '3y';
+
+export interface BtcConcentrationMetric {
+  value: number;
+  denominator: number;
+  unit: string;
+  coverage_pct: number;
+  method: string;
+}
+
+export interface BtcPoolConcentration {
+  period: string;
+  total_blocks: number;
+  known_blocks: number;
+  nakamoto: BtcConcentrationMetric;
+  hhi: BtcConcentrationMetric;
+}
+
+export interface BtcMiningPoolRow {
+  rank: number;
+  name: string;
+  slug: string;
+  block_count: number;
+  share_pct: number;
+  empty_blocks: number;
+  avg_match_rate: number;
+}
+
+export interface BtcHashratePoint {
+  date: string;
+  ts: string;
+  hashrate_ehs: number;
+  implied_hashrate_ehs?: number | null;
+  delta_pct?: number | null;
+  sma30_ehs?: number | null;
+  sma60_ehs?: number | null;
+}
+
+export interface BtcDifficultyHistoryPoint {
+  date: string;
+  ts: string;
+  height: number;
+  difficulty: number;
+  adjustment_pct: number;
+}
+
+export interface BtcRibbonState {
+  state: 'capitulation' | 'recovery' | 'normal' | 'warming_up' | string;
+  sma30?: (number | null)[];
+  sma60?: (number | null)[];
+  last_cross_up_days?: number | null;
+}
+
+export interface BtcHashpricePoint {
+  date: string;
+  btc_per_ph_day: number;
+  usd_per_ph_day: number | null;
+}
+
+export interface BtcRewardStats144 {
+  start_block: number;
+  end_block: number;
+  total_reward_sats: number;
+  total_reward_btc: number;
+  total_fee_sats: number;
+  total_fee_btc: number;
+  subsidy_sats: number;
+  subsidy_btc: number;
+  fee_share_pct: number;
+  total_tx: number;
+}
+
+export interface BtcSecurityBudget {
+  daily_miner_revenue_btc: number;
+  daily_miner_revenue_usd: number | null;
+  annualized_revenue_usd: number | null;
+  market_cap_usd: number | null;
+  security_budget_pct: number | null;
+}
+
+export interface BtcMiningChainDay {
+  day: string;
+  blocks: number;
+  empty_blocks: number;
+  avg_difficulty: number;
+  implied_hashrate_ehs: number;
+  mempool_hashrate_ehs?: number | null;
+  hashrate_delta_pct?: number | null;
+  scheduled_sats: number;
+  claimed_sats: number;
+  fees_sats: number;
+  fee_share_pct: number;
+}
+
+export interface BtcNodeNetworkMix {
+  ipv4: number;
+  ipv6: number;
+  tor: number;
+  i2p: number;
+  cjdns: number;
+}
+
+export interface BtcNodeBucket {
+  label: string;
+  count: number;
+  share_pct: number;
+}
+
+export interface BtcNodeCountry {
+  code: string;
+  name: string;
+  count: number;
+  share_pct: number;
+}
+
+export interface BtcNodeASN {
+  asn: number;
+  org: string;
+  count: number;
+  share_pct: number;
+  is_cloud: boolean;
+}
+
+export interface BtcNodes {
+  as_of: string;
+  reachable: number;
+  clearnet: number;
+  network: BtcNodeNetworkMix;
+  clients: BtcNodeBucket[];
+  core_versions: BtcNodeBucket[];
+  countries: BtcNodeCountry[];
+  total_asns: number;
+  asns: BtcNodeASN[];
+  cloud_share: BtcConcentrationMetric;
+  asn_nakamoto: BtcConcentrationMetric;
+  country_nakamoto: BtcConcentrationMetric;
+  asn_hhi: BtcConcentrationMetric;
+  unresolved: number;
+  attribution: string;
+}
+
+export interface BtcMiningData {
+  as_of: string;
+  period: BtcMiningPeriod | string;
+  price_usd: number | null;
+  current_hashrate_ehs: number | null;
+  current_difficulty: number | null;
+  hashrate: BtcHashratePoint[];
+  difficulty: BtcDifficultyAdj | null;
+  adjustments: BtcDifficultyHistoryPoint[];
+  ribbon: BtcRibbonState;
+  hashprice: BtcHashpricePoint[];
+  hashprice_now: BtcHashpricePoint | null;
+  pools: BtcMiningPoolRow[];
+  concentration: BtcPoolConcentration;
+  rewards_144: BtcRewardStats144 | null;
+  fee_share_pct: number | null;
+  security_budget: BtcSecurityBudget;
+  halving: BtcHalving;
+  nodes: BtcNodes | null;
+  chain?: BtcMiningChainDay[];
+  sources: BtcSourceStatus[];
+}
+
