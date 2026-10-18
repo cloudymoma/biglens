@@ -35,6 +35,7 @@ func newTestBitcoinHandler(t *testing.T) *APIHandler {
 	h.btc.prices = newBtcPriceSyncer(openTestRiskStore(t), h.btc.settings, func() time.Time {
 		return time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
 	})
+	h.btc.prices.lastSync = time.Now()
 	return h
 }
 
@@ -226,6 +227,7 @@ func stubAllBtcUpstreams(t *testing.T, url string) {
 	origHL := btcHyperliquidInfoURL
 	origDeribit := btcDeribitBaseURL
 	origCFTC := btcCFTCTFFBaseURL
+	origFnG := btcAlternativeMeFnGURL
 	t.Cleanup(func() {
 		applyCryptoGasConfig(CryptoGasConfig{MempoolBaseURL: origMempool})
 		btcCoinbaseStatsURL = origCBStats
@@ -244,6 +246,7 @@ func stubAllBtcUpstreams(t *testing.T, url string) {
 		btcHyperliquidInfoURL = origHL
 		btcDeribitBaseURL = origDeribit
 		btcCFTCTFFBaseURL = origCFTC
+		btcAlternativeMeFnGURL = origFnG
 		resetBtcCGRateLimitForTest()
 	})
 	applyCryptoGasConfig(CryptoGasConfig{MempoolBaseURL: url})
@@ -263,6 +266,7 @@ func stubAllBtcUpstreams(t *testing.T, url string) {
 	btcHyperliquidInfoURL = url
 	btcDeribitBaseURL = url
 	btcCFTCTFFBaseURL = url
+	btcAlternativeMeFnGURL = url
 }
 
 func TestBitcoinHandlersNeverQueryBigQuery(t *testing.T) {

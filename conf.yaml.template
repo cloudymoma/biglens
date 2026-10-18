@@ -66,9 +66,9 @@ catalog:
 #     coinmetrics: true                 # Community API, CC BY-NC 4.0 (non-commercial)
 #     coingecko: true                   # spot tickers (+depth), derivatives stream, global dominance, public treasuries
 #     cftc: true                        # CFTC Traders in Financial Futures (weekly CME & US-regulated BTC positioning)
+#     alternative_me: true              # Fear & Greed Index (365-day history, attribution required)
 #     blockchain_com: true              # price history 2010–2015 (Coin Metrics PriceUSD is the fallback)
-#     # Added by subsequent M4–M5 tasks:
-#     #   alternative_me (M4 Task 4.5)
+#     # Added by subsequent M5 tasks:
 #     #   bitnodes (≤ 4 snapshots/day), dbip (DB-IP Lite, CC BY 4.0, ≈ 11.5 MB/month in data/geo/) (M5)
 #   bigquery:
 #     jobs: false                       # OPERATOR OPT-IN. true = run Bitcoin BigQuery jobs billed to bigquery.project_id.

@@ -39,6 +39,7 @@ Captured on `2026-10-17T09:28:28Z` (`User-Agent: biglens/1.0`). Each fixture is 
 | `coingecko_tickers_curated.json` | CoinGecko | `https://api.coingecko.com/api/v3/coins/bitcoin/tickers?exchange_ids=binance,gdax,okex,kraken,bybit_spot&depth=true` | 10 valid Binance pairs + 2 excluded (anomaly/stale) + Coinbase/OKX/Kraken/Bybit pairs with ±2 % depth (4.3 KB) | Public API (attribution required) |
 | `coingecko_derivatives.json` | CoinGecko | `https://api.coingecko.com/api/v3/derivatives` | Trimmed to 10 BTC-index rows across 9 venues (incl. long-tail WEEX/Tapbit) + 1 expired BTC future + 1 ETH row (3.4 KB) | Public API (attribution required) |
 | `cftc_tff_btc.json` | CFTC Socrata | `https://publicreporting.cftc.gov/resource/gpe5-46if.json` | 5 rows covering CME 5 BTC (3 weeks), CME Micro 0.10 BTC, and Coinbase CDE Nano 0.01 BTC (2.4 KB) | Public domain |
+| `alternative_fng.json` | alternative.me | `https://api.alternative.me/fng/?limit=365` | Trimmed to 4 daily Fear & Greed entries (468 B) | Public API (attribution required) |
 
 ## 1.1 Hand-Checked Venue Semantics (Tasks 4.1–4.2)
 
