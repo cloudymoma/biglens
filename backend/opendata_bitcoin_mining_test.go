@@ -85,12 +85,18 @@ func newBtcMiningTestServer(t *testing.T) (*httptest.Server, func()) {
 
 	origMempool := mempoolBaseURL
 	origCB := btcCoinbaseStatsURL
+	origBitnodes := btcBitnodesLatestURL
+	origDBIP := btcDBIPBaseURL
 	mempoolBaseURL = srv.URL
 	btcCoinbaseStatsURL = srv.URL + "/cb/stats"
+	btcBitnodesLatestURL = srv.URL + "/bitnodes"
+	btcDBIPBaseURL = srv.URL + "/dbip"
 
 	cleanup := func() {
 		mempoolBaseURL = origMempool
 		btcCoinbaseStatsURL = origCB
+		btcBitnodesLatestURL = origBitnodes
+		btcDBIPBaseURL = origDBIP
 		srv.Close()
 	}
 	return srv, cleanup

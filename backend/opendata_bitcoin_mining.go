@@ -651,6 +651,15 @@ func (h *APIHandler) buildBtcMiningData(ctx context.Context, r *http.Request, pe
 		}
 	}
 
+	var (
+		nodesData   *BtcNodes
+		bitnodesSrc BtcSourceStatus
+		dbipSrc     BtcSourceStatus
+	)
+	if s.nodes != nil {
+		nodesData, bitnodesSrc, dbipSrc = s.nodes.get(ctx, s)
+	}
+
 	mempoolStatus := mergeBtcSourceStatuses(s.providerMeta("mempool"), diffStatus, hrStatus, rewStatus, poolsStatus, rew144Status)
 	sources := []BtcSourceStatus{mempoolStatus}
 	if statsVal != nil || !s.providerEnabled("coinbase") {
@@ -659,6 +668,12 @@ func (h *APIHandler) buildBtcMiningData(ctx context.Context, r *http.Request, pe
 		sources = append(sources, fallbackSrc)
 	} else {
 		sources = append(sources, statsStatus)
+	}
+	if bitnodesSrc.ID != "" {
+		sources = append(sources, bitnodesSrc)
+	}
+	if dbipSrc.ID != "" {
+		sources = append(sources, dbipSrc)
 	}
 	if bqSource != nil {
 		sources = append(sources, *bqSource)
@@ -682,7 +697,7 @@ func (h *APIHandler) buildBtcMiningData(ctx context.Context, r *http.Request, pe
 		FeeSharePct:       feeSharePct,
 		SecurityBudget:    secBudget,
 		Halving:           halving,
-		Nodes:             nil,
+		Nodes:             nodesData,
 		Chain:             chainRows,
 		Sources:           sources,
 	}

@@ -32,10 +32,13 @@ func newTestBitcoinHandler(t *testing.T) *APIHandler {
 	cfg := &Config{}
 	cfg.BigQuery.ProjectID = "test-proj"
 	h := NewAPIHandler(&BQClient{config: cfg})
-	h.btc.prices = newBtcPriceSyncer(openTestRiskStore(t), h.btc.settings, func() time.Time {
+	nowFn := func() time.Time {
 		return time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
-	})
+	}
+	h.btc.prices = newBtcPriceSyncer(openTestRiskStore(t), h.btc.settings, nowFn)
 	h.btc.prices.lastSync = time.Now()
+	h.btc.nodes = newBtcNodesSyncer(nil, h.btc.settings, t.TempDir(), nowFn)
+	h.btc.nodes.lastSync = time.Now()
 	return h
 }
 
@@ -228,6 +231,8 @@ func stubAllBtcUpstreams(t *testing.T, url string) {
 	origDeribit := btcDeribitBaseURL
 	origCFTC := btcCFTCTFFBaseURL
 	origFnG := btcAlternativeMeFnGURL
+	origBitnodes := btcBitnodesLatestURL
+	origDBIP := btcDBIPBaseURL
 	t.Cleanup(func() {
 		applyCryptoGasConfig(CryptoGasConfig{MempoolBaseURL: origMempool})
 		btcCoinbaseStatsURL = origCBStats
@@ -247,6 +252,8 @@ func stubAllBtcUpstreams(t *testing.T, url string) {
 		btcDeribitBaseURL = origDeribit
 		btcCFTCTFFBaseURL = origCFTC
 		btcAlternativeMeFnGURL = origFnG
+		btcBitnodesLatestURL = origBitnodes
+		btcDBIPBaseURL = origDBIP
 		resetBtcCGRateLimitForTest()
 	})
 	applyCryptoGasConfig(CryptoGasConfig{MempoolBaseURL: url})
@@ -267,6 +274,8 @@ func stubAllBtcUpstreams(t *testing.T, url string) {
 	btcDeribitBaseURL = url
 	btcCFTCTFFBaseURL = url
 	btcAlternativeMeFnGURL = url
+	btcBitnodesLatestURL = url
+	btcDBIPBaseURL = url
 }
 
 func TestBitcoinHandlersNeverQueryBigQuery(t *testing.T) {

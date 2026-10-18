@@ -10,6 +10,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -294,6 +295,8 @@ var btcProviderRegistry = []btcProviderDef{
 	{ID: "alternative_me", Label: "alternative.me Fear & Greed", License: "attribution required"},
 	{ID: "cftc", Label: "CFTC Commitments of Traders", License: "public domain"},
 	{ID: "blockchain_com", Label: "blockchain.com", License: "public chart data"},
+	{ID: "bitnodes", Label: "Bitnodes", License: "public API (≤ 4 calls/day)"},
+	{ID: "dbip", Label: "DB-IP Lite", License: "CC BY 4.0"},
 }
 
 type bitcoinService struct {
@@ -303,6 +306,7 @@ type bitcoinService struct {
 	lastGood  *btcLastGood
 	prices    *btcPriceSyncer
 	binance   *binanceAdapter
+	nodes     *btcNodesSyncer
 	starter   btcBaselineStarter
 	projectID string
 	now       func() time.Time
@@ -324,6 +328,7 @@ func newBitcoinService(cfg *Config) *bitcoinService {
 		lastGood:  newBtcLastGood(),
 		prices:    newBtcPriceSyncer(nil, s, time.Now),
 		binance:   newBinanceAdapter(nil, time.Now),
+		nodes:     newBtcNodesSyncer(nil, s, filepath.Join("data", "geo"), time.Now),
 		projectID: projectID,
 		now:       time.Now,
 	}

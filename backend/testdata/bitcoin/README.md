@@ -40,13 +40,17 @@ Captured on `2026-10-17T09:28:28Z` (`User-Agent: biglens/1.0`). Each fixture is 
 | `coingecko_derivatives.json` | CoinGecko | `https://api.coingecko.com/api/v3/derivatives` | Trimmed to 10 BTC-index rows across 9 venues (incl. long-tail WEEX/Tapbit) + 1 expired BTC future + 1 ETH row (3.4 KB) | Public API (attribution required) |
 | `cftc_tff_btc.json` | CFTC Socrata | `https://publicreporting.cftc.gov/resource/gpe5-46if.json` | 5 rows covering CME 5 BTC (3 weeks), CME Micro 0.10 BTC, and Coinbase CDE Nano 0.01 BTC (2.4 KB) | Public domain |
 | `alternative_fng.json` | alternative.me | `https://api.alternative.me/fng/?limit=365` | Trimmed to 4 daily Fear & Greed entries (468 B) | Public API (attribution required) |
+| `bitnodes_latest.json` | Bitnodes (`bitnodes.io` → `btcnodes.io`) | `https://bitnodes.io/api/v1/snapshots/latest/` (`302` → `https://btcnodes.io/api/v1/snapshots/latest/`, `x-bitnodes-route: compatibility-backend`) | Trimmed to 300 reachable nodes covering all 5 networks (140 Tor `.onion`, 55 I2P `.b32.i2p`, 88 IPv4, 15 IPv6, 2 CJDNS `fc00::/8`) and Core/Knots/btcd user agents (43 KB) | Public API (≤ 4 calls/day) |
+| `dbip_country_sample.csv.gz` | DB-IP Lite | `https://download.db-ip.com/free/dbip-country-lite-2026-10.csv.gz` | 200 sorted IPv4 and IPv6 `[ip_start,ip_end,country]` ranges covering the clearnet fixture IPs (1.1 KB) | CC BY 4.0 ("IP geolocation by DB-IP") |
+| `dbip_asn_sample.csv.gz` | DB-IP Lite | `https://download.db-ip.com/free/dbip-asn-lite-2026-10.csv.gz` | 200 sorted IPv4 and IPv6 `[ip_start,ip_end,asn,org]` ranges covering the clearnet fixture IPs (1.4 KB) | CC BY 4.0 ("IP geolocation by DB-IP") |
 
-## 1.1 Hand-Checked Venue Semantics (Tasks 4.1–4.2)
+## 1.1 Hand-Checked Venue & Node Semantics (Tasks 4.1–4.2, 5.2)
 
 - **Coinbase INTX (`BTC-PERP`):** `notional_24hr` and `qty_24hr` report the current rolling 24h window and can legitimately return `"0"` while `avg_daily_notional` / `avg_daily_qty` are non-zero 30d averages. When `notional_24hr == 0`, the adapter sets INTX 24h volume to `nil` (never substituting `avg_daily_notional`).
 - **Coinbase CDE (`BIP-20DEC30-CDE`):** `future_product_details.contract_size` is `"0.01"` BTC (`open_interest: "173743"` contracts = `1,737.43 BTC`; `volume_24h` is in 0.01 BTC contracts). `funding_interval` is `"3600s"` (1 hour), so `funding_rate: "0.00001"` annualizes as `0.00001 × 8760 × 100 = 8.76 %` APR.
 - **CoinGecko `/derivatives` fallback rows:** `open_interest` and `converted_volume.usd` are in USD notional. `funding_rate` is reported in percentage points per interval; for verified 8h-interval venues (`binance`, `bybit`, `okx`, `deribit`), `funding_8h_pct = funding_rate` and `funding_apr_pct = funding_rate × (8760 / 8)`. Unverified venue funding rates in fallback rows are omitted (`nil`).
 - **CFTC Traders in Financial Futures (`gpe5-46if`):** Contract sizes: `BITCOIN - CHICAGO MERCANTILE EXCHANGE` (`133741`) = `5.0 BTC`; `MICRO BITCOIN - CHICAGO MERCANTILE EXCHANGE` (`133742`) = `0.1 BTC`; `BITCOIN NANO - COINBASE DERIVATIVES, LLC` (`133001`) = `0.01 BTC`.
+- **Bitnodes compatibility redirect (`bitnodes.io` → `btcnodes.io`):** `GET https://bitnodes.io/api/v1/snapshots/latest/` returns HTTP `302` with `Location: https://btcnodes.io/api/v1/snapshots/latest/`, `x-bitnodes-route: compatibility-backend`, and an empty body; the followed `btcnodes.io` response returns 5-element node arrays `[protocol, user_agent, connected_since, services, height]`. `btcHTTPClient` follows at most 1 redirect and only to allowlisted hosts (`bitnodes.io`, `btcnodes.io`).
 
 ## 2. `mempool.space` 39-Entry Fee Levels (`mempoolStatsFeeLevels`)
 
