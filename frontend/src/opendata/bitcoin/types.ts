@@ -111,20 +111,20 @@ export interface BtcDifficultyAdj {
 }
 
 export interface BtcHalving {
-  next_height: number;
-  blocks_remaining: number;
-  est_at: string;
-  subsidy_now_btc: number;
-  subsidy_next_btc: number;
-  scheduled_supply_btc: number;
-  pct_of_21m: number;
+  next_height: number | null;
+  blocks_remaining: number | null;
+  est_at: string | null;
+  subsidy_now_btc: number | null;
+  subsidy_next_btc: number | null;
+  scheduled_supply_btc: number | null;
+  pct_of_21m: number | null;
 }
 
 export interface BtcLiveData {
   as_of: string;
   price_usd: number | null;
   change_24h_pct: number | null;
-  tip_height: number;
+  tip_height: number | null;
   tip_time: string;
   next_block_sat_vb: number;
   next_block_usd: number | null;
@@ -633,7 +633,7 @@ export interface BtcRewardStats144 {
 }
 
 export interface BtcSecurityBudget {
-  daily_miner_revenue_btc: number;
+  daily_miner_revenue_btc: number | null;
   daily_miner_revenue_usd: number | null;
   annualized_revenue_usd: number | null;
   market_cap_usd: number | null;
@@ -776,13 +776,13 @@ export interface BtcRegimeSignal {
 }
 
 export interface BtcOverviewSupply {
-  tip_height: number;
-  scheduled_supply_btc: number;
+  tip_height: number | null;
+  scheduled_supply_btc: number | null;
   max_supply_btc: number;
-  mined_pct: number;
-  subsidy_btc: number;
-  annual_issuance_btc: number;
-  annual_inflation_pct: number;
+  mined_pct: number | null;
+  subsidy_btc: number | null;
+  annual_issuance_btc: number | null;
+  annual_inflation_pct: number | null;
   exchange_balance_btc: number | null;
   exchange_balance_pct: number | null;
   treasuries_btc: number | null;

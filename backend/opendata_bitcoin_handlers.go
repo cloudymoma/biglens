@@ -334,13 +334,15 @@ func (h *APIHandler) BitcoinLive(w http.ResponseWriter, r *http.Request) {
 		memRaw, _ = prev.(*btcLiveRaw)
 	}
 
+	var tipHeight int64
 	if memRaw != nil {
 		out.NextBlockSatVB = memRaw.Fees.Fastest
 		out.NextBlockUSD = btcTxUSD(memRaw.Fees.Fastest, out.PriceUSD)
 		out.MempoolVMB = float64(memRaw.Mempool.Vsize) / 1e6
 		out.BlocksToClear = float64(memRaw.Mempool.Vsize) / btcBlockVB
-		if len(memRaw.Recent) > 0 {
-			out.TipHeight = memRaw.Recent[0].Height
+		if len(memRaw.Recent) > 0 && memRaw.Recent[0].Height > 0 {
+			tipHeight = memRaw.Recent[0].Height
+			out.TipHeight = &tipHeight
 			out.TipTime = time.Unix(memRaw.Recent[0].Timestamp, 0).UTC().Format(time.RFC3339)
 		}
 	}
@@ -363,7 +365,7 @@ func (h *APIHandler) BitcoinLive(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	out.Halving = btcHalvingAt(out.TipHeight, now, avgBlockSec)
+	out.Halving = btcHalvingAt(tipHeight, now, avgBlockSec)
 	out.Sources = []BtcSourceStatus{spotSrc, diffSrc}
 	if poolsSrc.ID != "" && poolsSrc.Status != "ok" && diffSrc.Status == "ok" {
 		out.Sources = append(out.Sources, poolsSrc)

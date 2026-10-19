@@ -518,26 +518,36 @@ export default function OverviewTab({ bqControl, bigquery, refreshTick }: Props)
               </HelpTip>
             </span>
           }
-          note={`Tip #${fmtInt(supply.tip_height)} · subsidy ${supply.subsidy_btc} BTC/block`}
+          note={
+            supply.tip_height != null && supply.subsidy_btc != null
+              ? `Tip #${fmtInt(supply.tip_height)} · subsidy ${supply.subsidy_btc} BTC/block`
+              : 'Tip — · subsidy —'
+          }
         >
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <div className="rounded-xl border border-zinc-800/70 bg-zinc-900/40 p-3">
               <div className="text-[11px] text-zinc-400">Scheduled Supply</div>
               <div className="mt-1 font-mono text-sm font-semibold text-white">
-                {fmtInt(supply.scheduled_supply_btc)} BTC
+                {supply.scheduled_supply_btc != null
+                  ? `${fmtInt(supply.scheduled_supply_btc)} BTC`
+                  : '—'}
               </div>
               <div className="mt-0.5 text-[11px] text-amber-300">
-                {supply.mined_pct.toFixed(2)}% of 21M
+                {supply.mined_pct != null ? `${supply.mined_pct.toFixed(2)}% of 21M` : '—'}
               </div>
             </div>
 
             <div className="rounded-xl border border-zinc-800/70 bg-zinc-900/40 p-3">
               <div className="text-[11px] text-zinc-400">Annual Issuance</div>
               <div className="mt-1 font-mono text-sm font-semibold text-white">
-                {fmtInt(supply.annual_issuance_btc)} BTC/yr
+                {supply.annual_issuance_btc != null
+                  ? `${fmtInt(supply.annual_issuance_btc)} BTC/yr`
+                  : '—'}
               </div>
               <div className="mt-0.5 text-[11px] text-zinc-400">
-                {supply.annual_inflation_pct.toFixed(2)}% annualized inflation
+                {supply.annual_inflation_pct != null
+                  ? `${supply.annual_inflation_pct.toFixed(2)}% annualized inflation`
+                  : '—'}
               </div>
             </div>
 

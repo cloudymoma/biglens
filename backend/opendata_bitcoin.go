@@ -118,7 +118,7 @@ type BtcLiveData struct {
 	AsOf           string            `json:"as_of"`
 	PriceUSD       *float64          `json:"price_usd"`
 	Change24hPct   *float64          `json:"change_24h_pct"`
-	TipHeight      int64             `json:"tip_height"`
+	TipHeight      *int64            `json:"tip_height"`
 	TipTime        string            `json:"tip_time"`
 	NextBlockSatVB float64           `json:"next_block_sat_vb"`
 	NextBlockUSD   *float64          `json:"next_block_usd"`
@@ -141,13 +141,13 @@ type BtcDifficultyAdj struct {
 }
 
 type BtcHalving struct {
-	NextHeight      int64   `json:"next_height"`
-	BlocksRemaining int64   `json:"blocks_remaining"`
-	EstAt           string  `json:"est_at"`
-	SubsidyNowBTC   float64 `json:"subsidy_now_btc"`
-	SubsidyNextBTC  float64 `json:"subsidy_next_btc"`
-	ScheduledSupply float64 `json:"scheduled_supply_btc"`
-	PctOf21M        float64 `json:"pct_of_21m"`
+	NextHeight      *int64   `json:"next_height"`
+	BlocksRemaining *int64   `json:"blocks_remaining"`
+	EstAt           *string  `json:"est_at"`
+	SubsidyNowBTC   *float64 `json:"subsidy_now_btc"`
+	SubsidyNextBTC  *float64 `json:"subsidy_next_btc"`
+	ScheduledSupply *float64 `json:"scheduled_supply_btc"`
+	PctOf21M        *float64 `json:"pct_of_21m"`
 }
 
 type btcBaselinePlan struct {
@@ -592,9 +592,11 @@ func btcScheduledSupply(h int64) int64 {
 }
 
 // btcHalvingAt computes halving countdown and scheduled supply metrics at height.
+// When height <= 0 (unknown tip height), all fields remain nil instead of using
+// any fallback constant.
 func btcHalvingAt(height int64, now time.Time, avgBlockSeconds float64) BtcHalving {
-	if height < 0 {
-		height = 0
+	if height <= 0 {
+		return BtcHalving{}
 	}
 	nextHeight := (height/210_000 + 1) * 210_000
 	rem := nextHeight - height
@@ -606,14 +608,15 @@ func btcHalvingAt(height int64, now time.Time, avgBlockSeconds float64) BtcHalvi
 	subNow := float64(btcSubsidySats(height)) / 1e8
 	subNext := float64(btcSubsidySats(nextHeight)) / 1e8
 	supplyBTC := float64(btcScheduledSupply(height)) / 1e8
+	pctOf21M := supplyBTC / btcTotalMaxSupply * 100
 	return BtcHalving{
-		NextHeight:      nextHeight,
-		BlocksRemaining: rem,
-		EstAt:           estAt,
-		SubsidyNowBTC:   subNow,
-		SubsidyNextBTC:  subNext,
-		ScheduledSupply: supplyBTC,
-		PctOf21M:        supplyBTC / btcTotalMaxSupply * 100,
+		NextHeight:      &nextHeight,
+		BlocksRemaining: &rem,
+		EstAt:           &estAt,
+		SubsidyNowBTC:   &subNow,
+		SubsidyNextBTC:  &subNext,
+		ScheduledSupply: &supplyBTC,
+		PctOf21M:        &pctOf21M,
 	}
 }
 

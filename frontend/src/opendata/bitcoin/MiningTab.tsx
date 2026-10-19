@@ -278,21 +278,33 @@ export default function MiningTab({ bqControl, bigquery, refreshTick }: MiningTa
           value={
             data.security_budget.annualized_revenue_usd != null
               ? fmtUSD(data.security_budget.annualized_revenue_usd)
-              : `${data.security_budget.daily_miner_revenue_btc.toFixed(1)} BTC/d`
+              : data.security_budget.daily_miner_revenue_btc != null
+                ? `${data.security_budget.daily_miner_revenue_btc.toFixed(1)} BTC/d`
+                : '—'
           }
           icon={<Shield size={15} />}
           detail={
             data.security_budget.security_budget_pct != null
               ? `${data.security_budget.security_budget_pct.toFixed(2)}% of market cap / yr`
-              : 'Annualized miner revenue'
+              : '—'
           }
           accentColor="#a855f7"
         />
         <MetricCard
           label="Halving Countdown"
-          value={`${data.halving.blocks_remaining.toLocaleString()} blks`}
+          value={
+            data.halving.blocks_remaining != null
+              ? `${data.halving.blocks_remaining.toLocaleString()} blks`
+              : '—'
+          }
           icon={<Globe2 size={15} />}
-          detail={`${data.halving.subsidy_now_btc} → ${data.halving.subsidy_next_btc} BTC (#${data.halving.next_height.toLocaleString()})`}
+          detail={
+            data.halving.subsidy_now_btc != null &&
+            data.halving.subsidy_next_btc != null &&
+            data.halving.next_height != null
+              ? `${data.halving.subsidy_now_btc} → ${data.halving.subsidy_next_btc} BTC (#${data.halving.next_height.toLocaleString()})`
+              : '—'
+          }
           accentColor="#38bdf8"
         />
       </div>

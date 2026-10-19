@@ -63,7 +63,7 @@ export default function BitcoinTicker({
           <Blocks className="h-3.5 w-3.5 text-amber-400" />
         </div>
         <div className="mt-1 font-mono text-lg font-bold text-zinc-100">
-          {live.tip_height > 0 ? `#${live.tip_height.toLocaleString()}` : '—'}
+          {live.tip_height != null && live.tip_height > 0 ? `#${live.tip_height.toLocaleString()}` : '—'}
         </div>
         <div className="mt-0.5 text-[11px] text-zinc-400">
           {live.tip_time ? `Mined ${fmtRelativeAgo(live.tip_time)}` : 'Awaiting tip'}
@@ -119,16 +119,20 @@ export default function BitcoinTicker({
       {/* 6. Halving Countdown */}
       <div className="rounded-xl border border-zinc-800/80 bg-zinc-900/60 p-3">
         <div className="flex items-center justify-between text-[11px] text-zinc-400">
-          <span>Halving ({halving.subsidy_now_btc} → {halving.subsidy_next_btc})</span>
+          <span>
+            {halving.subsidy_now_btc != null && halving.subsidy_next_btc != null
+              ? `Halving (${halving.subsidy_now_btc} → ${halving.subsidy_next_btc})`
+              : 'Halving'}
+          </span>
           <Activity className="h-3.5 w-3.5 text-amber-400" />
         </div>
         <div className="mt-1 font-mono text-lg font-bold text-zinc-100">
-          {halving.blocks_remaining > 0
+          {halving.blocks_remaining != null && halving.blocks_remaining > 0
             ? `${halving.blocks_remaining.toLocaleString()} blks`
             : '—'}
         </div>
         <div className="mt-0.5 text-[11px] text-zinc-400">
-          {halving.pct_of_21m.toFixed(2)}% of 21M issued
+          {halving.pct_of_21m != null ? `${halving.pct_of_21m.toFixed(2)}% of 21M issued` : '—'}
         </div>
       </div>
 

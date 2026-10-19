@@ -76,20 +76,23 @@ func TestBtcDifficultyFromBits(t *testing.T) {
 func TestBtcHalvingAt(t *testing.T) {
 	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
 	h := btcHalvingAt(971_691, now, 567.0)
-	if h.NextHeight != 1_050_000 {
-		t.Errorf("NextHeight = %d, want 1050000", h.NextHeight)
+	if h.NextHeight == nil || *h.NextHeight != 1_050_000 {
+		t.Errorf("NextHeight = %v, want 1050000", h.NextHeight)
 	}
-	if h.BlocksRemaining != 78_309 {
-		t.Errorf("BlocksRemaining = %d, want 78309", h.BlocksRemaining)
+	if h.BlocksRemaining == nil || *h.BlocksRemaining != 78_309 {
+		t.Errorf("BlocksRemaining = %v, want 78309", h.BlocksRemaining)
 	}
-	if h.SubsidyNowBTC != 3.125 || h.SubsidyNextBTC != 1.5625 {
+	if h.SubsidyNowBTC == nil || *h.SubsidyNowBTC != 3.125 || h.SubsidyNextBTC == nil || *h.SubsidyNextBTC != 1.5625 {
 		t.Errorf("subsidies = %v -> %v, want 3.125 -> 1.5625", h.SubsidyNowBTC, h.SubsidyNextBTC)
 	}
-	if math.Abs(h.ScheduledSupply-20_099_037.5) > 1e-6 {
+	if h.ScheduledSupply == nil || math.Abs(*h.ScheduledSupply-20_099_037.5) > 1e-6 {
 		t.Errorf("ScheduledSupply = %v, want 20099037.5", h.ScheduledSupply)
 	}
 	// 78,309 * 567 s = 44,401,203 s ≈ 513.9 days -> ~2028-03-13
-	est, err := time.Parse(time.RFC3339, h.EstAt)
+	if h.EstAt == nil {
+		t.Fatal("EstAt is nil")
+	}
+	est, err := time.Parse(time.RFC3339, *h.EstAt)
 	if err != nil {
 		t.Fatalf("EstAt parse error: %v", err)
 	}

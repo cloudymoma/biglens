@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -322,8 +323,8 @@ func TestBitcoinOverviewPartial(t *testing.T) {
 	if len(got.Verification) != 8 {
 		t.Errorf("len(Verification) = %d, want 8", len(got.Verification))
 	}
-	if got.Supply.ScheduledSupplyBTC < 19_000_000 {
-		t.Errorf("ScheduledSupplyBTC = %f, want > 19M", got.Supply.ScheduledSupplyBTC)
+	if got.Supply.ScheduledSupplyBTC != nil || got.Supply.TipHeight != nil {
+		t.Errorf("Supply when tipHeight unknown = %+v, want nil TipHeight and ScheduledSupplyBTC", got.Supply)
 	}
 }
 
@@ -390,5 +391,96 @@ func TestBtcVerificationMinerRevenueUsesSameDayCM(t *testing.T) {
 	}
 	if math.Abs(*revRow.APIValue-481.25) > 1e-6 || math.Abs(*revRow.DeltaPct) > 1e-6 {
 		t.Errorf("miner_revenue APIValue=%.2f DeltaPct=%v, want 481.25 and 0%%", *revRow.APIValue, revRow.DeltaPct)
+	}
+}
+
+func TestBtcUnknownTipHeightReturnsNullFields(t *testing.T) {
+	poolsBody, err := os.ReadFile(filepath.Join("testdata", "bitcoin", "mempool_pools_1w.json"))
+	if err != nil {
+		t.Fatalf("read mempool_pools_1w.json: %v", err)
+	}
+	baseDay := time.Date(2026, 8, 13, 0, 0, 0, 0, time.UTC)
+	hrResp := btcMempoolHashrateResp{
+		Hashrates: []btcMempoolHashratePoint{
+			{Timestamp: baseDay.Unix(), AvgHashrate: 950e18},
+		},
+		Difficulty: []btcMempoolDifficultyPoint{
+			{Time: baseDay.Unix(), Height: 960000, Difficulty: 125e12, Adjustment: 1.03},
+		},
+		CurrentHashrate:   950e18,
+		CurrentDifficulty: 125e12,
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/cb/stats":
+			_, _ = w.Write([]byte(`{"open":"81170.00","last":"82064.00"}`))
+		case "/api/v1/mining/pools/1w":
+			_, _ = w.Write(poolsBody)
+		case "/api/v1/mining/hashrate/3m", "/api/v1/mining/hashrate/1y", "/api/v1/mining/hashrate/3y":
+			_ = json.NewEncoder(w).Encode(hrResp)
+		default:
+			// reward-stats, difficulty-adjustment, blocks, etc. all fail
+			w.WriteHeader(http.StatusBadGateway)
+		}
+	}))
+	defer srv.Close()
+	stubAllBtcUpstreams(t, srv.URL)
+	btcCoinbaseStatsURL = srv.URL + "/cb/stats"
+
+	h := newTestBitcoinHandler(t)
+	h.btc.now = func() time.Time { return time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC) }
+
+	forbiddenRe := regexp.MustCompile(`\b(840000|971691|210000)\b`)
+
+	// 1. Check /api/opendata/bitcoin/mining
+	mReq := httptest.NewRequest(http.MethodGet, "/api/opendata/bitcoin/mining?period=1y", nil)
+	mRec := httptest.NewRecorder()
+	h.BitcoinMining(mRec, mReq)
+	if mRec.Code != http.StatusOK {
+		t.Fatalf("GET /mining status = %d, want 200", mRec.Code)
+	}
+	mBody := mRec.Body.String()
+	if m := forbiddenRe.FindString(mBody); m != "" {
+		t.Fatalf("GET /mining body contains forbidden fallback constant %s: %s", m, mBody)
+	}
+	var mJSON map[string]any
+	if err := json.Unmarshal(mRec.Body.Bytes(), &mJSON); err != nil {
+		t.Fatalf("unmarshal /mining: %v", err)
+	}
+	halvingMap, _ := mJSON["halving"].(map[string]any)
+	for _, k := range []string{"next_height", "blocks_remaining", "est_at", "subsidy_now_btc", "subsidy_next_btc", "scheduled_supply_btc", "pct_of_21m"} {
+		if v, exists := halvingMap[k]; !exists || v != nil {
+			t.Fatalf("mining.halving.%s = %v, want null", k, v)
+		}
+	}
+	secMap, _ := mJSON["security_budget"].(map[string]any)
+	for _, k := range []string{"daily_miner_revenue_btc", "daily_miner_revenue_usd", "annualized_revenue_usd", "market_cap_usd", "security_budget_pct"} {
+		if v, exists := secMap[k]; !exists || v != nil {
+			t.Fatalf("mining.security_budget.%s = %v, want null", k, v)
+		}
+	}
+
+	// 2. Check /api/opendata/bitcoin/overview
+	oReq := httptest.NewRequest(http.MethodGet, "/api/opendata/bitcoin/overview", nil)
+	oRec := httptest.NewRecorder()
+	h.BitcoinOverview(oRec, oReq)
+	if oRec.Code != http.StatusOK {
+		t.Fatalf("GET /overview status = %d, want 200", oRec.Code)
+	}
+	oBody := oRec.Body.String()
+	if m := forbiddenRe.FindString(oBody); m != "" {
+		t.Fatalf("GET /overview body contains forbidden fallback constant %s: %s", m, oBody)
+	}
+	var oJSON map[string]any
+	if err := json.Unmarshal(oRec.Body.Bytes(), &oJSON); err != nil {
+		t.Fatalf("unmarshal /overview: %v", err)
+	}
+	supMap, _ := oJSON["supply"].(map[string]any)
+	for _, k := range []string{"tip_height", "scheduled_supply_btc", "mined_pct", "subsidy_btc", "annual_issuance_btc", "annual_inflation_pct"} {
+		if v, exists := supMap[k]; !exists || v != nil {
+			t.Fatalf("overview.supply.%s = %v, want null", k, v)
+		}
 	}
 }

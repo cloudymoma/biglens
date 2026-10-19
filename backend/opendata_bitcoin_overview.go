@@ -85,13 +85,13 @@ type BtcRegimeSignal struct {
 
 // BtcOverviewSupply summarizes Bitcoin issuance, scheduled supply, exchange balances, and public treasuries (§5.2).
 type BtcOverviewSupply struct {
-	TipHeight           int64    `json:"tip_height"`
-	ScheduledSupplyBTC  float64  `json:"scheduled_supply_btc"`
+	TipHeight           *int64   `json:"tip_height"`
+	ScheduledSupplyBTC  *float64 `json:"scheduled_supply_btc"`
 	MaxSupplyBTC        float64  `json:"max_supply_btc"`
-	MinedPct            float64  `json:"mined_pct"`
-	SubsidyBTC          float64  `json:"subsidy_btc"`
-	AnnualIssuanceBTC   float64  `json:"annual_issuance_btc"`
-	AnnualInflationPct  float64  `json:"annual_inflation_pct"`
+	MinedPct            *float64 `json:"mined_pct"`
+	SubsidyBTC          *float64 `json:"subsidy_btc"`
+	AnnualIssuanceBTC   *float64 `json:"annual_issuance_btc"`
+	AnnualInflationPct  *float64 `json:"annual_inflation_pct"`
 	ExchangeBalanceBTC  *float64 `json:"exchange_balance_btc"`
 	ExchangeBalancePct  *float64 `json:"exchange_balance_pct"`
 	TreasuriesBTC       *float64 `json:"treasuries_btc"`
@@ -637,8 +637,8 @@ func (h *APIHandler) BitcoinOverview(w http.ResponseWriter, r *http.Request) {
 			tipHeight = memRaw.Recent[0].Height
 		}
 	}
-	if tipHeight == 0 && mining.Halving.NextHeight > mining.Halving.BlocksRemaining {
-		tipHeight = mining.Halving.NextHeight - mining.Halving.BlocksRemaining
+	if tipHeight == 0 && mining.Halving.NextHeight != nil && mining.Halving.BlocksRemaining != nil && *mining.Halving.NextHeight > *mining.Halving.BlocksRemaining {
+		tipHeight = *mining.Halving.NextHeight - *mining.Halving.BlocksRemaining
 	}
 	consSignal := consolidationSignal(economy, blocksToClear)
 
@@ -889,34 +889,32 @@ func (h *APIHandler) BitcoinOverview(w http.ResponseWriter, r *http.Request) {
 		mempoolRevBTC = &rBTC
 	}
 
-	// Supply summary (§5.2).
-	if tipHeight <= 0 && len(mining.Adjustments) > 0 {
-		tipHeight = mining.Adjustments[len(mining.Adjustments)-1].Height
-	}
-	if tipHeight <= 0 {
-		tipHeight = 840_000
-	}
-	schedSats := btcScheduledSupply(tipHeight)
-	schedBTC := float64(schedSats) / 1e8
-	subBTC := float64(btcSubsidySats(tipHeight)) / 1e8
-	annBTC := subBTC * 144.0 * 365.0
-	var annInfPct float64
-	if schedBTC > 0 {
-		annInfPct = annBTC / schedBTC * 100.0
-	}
+	// Supply summary (§5.2). When tipHeight is unknown, height-dependent fields are nil.
 	supply := BtcOverviewSupply{
-		TipHeight:           tipHeight,
-		ScheduledSupplyBTC:  schedBTC,
 		MaxSupplyBTC:        21_000_000,
-		MinedPct:            schedBTC / 21_000_000.0 * 100.0,
-		SubsidyBTC:          subBTC,
-		AnnualIssuanceBTC:   annBTC,
-		AnnualInflationPct:  annInfPct,
 		ExchangeBalanceBTC:  exchangeBalanceBTC,
 		ExchangeBalancePct:  exchangeBalancePct,
 		TreasuriesBTC:       treasuriesBTC,
 		TreasuriesPct:       treasuriesPct,
 		TreasuriesCompanies: treasuriesCompanies,
+	}
+	if tipHeight > 0 {
+		th := tipHeight
+		schedSats := btcScheduledSupply(tipHeight)
+		schedBTC := float64(schedSats) / 1e8
+		minedPct := schedBTC / 21_000_000.0 * 100.0
+		subBTC := float64(btcSubsidySats(tipHeight)) / 1e8
+		annBTC := subBTC * 144.0 * 365.0
+		var annInfPct float64
+		if schedBTC > 0 {
+			annInfPct = annBTC / schedBTC * 100.0
+		}
+		supply.TipHeight = &th
+		supply.ScheduledSupplyBTC = &schedBTC
+		supply.MinedPct = &minedPct
+		supply.SubsidyBTC = &subBTC
+		supply.AnnualIssuanceBTC = &annBTC
+		supply.AnnualInflationPct = &annInfPct
 	}
 
 	fngHist := valuation.FearGreed

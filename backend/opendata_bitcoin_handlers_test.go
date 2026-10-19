@@ -148,13 +148,13 @@ func TestBitcoinLive(t *testing.T) {
 	if live.PriceUSD == nil || *live.PriceUSD <= 0 {
 		t.Errorf("PriceUSD = %v, want > 0", live.PriceUSD)
 	}
-	if live.TipHeight != 971691 {
-		t.Errorf("TipHeight = %d, want 971691", live.TipHeight)
+	if live.TipHeight == nil || *live.TipHeight != 971691 {
+		t.Errorf("TipHeight = %v, want 971691", live.TipHeight)
 	}
 	if live.Difficulty == nil || live.Difficulty.NextRetargetHeight <= 0 {
 		t.Errorf("Difficulty = %+v", live.Difficulty)
 	}
-	if live.Halving.NextHeight != 1_050_000 || live.Halving.BlocksRemaining != 78_309 {
+	if live.Halving.NextHeight == nil || *live.Halving.NextHeight != 1_050_000 || live.Halving.BlocksRemaining == nil || *live.Halving.BlocksRemaining != 78_309 {
 		t.Errorf("Halving = %+v", live.Halving)
 	}
 	if live.Hashrate7dEHs == nil || *live.Hashrate7dEHs <= 0 {

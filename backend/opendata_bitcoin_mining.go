@@ -72,7 +72,7 @@ type BtcHashpricePoint struct {
 }
 
 type BtcSecurityBudget struct {
-	DailyMinerRevenueBTC float64  `json:"daily_miner_revenue_btc"`
+	DailyMinerRevenueBTC *float64 `json:"daily_miner_revenue_btc"`
 	DailyMinerRevenueUSD *float64 `json:"daily_miner_revenue_usd"`
 	AnnualizedRevenueUSD *float64 `json:"annualized_revenue_usd"`
 	MarketCapUSD         *float64 `json:"market_cap_usd"`
@@ -518,11 +518,14 @@ func (h *APIHandler) buildBtcMiningData(ctx context.Context, r *http.Request, pe
 			continue
 		}
 		rewBTC := rewardByDay[hp.Date]
-		if rewBTC <= 0 {
-			rewBTC = halving.SubsidyNowBTC
+		if rewBTC <= 0 && halving.SubsidyNowBTC != nil {
+			rewBTC = *halving.SubsidyNowBTC
 			if hp.Date < "2024-04-20" {
 				rewBTC = 6.25
 			}
+		}
+		if rewBTC <= 0 {
+			continue
 		}
 		var dayPrice *float64
 		if c, ok := priceByDay[hp.Date]; ok && c > 0 {
@@ -549,7 +552,7 @@ func (h *APIHandler) buildBtcMiningData(ctx context.Context, r *http.Request, pe
 		nowDiff = adjustments[len(adjustments)-1].Difficulty
 	}
 	if nowDiff > 0 {
-		rewNowBTC := halving.SubsidyNowBTC
+		var rewNowBTC float64
 		if rew144 != nil && rew144.TotalRewardBTC > 0 {
 			blocks := rew144.EndBlock - rew144.StartBlock + 1
 			if blocks <= 0 {
@@ -561,34 +564,44 @@ func (h *APIHandler) buildBtcMiningData(ctx context.Context, r *http.Request, pe
 				rewNowBTC = r
 			}
 		}
-		btcPH, usdPH := hashpricePerPH(rewNowBTC, nowDiff, priceUSD)
-		if btcPH > 0 {
-			hashpriceNow = &BtcHashpricePoint{
-				Date:        now.Format("2006-01-02"),
-				BTCPerPHDay: btcPH,
-				USDPerPHDay: usdPH,
+		if rewNowBTC <= 0 && halving.SubsidyNowBTC != nil {
+			rewNowBTC = *halving.SubsidyNowBTC
+		}
+		if rewNowBTC > 0 {
+			btcPH, usdPH := hashpricePerPH(rewNowBTC, nowDiff, priceUSD)
+			if btcPH > 0 {
+				hashpriceNow = &BtcHashpricePoint{
+					Date:        now.Format("2006-01-02"),
+					BTCPerPHDay: btcPH,
+					USDPerPHDay: usdPH,
+				}
 			}
 		}
 	}
 
-	dailyRevBTC := halving.SubsidyNowBTC * 144.0
+	var secBudget BtcSecurityBudget
+	var dailyRevBTC *float64
 	if rew144 != nil && rew144.TotalRewardBTC > 0 {
-		dailyRevBTC = rew144.TotalRewardBTC
+		v := rew144.TotalRewardBTC
+		dailyRevBTC = &v
+	} else if halving.SubsidyNowBTC != nil {
+		v := *halving.SubsidyNowBTC * 144.0
+		dailyRevBTC = &v
 	}
-	secBudget := BtcSecurityBudget{
-		DailyMinerRevenueBTC: dailyRevBTC,
-	}
-	if priceUSD != nil && *priceUSD > 0 {
-		dailyUSD := dailyRevBTC * (*priceUSD)
-		annUSD := dailyUSD * 365.0
-		secBudget.DailyMinerRevenueUSD = &dailyUSD
-		secBudget.AnnualizedRevenueUSD = &annUSD
-		if halving.ScheduledSupply > 0 {
-			mcap := halving.ScheduledSupply * (*priceUSD)
-			secBudget.MarketCapUSD = &mcap
-			if mcap > 0 {
-				pct := annUSD / mcap * 100.0
-				secBudget.SecurityBudgetPct = &pct
+	if dailyRevBTC != nil {
+		secBudget.DailyMinerRevenueBTC = dailyRevBTC
+		if priceUSD != nil && *priceUSD > 0 {
+			dailyUSD := (*dailyRevBTC) * (*priceUSD)
+			annUSD := dailyUSD * 365.0
+			secBudget.DailyMinerRevenueUSD = &dailyUSD
+			secBudget.AnnualizedRevenueUSD = &annUSD
+			if halving.ScheduledSupply != nil && *halving.ScheduledSupply > 0 {
+				mcap := (*halving.ScheduledSupply) * (*priceUSD)
+				secBudget.MarketCapUSD = &mcap
+				if mcap > 0 {
+					pct := annUSD / mcap * 100.0
+					secBudget.SecurityBudgetPct = &pct
+				}
 			}
 		}
 	}
