@@ -491,3 +491,65 @@ func TestRecomputeWaitsForRollup(t *testing.T) {
 		t.Fatalf("expected UTXO state to wait for rollup at 2026-10-14, got %q", asOf)
 	}
 }
+
+func TestMaintenanceUnblocksPriceHistoryIncompleteOnceComplete(t *testing.T) {
+	ctx := context.Background()
+	store := openTestRiskStore(t)
+	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	seedMaintenanceChain(t, store, now)
+
+	settings := (BitcoinConfig{}).settings()
+	settings.Jobs = true
+	budget := newBtcBudget(store, settings, func() time.Time { return now })
+	resID, err := budget.reserve(ctx, btcBaselineJobID, 1<<30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseRows := []btcUTXOBaselineRow{
+		{CreateDay: "2026-10-10", Sats: 4_000_000_000, UTXOs: 4},
+		{CreateDay: "2026-10-14", Sats: 6_000_000_000, UTXOs: 6},
+	}
+	if _, err := store.commitBtcBaseline(ctx, budget, settings, resID, "2026-10-15", baseRows, 1<<30, now, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// First run with nil prices -> holder rows are written with Blocked = "price_history_incomplete".
+	maintNoPrices := newBtcHolderMaintenance(store, nil, func() time.Time { return now })
+	if err := maintNoPrices.run(ctx); err != nil {
+		t.Fatalf("first maint.run: %v", err)
+	}
+	rs := newBtcReadStore(store, settings, func() time.Time { return now })
+	hDays1, err := rs.holderDays(ctx, "2026-10-14", "2026-10-15")
+	if err != nil || len(hDays1) != 2 {
+		t.Fatalf("holderDays after first run: len=%d err=%v", len(hDays1), err)
+	}
+	if hDays1[1].Blocked != "price_history_incomplete" || hDays1[1].RealizedCapUSD != nil {
+		t.Fatalf("expected 2026-10-15 blocked by price_history_incomplete, got %+v", hDays1[1])
+	}
+
+	// Now seed complete daily prices from 2010-08-18 through 2026-10-15 and run maintenance again with no new chain days.
+	ps := newBtcPriceSyncer(store, settings, func() time.Time { return now })
+	var pricePts []btcPriceDay
+	start, _ := time.Parse("2006-01-02", btcPriceCoverageStart)
+	end, _ := time.Parse("2006-01-02", "2026-10-15")
+	for d := start; !d.After(end); d = d.AddDate(0, 0, 1) {
+		pricePts = append(pricePts, btcPriceDay{
+			Day:    d.Format("2006-01-02"),
+			Close:  60000.0,
+			Source: "test",
+		})
+	}
+	ps.putRows(ctx, pricePts)
+
+	maintWithPrices := newBtcHolderMaintenance(store, ps, func() time.Time { return now })
+	if err := maintWithPrices.run(ctx); err != nil {
+		t.Fatalf("second maint.run with complete prices: %v", err)
+	}
+	hDays2, err := rs.holderDays(ctx, "2026-10-14", "2026-10-15")
+	if err != nil || len(hDays2) != 2 {
+		t.Fatalf("holderDays after second run: len=%d err=%v", len(hDays2), err)
+	}
+	if hDays2[1].Blocked != "" || hDays2[1].RealizedCapUSD == nil || hDays2[1].MVRV == nil {
+		t.Fatalf("expected 2026-10-15 unblocked with RealizedCapUSD and MVRV, got %+v", hDays2[1])
+	}
+}

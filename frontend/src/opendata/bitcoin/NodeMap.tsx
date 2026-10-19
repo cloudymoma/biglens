@@ -17,7 +17,29 @@ const GEO_NAME_OVERRIDES: Record<string, string> = {
   KR: 'South Korea',
   RU: 'Russia',
   TW: 'Taiwan',
+  VN: 'Vietnam',
+  IR: 'Iran',
+  VE: 'Venezuela',
+  BO: 'Bolivia',
+  TZ: 'United Republic of Tanzania',
+  SY: 'Syria',
+  MD: 'Moldova',
+  LA: 'Laos',
+  CD: 'Democratic Republic of the Congo',
+  CG: 'Republic of the Congo',
+  CI: 'Ivory Coast',
+  BA: 'Bosnia and Herzegovina',
+  MK: 'Macedonia',
 };
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
 
 export default function NodeMap({ countries, clearnetTotal }: NodeMapProps) {
   const [mapReady, setMapReady] = useState<boolean>(() => Boolean(echarts.getMap('world')));
@@ -69,7 +91,7 @@ export default function NodeMap({ countries, clearnetTotal }: NodeMapProps) {
                 formatter: (p: { name?: string; value?: number; data?: { code?: string; sharePct?: number } }) => {
                   const val = typeof p.value === 'number' && !Number.isNaN(p.value) ? p.value : 0;
                   const share = p.data?.sharePct ?? (clearnetTotal > 0 ? (val / clearnetTotal) * 100 : 0);
-                  return `<div class="text-xs"><div class="font-semibold">${p.name ?? 'Unknown'}</div><div>${val.toLocaleString()} clearnet nodes (${share.toFixed(1)}%)</div></div>`;
+                  return `<div class="text-xs"><div class="font-semibold">${escapeHtml(p.name ?? 'Unknown')}</div><div>${val.toLocaleString()} clearnet nodes (${share.toFixed(1)}%)</div></div>`;
                 },
               },
               visualMap: {

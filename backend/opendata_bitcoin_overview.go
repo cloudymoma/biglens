@@ -206,6 +206,13 @@ func computeBtcRegimeSignals(in btcRegimeInputs) []BtcRegimeSignal {
 	case "capitulation":
 		miners.State = "capitulation"
 		miners.Summary = "SMA30 < SMA60 (miner capitulation)"
+	case "recovery":
+		miners.State = "recovery"
+		if in.Ribbon.LastCrossUpDays != nil {
+			miners.Summary = fmt.Sprintf("SMA30 ≥ SMA60 (recovery cross %dd ago)", *in.Ribbon.LastCrossUpDays)
+		} else {
+			miners.Summary = "SMA30 ≥ SMA60 (hashrate recovery)"
+		}
 	case "normal":
 		if in.Ribbon.LastCrossUpDays != nil && *in.Ribbon.LastCrossUpDays <= btcRegimeMinerRecoveryDays {
 			miners.State = "recovery"
@@ -382,12 +389,23 @@ func computeBtcVerificationRows(in btcVerificationInputs) []BtcVerificationRow {
 		}
 	}
 
-	apiMinerRev := in.MempoolRewardsBTC
-	apiMinerRevLabel := "mempool rewards"
-	if apiMinerRev == nil && cmIssBTC != nil && cmFeeBTC != nil {
+	var apiMinerRev *float64
+	apiMinerRevLabel := "CM IssTotNtv + FeeTotNtv"
+	if cmIssBTC != nil && cmFeeBTC != nil && (ocDate == "" || cmDate == "" || cmDate == ocDate) {
 		sum := *cmIssBTC + *cmFeeBTC
 		apiMinerRev = &sum
-		apiMinerRevLabel = "CM IssTotNtv + FeeTotNtv"
+	} else if in.MempoolRewardsBTC != nil {
+		rev := *in.MempoolRewardsBTC
+		if in.OnchainDay != nil && in.OnchainDay.Blocks > 0 {
+			rev = rev * float64(in.OnchainDay.Blocks) / 144.0
+			apiMinerRevLabel = "mempool rewards (block-scaled)"
+		} else {
+			apiMinerRevLabel = "mempool rewards"
+		}
+		apiMinerRev = &rev
+	} else if cmIssBTC != nil && cmFeeBTC != nil {
+		sum := *cmIssBTC + *cmFeeBTC
+		apiMinerRev = &sum
 	}
 
 	m2Status := func(apiVal, chainVal *float64) (string, string) {
@@ -782,9 +800,101 @@ func (h *APIHandler) BitcoinOverview(w http.ResponseWriter, r *http.Request) {
 		ExchangeNetFlow7dUSD: exchangeNetFlow7dUSD,
 	})
 
+	// Build verification table by aligning on-chain rollup, holder day, and Coin Metrics to the same UTC date.
+	var (
+		ocRows          []BtcOnchainDay
+		hRows           []BtcHolderDay
+		latestOnchain   *BtcOnchainDay
+		latestHolder    *BtcHolderDay
+		baselineAvail   bool
+		impliedHR       *float64
+		mempoolHRForDay *float64
+		mempoolRevBTC   *float64
+		matchedCMRow    *BtcCMMetricRow
+	)
+	if s.read != nil {
+		fromDay := now.AddDate(0, 0, -30).Format("2006-01-02")
+		toDay := now.Format("2006-01-02")
+		if rows, err := s.read.onchainDays(ctx, fromDay, toDay); err == nil && len(rows) > 0 {
+			ocRows = rows
+			last := ocRows[len(ocRows)-1]
+			latestOnchain = &last
+		}
+		if bs, err := s.read.baselineStatus(ctx); err == nil {
+			baselineAvail = bs.Available
+		}
+		if rows, err := s.read.holderDays(ctx, fromDay, toDay); err == nil && len(rows) > 0 {
+			hRows = rows
+		}
+	}
+
+	// Align latestOnchain and matchedCMRow to the newest common UTC date when both are present.
+	if len(ocRows) > 0 && len(cmRows) > 0 {
+		cmByDate := make(map[string]BtcCMMetricRow, len(cmRows))
+		for _, r := range cmRows {
+			cmByDate[r.Date] = r
+		}
+		for i := len(ocRows) - 1; i >= 0; i-- {
+			if cm, ok := cmByDate[ocRows[i].Date]; ok {
+				oc := ocRows[i]
+				latestOnchain = &oc
+				matchedCMRow = &cm
+				break
+			}
+		}
+	} else if len(cmRows) > 0 {
+		row := cmRows[len(cmRows)-1]
+		matchedCMRow = &row
+	}
+
+	if len(hRows) > 0 {
+		if latestOnchain != nil {
+			for i := len(hRows) - 1; i >= 0; i-- {
+				if hRows[i].Date == latestOnchain.Date {
+					h := hRows[i]
+					latestHolder = &h
+					break
+				}
+			}
+		} else {
+			last := hRows[len(hRows)-1]
+			latestHolder = &last
+		}
+	}
+
+	if len(mining.Chain) > 0 {
+		var matchedChain *BtcMiningChainDay
+		if latestOnchain != nil {
+			for i := len(mining.Chain) - 1; i >= 0; i-- {
+				if mining.Chain[i].Day == latestOnchain.Date {
+					ch := mining.Chain[i]
+					matchedChain = &ch
+					break
+				}
+			}
+		}
+		if matchedChain == nil {
+			ch := mining.Chain[len(mining.Chain)-1]
+			matchedChain = &ch
+		}
+		ih := matchedChain.ImpliedHashrateEHs
+		impliedHR = &ih
+		mempoolHRForDay = matchedChain.MempoolHashrateEHs
+	}
+	if mempoolHRForDay == nil {
+		mempoolHRForDay = mining.CurrentHashrateEH
+	}
+	if mining.Rewards144 != nil && mining.Rewards144.TotalRewardSats > 0 {
+		rBTC := float64(mining.Rewards144.TotalRewardSats) / 1e8
+		mempoolRevBTC = &rBTC
+	}
+
 	// Supply summary (§5.2).
+	if tipHeight <= 0 && len(mining.Adjustments) > 0 {
+		tipHeight = mining.Adjustments[len(mining.Adjustments)-1].Height
+	}
 	if tipHeight <= 0 {
-		tipHeight = 971_691
+		tipHeight = 840_000
 	}
 	schedSats := btcScheduledSupply(tipHeight)
 	schedBTC := float64(schedSats) / 1e8
@@ -817,60 +927,6 @@ func (h *APIHandler) BitcoinOverview(w http.ResponseWriter, r *http.Request) {
 		FearGreedValue:   valuation.Latest.FearGreedValue,
 		FearGreedClass:   valuation.Latest.FearGreedClass,
 		FearGreedHistory: fngHist,
-	}
-
-	// Build verification table by matching the latest on-chain day (or latest CM day).
-	var (
-		latestOnchain   *BtcOnchainDay
-		latestHolder    *BtcHolderDay
-		baselineAvail   bool
-		impliedHR       *float64
-		mempoolHRForDay *float64
-		mempoolRevBTC   *float64
-		matchedCMRow    *BtcCMMetricRow
-	)
-	if s.read != nil {
-		fromDay := now.AddDate(0, 0, -30).Format("2006-01-02")
-		toDay := now.Format("2006-01-02")
-		if ocRows, err := s.read.onchainDays(ctx, fromDay, toDay); err == nil && len(ocRows) > 0 {
-			last := ocRows[len(ocRows)-1]
-			latestOnchain = &last
-		}
-		if bs, err := s.read.baselineStatus(ctx); err == nil {
-			baselineAvail = bs.Available
-		}
-		if hRows, err := s.read.holderDays(ctx, fromDay, toDay); err == nil && len(hRows) > 0 {
-			last := hRows[len(hRows)-1]
-			latestHolder = &last
-		}
-	}
-	if len(mining.Chain) > 0 {
-		lastChain := mining.Chain[len(mining.Chain)-1]
-		ih := lastChain.ImpliedHashrateEHs
-		impliedHR = &ih
-		mempoolHRForDay = lastChain.MempoolHashrateEHs
-	}
-	if mempoolHRForDay == nil {
-		mempoolHRForDay = mining.CurrentHashrateEH
-	}
-	if mining.Rewards144 != nil && mining.Rewards144.TotalRewardSats > 0 {
-		rBTC := float64(mining.Rewards144.TotalRewardSats) / 1e8
-		mempoolRevBTC = &rBTC
-	}
-	if len(cmRows) > 0 {
-		if latestOnchain != nil {
-			for i := len(cmRows) - 1; i >= 0; i-- {
-				if cmRows[i].Date == latestOnchain.Date {
-					row := cmRows[i]
-					matchedCMRow = &row
-					break
-				}
-			}
-		}
-		if matchedCMRow == nil {
-			row := cmRows[len(cmRows)-1]
-			matchedCMRow = &row
-		}
 	}
 
 	verifDate := ""

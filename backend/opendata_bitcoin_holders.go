@@ -347,7 +347,31 @@ func (m *btcHolderMaintenance) run(ctx context.Context) error {
 		return m.applyPendingBaseline(ctx, pend, matrixByDay, onchainByDay, closePrices, priceComplete, coinageUpdates)
 	}
 
+	// If price history is now complete and any existing holder rows were previously
+	// blocked by price_history_incomplete, recompute from the active baseline generation.
+	if priceComplete {
+		var blockedCnt int64
+		_ = m.store.db.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM btc_holder_daily WHERE payload LIKE '%"price_history_incomplete"%'`,
+		).Scan(&blockedCnt)
+		if blockedCnt > 0 {
+			if pend, ok := m.activeBaselineRef(ctx); ok {
+				return m.applyPendingBaseline(ctx, pend, matrixByDay, onchainByDay, closePrices, priceComplete, coinageUpdates)
+			}
+		}
+	}
+
 	return m.rollForwardExisting(ctx, matrixByDay, onchainByDay, closePrices, priceComplete, coinageUpdates)
+}
+
+func (m *btcHolderMaintenance) activeBaselineRef(ctx context.Context) (btcPendingBaseline, bool) {
+	if rawMeta, ok, _ := m.store.getBtcKV(ctx, "baseline_meta"); ok && rawMeta != "" {
+		var saved BtcBaselineStatus
+		if json.Unmarshal([]byte(rawMeta), &saved) == nil && saved.Generation > 0 && saved.AsOf != "" {
+			return btcPendingBaseline{Generation: saved.Generation, AsOf: saved.AsOf}, true
+		}
+	}
+	return btcPendingBaseline{}, false
 }
 
 func (m *btcHolderMaintenance) minSyncedCursor(ctx context.Context) string {
@@ -418,10 +442,14 @@ func (m *btcHolderMaintenance) applyPendingBaseline(
 		if hasOC && hasMat {
 			prevState := uBack.clone()
 			applyDay(prevState, dStr, spent, oc.CreatedSats, false)
-			if sErr := checkSupplyIdentity(prevState.totalSats(), uBack.totalSats(), oc.CoinbaseSats, oc.FeesSats, oc.OpretValueSats); sErr != nil {
+			sErr := checkSupplyIdentity(prevState.totalSats(), uBack.totalSats(), oc.CoinbaseSats, oc.FeesSats, oc.OpretValueSats)
+			if sErr != nil {
 				blockHolderDayMetrics(&hm, sErr.Error())
 			}
 			holderByDay[dStr] = hm
+			if sErr != nil {
+				break
+			}
 			uBack = prevState
 		} else {
 			holderByDay[dStr] = hm
@@ -442,23 +470,31 @@ func (m *btcHolderMaintenance) applyPendingBaseline(
 					break
 				}
 				spent := matrixByDay[dStr]
+				prevU := uFwd.clone()
 				prevSum := uFwd.totalSats()
 				applyDay(uFwd, dStr, spent, oc.CreatedSats, true)
 				nextSum := uFwd.totalSats()
 
 				hm := holderMetrics(dStr, pend.Generation, uFwd, closePrices, priceComplete)
-				if sErr := checkSupplyIdentity(prevSum, nextSum, oc.CoinbaseSats, oc.FeesSats, oc.OpretValueSats); sErr != nil {
+				sErr := checkSupplyIdentity(prevSum, nextSum, oc.CoinbaseSats, oc.FeesSats, oc.OpretValueSats)
+				if sErr != nil {
 					blockHolderDayMetrics(&hm, sErr.Error())
 				}
-				if warn, iErr := checkIssuanceBound(oc.ClaimedIssuanceSats, oc.ScheduledIssuanceSats); iErr != nil {
+				warn, iErr := checkIssuanceBound(oc.ClaimedIssuanceSats, oc.ScheduledIssuanceSats)
+				if iErr != nil {
 					blockHolderDayMetrics(&hm, iErr.Error())
 				} else if warn != "" {
 					hm.Warnings = append(hm.Warnings, warn)
 				}
-				if bErr := checkBucketSigns(uFwd, dStr); bErr != nil {
+				bErr := checkBucketSigns(uFwd, dStr)
+				if bErr != nil {
 					blockHolderDayMetrics(&hm, bErr.Error())
 				}
 				holderByDay[dStr] = hm
+				if sErr != nil || iErr != nil || bErr != nil {
+					uFwd = prevU
+					break
+				}
 				finalAsOf = dStr
 			}
 		}
@@ -529,23 +565,31 @@ func (m *btcHolderMaintenance) rollForwardExisting(
 			break
 		}
 		spent := matrixByDay[dStr]
+		prevU := u.clone()
 		prevSum := u.totalSats()
 		applyDay(u, dStr, spent, oc.CreatedSats, true)
 		nextSum := u.totalSats()
 
 		hm := holderMetrics(dStr, gen, u, closePrices, priceComplete)
-		if sErr := checkSupplyIdentity(prevSum, nextSum, oc.CoinbaseSats, oc.FeesSats, oc.OpretValueSats); sErr != nil {
+		sErr := checkSupplyIdentity(prevSum, nextSum, oc.CoinbaseSats, oc.FeesSats, oc.OpretValueSats)
+		if sErr != nil {
 			blockHolderDayMetrics(&hm, sErr.Error())
 		}
-		if warn, iErr := checkIssuanceBound(oc.ClaimedIssuanceSats, oc.ScheduledIssuanceSats); iErr != nil {
+		warn, iErr := checkIssuanceBound(oc.ClaimedIssuanceSats, oc.ScheduledIssuanceSats)
+		if iErr != nil {
 			blockHolderDayMetrics(&hm, iErr.Error())
 		} else if warn != "" {
 			hm.Warnings = append(hm.Warnings, warn)
 		}
-		if bErr := checkBucketSigns(u, dStr); bErr != nil {
+		bErr := checkBucketSigns(u, dStr)
+		if bErr != nil {
 			blockHolderDayMetrics(&hm, bErr.Error())
 		}
 		holderUpdates = append(holderUpdates, hm)
+		if sErr != nil || iErr != nil || bErr != nil {
+			u = prevU
+			break
+		}
 		finalAsOf = dStr
 	}
 

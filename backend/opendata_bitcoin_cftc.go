@@ -79,6 +79,8 @@ func resolveCFTCContractSizeBTC(name, code, units string) (float64, bool) {
 		return 0.1, true
 	case strings.Contains(upperUnits, "0.01 BITCOIN"):
 		return 0.01, true
+	case strings.Contains(upperName, "NANO BITCOIN"), strings.Contains(upperName, "BITCOIN NANO"), strings.Contains(upperName, "COINBASE"):
+		return 0.01, true
 	default:
 		return 0, false
 	}
@@ -94,7 +96,7 @@ func fetchCFTCBitcoin(ctx context.Context, weeks int) (*BtcCFTCSummary, string) 
 		q := url.Values{}
 		q.Set("$where", "upper(market_and_exchange_names) like '%BITCOIN%'")
 		q.Set("$order", "report_date_as_yyyy_mm_dd DESC")
-		q.Set("$limit", fmt.Sprintf("%d", weeks*4))
+		q.Set("$limit", fmt.Sprintf("%d", weeks*12))
 		u = u + "?" + q.Encode()
 	}
 

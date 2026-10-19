@@ -188,7 +188,7 @@ func (s *lazyDerivativesStream) Read(p []byte) (int, error) {
 			}
 		}
 		elem := fmt.Sprintf(
-			`{"market":%q,"symbol":"SYM-%d","index_id":%q,"price":"81484.00","price_percentage_change_24h":1.13,"contract_type":"perpetual","index":81450.0,"basis":-0.04,"spread":0.01,"funding_rate":0.005447,"open_interest":1000000.0,"volume_24h":100.0,"converted_volume":{"usd":"8148400.0"},"last_traded_at":1760659200,"expired_at":null}`,
+			`{"market":%q,"symbol":"SYM-%d","index_id":%q,"price":"81484.00","price_percentage_change_24h":1.13,"contract_type":"perpetual","index":81450.0,"basis":-0.04,"spread":0.01,"funding_rate":0.005447,"open_interest":1000000.0,"volume_24h":8148400.0,"last_traded_at":1760659200,"expired_at":null}`,
 			market, s.idx, indexID,
 		)
 		s.buf = append(s.buf, elem...)

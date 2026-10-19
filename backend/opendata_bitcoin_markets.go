@@ -738,6 +738,9 @@ func (ms *btcMarketSnapshotter) syncOnce(ctx context.Context) {
 		RV30:                 data.RV30,
 		VRP:                  data.VRP,
 	}
+	if pt.TotalOIUSD == nil && pt.MajorDerivSpot == nil && pt.DVOL == nil && pt.RV30 == nil {
+		return
+	}
 	if _, err := ms.store.putBtcMarketDaily(ctx, pt, now); err != nil {
 		slog.Warn("btc market snapshot: save failed", "day", day, "error", err)
 	}

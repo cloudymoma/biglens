@@ -11,8 +11,7 @@
     "spread": 0.01,
     "funding_rate": 0.005447,
     "open_interest": 7656980000.0,
-    "volume_24h": 134580.12,
-    "converted_volume": { "usd": "10966095175.28" },
+    "volume_24h": 10966095175.28,
     "last_traded_at": 1760659200,
     "expired_at": null
   },
@@ -28,8 +27,7 @@
     "spread": 0.01,
     "funding_rate": 0.005447,
     "open_interest": 1343862400.0,
-    "volume_24h": 14825000.0,
-    "converted_volume": { "usd": "1482500000.0" },
+    "volume_24h": 1482500000.0,
     "last_traded_at": 1760659200,
     "expired_at": null
   },
@@ -45,8 +43,7 @@
     "spread": 0.01,
     "funding_rate": 0.0062,
     "open_interest": 5120000000.0,
-    "volume_24h": 72100.0,
-    "converted_volume": { "usd": "5875000000.0" },
+    "volume_24h": 5875000000.0,
     "last_traded_at": 1760659200,
     "expired_at": null
   },
@@ -62,8 +59,7 @@
     "spread": 0.01,
     "funding_rate": 0.0085,
     "open_interest": 3463070000.0,
-    "volume_24h": 69758.85,
-    "converted_volume": { "usd": "5684230133.4" },
+    "volume_24h": 5684230133.4,
     "last_traded_at": 1760659200,
     "expired_at": null
   },
@@ -79,8 +75,7 @@
     "spread": 0.01,
     "funding_rate": 0.00125,
     "open_interest": 3346059650.69,
-    "volume_24h": 34855.0,
-    "converted_volume": { "usd": "2840125000.0" },
+    "volume_24h": 2840125000.0,
     "last_traded_at": 1760659200,
     "expired_at": null
   },
@@ -96,8 +91,7 @@
     "spread": 0.01,
     "funding_rate": 0.0062,
     "open_interest": 825400000.0,
-    "volume_24h": 17426.5,
-    "converted_volume": { "usd": "1420000000.0" },
+    "volume_24h": 1420000000.0,
     "last_traded_at": 1760659200,
     "expired_at": null
   },
@@ -113,8 +107,7 @@
     "spread": 0.01,
     "funding_rate": 0.00128,
     "open_interest": 232229400.0,
-    "volume_24h": 4250.5,
-    "converted_volume": { "usd": "346347742.0" },
+    "volume_24h": 346347742.0,
     "last_traded_at": 1760659200,
     "expired_at": null
   },
@@ -130,8 +123,7 @@
     "spread": 0.01,
     "funding_rate": 0.0008,
     "open_interest": 84041782.76,
-    "volume_24h": 1250.0,
-    "converted_volume": { "usd": "101855000.0" },
+    "volume_24h": 101855000.0,
     "last_traded_at": 1760659200,
     "expired_at": null
   },
@@ -147,8 +139,7 @@
     "spread": 0.02,
     "funding_rate": 0.01,
     "open_interest": 4200000000.0,
-    "volume_24h": 185000.0,
-    "converted_volume": { "usd": "15073800000.0" },
+    "volume_24h": 15073800000.0,
     "last_traded_at": 1760659200,
     "expired_at": null
   },
@@ -164,8 +155,7 @@
     "spread": 0.02,
     "funding_rate": 0.01,
     "open_interest": 2800000000.0,
-    "volume_24h": 110000.0,
-    "converted_volume": { "usd": "8962910000.0" },
+    "volume_24h": 8962910000.0,
     "last_traded_at": 1760659200,
     "expired_at": null
   },
@@ -177,7 +167,7 @@
     "contract_type": "futures",
     "index": 65000.0,
     "open_interest": 120000000.0,
-    "converted_volume": { "usd": "500000000.0" },
+    "volume_24h": 500000000.0,
     "last_traded_at": 1727424000,
     "expired_at": 1727424000
   },
@@ -189,7 +179,7 @@
     "contract_type": "perpetual",
     "index": 2640.0,
     "open_interest": 3500000000.0,
-    "converted_volume": { "usd": "8200000000.0" },
+    "volume_24h": 8200000000.0,
     "last_traded_at": 1760659200,
     "expired_at": null
   }

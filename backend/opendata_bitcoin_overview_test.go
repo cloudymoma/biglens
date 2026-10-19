@@ -326,3 +326,69 @@ func TestBitcoinOverviewPartial(t *testing.T) {
 		t.Errorf("ScheduledSupplyBTC = %f, want > 19M", got.Supply.ScheduledSupplyBTC)
 	}
 }
+
+func TestBtcRegimeSignalsHandlesRibbonRecoveryState(t *testing.T) {
+	// Build a hashrate series where SMA30 recently crossed above SMA60 -> ribbonState returns State == "recovery".
+	ehVals := make([]float64, 70)
+	for i := 0; i < 60; i++ {
+		ehVals[i] = 500.0
+	}
+	// Dip to force SMA30 < SMA60, then spike at the end so SMA30 crosses back above SMA60.
+	for i := 30; i < 65; i++ {
+		ehVals[i] = 400.0
+	}
+	for i := 65; i < 70; i++ {
+		ehVals[i] = 1000.0
+	}
+	rb := ribbonState(ehVals)
+	if rb.State != "recovery" {
+		t.Fatalf("ribbonState.State = %q, want recovery", rb.State)
+	}
+
+	sigs := computeBtcRegimeSignals(btcRegimeInputs{
+		Ribbon: rb,
+	})
+	var minersSig *BtcRegimeSignal
+	for i := range sigs {
+		if sigs[i].ID == "miners" {
+			minersSig = &sigs[i]
+			break
+		}
+	}
+	if minersSig == nil || minersSig.State != "recovery" {
+		t.Fatalf("miners signal from ribbonState(recovery) = %+v, want State=recovery", minersSig)
+	}
+}
+
+func TestBtcVerificationMinerRevenueUsesSameDayCM(t *testing.T) {
+	iss := 468.75
+	fee := 12.50
+	mempool144 := 450.0 // 144-block window, differs from 150-block UTC day
+	rows := computeBtcVerificationRows(btcVerificationInputs{
+		Date: "2026-10-15",
+		CMRow: &BtcCMMetricRow{
+			Date:      "2026-10-15",
+			IssTotNtv: &iss,
+			FeeTotNtv: &fee,
+		},
+		MempoolRewardsBTC: &mempool144,
+		OnchainDay: &BtcOnchainDay{
+			Date:         "2026-10-15",
+			Blocks:       150,
+			CoinbaseSats: 48_125_000_000, // 481.25 BTC
+		},
+	})
+	var revRow *BtcVerificationRow
+	for i := range rows {
+		if rows[i].ID == "miner_revenue" {
+			revRow = &rows[i]
+			break
+		}
+	}
+	if revRow == nil || revRow.APIValue == nil {
+		t.Fatalf("miner_revenue row missing APIValue: %+v", revRow)
+	}
+	if math.Abs(*revRow.APIValue-481.25) > 1e-6 || math.Abs(*revRow.DeltaPct) > 1e-6 {
+		t.Errorf("miner_revenue APIValue=%.2f DeltaPct=%v, want 481.25 and 0%%", *revRow.APIValue, revRow.DeltaPct)
+	}
+}

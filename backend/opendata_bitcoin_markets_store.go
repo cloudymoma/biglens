@@ -54,8 +54,12 @@ func (s *riskStore) putBtcMarketDaily(ctx context.Context, pt BtcMarketDailyPoin
 		return false, err
 	}
 	res, err := s.db.ExecContext(ctx, `
-INSERT OR IGNORE INTO btc_market_daily (day, payload, captured_at)
-VALUES (?, ?, ?)`,
+INSERT INTO btc_market_daily (day, payload, captured_at)
+VALUES (?, ?, ?)
+ON CONFLICT(day) DO UPDATE SET
+  payload = excluded.payload,
+  captured_at = excluded.captured_at
+WHERE btc_market_daily.payload LIKE '%"total_oi_usd":null%'`,
 		pt.Date, string(b), capturedAt.UTC().Format(time.RFC3339))
 	if err != nil {
 		return false, err

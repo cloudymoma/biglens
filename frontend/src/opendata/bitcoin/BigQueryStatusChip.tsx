@@ -10,9 +10,24 @@ export default function BigQueryStatusChip({
 }) {
   if (!bigquery) return null;
 
+  const allStatuses = Object.values(bigquery.statuses ?? {});
+  const stoppedStatus = allStatuses.find(s => s.state === 'stopped');
+  const retryingStatus = allStatuses.find(s => s.state === 'retrying' || s.state === 'budget_paused');
   const status: BtcBQStatus | undefined =
-    bigquery.statuses?.[job] ?? bigquery.statuses?.rollup;
+    stoppedStatus ??
+    retryingStatus ??
+    bigquery.statuses?.[job] ??
+    bigquery.statuses?.rollup ??
+    allStatuses[0];
   const state = status?.state ?? (bigquery.jobs ? 'cold_start' : 'off');
+  const stoppedJobs =
+    bigquery.stopped_jobs && bigquery.stopped_jobs.length > 0
+      ? bigquery.stopped_jobs
+      : stoppedStatus?.job
+        ? [stoppedStatus.job]
+        : state === 'stopped'
+          ? [status?.job || job]
+          : [];
   const billed = bigquery.month_billed_gib ?? 0;
   const budget = bigquery.budget_gib ?? 0;
 
@@ -68,15 +83,16 @@ export default function BigQueryStatusChip({
           <span className="opacity-80">· thru {status.synced_through}</span>
         )}
       </span>
-      {state === 'stopped' && (
+      {stoppedJobs.map(sj => (
         <span
+          key={sj}
           title={status?.stop_reason || 'Repeated billed failures stopped this job'}
           className="inline-flex items-center gap-1 rounded-full border border-red-500/30 bg-red-950/40 px-2.5 py-0.5 font-mono text-[11px] text-red-200"
         >
           <Terminal className="h-3 w-3 text-red-400" />
-          <span>./biglens-server --bitcoin-bq-resume {stoppedJob}</span>
+          <span>./biglens-server --bitcoin-bq-resume {sj}</span>
         </span>
-      )}
+      ))}
       {budget > 0 && (
         <span className="rounded-full border border-zinc-800 bg-zinc-900/70 px-2.5 py-0.5 text-[11px] text-zinc-400">
           Budget: {billed.toFixed(1)} / {budget.toFixed(0)} GiB

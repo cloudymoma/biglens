@@ -314,7 +314,7 @@ func fetchCGCuratedSpot(ctx context.Context, exchangeIDs []string) (*BtcCuratedS
 		if tk.IsAnomaly || tk.IsStale {
 			continue
 		}
-		if !strings.EqualFold(strings.TrimSpace(tk.Base), "BTC") {
+		if !isBTCBaseSymbol(tk.Base) {
 			continue
 		}
 		vol := tk.ConvertedVolume.USD
@@ -385,10 +385,16 @@ type cgRawDerivativeTicker struct {
 	Spread          *float64 `json:"spread"`
 	FundingRate     *float64 `json:"funding_rate"`
 	OpenInterest    *float64 `json:"open_interest"`
+	Volume24h       any      `json:"volume_24h"`
 	ConvertedVolume struct {
 		USD any `json:"usd"`
 	} `json:"converted_volume"`
 	ExpiredAt *int64 `json:"expired_at"`
+}
+
+func isBTCBaseSymbol(s string) bool {
+	s = strings.ToUpper(strings.TrimSpace(s))
+	return s == "BTC" || s == "XBT"
 }
 
 func mapCGDerivativeMarketToVenue(market string) (venueID, kind string, verifiedFunding8h bool) {
@@ -452,7 +458,7 @@ func fetchCGDerivativesBTC(ctx context.Context, now time.Time) (*BtcCGDerivative
 	nowUnix := now.UTC().Unix()
 
 	code := btcStreamJSONArray(ctx, btcCGDerivativesURL, btcStreamMaxBody, func(tk cgRawDerivativeTicker) error {
-		if !strings.EqualFold(strings.TrimSpace(tk.IndexID), "BTC") {
+		if !isBTCBaseSymbol(tk.IndexID) {
 			return nil
 		}
 		if tk.ExpiredAt != nil && *tk.ExpiredAt > 0 && *tk.ExpiredAt <= nowUnix {
@@ -464,7 +470,10 @@ func fetchCGDerivativesBTC(ctx context.Context, now time.Time) (*BtcCGDerivative
 			venuesSeen[strings.ToLower(mkt)] = true
 		}
 
-		volUSD, _ := parseCGAnyFloat(tk.ConvertedVolume.USD)
+		volUSD, ok := parseCGAnyFloat(tk.Volume24h)
+		if !ok || volUSD <= 0 {
+			volUSD, _ = parseCGAnyFloat(tk.ConvertedVolume.USD)
+		}
 		var oiUSD float64
 		if tk.OpenInterest != nil && *tk.OpenInterest > 0 {
 			oiUSD = *tk.OpenInterest
