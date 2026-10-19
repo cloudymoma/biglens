@@ -16,6 +16,10 @@ type stablecoinService struct {
 	settings stableSettings
 	facts    stableFacts
 	now      func() time.Time
+	// Wired in main once the shared store and RPC lists exist; nil until then.
+	store  *riskStore
+	supply *stableSupplySampler
+	health *stableHealth
 }
 
 func newStablecoinService(cfg *Config) *stablecoinService {

@@ -259,8 +259,8 @@ func (h *stableHealth) samplers() []StableSamplerHealth {
 }
 
 // runStableOnce is one runner iteration: the supply tick, then the history
-// and rates jobs when due, each recorded in h. It wires the sampler's fetch
-// hook to h on first use.
+// and rates jobs and the retention prune when due, each run recorded in h.
+// It wires the sampler's fetch hook to h on first use.
 func runStableOnce(ctx context.Context, s *stableSupplySampler, h *stableHealth) {
 	if s.onFetch == nil {
 		s.onFetch = h.recordFetch
@@ -274,6 +274,7 @@ func runStableOnce(ctx context.Context, s *stableSupplySampler, h *stableHealth)
 	if ran, ok := s.syncRates(ctx); ran {
 		h.recordRun("rates", stableRatesEvery, start, s.ratesNextDue(), ok)
 	}
+	s.prune(ctx)
 	h.checkStalls()
 }
 

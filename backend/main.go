@@ -155,6 +155,16 @@ func main() {
 	api.risk.bqProfile = newBQProfiler(cfg.AddressRisk.bigQueryProfile(), bqProfileClient{client: bq.client})
 	api.risk.invalidateCache = invalidate
 	api.risk.setEtherscanKey(cfg.AddressRisk.EtherscanAPIKey)
+	// Stablecoins dashboard: keyless public APIs and RPC reads only (no
+	// BigQuery in v1). Started after api.risk so the sampler's RPC lists
+	// (payRPCs) are final.
+	if api.stable != nil {
+		api.stable.store = rstore
+		api.stable.health = newStableHealth(api.stable.settings, time.Now)
+		api.stable.supply = newStableSupplySampler(api.stable.settings, rstore, defaultStableEndpoints(), api.payRPCs, time.Now)
+		api.stable.supply.onFetch = api.stable.health.recordFetch
+		go runStableSamplers(ctx, api.stable.supply, api.stable.health)
+	}
 
 	mux := http.NewServeMux()
 
@@ -232,6 +242,7 @@ func main() {
 	mux.Handle("/api/opendata/weather/dashboard", h(api.WeatherDashboard))
 	registerCryptoRoutes(mux, api, prices, h, logMW)
 	registerBitcoinRoutes(mux, api, h, logMW)
+	registerStablecoinRoutes(mux, api, h)
 	mux.Handle("/api/gcp_billing/config", h(api.BillingConfig))
 	mux.Handle("/api/gcp_billing/meta", h(api.BillingMeta))
 	mux.Handle("/api/gcp_billing/overview", h(api.BillingOverview))

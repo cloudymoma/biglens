@@ -608,6 +608,7 @@ type stableSupplySampler struct {
 	recon       map[string][]StableReconOnchain
 	reconAsOf   time.Time
 	state       *stableSupplyState
+	pruneDue    time.Time
 }
 
 func newStableSupplySampler(settings stableSettings, store *riskStore, ep stableEndpoints, rpcs func(string) []string, now func() time.Time) *stableSupplySampler {
@@ -977,6 +978,23 @@ func (s *stableSupplySampler) syncHistory(ctx context.Context) (ran, ok bool) {
 	}
 	s.mu.Unlock()
 	return true, ok
+}
+
+// prune deletes snapshots past the retention window once a day (§8.5).
+func (s *stableSupplySampler) prune(ctx context.Context) {
+	now := s.now().UTC()
+	s.mu.Lock()
+	due := s.store != nil && !now.Before(s.pruneDue)
+	if due {
+		s.pruneDue = now.Add(24 * time.Hour)
+	}
+	s.mu.Unlock()
+	if !due {
+		return
+	}
+	if _, err := s.store.pruneStable(ctx, now); err != nil {
+		slog.Warn("stablecoin retention prune", "error", err)
+	}
 }
 
 func (s *stableSupplySampler) historyNextDue() time.Time {
