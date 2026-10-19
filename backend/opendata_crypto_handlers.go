@@ -320,20 +320,11 @@ type CryptoFeesData struct {
 }
 
 // mergeBtcFees returns new rows with SubsidyBTC = coinbase revenue − fees,
-// clamped at 0. Inputs are not mutated. When coinbase is nil/empty, each row's
-// inline CoinbaseBTC field (from conditional aggregation) is used.
-func mergeBtcFees(fees []BtcFeeRow, coinbase []BtcCoinbaseRow) []BtcFeeRow {
-	revenue := make(map[string]float64, len(coinbase))
-	for _, c := range coinbase {
-		revenue[c.Date] = c.CoinbaseBTC
-	}
+// clamped at 0. Inputs are not mutated.
+func mergeBtcFees(fees []BtcFeeRow) []BtcFeeRow {
 	out := make([]BtcFeeRow, 0, len(fees))
 	for _, f := range fees {
-		cb, ok := revenue[f.Date]
-		if !ok {
-			cb = f.CoinbaseBTC
-		}
-		if subsidy := cb - f.TotalFeesBTC; subsidy > 0 {
+		if subsidy := f.CoinbaseBTC - f.TotalFeesBTC; subsidy > 0 {
 			f.SubsidyBTC = subsidy
 		}
 		out = append(out, f)
@@ -427,7 +418,7 @@ func (h *APIHandler) CryptoFees(w http.ResponseWriter, r *http.Request) {
 			slog.Warn("crypto fees: btc query failed", "error", btcFeeErr)
 			data.Warnings = append(data.Warnings, "btc_fees: "+btcFeeErr.Error())
 		} else {
-			data.BTC = mergeBtcFees(btcFees, nil)
+			data.BTC = mergeBtcFees(btcFees)
 		}
 		if btcBlocksErr != nil {
 			slog.Warn("crypto fees: btc blocks query failed", "error", btcBlocksErr)

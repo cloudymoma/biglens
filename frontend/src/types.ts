@@ -1037,12 +1037,6 @@ export interface CryptoTokensLiveData {
   warnings?: string[];
 }
 
-export interface CryptoSpotData {
-  price_usd: number;
-  as_of: string;
-  source: string;
-}
-
 // --- Crypto Pulse: Address Risk (field names mirror backend/address_risk_lookup.go) ---
 
 export type AddressRiskChain = 'eth' | 'arb' | 'op' | 'base' | 'tron' | 'btc' | 'sol';

@@ -96,14 +96,10 @@ func TestRollupCryptoKpiEmpty(t *testing.T) {
 // rows and coinbase rows disagree must never render a negative subsidy).
 func TestMergeBtcFees(t *testing.T) {
 	fees := []BtcFeeRow{
-		{Date: "2026-07-19", MedianFeeVB: 12, TotalFeesBTC: 20},
-		{Date: "2026-07-20", MedianFeeVB: 15, TotalFeesBTC: 30},
+		{Date: "2026-07-19", MedianFeeVB: 12, TotalFeesBTC: 20, CoinbaseBTC: 470},
+		{Date: "2026-07-20", MedianFeeVB: 15, TotalFeesBTC: 30, CoinbaseBTC: 10}, // pathological: fees > revenue
 	}
-	coinbase := []BtcCoinbaseRow{
-		{Date: "2026-07-19", CoinbaseBTC: 470},
-		{Date: "2026-07-20", CoinbaseBTC: 10}, // pathological: fees > revenue
-	}
-	got := mergeBtcFees(fees, coinbase)
+	got := mergeBtcFees(fees)
 	if len(got) != 2 {
 		t.Fatalf("len = %d, want 2", len(got))
 	}
