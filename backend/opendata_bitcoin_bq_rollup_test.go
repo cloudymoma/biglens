@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"math"
+	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -92,6 +94,8 @@ func validTestRollupRow(date string, coinbaseTxs int64) btcRollupRawRow {
 func TestBtcRollupSQL(t *testing.T) {
 	sql := btcRollupSQL()
 	mustContain := []string{
+		"DIV(4 * (size - virtual_size), 3) AS witness_bytes",
+		"CAST(SUM(witness_bytes) AS INT64) AS witness_bytes",
 		"CAST(SUM(IF(is_coinbase, 0, fee)) AS INT64) AS fees_sats",
 		"CAST(SUM(IF(is_coinbase, (SELECT SUM(o.value) FROM UNNEST(outs) o), 0)) AS INT64) AS coinbase_sats",
 		"CAST(SUM((SELECT SUM(IF(o.type != 'nulldata', o.value, 0)) FROM UNNEST(outs) o)) AS INT64) AS created_sats",
@@ -113,6 +117,49 @@ func TestBtcRollupSQL(t *testing.T) {
 	opretIdx := strings.Index(sql, "THEN 'op_return'")
 	if runesIdx < 0 || opretIdx < 0 || runesIdx >= opretIdx {
 		t.Errorf("expected 'runes' branch (%d) before 'op_return' branch (%d)", runesIdx, opretIdx)
+	}
+}
+
+func TestBtcSQLResultTypesMatchStructs(t *testing.T) {
+	cases := []struct {
+		name string
+		sql  string
+		typ  reflect.Type
+	}{
+		{"A1 rollup", btcRollupSQL(), reflect.TypeFor[btcRollupRawRow]()},
+		{"A2 blocks", btcBlocksSQL(), reflect.TypeFor[btcBlockRow]()},
+		{"B coinage", btcCoinAgeSQL(), reflect.TypeFor[btcCoinAgeRawRow]()},
+		{"C utxo_baseline", btcUTXOBaselineSQL(), reflect.TypeFor[btcUTXOBaselineRow]()},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for i := 0; i < tc.typ.NumField(); i++ {
+				f := tc.typ.Field(i)
+				tag := f.Tag.Get("bigquery")
+				if tag == "" || tag == "-" {
+					t.Fatalf("struct %s field %s missing bigquery tag", tc.typ.Name(), f.Name)
+				}
+				// Verify column is projected in the SQL (as `AS <tag>` or bare `<tag>`).
+				aliasRe := regexp.MustCompile(`(?i)\b(?:AS\s+` + regexp.QuoteMeta(tag) + `|` + regexp.QuoteMeta(tag) + `\b)`)
+				if !aliasRe.MatchString(tc.sql) {
+					t.Errorf("struct %s field %s (bigquery:%q) not projected in SQL", tc.typ.Name(), f.Name, tag)
+				}
+				// If the Go field is int64, ensure no expression aliased `AS <tag>` in any CTE or SELECT
+				// uses BigQuery's float division operator `/` without an outer CAST(... AS INT64).
+				if f.Type.Kind() == reflect.Int64 {
+					defRe := regexp.MustCompile(`(?im)([^\n,]+?)\s+AS\s+` + regexp.QuoteMeta(tag) + `\b`)
+					matches := defRe.FindAllStringSubmatch(tc.sql, -1)
+					for _, m := range matches {
+						expr := strings.TrimSpace(m[1])
+						if strings.Contains(expr, "/") && !strings.HasPrefix(strings.ToUpper(expr), "CAST(") {
+							t.Errorf("int64 field %s (bigquery:%q) uses float division '/' in SQL expression %q (will return FLOAT64 in BigQuery and fail decoding into int64)",
+								f.Name, tag, expr)
+						}
+					}
+				}
+			}
+		})
 	}
 }
 

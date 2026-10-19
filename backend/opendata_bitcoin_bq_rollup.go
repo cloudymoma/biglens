@@ -36,7 +36,7 @@ func btcRollupSQL() string {
   WHERE block_timestamp >= TIMESTAMP(@start_date) AND block_timestamp < TIMESTAMP(@end_date)
 ), cls AS (
   SELECT *,
-    4 * (size - virtual_size) / 3 AS witness_bytes,
+    DIV(4 * (size - virtual_size), 3) AS witness_bytes,
     CASE
       WHEN is_coinbase THEN 'coinbase'
       WHEN EXISTS (SELECT 1 FROM UNNEST(outs) o WHERE o.type = 'nulldata' AND o.pfx = '6a5d') THEN 'runes'
@@ -51,7 +51,7 @@ func btcRollupSQL() string {
   SELECT d,
     COUNTIF(NOT is_coinbase) AS txs,
     COUNTIF(is_coinbase) AS coinbase_txs,
-    SUM(virtual_size) AS vbytes, SUM(size) AS bytes, SUM(witness_bytes) AS witness_bytes,
+    SUM(virtual_size) AS vbytes, SUM(size) AS bytes, CAST(SUM(witness_bytes) AS INT64) AS witness_bytes,
     APPROX_QUANTILES(IF(is_coinbase, NULL, CAST(fee AS FLOAT64) / NULLIF(virtual_size, 0)), 100) AS fee_q,
     CAST(SUM(IF(is_coinbase, 0, fee)) AS INT64) AS fees_sats,
     CAST(SUM(IF(is_coinbase, (SELECT SUM(o.value) FROM UNNEST(outs) o), 0)) AS INT64) AS coinbase_sats,
