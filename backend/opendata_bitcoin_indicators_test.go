@@ -30,6 +30,23 @@ func TestIndicatorSMAReturnsDrawdownPercentile(t *testing.T) {
 		t.Fatalf("realizedVol constant growth = %v", rv[34])
 	}
 
+	// Non-constant alternating log returns (+0.02, -0.02 over 30 days):
+	// mean = 0, population stdev = 0.02, annualized RV = 0.02 * sqrt(365) * 100 = 38.209946349...
+	altCloses := make([]float64, 31)
+	altCloses[0] = 100
+	for i := 1; i < len(altCloses); i++ {
+		r := 0.02
+		if i%2 == 0 {
+			r = -0.02
+		}
+		altCloses[i] = altCloses[i-1] * math.Exp(r)
+	}
+	altRV := realizedVol(altCloses, 30)
+	wantRV := 0.02 * math.Sqrt(365.0) * 100.0
+	if len(altRV) != 31 || altRV[29] != nil || altRV[30] == nil || math.Abs(*altRV[30]-wantRV) > 1e-9 {
+		t.Fatalf("realizedVol alternating = %v, want %.9f", altRV[30], wantRV)
+	}
+
 	dd := drawdownSeries([]float64{1, 2, 1})
 	if len(dd) != 3 || dd[0] != 0 || dd[1] != 0 || math.Abs(dd[2]+50) > 1e-9 {
 		t.Errorf("drawdownSeries([1,2,1]) = %v, want [0, 0, -50]", dd)
@@ -50,6 +67,10 @@ func TestIndicatorMayerWMA200HalvingPuell(t *testing.T) {
 	mayer := mayerSeries(closes)
 	if mayer[198] != nil || mayer[199] == nil || math.Abs(*mayer[199]-1.0) > 1e-9 {
 		t.Errorf("mayer[199] = %v, want 1.0", mayer[199])
+	}
+	wantMayerSpike := 200.0 / 100.5 // 199 days of 100 + 1 day of 200 -> SMA200 = 100.5
+	if mayer[204] == nil || math.Abs(*mayer[204]-wantMayerSpike) > 1e-9 {
+		t.Errorf("mayer[204] = %v, want %.9f (200 / 100.5)", mayer[204], wantMayerSpike)
 	}
 	if wma := wma200Series(closes); wma != nil {
 		t.Errorf("wma200Series on 205 days = %v, want nil (<1400)", wma)
@@ -79,6 +100,10 @@ func TestIndicatorMayerWMA200HalvingPuell(t *testing.T) {
 	puell := puellSeries(iss)
 	if puell[363] != nil || puell[364] == nil || math.Abs(*puell[364]-1.0) > 1e-9 {
 		t.Errorf("puell[364] = %v, want 1.0", puell[364])
+	}
+	wantPuellSpike := 1500.0 / (365500.0 / 365.0) // 364 days of 1000 + 1 day of 1500
+	if puell[365] == nil || math.Abs(*puell[365]-wantPuellSpike) > 1e-9 {
+		t.Errorf("puell[365] = %v, want %.9f (1500 / (365500/365))", puell[365], wantPuellSpike)
 	}
 }
 
