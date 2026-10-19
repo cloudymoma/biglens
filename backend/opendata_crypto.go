@@ -357,13 +357,6 @@ func (b *BQClient) GetBtcFees(ctx context.Context, start, end civil.Date) ([]Btc
 	return collectRows[BtcFeeRow](q, ctx)
 }
 
-// BtcCoinbaseRow is one day's total miner revenue (subsidy + fees), read
-// from the coinbase transactions' outputs.
-type BtcCoinbaseRow struct {
-	Date        string  `json:"date" bigquery:"date"`
-	CoinbaseBTC float64 `json:"coinbase_btc" bigquery:"coinbase_btc"`
-}
-
 // EthFeeRow is one day's ETH fee economics; the gas price average is
 // gas-weighted. BurnedETH/TipsETH are computed alongside blocks in ethFeesSQL
 // (or filled by mergeEthFees when called separately).
