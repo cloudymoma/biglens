@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"sync"
@@ -463,7 +464,8 @@ func writeBtcBaselineError(w http.ResponseWriter, err error) {
 	case errors.Is(err, errBtcBaselineInterval), errors.Is(err, errBtcBaselineInFlight), errors.Is(err, errBtcOverBudget):
 		writeError(w, err.Error(), http.StatusTooManyRequests)
 	default:
-		writeError(w, err.Error(), http.StatusInternalServerError)
+		slog.Error("bitcoin utxo baseline operation failed", "error", err)
+		writeError(w, "UTXO baseline operation failed", http.StatusInternalServerError)
 	}
 }
 

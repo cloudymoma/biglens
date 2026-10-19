@@ -640,3 +640,16 @@ func TestBitcoinBaselineEndpoint(t *testing.T) {
 		t.Fatalf("POST confirm reuse = %d, want 400", reuseRec.Code)
 	}
 }
+
+func TestWriteBtcBaselineErrorHidesInternal500Details(t *testing.T) {
+	rec := httptest.NewRecorder()
+	secretErr := errors.New("sqlite open /var/lib/biglens/secret/risk.db: permission denied (project=internal-prod-123)")
+	writeBtcBaselineError(rec, secretErr)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "/var/lib/biglens/secret/risk.db") || strings.Contains(body, "internal-prod-123") {
+		t.Fatalf("500 response leaked internal error details: %s", strings.TrimSpace(body))
+	}
+}

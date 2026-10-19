@@ -4,7 +4,7 @@ import { EmptyState, ErrorBanner } from '../../dashboards/shared';
 import { AXIS_LABEL, CHART_TOOLTIP, Panel, SPLIT_LINE } from '../crypto/shared';
 import HelpTip from '../crypto/HelpTip';
 import { fetchBitcoinMarkets } from './api';
-import { downloadCsv, fmtBTC, fmtPct, fmtUSD } from './format';
+import { downloadCsv, escapeHtml, fmtBTC, fmtPct, fmtUSD } from './format';
 import { usePolling } from './usePolling';
 import SourceBadge from './SourceBadge';
 import type { BtcVenueRow } from './types';
@@ -158,7 +158,7 @@ export default function MarketsTab({ refreshTick }: { refreshTick: number }) {
       trigger: 'item',
       formatter: (p: { data: [number, number, string, string, number] }) => {
         const [days, apr, inst, venue, futPx] = p.data;
-        return `<div class="text-xs"><b>${inst}</b> (${venue})<br/>Days to expiry: ${days.toFixed(
+        return `<div class="text-xs"><b>${escapeHtml(inst)}</b> (${escapeHtml(venue)})<br/>Days to expiry: ${days.toFixed(
           1,
         )}d<br/>Annualized basis: <b>${apr.toFixed(2)}% APR</b><br/>Future: ${fmtUSD(futPx)}</div>`;
       },

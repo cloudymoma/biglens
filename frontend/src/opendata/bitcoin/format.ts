@@ -56,6 +56,14 @@ export const fmtRelativeAgo = (iso: string | undefined): string => {
   return `${diffDay}d ago`;
 };
 
+export const escapeHtml = (s: string): string =>
+  s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
 export const downloadCsv = (filename: string, headers: string[], rows: (string | number | null | undefined)[][]): void => {
   const esc = (v: string | number | null | undefined): string => {
     if (v === null || v === undefined) return '';

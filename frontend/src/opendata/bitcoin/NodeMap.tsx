@@ -3,7 +3,7 @@ import ReactECharts from 'echarts-for-react';
 import * as echarts from 'echarts';
 import type { BtcNodeCountry } from './types';
 import { CHART_TOOLTIP } from '../crypto/shared';
-import { fmtPct } from './format';
+import { escapeHtml, fmtPct } from './format';
 
 interface NodeMapProps {
   countries: BtcNodeCountry[];
@@ -31,15 +31,6 @@ const GEO_NAME_OVERRIDES: Record<string, string> = {
   BA: 'Bosnia and Herzegovina',
   MK: 'Macedonia',
 };
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
 
 export default function NodeMap({ countries, clearnetTotal }: NodeMapProps) {
   const [mapReady, setMapReady] = useState<boolean>(() => Boolean(echarts.getMap('world')));
