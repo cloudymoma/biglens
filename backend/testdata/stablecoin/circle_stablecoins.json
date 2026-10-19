@@ -1,0 +1,308 @@
+{
+ "data": [
+  {
+   "name": "Euro Coin",
+   "symbol": "EURC",
+   "totalAmount": "439832365.3957852",
+   "totalSecondaryMarketBurnedAmount": "0",
+   "chains": [
+    {
+     "chain": "ARC",
+     "amount": "7092338.708042",
+     "secondaryMarketBurnedAmount": "0",
+     "updateDate": "2026-10-19T13:19:01.805Z"
+    },
+    {
+     "chain": "AVAX",
+     "amount": "5020755.621566",
+     "secondaryMarketBurnedAmount": "0",
+     "updateDate": "2026-10-19T13:19:01.697Z"
+    },
+    {
+     "chain": "BASE",
+     "amount": "50542524.481019",
+     "secondaryMarketBurnedAmount": "0",
+     "updateDate": "2026-10-19T13:19:01.697Z"
+    },
+    {
+     "chain": "CRONOS",
+     "amount": "338412.8",
+     "secondaryMarketBurnedAmount": "0",
+     "updateDate": "2026-10-19T13:19:01.806Z"
+    },
+    {
+     "chain": "ETH",
+     "amount": "321883495.462394",
+     "secondaryMarketBurnedAmount": "0",
+     "updateDate": "2026-10-19T13:19:01.697Z"
+    },
+    {
+     "chain": "PLASMA",
+     "amount": "279050.54",
+     "secondaryMarketBurnedAmount": "0",
+     "updateDate": "2026-10-19T13:19:01.806Z"
+    },
+    {
+     "chain": "SOL",
+     "amount": "50053662.075142",
+     "secondaryMarketBurnedAmount": "0",
+     "updateDate": "2026-10-19T13:19:01.697Z"
+    },
+    {
+     "chain": "WORLDCHAIN",
+     "amount": "587270.46",
+     "secondaryMarketBurnedAmount": "0",
+     "updateDate": "2026-10-19T13:19:01.698Z"
+    },
+    {
+     "chain": "XLM",
+     "amount": "4034855.2476222",
+     "secondaryMarketBurnedAmount": "0",
+     "updateDate": "2026-10-19T13:19:01.806Z"
+    }
+   ]
+  },
+  {
+   "name": "USD Coin",
+   "symbol": "USDC",
+   "totalAmount": "72428691938.569237593",
+   "totalSecondaryMarketBurnedAmount": "381235",
+   "chains": [
+    {
+     "chain": "ALGO",
+     "amount": "92357293.036204",
+     "secondaryMarketBurnedAmount": "0",
+     "updateDate": "2026-10-19T13:19:01.695Z"
+    },
+    {
+     "chain": "APTOS",
+     "amount": "298965022.563087",
+     "secondaryMarketBurnedAmount": "0",
+     "updateDate": "2026-10-19T13:19:00.845Z"
+    },
+    {
+     "chain": "ARB",
+     "amount": "2648258154.953247",
+     "secondaryMarketBurnedAmount": "0",
+     "updateDate": "2026-10-19T13:19:00.829Z"
+    },
+    {
+     "chain": "ARC",
+     "amount": "667548557.967527",
+     "secondaryMarketBurnedAmount": "0",
+     "updateDate": "2026-10-19T13:19:01.317Z"
+    },
+    {
+     "chain": "AVAX",
+     "amount": "361947648.867478",
+     "secondaryMarketBurnedAmount": "0",
+     "updateDate": "2026-10-19T13:19:00.823Z"
+    },
+    {
+     "chain": "BASE",
+     "amount": "4303557239.588063",
+     "secondaryMarketBurnedAmount": "0",
+     "updateDate": "2026-10-19T13:19:00.837Z"
+    },
+    {
+     "chain": "CELO",
+     "amount": "15785988.948166",
+     "secondaryMarketBurnedAmount": "0",
+     "updateDate": "2026-10-19T13:19:01.696Z"
+    },
+    {
+     "chain": "CODEX",
+     "amount": "4722234.751827",
+     "secondaryMarketBurnedAmount": "0",
+     "updateDate": "2026-10-19T13:19:00.853Z"
+    },
+    {
+     "chain": "CRONOS",
+     "amount": "9819537.0182",
+     "secondaryMarketBurnedAmount": "0",
+     "updateDate": "2026-10-19T13:19:01.695Z"
+    },
+    {
+     "chain": "EDGE",
+     "amount": "2296960.113846",
+     "secondaryMarketBurnedAmount": "0",
+     "updateDate": "2026-10-19T13:19:01.320Z"
+    },
+    {
+     "chain": "ETH",
+     "amount": "48110376596.928461",
+     "secondaryMarketBurnedAmount": "381235",
+     "updateDate": "2026-10-19T13:19:00.821Z"
+    },
+    {
+     "chain": "HBAR",
+     "amount": "37519260.53",
+     "secondaryMarketBurnedAmount": "0",
+     "updateDate": "2026-10-19T13:19:01.696Z"
+    },
+    {
+     "chain": "HYPEREVM",
+     "amount": "6584583979.115576",
+     "secondaryMarketBurnedAmount": "0",
+     "updateDate": "2026-10-19T13:19:01.312Z"
+    },
+    {
+     "chain": "INJECTIVE",
+     "amount": "12595576.623979",
+     "secondaryMarketBurnedAmount": "0",
+     "updateDate": "2026-10-19T13:19:01.321Z"
+    },
+    {
+     "chain": "INK",
+     "amount": "45670150.342586",
+     "secondaryMarketBurnedAmount": "0",
+     "updateDate": "2026-10-19T13:19:01.313Z"
+    },
+    {
+     "chain": "LINEA",
+     "amount": "23659616.358427",
+     "secondaryMarketBurnedAmount": "0",
+     "updateDate": "2026-10-19T13:19:00.851Z"
+    },
+    {
+     "chain": "MONAD",
+     "amount": "214776440.252939",
+     "secondaryMarketBurnedAmount": "0",
+     "updateDate": "2026-10-19T13:19:00.861Z"
+    },
+    {
+     "chain": "MORPH",
+     "amount": "23520080.672782",
+     "secondaryMarketBurnedAmount": "0",
+     "updateDate": "2026-10-19T13:19:01.322Z"
+    },
+    {
+     "chain": "NEAR",
+     "amount": "76388943.300469",
+     "secondaryMarketBurnedAmount": "0",
+     "updateDate": "2026-10-19T13:19:01.696Z"
+    },
+    {
+     "chain": "NOBLE",
+     "amount": "94554454.785662",
+     "secondaryMarketBurnedAmount": "0",
+     "updateDate": "2026-10-19T13:19:00.832Z"
+    },
+    {
+     "chain": "OP",
+     "amount": "138706579.151216",
+     "secondaryMarketBurnedAmount": "0",
+     "updateDate": "2026-10-19T13:19:00.826Z"
+    },
+    {
+     "chain": "PAH",
+     "amount": "31941398.117282",
+     "secondaryMarketBurnedAmount": "0",
+     "updateDate": "2026-10-19T13:19:01.696Z"
+    },
+    {
+     "chain": "PHAROS",
+     "amount": "43542640.703863",
+     "secondaryMarketBurnedAmount": "0",
+     "updateDate": "2026-10-19T13:19:01.694Z"
+    },
+    {
+     "chain": "PLASMA",
+     "amount": "3250987.294019",
+     "secondaryMarketBurnedAmount": "0",
+     "updateDate": "2026-10-19T13:19:01.695Z"
+    },
+    {
+     "chain": "PLUME",
+     "amount": "7789470.139217",
+     "secondaryMarketBurnedAmount": "0",
+     "updateDate": "2026-10-19T13:19:01.315Z"
+    },
+    {
+     "chain": "POLY",
+     "amount": "608259209.530388",
+     "secondaryMarketBurnedAmount": "0",
+     "updateDate": "2026-10-19T13:19:00.840Z"
+    },
+    {
+     "chain": "SEI",
+     "amount": "42313285.577048",
+     "secondaryMarketBurnedAmount": "0",
+     "updateDate": "2026-10-19T13:19:01.310Z"
+    },
+    {
+     "chain": "SOL",
+     "amount": "6664088519.355501",
+     "secondaryMarketBurnedAmount": "0",
+     "updateDate": "2026-10-19T13:19:00.834Z"
+    },
+    {
+     "chain": "SONIC",
+     "amount": "115882809.189654",
+     "secondaryMarketBurnedAmount": "0",
+     "updateDate": "2026-10-19T13:19:00.856Z"
+    },
+    {
+     "chain": "STRK",
+     "amount": "139456819.19533",
+     "secondaryMarketBurnedAmount": "0",
+     "updateDate": "2026-10-19T13:19:01.316Z"
+    },
+    {
+     "chain": "SUI",
+     "amount": "351188885.826242",
+     "secondaryMarketBurnedAmount": "0",
+     "updateDate": "2026-10-19T13:19:00.843Z"
+    },
+    {
+     "chain": "TRX",
+     "amount": "27934099.204966",
+     "secondaryMarketBurnedAmount": "0",
+     "updateDate": "2026-10-19T13:19:01.696Z"
+    },
+    {
+     "chain": "UNI",
+     "amount": "20184642.562687",
+     "secondaryMarketBurnedAmount": "0",
+     "updateDate": "2026-10-19T13:19:00.848Z"
+    },
+    {
+     "chain": "WORLDCHAIN",
+     "amount": "17393184.966812",
+     "secondaryMarketBurnedAmount": "0",
+     "updateDate": "2026-10-19T13:19:00.859Z"
+    },
+    {
+     "chain": "XDC",
+     "amount": "53888310.494956",
+     "secondaryMarketBurnedAmount": "0",
+     "updateDate": "2026-10-19T13:19:01.311Z"
+    },
+    {
+     "chain": "XLAYER",
+     "amount": "33866326.872693",
+     "secondaryMarketBurnedAmount": "0",
+     "updateDate": "2026-10-19T13:19:01.695Z"
+    },
+    {
+     "chain": "XLM",
+     "amount": "484264891.8377818",
+     "secondaryMarketBurnedAmount": "0",
+     "updateDate": "2026-10-19T13:19:01.318Z"
+    },
+    {
+     "chain": "XRP",
+     "amount": "5199650.418900793",
+     "secondaryMarketBurnedAmount": "0",
+     "updateDate": "2026-10-19T13:19:01.696Z"
+    },
+    {
+     "chain": "ZKS",
+     "amount": "10636491.412155",
+     "secondaryMarketBurnedAmount": "0",
+     "updateDate": "2026-10-19T13:19:01.697Z"
+    }
+   ]
+  }
+ ]
+}

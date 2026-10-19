@@ -1,0 +1,101 @@
+{
+ "success": true,
+ "data": {
+  "poolData": [
+   {
+    "id": "0",
+    "address": "0xbEbc44782C7dB0a1A60Cb6fe97d0b483032FF1C7",
+    "coinsAddresses": [
+     "0x6B175474E89094C44Da98b954EedeAC495271d0F",
+     "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+     "0xdAC17F958D2ee523a2206206994597C13D831ec7",
+     "0x0000000000000000000000000000000000000000"
+    ],
+    "decimals": [
+     "18",
+     "6",
+     "6",
+     "0"
+    ],
+    "virtualPrice": "1039823717428684594",
+    "amplificationCoefficient": "4000",
+    "totalSupply": "153881994786254509218209707",
+    "name": "Curve.fi DAI/USDC/USDT",
+    "assetType": "0",
+    "lpTokenAddress": "0x6c3F90f043a72FA612cbac8115EE7e52BDe6E490",
+    "priceOracle": null,
+    "priceOracles": null,
+    "symbol": "3Crv",
+    "implementation": "",
+    "assetTypeName": "usd",
+    "coins": [
+     {
+      "address": "0x6B175474E89094C44Da98b954EedeAC495271d0F",
+      "usdPrice": 0.9999596164775284,
+      "decimals": "18",
+      "isBasePoolLpToken": false,
+      "symbol": "DAI",
+      "name": "Dai Stablecoin",
+      "poolBalance": "24074140537851234691164066"
+     },
+     {
+      "address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+      "usdPrice": 1,
+      "decimals": "6",
+      "isBasePoolLpToken": false,
+      "symbol": "USDC",
+      "name": "USD Coin",
+      "poolBalance": "24199420497991"
+     },
+     {
+      "address": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
+      "usdPrice": 1,
+      "decimals": "6",
+      "isBasePoolLpToken": false,
+      "symbol": "USDT",
+      "name": "Tether USD",
+      "poolBalance": "111754328639975"
+     }
+    ],
+    "poolUrls": {
+     "swap": [
+      "https://www.curve.finance/dex/ethereum/pools/0xbEbc44782C7dB0a1A60Cb6fe97d0b483032FF1C7",
+      "https://classic.curve.finance/3pool"
+     ],
+     "deposit": [
+      "https://www.curve.finance/dex/ethereum/pools/0xbEbc44782C7dB0a1A60Cb6fe97d0b483032FF1C7",
+      "https://classic.curve.finance/3pool/deposit"
+     ],
+     "withdraw": [
+      "https://www.curve.finance/dex/ethereum/pools/0xbEbc44782C7dB0a1A60Cb6fe97d0b483032FF1C7",
+      "https://classic.curve.finance/3pool/withdraw"
+     ]
+    },
+    "usdTotal": 160026917.47722185,
+    "isMetaPool": false,
+    "usdTotalExcludingBasePool": 160026917.47722185,
+    "gaugeAddress": "0xbfcf63294ad7105dea65aa58f8ae5be2d9d0952a",
+    "gaugeRewards": [],
+    "gaugeCrvApy": [
+     1.7465347478095417e-05,
+     4.366336869523854e-05
+    ],
+    "gaugeFutureCrvApy": [
+     1.6988913261869863e-05,
+     4.247228315467466e-05
+    ],
+    "usesRateOracle": false,
+    "isBroken": false,
+    "hasMethods": {
+     "exchange_received": false,
+     "exchange_extended": false
+    },
+    "creationTs": 1599422178,
+    "creationBlockNumber": 10809473
+   }
+  ],
+  "tvlAll": 267048664.8787848,
+  "tvl": 267048664.8787848
+ },
+ "generatedTimeMs": 1792415713400
+}

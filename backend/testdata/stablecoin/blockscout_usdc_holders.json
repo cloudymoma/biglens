@@ -1,0 +1,238 @@
+{
+ "eth": {
+  "holders": {
+   "http_status": 200,
+   "body": {
+    "items": [
+     {
+      "address": {
+       "ens_domain_name": null,
+       "hash": "0x37305B1cD40574E4C5Ce33f8e8306Be057fD7341",
+       "implementations": [],
+       "is_contract": false,
+       "is_scam": false,
+       "is_verified": false,
+       "metadata": {
+        "tags": [
+         {
+          "meta": {
+           "main_entity": "Maker",
+           "tooltipUrl": "https://sky.money/"
+          },
+          "name": "Sky: PSM",
+          "ordinal": 10,
+          "slug": "sky-psm",
+          "tagType": "name"
+         },
+         {
+          "meta": {
+           "tagIcon ": "https://blockscout-icons.s3.us-east-1.amazonaws.com/OLI_tag_logo.svg",
+           "textColor": "#C163D4",
+           "tooltipAttribution": "https://www.openlabelsinitiative.org?utm_source=blockscout",
+           "tooltipAttributionIcon": "https://blockscout-icons.s3.us-east-1.amazonaws.com/OLI_tag_logo.svg",
+           "tooltipDescription": "Provided by OLI"
+          },
+          "name": "Lite Psm Usdc A Pocket",
+          "ordinal": 0,
+          "slug": "lite-psm-usdc-a-pocket",
+          "tagType": "name"
+         },
+         {
+          "meta": {},
+          "name": "Sky",
+          "ordinal": 0,
+          "slug": "sky",
+          "tagType": "protocol"
+         }
+        ]
+       },
+       "name": null,
+       "private_tags": [],
+       "proxy_type": null,
+       "public_tags": [],
+       "reputation": "ok",
+       "watchlist_names": []
+      },
+      "token_id": null,
+      "value": "4227242386736457"
+     },
+     {
+      "address": {
+       "ens_domain_name": null,
+       "hash": "0xe1940f578743367F38D3f25c2D2d32D6636929B6",
+       "implementations": [
+        {
+         "address_hash": "0xeF3d10Df6e8eeAa925dA46ea12a6F17aB7F43B70",
+         "name": "SingleOwnerMSCA"
+        }
+       ],
+       "is_contract": true,
+       "is_scam": false,
+       "is_verified": true,
+       "metadata": {
+        "tags": [
+         {
+          "meta": {},
+          "name": "Binance SingleOwnerMSCA 1",
+          "ordinal": 10,
+          "slug": "binance-singleownermsca-1",
+          "tagType": "name"
+         }
+        ]
+       },
+       "name": "ERC1967Proxy",
+       "private_tags": [],
+       "proxy_type": "eip1967",
+       "public_tags": [],
+       "reputation": "ok",
+       "watchlist_names": []
+      },
+      "token_id": null,
+      "value": "1699999999039577"
+     },
+     {
+      "address": {
+       "ens_domain_name": null,
+       "hash": "0xffA69C0080582098aF595156240214b742735a5e",
+       "implementations": [
+        {
+         "address_hash": "0xD206aC7fEf53d83ED4563E770b28Dba90D0D9eC8",
+         "name": "SingleOwnerMSCA"
+        }
+       ],
+       "is_contract": true,
+       "is_scam": false,
+       "is_verified": true,
+       "metadata": null,
+       "name": "ERC1967Proxy",
+       "private_tags": [],
+       "proxy_type": "eip1967",
+       "public_tags": [],
+       "reputation": "ok",
+       "watchlist_names": []
+      },
+      "token_id": null,
+      "value": "1582999999860100"
+     },
+     {
+      "address": {
+       "ens_domain_name": null,
+       "hash": "0xaD354CfBAa4A8572DD6Df021514a3931A8329Ef5",
+       "implementations": [
+        {
+         "address_hash": "0xeF3d10Df6e8eeAa925dA46ea12a6F17aB7F43B70",
+         "name": "SingleOwnerMSCA"
+        }
+       ],
+       "is_contract": true,
+       "is_scam": false,
+       "is_verified": true,
+       "metadata": {
+        "tags": [
+         {
+          "meta": {},
+          "name": "Binance SingleOwnerMSCA 2",
+          "ordinal": 10,
+          "slug": "binance-singleownermsca-2",
+          "tagType": "name"
+         }
+        ]
+       },
+       "name": "ERC1967Proxy",
+       "private_tags": [],
+       "proxy_type": "eip1967",
+       "public_tags": [],
+       "reputation": "ok",
+       "watchlist_names": []
+      },
+      "token_id": null,
+      "value": "1400000000520100"
+     },
+     {
+      "address": {
+       "ens_domain_name": null,
+       "hash": "0x40ec5B33f54e0E8A33A975908C5BA1c14e5BbbDf",
+       "implementations": [
+        {
+         "address_hash": "0x1F4c1E0afBeb5b5B86d7722549274434b29884F6",
+         "name": "ERC20Predicate"
+        }
+       ],
+       "is_contract": true,
+       "is_scam": false,
+       "is_verified": true,
+       "metadata": {
+        "tags": [
+         {
+          "meta": {
+           "tooltipUrl": "https://app.hop.exchange/"
+          },
+          "name": "Polygon (Matic): ERC20 Bridge",
+          "ordinal": 10,
+          "slug": "polygon-matic-erc20-bridge",
+          "tagType": "name"
+         },
+         {
+          "meta": {},
+          "name": "Bridge",
+          "ordinal": 0,
+          "slug": "bridge",
+          "tagType": "generic"
+         },
+         {
+          "meta": {},
+          "name": "Polygon (Matic)",
+          "ordinal": 0,
+          "slug": "polygon-matic",
+          "tagType": "protocol"
+         }
+        ]
+       },
+       "name": "RootChainManagerProxy",
+       "private_tags": [],
+       "proxy_type": "basic_implementation",
+       "public_tags": [],
+       "reputation": "ok",
+       "watchlist_names": []
+      },
+      "token_id": null,
+      "value": "1016534209285450"
+     }
+    ],
+    "next_page_params": {
+     "value": "100000000090000",
+     "address_hash": "0x2f9ec5662c1199c028edc1f3eca0c22aa279f2b4",
+     "items_count": 50
+    }
+   }
+  },
+  "token": {
+   "http_status": 200,
+   "body": {
+    "address_hash": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+    "circulating_market_cap": "72402188683.14331",
+    "circulating_supply": null,
+    "decimals": "6",
+    "exchange_rate": "0.999882",
+    "holders_count": "9508632",
+    "icon_url": "https://raw.githubusercontent.com/ulyanas/frontend-configs/add-usdc-eurc-latest-token-icons/configs/token-icons/USDC_latest.svg",
+    "name": "USDC",
+    "reputation": "ok",
+    "symbol": "USDC",
+    "total_supply": "48111615291064261",
+    "type": "ERC-20",
+    "volume_24h": "13340698092.442945"
+   }
+  }
+ },
+ "base": {
+  "holders": {
+   "http_status": 403,
+   "body": "<!DOCTYPE html><html lang=\"en-US\"><head><title>Just a moment...</title><meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\"><meta http-equiv=\"X-UA-Compatible\" content=\"IE=Edge\"><meta nam"
+  },
+  "token": {
+   "http_status": 403,
+   "body": "<!DOCTYPE html><html lang=\"en-US\"><head><title>Just a moment...</title><meta http-equiv=\"Content-Type\" content=\"text/html; charset=UTF-8\"><meta http-equiv=\"X-UA-Compatible\" content=\"IE=Edge\"><meta nam"
+  }
+ }
+}

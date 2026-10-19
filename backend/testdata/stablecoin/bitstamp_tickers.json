@@ -1,0 +1,133 @@
+{
+ "usdtusd": {
+  "http_status": 200,
+  "body": {
+   "timestamp": "1792416049",
+   "open": "0.99876",
+   "high": "0.99897",
+   "low": "0.99865",
+   "last": "0.99897",
+   "volume": "19885295.39138",
+   "vwap": "0.99883",
+   "bid": "0.99896",
+   "ask": "0.99897",
+   "side": "0",
+   "open_24": "0.99870",
+   "percent_change_24": "0.03",
+   "market_type": "SPOT"
+  }
+ },
+ "usdcusd": {
+  "http_status": 200,
+  "body": {
+   "timestamp": "1792416050",
+   "open": "0.99988",
+   "high": "0.99993",
+   "low": "0.99979",
+   "last": "0.99985",
+   "volume": "446870.13497",
+   "vwap": "0.99986",
+   "bid": "0.99983",
+   "ask": "0.99985",
+   "side": "0",
+   "open_24": "0.99989",
+   "percent_change_24": "0.00",
+   "market_type": "SPOT"
+  }
+ },
+ "eurceur": {
+  "http_status": 200,
+  "body": {
+   "timestamp": "1792416051",
+   "open": "0.9990",
+   "high": "1.0000",
+   "low": "0.9950",
+   "last": "0.9981",
+   "volume": "11554.14",
+   "vwap": "0.9982",
+   "bid": "0.9987",
+   "ask": "0.9999",
+   "side": "1",
+   "open_24": "0.9970",
+   "percent_change_24": "0.11",
+   "market_type": "SPOT"
+  }
+ },
+ "eurusd": {
+  "http_status": 200,
+  "body": {
+   "timestamp": "1792416051",
+   "open": "1.12222",
+   "high": "1.12328",
+   "low": "1.11845",
+   "last": "1.12243",
+   "volume": "1769498.43618",
+   "vwap": "1.12108",
+   "bid": "1.12244",
+   "ask": "1.12256",
+   "side": "0",
+   "open_24": "1.12313",
+   "percent_change_24": "-0.06",
+   "market_type": "SPOT",
+   "index_price": "1.12243"
+  }
+ },
+ "eurcusd_unknown_pair": {
+  "http_status": 200,
+  "body_type": "list",
+  "body_len": 276,
+  "body": [
+   {
+    "timestamp": "1792416050",
+    "open": "82001.58",
+    "high": "83061.54",
+    "low": "80594.94",
+    "last": "82506.96",
+    "volume": "1245.83125708",
+    "vwap": "81889.71",
+    "bid": "82506.95",
+    "ask": "82506.96",
+    "side": "0",
+    "open_24": "81807.28",
+    "percent_change_24": "0.86",
+    "market_type": "SPOT",
+    "pair": "BTC/USD",
+    "market": "BTC/USD"
+   },
+   {
+    "timestamp": "1792416051",
+    "open": "73074.41",
+    "high": "74084.73",
+    "low": "71865.00",
+    "last": "73501.21",
+    "volume": "82.90995116",
+    "vwap": "72910.15",
+    "bid": "73503.28",
+    "ask": "73505.74",
+    "side": "0",
+    "open_24": "72805.74",
+    "percent_change_24": "0.96",
+    "market_type": "SPOT",
+    "pair": "BTC/EUR",
+    "market": "BTC/EUR"
+   },
+   {
+    "timestamp": "1792416050",
+    "open": "61505.03",
+    "high": "62347.62",
+    "low": "60500.00",
+    "last": "61837.22",
+    "volume": "22.42376969",
+    "vwap": "61746.61",
+    "bid": "61877.80",
+    "ask": "61899.20",
+    "side": "0",
+    "open_24": "61174.77",
+    "percent_change_24": "1.08",
+    "market_type": "SPOT",
+    "pair": "BTC/GBP",
+    "market": "BTC/GBP"
+   }
+  ]
+ }
+}

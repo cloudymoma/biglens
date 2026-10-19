@@ -1,0 +1,26 @@
+{
+ "http_status": 200,
+ "body": {
+  "symbol": "USDCUSDT",
+  "priceChange": "-0.00033000",
+  "priceChangePercent": "-0.033",
+  "weightedAvgPrice": "1.00104842",
+  "prevClosePrice": "1.00120000",
+  "lastPrice": "1.00088000",
+  "lastQty": "715.00000000",
+  "bidPrice": "1.00087000",
+  "bidQty": "3378217.00000000",
+  "askPrice": "1.00088000",
+  "askQty": "4739279.00000000",
+  "openPrice": "1.00121000",
+  "highPrice": "1.00124000",
+  "lowPrice": "1.00086000",
+  "volume": "3437089167.00000000",
+  "quoteVolume": "3440692677.47768000",
+  "openTime": 1792329652284,
+  "closeTime": 1792416052284,
+  "firstId": 506363287,
+  "lastId": 506979533,
+  "count": 616247
+ }
+}

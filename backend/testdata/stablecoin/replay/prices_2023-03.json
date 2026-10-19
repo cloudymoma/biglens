@@ -1,0 +1,362 @@
+[
+ {
+  "date": 1676419200,
+  "prices": {
+   "tether": 1.0004,
+   "usd-coin": 0.99996156,
+   "euro-coin": 1.0725382884898933
+  }
+ },
+ {
+  "date": 1676505600,
+  "prices": {
+   "tether": 1.00023313,
+   "usd-coin": 0.99992048,
+   "euro-coin": 1.0608493634397789
+  }
+ },
+ {
+  "date": 1676592000,
+  "prices": {
+   "tether": 1.00009,
+   "usd-coin": 0.99998,
+   "euro-coin": 1.0680205805584466
+  }
+ },
+ {
+  "date": 1676678400,
+  "prices": {
+   "tether": 1,
+   "usd-coin": 0.99998844,
+   "euro-coin": 1.0680278740024152
+  }
+ },
+ {
+  "date": 1676764800,
+  "prices": {
+   "tether": 1.00028481,
+   "usd-coin": 0.99994231,
+   "euro-coin": 1.0679252865766877
+  }
+ },
+ {
+  "date": 1676851200,
+  "prices": {
+   "tether": 1.00028427,
+   "usd-coin": 1,
+   "euro-coin": 1.0679284663035977
+  }
+ },
+ {
+  "date": 1676937600,
+  "prices": {
+   "tether": 1.0000648,
+   "usd-coin": 0.99994,
+   "euro-coin": 1.0679311786384014
+  }
+ },
+ {
+  "date": 1677024000,
+  "prices": {
+   "tether": 1.00012342,
+   "usd-coin": 0.99997236,
+   "euro-coin": 1.0679352738140764
+  }
+ },
+ {
+  "date": 1677110400,
+  "prices": {
+   "tether": 1.00011448,
+   "usd-coin": 0.999895,
+   "euro-coin": 1.0679398899704717
+  }
+ },
+ {
+  "date": 1677196800,
+  "prices": {
+   "tether": 1.00011452,
+   "usd-coin": 0.99999508,
+   "euro-coin": 1.0679436544679288
+  }
+ },
+ {
+  "date": 1677283200,
+  "prices": {
+   "tether": 1.000015,
+   "usd-coin": 0.99991,
+   "euro-coin": 1.0631955480294262
+  }
+ },
+ {
+  "date": 1677369600,
+  "prices": {
+   "tether": 1.00009649,
+   "usd-coin": 0.9999,
+   "euro-coin": 1.0631984836146655
+  }
+ },
+ {
+  "date": 1677456000,
+  "prices": {
+   "tether": 1,
+   "usd-coin": 0.99995298,
+   "euro-coin": 1.0631995384347812
+  }
+ },
+ {
+  "date": 1677542400,
+  "prices": {
+   "tether": 1,
+   "usd-coin": 0.99995322,
+   "euro-coin": 1.063205283692975
+  }
+ },
+ {
+  "date": 1677628800,
+  "prices": {
+   "tether": 1.0001,
+   "usd-coin": 0.99986129,
+   "euro-coin": 1.0632090677847965
+  }
+ },
+ {
+  "date": 1677715200,
+  "prices": {
+   "tether": 1.00010966,
+   "usd-coin": 0.9999,
+   "euro-coin": 1.0681133996676093
+  }
+ },
+ {
+  "date": 1677801600,
+  "prices": {
+   "tether": 1.00000359,
+   "usd-coin": 0.99993187,
+   "euro-coin": 1.0613936570360887
+  }
+ },
+ {
+  "date": 1677888000,
+  "prices": {
+   "tether": 1.00006,
+   "usd-coin": 0.99971826,
+   "euro-coin": 1.0614053647546786
+  }
+ },
+ {
+  "date": 1677974400,
+  "prices": {
+   "tether": 1.00004,
+   "usd-coin": 0.99999779,
+   "euro-coin": 1.0598230213561841
+  }
+ },
+ {
+  "date": 1678060800,
+  "prices": {
+   "tether": 1.0001,
+   "usd-coin": 1,
+   "euro-coin": 1.059825765428206
+  }
+ },
+ {
+  "date": 1678147200,
+  "prices": {
+   "tether": 0.99997,
+   "usd-coin": 0.99998374,
+   "euro-coin": 1.059841134044231
+  }
+ },
+ {
+  "date": 1678233600,
+  "prices": {
+   "tether": 0.99990205,
+   "usd-coin": 0.99999517,
+   "euro-coin": 1.059116348040938
+  }
+ },
+ {
+  "date": 1678320000,
+  "prices": {
+   "tether": 0.9999,
+   "usd-coin": 0.99996381,
+   "euro-coin": 1.0591242503392044
+  }
+ },
+ {
+  "date": 1678406400,
+  "prices": {
+   "tether": 0.9999,
+   "usd-coin": 1,
+   "euro-coin": 1.0541559102416789
+  }
+ },
+ {
+  "date": 1678492800,
+  "prices": {
+   "tether": 1.003,
+   "usd-coin": 0.99755917,
+   "euro-coin": 1.0597112442422751
+  }
+ },
+ {
+  "date": 1678579200,
+  "prices": {
+   "tether": 1,
+   "usd-coin": 0.961065,
+   "euro-coin": 1.057
+  }
+ },
+ {
+  "date": 1678665600,
+  "prices": {
+   "tether": 1.01,
+   "usd-coin": 0.991923,
+   "euro-coin": 1.098
+  }
+ },
+ {
+  "date": 1678752000,
+  "prices": {
+   "tether": 1.004,
+   "usd-coin": 0.999427,
+   "euro-coin": 1.067
+  }
+ },
+ {
+  "date": 1678838400,
+  "prices": {
+   "tether": 1.001,
+   "usd-coin": 0.997236,
+   "euro-coin": 1.07
+  }
+ },
+ {
+  "date": 1678924800,
+  "prices": {
+   "tether": 1.006,
+   "usd-coin": 1.002,
+   "euro-coin": 1.063
+  }
+ },
+ {
+  "date": 1679011200,
+  "prices": {
+   "tether": 1.006,
+   "usd-coin": 1.004,
+   "euro-coin": 1.065
+  }
+ },
+ {
+  "date": 1679097600,
+  "prices": {
+   "tether": 1.005,
+   "usd-coin": 1.003,
+   "euro-coin": 1.073
+  }
+ },
+ {
+  "date": 1679184000,
+  "prices": {
+   "tether": 1.008,
+   "usd-coin": 1.005,
+   "euro-coin": 1.071
+  }
+ },
+ {
+  "date": 1679270400,
+  "prices": {
+   "tether": 1.007,
+   "usd-coin": 1.004,
+   "euro-coin": 1.07
+  }
+ },
+ {
+  "date": 1679356800,
+  "prices": {
+   "tether": 1.011,
+   "usd-coin": 1.006,
+   "euro-coin": 1.09
+  }
+ },
+ {
+  "date": 1679443200,
+  "prices": {
+   "tether": 1.006,
+   "usd-coin": 1.002,
+   "euro-coin": 1.077
+  }
+ },
+ {
+  "date": 1679529600,
+  "prices": {
+   "tether": 1.006,
+   "usd-coin": 1.004,
+   "euro-coin": 1.092
+  }
+ },
+ {
+  "date": 1679616000,
+  "prices": {
+   "tether": 1.005,
+   "usd-coin": 1.002,
+   "euro-coin": 1.086
+  }
+ },
+ {
+  "date": 1679702400,
+  "prices": {
+   "tether": 1.007,
+   "usd-coin": 1.006,
+   "euro-coin": 1.083
+  }
+ },
+ {
+  "date": 1679788800,
+  "prices": {
+   "tether": 1.008,
+   "usd-coin": 1.006,
+   "euro-coin": 1.079
+  }
+ },
+ {
+  "date": 1679875200,
+  "prices": {
+   "tether": 1.001,
+   "usd-coin": 1.001,
+   "euro-coin": 1.081
+  }
+ },
+ {
+  "date": 1679961600,
+  "prices": {
+   "tether": 1.001,
+   "usd-coin": 0.999553,
+   "euro-coin": 1.081
+  }
+ },
+ {
+  "date": 1680048000,
+  "prices": {
+   "tether": 1.001,
+   "usd-coin": 1,
+   "euro-coin": 1.085
+  }
+ },
+ {
+  "date": 1680134400,
+  "prices": {
+   "tether": 1,
+   "usd-coin": 0.99998,
+   "euro-coin": 1.086
+  }
+ },
+ {
+  "date": 1680220800,
+  "prices": {
+   "tether": 1.003,
+   "usd-coin": 1.001,
+   "euro-coin": 1.089
+  }
+ }
+]
