@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"maps"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,6 +17,8 @@ import (
 const (
 	btcHolderSchemaVersion    = 1
 	btcUTXOStateGenerationKey = "utxo_state_generation"
+	btcHolderEngineStatusKey  = "holder_engine_status"
+	btcHolderEngineRemedy     = "Rebuild the UTXO baseline to resynchronize holder state: ./biglens-server --bitcoin-utxo-baseline --yes"
 )
 
 // utxoState maps creation day ("YYYY-MM-DD") to unspent satoshis.
@@ -460,6 +464,7 @@ func (m *btcHolderMaintenance) applyPendingBaseline(
 	// 2. Roll forward from T0 through min(coinage_cursor, rollup_cursor).
 	uFwd := uInit.clone()
 	finalAsOf := initDayStr
+	var haltedDay, haltReason, haltDetail string
 	targetCursor := m.minSyncedCursor(ctx)
 	if targetCursor >= pend.AsOf {
 		if targetDate, err := civil.ParseDate(targetCursor); err == nil {
@@ -492,6 +497,8 @@ func (m *btcHolderMaintenance) applyPendingBaseline(
 				}
 				holderByDay[dStr] = hm
 				if sErr != nil || iErr != nil || bErr != nil {
+					haltedDay = dStr
+					haltReason, haltDetail = extractHolderHaltReason(sErr, iErr, bErr)
 					uFwd = prevU
 					break
 				}
@@ -508,6 +515,7 @@ func (m *btcHolderMaintenance) applyPendingBaseline(
 	if err := m.store.applyHolderMaintenanceTx(ctx, &uFwd, finalAsOf, pend.Generation, true, holderUpdates, coinageUpdates, m.now().UTC()); err != nil {
 		return err
 	}
+	m.persistEngineStatus(ctx, haltedDay, haltReason, haltDetail)
 	_ = m.store.pruneBtcBaselineGenerations(ctx, pend.Generation)
 	return nil
 }
@@ -558,6 +566,7 @@ func (m *btcHolderMaintenance) rollForwardExisting(
 
 	var holderUpdates []BtcHolderDay
 	finalAsOf := asOf
+	var haltedDay, haltReason, haltDetail string
 	for cur := asOfDate.AddDays(1); !cur.After(targetDate); cur = cur.AddDays(1) {
 		dStr := cur.String()
 		oc, hasOC := onchainByDay[dStr]
@@ -587,20 +596,87 @@ func (m *btcHolderMaintenance) rollForwardExisting(
 		}
 		holderUpdates = append(holderUpdates, hm)
 		if sErr != nil || iErr != nil || bErr != nil {
+			haltedDay = dStr
+			haltReason, haltDetail = extractHolderHaltReason(sErr, iErr, bErr)
 			u = prevU
 			break
 		}
 		finalAsOf = dStr
 	}
 
-	if finalAsOf == asOf && len(holderUpdates) == 0 && len(coinageUpdates) == 0 {
+	if finalAsOf == asOf && len(holderUpdates) == 0 && len(coinageUpdates) == 0 && haltedDay == "" {
 		return nil
 	}
 	var statePtr *utxoState
 	if finalAsOf != asOf {
 		statePtr = &u
 	}
-	return m.store.applyHolderMaintenanceTx(ctx, statePtr, finalAsOf, gen, false, holderUpdates, coinageUpdates, m.now().UTC())
+	if err := m.store.applyHolderMaintenanceTx(ctx, statePtr, finalAsOf, gen, false, holderUpdates, coinageUpdates, m.now().UTC()); err != nil {
+		return err
+	}
+	if finalAsOf != asOf || haltedDay != "" {
+		m.persistEngineStatus(ctx, haltedDay, haltReason, haltDetail)
+	}
+	return nil
+}
+
+func extractHolderHaltReason(sErr, iErr, bErr error) (string, string) {
+	first := sErr
+	if first == nil {
+		first = iErr
+	}
+	if first == nil {
+		first = bErr
+	}
+	if first == nil {
+		return "", ""
+	}
+	msg := first.Error()
+	if code, _, ok := strings.Cut(msg, ":"); ok && code != "" {
+		return strings.TrimSpace(code), msg
+	}
+	return msg, msg
+}
+
+func (m *btcHolderMaintenance) persistEngineStatus(ctx context.Context, haltedDay, reason, detail string) {
+	if m == nil || m.store == nil || m.store.db == nil {
+		return
+	}
+	if haltedDay == "" {
+		_ = m.store.deleteBtcKV(ctx, btcHolderEngineStatusKey)
+		return
+	}
+	since := m.now().UTC().Format(time.RFC3339)
+	alreadyHaltedSameDay := false
+	if raw, ok, err := m.store.getBtcKV(ctx, btcHolderEngineStatusKey); err == nil && ok && raw != "" {
+		var prev BtcHolderEngineStatus
+		if json.Unmarshal([]byte(raw), &prev) == nil &&
+			prev.State == "halted" &&
+			prev.HaltedDay == haltedDay &&
+			prev.Reason == reason &&
+			prev.Since != "" {
+			since = prev.Since
+			alreadyHaltedSameDay = true
+		}
+	}
+	if !alreadyHaltedSameDay {
+		slog.Error("btc holder engine halted",
+			"halted_day", haltedDay,
+			"reason", reason,
+			"error", detail,
+			"remedy", btcHolderEngineRemedy,
+		)
+	}
+	st := BtcHolderEngineStatus{
+		State:     "halted",
+		HaltedDay: haltedDay,
+		Reason:    reason,
+		Since:     since,
+		Remedy:    btcHolderEngineRemedy,
+	}
+	if b, err := json.Marshal(st); err == nil {
+		_ = m.store.setBtcKV(ctx, btcHolderEngineStatusKey, string(b))
+	}
 }
 
 func (s *riskStore) loadBtcUTXOState(ctx context.Context) (utxoState, error) {

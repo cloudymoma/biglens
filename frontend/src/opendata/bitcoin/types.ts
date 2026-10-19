@@ -337,6 +337,14 @@ export interface BtcWhaleRevival {
   inputs: number;
 }
 
+export interface BtcHolderEngineStatus {
+  state: 'ok' | 'halted' | string;
+  halted_day?: string;
+  reason?: string;
+  since?: string;
+  remedy?: string;
+}
+
 export interface BtcOnchainHoldersData {
   days: number;
   coinage: BtcCoinageDay[];
@@ -345,6 +353,7 @@ export interface BtcOnchainHoldersData {
   coinage_status: BtcBQStatus;
   onchain_status: BtcBQStatus;
   baseline: BtcBaselineStatus;
+  holder_engine: BtcHolderEngineStatus;
   price_coverage: BtcPriceCoverage;
   sources: BtcSourceStatus[];
 }

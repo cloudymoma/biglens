@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"math"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -551,5 +553,132 @@ func TestMaintenanceUnblocksPriceHistoryIncompleteOnceComplete(t *testing.T) {
 	}
 	if hDays2[1].Blocked != "" || hDays2[1].RealizedCapUSD == nil || hDays2[1].MVRV == nil {
 		t.Fatalf("expected 2026-10-15 unblocked with RealizedCapUSD and MVRV, got %+v", hDays2[1])
+	}
+}
+
+func TestBtcHolderEngineHaltedExposedAndDeduped(t *testing.T) {
+	ctx := context.Background()
+	store := openTestRiskStore(t)
+	now := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
+	seedMaintenanceChain(t, store, now)
+
+	settings := (BitcoinConfig{}).settings()
+	settings.Jobs = true
+	budget := newBtcBudget(store, settings, func() time.Time { return now })
+	resID, err := budget.reserve(ctx, btcBaselineJobID, 1<<30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseRows := []btcUTXOBaselineRow{
+		{CreateDay: "2026-10-10", Sats: 4_000_000_000, UTXOs: 4},
+		{CreateDay: "2026-10-14", Sats: 6_000_000_000, UTXOs: 6},
+	}
+	if _, err := store.commitBtcBaseline(ctx, budget, settings, resID, "2026-10-15", baseRows, 1<<30, now, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	maint := newBtcHolderMaintenance(store, nil, func() time.Time { return now })
+	if err := maint.run(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// Now add 2026-10-16 where 1 unmatched input (1,000 sats) causes spent_sats (499,999,000)
+	// to differ from CreatedSats - (CoinbaseSats - FeesSats) = 500,000,000.
+	rollup16 := btcRollupPayload{
+		CoverageStart: 1,
+		Blocks: []btcBlockRow{
+			{Height: 3, TS: "2026-10-16T12:00:00Z", Date: "2026-10-16", Bits: "17021ef0", TransactionCount: 100, SubsidySats: 5_000_000_000},
+		},
+		Days: []BtcOnchainDay{
+			{
+				Date:                  "2026-10-16",
+				Blocks:                1,
+				ScheduledIssuanceSats: 5_000_000_000,
+				ClaimedIssuanceSats:   5_000_000_000,
+				CoinbaseSats:          5_000_000_000,
+				FeesSats:              0,
+				CreatedSats:           5_500_000_000,
+				OpretValueSats:        0,
+			},
+		},
+	}
+	if err := store.applyBtcRollupBatch(ctx, rollup16, "2026-10-14", "2026-10-16", now); err != nil {
+		t.Fatal(err)
+	}
+	ca16 := btcCoinAgePayload{
+		Matrix: []btcSpentMatrixRow{
+			{SpendDay: "2026-10-16", CreateDay: "2026-10-14", Sats: 499_999_000, Inputs: 1},
+		},
+		Days: []BtcCoinageDay{
+			coinageMetrics("2026-10-16", map[string]int64{"2026-10-14": 499_999_000}, nil, false),
+		},
+	}
+	if err := store.applyBtcCoinAgeBatch(ctx, ca16, "2026-10-14", "2026-10-16", now); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := maint.run(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// State cursor must not advance past 2026-10-15.
+	asOf, err := store.getBtcUTXOStateAsOf(ctx)
+	if err != nil || asOf != "2026-10-15" {
+		t.Fatalf("utxo_state_as_of = %q, want 2026-10-15 (err=%v)", asOf, err)
+	}
+
+	h := newTestBitcoinHandler(t)
+	h.bq = nil
+	h.btc.now = func() time.Time { return now }
+	h.btc.read = newBtcReadStore(store, settings, h.btc.now)
+
+	req := httptest.NewRequest("GET", "/api/opendata/bitcoin/onchain/holders?days=30", nil)
+	rec := httptest.NewRecorder()
+	h.BitcoinOnchainHolders(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		HolderEngine struct {
+			State     string `json:"state"`
+			HaltedDay string `json:"halted_day"`
+			Reason    string `json:"reason"`
+			Since     string `json:"since"`
+			Remedy    string `json:"remedy"`
+		} `json:"holder_engine"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.HolderEngine.State != "halted" || resp.HolderEngine.HaltedDay != "2026-10-16" || resp.HolderEngine.Reason != "supply_identity_mismatch" {
+		t.Fatalf("holder_engine = %+v, want state=halted halted_day=2026-10-16 reason=supply_identity_mismatch", resp.HolderEngine)
+	}
+	if resp.HolderEngine.Since == "" || resp.HolderEngine.Remedy == "" {
+		t.Fatalf("holder_engine missing since or remedy: %+v", resp.HolderEngine)
+	}
+
+	// Running maintenance an hour later on the same halted day must preserve Since (deduped).
+	firstSince := resp.HolderEngine.Since
+	later := now.Add(time.Hour)
+	maintLater := newBtcHolderMaintenance(store, nil, func() time.Time { return later })
+	if err := maintLater.run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	rec2 := httptest.NewRecorder()
+	h.BitcoinOnchainHolders(rec2, req)
+	var resp2 struct {
+		HolderEngine struct {
+			State     string `json:"state"`
+			HaltedDay string `json:"halted_day"`
+			Reason    string `json:"reason"`
+			Since     string `json:"since"`
+			Remedy    string `json:"remedy"`
+		} `json:"holder_engine"`
+	}
+	if err := json.Unmarshal(rec2.Body.Bytes(), &resp2); err != nil {
+		t.Fatal(err)
+	}
+	if resp2.HolderEngine.Since != firstSince {
+		t.Fatalf("expected repeated halt on same day to preserve Since=%q, got %q", firstSince, resp2.HolderEngine.Since)
 	}
 }

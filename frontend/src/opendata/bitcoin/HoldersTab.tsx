@@ -86,6 +86,11 @@ export default function HoldersTab({
   const holderRows: BtcHolderDay[] = onchainData?.holders ?? [];
   const whales = onchainData?.whales ?? [];
   const baseline = baselineOverride ?? onchainData?.baseline ?? null;
+  const holderEngine = onchainData?.holder_engine ?? null;
+  const coinageStatus = onchainData?.coinage_status ?? null;
+  const holderWarnings = holderRows.flatMap(r =>
+    (r.warnings ?? []).map(w => ({ date: r.date, warning: w })),
+  );
   const latestCoinage = coinageRows.length > 0 ? coinageRows[coinageRows.length - 1] : null;
   const latestHolder = holderRows.length > 0 ? holderRows[holderRows.length - 1] : null;
 
@@ -707,6 +712,67 @@ export default function HoldersTab({
       ) : (
         <div className="space-y-6">
           {onchainPoll.error && <ErrorBanner message={onchainPoll.error} />}
+
+          {holderEngine?.state === 'halted' && (
+            <div className="rounded-xl border border-rose-500/40 bg-rose-950/40 p-4 text-xs text-rose-100">
+              <div className="flex flex-wrap items-center justify-between gap-2 font-semibold text-rose-200">
+                <span className="inline-flex items-center gap-1.5">
+                  <AlertTriangle className="h-4 w-4 text-rose-400" />
+                  <span>
+                    Holder Engine Halted on{' '}
+                    <span className="font-mono">{holderEngine.halted_day || 'unknown day'}</span>
+                  </span>
+                </span>
+                {holderEngine.since && (
+                  <span className="font-mono text-[11px] text-rose-300/80">Since {holderEngine.since}</span>
+                )}
+              </div>
+              <div className="mt-1.5 text-rose-200/90">
+                Reason: <span className="font-mono">{holderEngine.reason || 'invariant_violation'}</span>
+              </div>
+              <div className="mt-1.5 flex flex-wrap items-center gap-2 text-rose-200/90">
+                <span>Remedy:</span>
+                <code className="rounded bg-zinc-950/80 px-2 py-0.5 font-mono text-[11px] text-amber-300">
+                  {holderEngine.remedy || './biglens-server --bitcoin-utxo-baseline --yes'}
+                </code>
+              </div>
+            </div>
+          )}
+
+          {coinageStatus && (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-800/80 bg-zinc-900/50 px-3.5 py-2 text-xs text-zinc-300">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-zinc-400">Coin-Age Sync (`btc_coinage`):</span>
+                <span className="rounded bg-zinc-800 px-1.5 py-0.5 font-mono text-[11px] text-zinc-200">
+                  {coinageStatus.state}
+                </span>
+                <span className="text-zinc-400">
+                  Synced through:{' '}
+                  <span className="font-mono text-zinc-200">{coinageStatus.synced_through || '—'}</span>
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5 text-[11px] text-zinc-400">
+                <Terminal className="h-3.5 w-3.5 text-amber-400" />
+                <span>Resume CLI:</span>
+                <code className="rounded bg-zinc-950 px-2 py-0.5 font-mono text-amber-300">
+                  ./biglens-server --bitcoin-bq-resume btc_coinage
+                </code>
+              </div>
+            </div>
+          )}
+
+          {holderWarnings.length > 0 && (
+            <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3.5 py-2 text-xs text-amber-200">
+              <div className="font-medium">On-Chain Holder Warnings:</div>
+              <ul className="mt-1 list-inside list-disc space-y-0.5 font-mono text-[11px]">
+                {holderWarnings.map((hw, i) => (
+                  <li key={`${hw.date}-${i}`}>
+                    {hw.date}: {hw.warning}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           {/* Baseline Status & Reconciliation Card */}
           <Panel

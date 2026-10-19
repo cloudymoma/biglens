@@ -56,15 +56,16 @@ type BtcOnchainData struct {
 }
 
 type BtcOnchainHoldersData struct {
-	Days          int               `json:"days"`
-	Coinage       []BtcCoinageDay   `json:"coinage"`
-	Holders       []BtcHolderDay    `json:"holders"`
-	Whales        []BtcWhaleRevival `json:"whales"`
-	CoinageStatus BtcBQStatus       `json:"coinage_status"`
-	OnchainStatus BtcBQStatus       `json:"onchain_status"`
-	Baseline      BtcBaselineStatus `json:"baseline"`
-	PriceCoverage BtcPriceCoverage  `json:"price_coverage"`
-	Sources       []BtcSourceStatus `json:"sources"`
+	Days          int                   `json:"days"`
+	Coinage       []BtcCoinageDay       `json:"coinage"`
+	Holders       []BtcHolderDay        `json:"holders"`
+	Whales        []BtcWhaleRevival     `json:"whales"`
+	CoinageStatus BtcBQStatus           `json:"coinage_status"`
+	OnchainStatus BtcBQStatus           `json:"onchain_status"`
+	Baseline      BtcBaselineStatus     `json:"baseline"`
+	HolderEngine  BtcHolderEngineStatus `json:"holder_engine"`
+	PriceCoverage BtcPriceCoverage      `json:"price_coverage"`
+	Sources       []BtcSourceStatus     `json:"sources"`
 }
 
 type BtcMetaProvider struct {
@@ -752,6 +753,7 @@ func (h *APIHandler) BitcoinOnchainHolders(w http.ResponseWriter, r *http.Reques
 		CLICommand:      "./biglens-server --bitcoin-utxo-baseline",
 		CMSplyCurBTC:    s.latestCMSplyCurBTC(),
 	}
+	holderEngine := BtcHolderEngineStatus{State: "ok"}
 	coinage := []BtcCoinageDay{}
 	holders := []BtcHolderDay{}
 	whales := []BtcWhaleRevival{}
@@ -773,6 +775,9 @@ func (h *APIHandler) BitcoinOnchainHolders(w http.ResponseWriter, r *http.Reques
 		if bs, err := s.read.baselineStatus(ctx); err == nil {
 			bs.CMSplyCurBTC = s.latestCMSplyCurBTC()
 			baseline = bs
+		}
+		if he, err := s.read.holderEngineStatus(ctx); err == nil {
+			holderEngine = he
 		}
 		if cd, err := s.read.coinageDays(ctx, from, to); err == nil && len(cd) > 0 {
 			coinage = cd
@@ -811,6 +816,7 @@ func (h *APIHandler) BitcoinOnchainHolders(w http.ResponseWriter, r *http.Reques
 		CoinageStatus: coinageStatus,
 		OnchainStatus: onchainStatus,
 		Baseline:      baseline,
+		HolderEngine:  holderEngine,
 		PriceCoverage: s.prices.priceCoverage(),
 		Sources:       []BtcSourceStatus{bqSrc},
 	})

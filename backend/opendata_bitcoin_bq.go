@@ -708,6 +708,24 @@ func (r *btcReadStoreImpl) budget(ctx context.Context, now time.Time) (BtcBudget
 	return r.budgetEl.status(ctx, now)
 }
 
+func (r *btcReadStoreImpl) holderEngineStatus(ctx context.Context) (BtcHolderEngineStatus, error) {
+	out := BtcHolderEngineStatus{State: "ok"}
+	if err := r.store.ensureBtcBQSchema(ctx); err != nil {
+		return out, err
+	}
+	raw, ok, err := r.store.getBtcKV(ctx, btcHolderEngineStatusKey)
+	if err != nil {
+		return out, err
+	}
+	if ok && raw != "" {
+		var saved BtcHolderEngineStatus
+		if json.Unmarshal([]byte(raw), &saved) == nil && saved.State != "" {
+			return saved, nil
+		}
+	}
+	return out, nil
+}
+
 func (r *btcReadStoreImpl) baselineStatus(ctx context.Context) (BtcBaselineStatus, error) {
 	out := BtcBaselineStatus{
 		AllowUI:         r.settings.BaselineAllowUI,

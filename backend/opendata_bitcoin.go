@@ -159,6 +159,14 @@ type btcBaselinePlan struct {
 	ExpiresAt      string  `json:"expires_at,omitempty"`
 }
 
+type BtcHolderEngineStatus struct {
+	State     string `json:"state"` // "ok" | "halted"
+	HaltedDay string `json:"halted_day,omitempty"`
+	Reason    string `json:"reason,omitempty"`
+	Since     string `json:"since,omitempty"`
+	Remedy    string `json:"remedy,omitempty"`
+}
+
 // btcReadStore is the read-only SQLite interface exposed to HTTP handlers.
 type btcReadStore interface {
 	onchainDays(ctx context.Context, from, to string) ([]BtcOnchainDay, error)
@@ -167,6 +175,7 @@ type btcReadStore interface {
 	whaleRevivals(ctx context.Context, from, to string) ([]BtcWhaleRevival, error)
 	jobStatus(ctx context.Context, job string) (BtcBQStatus, error)
 	baselineStatus(ctx context.Context) (BtcBaselineStatus, error)
+	holderEngineStatus(ctx context.Context) (BtcHolderEngineStatus, error)
 	budget(ctx context.Context, now time.Time) (BtcBudgetStatus, error)
 }
 
