@@ -171,23 +171,23 @@ func fetchDefiLlamaPrices(ctx context.Context) (map[string]float64, string) {
 	return out, ""
 }
 
-func (h *APIHandler) refreshSupplyMatrix(ctx context.Context, prev []TokenSupplyRow, now time.Time) ([]TokenSupplyRow, []string) {
-	prevMap := make(map[string]TokenSupplyRow, len(prev))
-	for _, r := range prev {
-		prevMap[r.Asset+"|"+r.Network+"|"+r.Contract] = r
-	}
+// registrySupplyReading is one on-chain total supply read for a registry token.
+type registrySupplyReading struct {
+	Token  registryToken
+	Supply float64 // native units; meaningful only when Code is ""
+	Code   string  // "" on success, else an upstream error code
+	ReadAt time.Time
+}
 
-	rows := make([]TokenSupplyRow, len(registryTokens))
-	var (
-		mu       sync.Mutex
-		warnings []string
-		g        errgroup.Group
-	)
+// fetchRegistrySupplies reads totalSupply() (EVM, TRC-20) or the SPL mint
+// supply (Solana) of each token over the configured RPCs, in the order given.
+// It is shared by the Crypto Pulse supply matrix and the Stablecoins supply
+// sampler, which keep their own caches (stablecoin.md §8.3).
+func fetchRegistrySupplies(ctx context.Context, tokens []registryToken, rpcs func(network string) []string, now func() time.Time) []registrySupplyReading {
+	out := make([]registrySupplyReading, len(tokens))
+	var g errgroup.Group
 	g.SetLimit(6)
-	at := now.UTC().Format(time.RFC3339)
-
-	for i, tok := range registryTokens {
-		i, tok := i, tok
+	for i, tok := range tokens {
 		g.Go(func() error {
 			var (
 				supply float64
@@ -195,38 +195,55 @@ func (h *APIHandler) refreshSupplyMatrix(ctx context.Context, prev []TokenSupply
 			)
 			switch chains[tok.Network].Family {
 			case familyEVM:
-				supply, code = fetchEVMTokenSupply(ctx, h.payRPCs(tok.Network), tok.Contract, tok.Decimals)
+				supply, code = fetchEVMTokenSupply(ctx, rpcs(tok.Network), tok.Contract, tok.Decimals)
 			case familyTron:
 				supply, code = fetchTronTokenSupply(ctx, tok.Contract, tok.Decimals)
 			case familySol:
-				supply, code = fetchSolanaMintSupply(ctx, h.payRPCs("sol"), tok.Contract, tok.Decimals)
+				supply, code = fetchSolanaMintSupply(ctx, rpcs("sol"), tok.Contract, tok.Decimals)
+			default:
+				code = "unsupported_network"
 			}
-			row := TokenSupplyRow{
-				Asset:        tok.Asset,
-				Network:      tok.Network,
-				NetworkLabel: chains[tok.Network].Label,
-				Contract:     tok.Contract,
-				Tier:         string(tok.Tier),
-				Label:        tok.Label,
-				Supply:       supply,
-				UpdatedAt:    at,
-			}
-			if code != "" {
-				if old, ok := prevMap[tok.Asset+"|"+tok.Network+"|"+tok.Contract]; ok && old.Supply > 0 {
-					row.Supply = old.Supply
-					row.UpdatedAt = old.UpdatedAt
-					row.Stale = true
-				}
-				row.Error = code
-				mu.Lock()
-				warnings = append(warnings, fmt.Sprintf("supply %s (%s): %s", tok.Label, tok.Network, code))
-				mu.Unlock()
-			}
-			rows[i] = row
+			out[i] = registrySupplyReading{Token: tok, Supply: supply, Code: code, ReadAt: now().UTC()}
 			return nil
 		})
 	}
 	_ = g.Wait()
+	return out
+}
+
+func (h *APIHandler) refreshSupplyMatrix(ctx context.Context, prev []TokenSupplyRow, now time.Time) ([]TokenSupplyRow, []string) {
+	prevMap := make(map[string]TokenSupplyRow, len(prev))
+	for _, r := range prev {
+		prevMap[r.Asset+"|"+r.Network+"|"+r.Contract] = r
+	}
+
+	at := now.UTC().Format(time.RFC3339)
+	readings := fetchRegistrySupplies(ctx, registryTokens, h.payRPCs, time.Now)
+	rows := make([]TokenSupplyRow, len(readings))
+	var warnings []string
+	for i, rd := range readings {
+		tok := rd.Token
+		row := TokenSupplyRow{
+			Asset:        tok.Asset,
+			Network:      tok.Network,
+			NetworkLabel: chains[tok.Network].Label,
+			Contract:     tok.Contract,
+			Tier:         string(tok.Tier),
+			Label:        tok.Label,
+			Supply:       rd.Supply,
+			UpdatedAt:    at,
+		}
+		if rd.Code != "" {
+			if old, ok := prevMap[tok.Asset+"|"+tok.Network+"|"+tok.Contract]; ok && old.Supply > 0 {
+				row.Supply = old.Supply
+				row.UpdatedAt = old.UpdatedAt
+				row.Stale = true
+			}
+			row.Error = rd.Code
+			warnings = append(warnings, fmt.Sprintf("supply %s (%s): %s", tok.Label, tok.Network, rd.Code))
+		}
+		rows[i] = row
+	}
 	return rows, warnings
 }
 

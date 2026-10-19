@@ -91,6 +91,9 @@ type stableSupplyDaily struct {
 	UpdatedAt         time.Time // observation time of the value
 }
 
+// stableChainDaily is the newest observation of one chain per day. For
+// source "onchain" the value is the on-chain total supply of the deployment;
+// for "issuer" and "aggregator" it is circulating supply.
 type stableChainDaily struct {
 	Day               string
 	Asset             string
@@ -423,4 +426,48 @@ func (s *riskStore) pruneStable(ctx context.Context, now time.Time) (int64, erro
 	}
 	slog.Info("stablecoin retention prune", "table", "stable_supply_snapshots", "cutoff", cutoff, "deleted", n)
 	return n, nil
+}
+
+// hasStableSnapshotInHour reports whether any snapshot of asset/source was
+// stored for the UTC hour containing t (the sampler stores at most one
+// observation per source per hour).
+func (s *riskStore) hasStableSnapshotInHour(ctx context.Context, asset, source string, t time.Time) (bool, error) {
+	if err := s.ensureStableSchema(ctx); err != nil {
+		return false, err
+	}
+	start := t.UTC().Truncate(time.Hour)
+	var n int
+	err := s.db.QueryRowContext(ctx, `
+SELECT COUNT(*) FROM (SELECT 1 FROM stable_supply_snapshots
+WHERE asset = ? AND source = ? AND ts >= ? AND ts < ? LIMIT 1)`, asset, source, stableTS(start), stableTS(start.Add(time.Hour))).Scan(&n)
+	return n > 0, err
+}
+
+// stableSupplyNear returns the asset/source/chain snapshot closest to target
+// within ±tol, or nil when there is none.
+func (s *riskStore) stableSupplyNear(ctx context.Context, asset, source, chain string, target time.Time, tol time.Duration) (*stableSupplySnapshot, error) {
+	if err := s.ensureStableSchema(ctx); err != nil {
+		return nil, err
+	}
+	rs, err := s.db.QueryContext(ctx, `
+SELECT ts, asset, chain, source, circulating_native, onchain_total_native, unissued_native, quarantined_native, fetched_at
+FROM stable_supply_snapshots
+WHERE asset = ? AND source = ? AND chain = ? AND ts >= ? AND ts <= ?
+ORDER BY ABS(CAST(strftime('%s', ts) AS INTEGER) - ?), ts
+LIMIT 1`, asset, source, chain, stableTS(target.Add(-tol)), stableTS(target.Add(tol)), target.UTC().Unix())
+	if err != nil {
+		return nil, err
+	}
+	defer rs.Close()
+	if !rs.Next() {
+		return nil, rs.Err()
+	}
+	var r stableSupplySnapshot
+	var ts, fetched string
+	if err := rs.Scan(&ts, &r.Asset, &r.Chain, &r.Source, &r.CirculatingNative, &r.OnchainTotalNative,
+		&r.UnissuedNative, &r.QuarantinedNative, &fetched); err != nil {
+		return nil, err
+	}
+	r.TS, r.FetchedAt = parseStableTS(ts), parseStableTS(fetched)
+	return &r, nil
 }
