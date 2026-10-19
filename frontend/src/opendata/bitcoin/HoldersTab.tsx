@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import ReactECharts from 'echarts-for-react';
 import { AlertTriangle, Building2, CheckCircle2, Clock, Database, Download, Terminal } from 'lucide-react';
 import { EmptyState, ErrorBanner } from '../../dashboards/shared';
@@ -58,17 +58,31 @@ export default function HoldersTab({
   refreshTick: number;
 }) {
   const [baselinePlan, setBaselinePlan] = useState<BtcBaselinePlan | null>(null);
-  const [baselineOverride, setBaselineOverride] = useState<BtcBaselineStatus | null>(null);
+  const [lastPolledBaseline, setLastPolledBaseline] = useState<BtcBaselineStatus | null>(null);
+  const [baselineOverride, setBaselineOverride] = useState<{
+    forBaseline: BtcBaselineStatus | null;
+    status: BtcBaselineStatus;
+  } | null>(null);
   const [baselineBusy, setBaselineBusy] = useState<boolean>(false);
   const [baselineErr, setBaselineErr] = useState<string | null>(null);
 
   const fetchHolders = useCallback(() => fetchBitcoinHolders(days), [days]);
   const holdersPoll = usePolling(fetchHolders, 0, `btc-holders-${days}-${refreshTick}`);
 
-  const fetchOnchain = useCallback(() => fetchBitcoinOnchainHolders(days), [days]);
+  const fetchOnchain = useCallback(async () => {
+    const res = await fetchBitcoinOnchainHolders(days);
+    setLastPolledBaseline(res.baseline ?? null);
+    return res;
+  }, [days]);
+  const activeBaselineForPoll =
+    baselineOverride && baselineOverride.forBaseline === lastPolledBaseline
+      ? baselineOverride.status
+      : lastPolledBaseline;
+  const onchainPollInterval =
+    activeBaselineForPoll?.building || activeBaselineForPoll?.pending ? 30_000 : 0;
   const onchainPoll = usePolling(
     fetchOnchain,
-    0,
+    onchainPollInterval,
     `btc-onchain-holders-${days}-${refreshTick}`,
     bqControl.show,
   );
@@ -85,7 +99,11 @@ export default function HoldersTab({
   const coinageRows: BtcCoinageDay[] = onchainData?.coinage ?? [];
   const holderRows: BtcHolderDay[] = onchainData?.holders ?? [];
   const whales = onchainData?.whales ?? [];
-  const baseline = baselineOverride ?? onchainData?.baseline ?? null;
+  const polledBaseline = onchainData?.baseline ?? null;
+  const baseline =
+    baselineOverride && baselineOverride.forBaseline === polledBaseline
+      ? baselineOverride.status
+      : polledBaseline;
   const holderEngine = onchainData?.holder_engine ?? null;
   const coinageStatus = onchainData?.coinage_status ?? null;
   const holderWarnings = holderRows.flatMap(r =>
@@ -93,10 +111,6 @@ export default function HoldersTab({
   );
   const latestCoinage = coinageRows.length > 0 ? coinageRows[coinageRows.length - 1] : null;
   const latestHolder = holderRows.length > 0 ? holderRows[holderRows.length - 1] : null;
-
-  useEffect(() => {
-    setBaselineOverride(null);
-  }, [onchainData?.baseline]);
 
   const extractBaselineError = (e: unknown, fallback: string): string => {
     if (typeof e === 'object' && e !== null && 'response' in e) {
@@ -122,6 +136,7 @@ export default function HoldersTab({
     setBaselineErr(null);
     try {
       const plan = await dryRunBitcoinBaseline();
+      setBaselineOverride(null);
       setBaselinePlan(plan);
     } catch (e) {
       setBaselineErr(extractBaselineError(e, 'Baseline dry run failed'));
@@ -136,7 +151,7 @@ export default function HoldersTab({
     setBaselineErr(null);
     try {
       const st = await confirmBitcoinBaseline(baselinePlan.token);
-      setBaselineOverride(st);
+      setBaselineOverride({ forBaseline: onchainData?.baseline ?? null, status: st });
       setBaselinePlan(null);
     } catch (e) {
       setBaselineErr(extractBaselineError(e, 'Baseline build failed'));
@@ -756,7 +771,8 @@ export default function HoldersTab({
               <div className="mt-1.5 flex flex-wrap items-center gap-2 text-rose-200/90">
                 <span>Remedy:</span>
                 <code className="rounded bg-zinc-950/80 px-2 py-0.5 font-mono text-[11px] text-amber-300">
-                  {holderEngine.remedy || './biglens-server --bitcoin-utxo-baseline --yes'}
+                  {holderEngine.remedy ||
+                    'Rebuild the UTXO baseline (~687 GiB scan, ~$4.20; run without --yes first to dry-run and confirm estimated cost, add --force if within min_interval_days): ./biglens-server --bitcoin-utxo-baseline --yes'}
                 </code>
               </div>
             </div>
@@ -774,13 +790,15 @@ export default function HoldersTab({
                   <span className="font-mono text-zinc-200">{coinageStatus.synced_through || '—'}</span>
                 </span>
               </div>
-              <div className="flex items-center gap-1.5 text-[11px] text-zinc-400">
-                <Terminal className="h-3.5 w-3.5 text-amber-400" />
-                <span>Resume CLI:</span>
-                <code className="rounded bg-zinc-950 px-2 py-0.5 font-mono text-amber-300">
-                  ./biglens-server --bitcoin-bq-resume btc_coinage
-                </code>
-              </div>
+              {coinageStatus.state === 'stopped' && (
+                <div className="flex items-center gap-1.5 text-[11px] text-zinc-400">
+                  <Terminal className="h-3.5 w-3.5 text-amber-400" />
+                  <span>Resume CLI:</span>
+                  <code className="rounded bg-zinc-950 px-2 py-0.5 font-mono text-amber-300">
+                    ./biglens-server --bitcoin-bq-resume btc_coinage
+                  </code>
+                </div>
+              )}
             </div>
           )}
 
@@ -817,12 +835,16 @@ export default function HoldersTab({
                   {baseline?.available ? (
                     <span
                       className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium ${
-                        baseline.pending
+                        baseline.building || baseline.pending
                           ? 'bg-amber-500/15 text-amber-300'
                           : 'bg-emerald-500/15 text-emerald-300'
                       }`}
                     >
-                      {baseline.pending ? (
+                      {baseline.building ? (
+                        <>
+                          <Clock className="h-3 w-3" /> Building…
+                        </>
+                      ) : baseline.pending ? (
                         <>
                           <Clock className="h-3 w-3" /> Pending Handoff
                         </>
@@ -831,6 +853,10 @@ export default function HoldersTab({
                           <CheckCircle2 className="h-3 w-3" /> Active (Gen #{baseline.generation})
                         </>
                       )}
+                    </span>
+                  ) : baseline?.building || baseline?.pending ? (
+                    <span className="inline-flex items-center gap-1 rounded bg-amber-500/15 px-1.5 py-0.5 text-[11px] font-medium text-amber-300">
+                      <Clock className="h-3 w-3" /> {baseline.building ? 'Building…' : 'Pending Handoff'}
                     </span>
                   ) : (
                     <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[11px] text-zinc-400">

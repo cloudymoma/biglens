@@ -25,6 +25,7 @@ export interface BtcBaselineStatus {
   generation: number;
   as_of: string;
   built_at: string;
+  building?: boolean;
   pending: boolean;
   baseline_sats: number;
   baseline_btc: number;

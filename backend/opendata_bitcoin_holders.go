@@ -18,7 +18,7 @@ const (
 	btcHolderSchemaVersion    = 1
 	btcUTXOStateGenerationKey = "utxo_state_generation"
 	btcHolderEngineStatusKey  = "holder_engine_status"
-	btcHolderEngineRemedy     = "Rebuild the UTXO baseline to resynchronize holder state: ./biglens-server --bitcoin-utxo-baseline --yes"
+	btcHolderEngineRemedy     = "Rebuild the UTXO baseline (~687 GiB scan, ~$4.20; run without --yes first to dry-run and confirm estimated cost, add --force if within min_interval_days): ./biglens-server --bitcoin-utxo-baseline --yes"
 )
 
 // utxoState maps creation day ("YYYY-MM-DD") to unspent satoshis.

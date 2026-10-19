@@ -656,6 +656,11 @@ func TestBtcHolderEngineHaltedExposedAndDeduped(t *testing.T) {
 	if resp.HolderEngine.Since == "" || resp.HolderEngine.Remedy == "" {
 		t.Fatalf("holder_engine missing since or remedy: %+v", resp.HolderEngine)
 	}
+	for _, wantSub := range []string{"--bitcoin-utxo-baseline", "--force", "--yes", "687 GiB"} {
+		if !strings.Contains(resp.HolderEngine.Remedy, wantSub) {
+			t.Fatalf("holder_engine.remedy = %q, missing %q", resp.HolderEngine.Remedy, wantSub)
+		}
+	}
 
 	// Running maintenance an hour later on the same halted day must preserve Since (deduped).
 	firstSince := resp.HolderEngine.Since
