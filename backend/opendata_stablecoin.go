@@ -2,6 +2,7 @@ package main
 
 import (
 	"net/http"
+	"os"
 	"time"
 )
 
@@ -10,6 +11,7 @@ import (
 // answers 404 (§9).
 type stablecoinService struct {
 	settings stableSettings
+	facts    stableFacts
 	now      func() time.Time
 }
 
@@ -22,7 +24,7 @@ func newStablecoinService(cfg *Config) *stablecoinService {
 	if !s.Enabled {
 		return nil
 	}
-	return &stablecoinService{settings: s, now: time.Now}
+	return &stablecoinService{settings: s, facts: loadStableFacts(s.FactsFile, os.ReadFile), now: time.Now}
 }
 
 // providerEnabled reports whether a provider key may be called; false means

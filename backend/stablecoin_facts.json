@@ -1,0 +1,8 @@
+{
+  "version": "2026-10-19.0",
+  "assets": {
+    "usdt": {"status": "unknown"},
+    "usdc": {"status": "unknown"},
+    "eurc": {"status": "unknown"}
+  }
+}
