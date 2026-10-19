@@ -713,7 +713,7 @@ export default function MiningTab({ bqControl, bigquery, refreshTick }: MiningTa
           title="BigQuery On-Chain Mining & Issuance Accounting (A2)"
           description="Daily exact block-header difficulty decode, implied hashrate Δ% vs mempool.space, empty block counts, and claimed vs scheduled subsidy verification."
           bigquery={bigquery}
-          onEnableDisplay={() => bqControl.toggle()}
+          onEnableDisplay={bqControl.available ? bqControl.toggle : undefined}
         />
       ) : data.chain && data.chain.length > 0 ? (
         <Panel

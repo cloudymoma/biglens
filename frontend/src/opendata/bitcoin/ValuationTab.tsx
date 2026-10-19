@@ -208,7 +208,6 @@ export default function ValuationTab({
       yAxis: {
         type: 'value',
         max: 0,
-        min: -90,
         ...CHART_AXIS,
         splitLine: SPLIT_LINE,
         axisLabel: { ...AXIS_LABEL, formatter: (v: number) => `${v}%` },
@@ -762,7 +761,7 @@ export default function ValuationTab({
           title="On-Chain Realized Price, STH/LTH Cost Basis & Exact Puell Multiple"
           description="Enable BigQuery panels to overlay UTXO-derived Realized Price, Short-Term / Long-Term Holder Realized Prices, BigLens MVRV (with Δ% cross-check against Coin Metrics), and exact per-block subsidy Puell Multiple."
           bigquery={bigquery}
-          onEnableDisplay={() => bqControl.toggle()}
+          onEnableDisplay={bqControl.available ? bqControl.toggle : undefined}
         />
       )}
     </div>

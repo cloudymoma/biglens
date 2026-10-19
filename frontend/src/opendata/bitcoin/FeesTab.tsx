@@ -395,7 +395,12 @@ export default function FeesTab({
           >
             <div className="space-y-3">
               <div className="flex items-center gap-2.5">
-                {feesData.consolidation.open ? (
+                {feesData.consolidation.economy_sat_vb <= 0 ? (
+                  <span className="inline-flex items-center gap-1.5 rounded-full border border-zinc-700/60 bg-zinc-800/60 px-3 py-1 text-xs font-semibold text-zinc-400">
+                    <Clock className="h-4 w-4" />
+                    <span>Unavailable</span>
+                  </span>
+                ) : feesData.consolidation.open ? (
                   <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/15 px-3 py-1 text-xs font-semibold text-emerald-300">
                     <CheckCircle2 className="h-4 w-4" />
                     <span>Window Open</span>
@@ -407,18 +412,26 @@ export default function FeesTab({
                   </span>
                 )}
               </div>
-              <p className="text-xs leading-relaxed text-zinc-300">{feesData.consolidation.reason}</p>
+              <p className="text-xs leading-relaxed text-zinc-300">
+                {feesData.consolidation.economy_sat_vb <= 0
+                  ? 'Live fee market telemetry unavailable'
+                  : feesData.consolidation.reason}
+              </p>
               <div className="grid grid-cols-2 gap-2 pt-2 text-xs">
                 <div className="rounded-lg border border-zinc-800/80 bg-zinc-950/60 p-2.5">
                   <div className="text-[11px] text-zinc-500">Economy Rate</div>
                   <div className="mt-0.5 font-mono font-semibold text-zinc-100">
-                    {fmtSatVB(feesData.consolidation.economy_sat_vb)}
+                    {feesData.consolidation.economy_sat_vb <= 0
+                      ? 'unavailable'
+                      : fmtSatVB(feesData.consolidation.economy_sat_vb)}
                   </div>
                 </div>
                 <div className="rounded-lg border border-zinc-800/80 bg-zinc-950/60 p-2.5">
                   <div className="text-[11px] text-zinc-500">Backlog</div>
                   <div className="mt-0.5 font-mono font-semibold text-zinc-100">
-                    {feesData.consolidation.blocks_to_clear.toFixed(1)} blks
+                    {feesData.consolidation.economy_sat_vb <= 0
+                      ? 'unavailable'
+                      : `${feesData.consolidation.blocks_to_clear.toFixed(1)} blks`}
                   </div>
                 </div>
               </div>
@@ -449,36 +462,57 @@ export default function FeesTab({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-800/60 font-mono">
-                    {feesData.templates.map(tpl => (
-                      <tr key={tpl.id} className="hover:bg-zinc-800/20">
-                        <td className="py-2 font-sans text-zinc-200">{tpl.label}</td>
-                        <td className="py-2 text-right text-zinc-400">{tpl.vbytes.toLocaleString()}</td>
-                        <td className="py-2 text-right text-zinc-100">
-                          {fmtSats(tpl.next_block_sats)}
-                          {tpl.next_block_usd !== null && (
-                            <span className="ml-1.5 text-[11px] text-zinc-400">
-                              ({fmtUSD(tpl.next_block_usd, 2)})
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-2 text-right text-zinc-200">
-                          {fmtSats(tpl.half_hour_sats)}
-                          {tpl.half_hour_usd !== null && (
-                            <span className="ml-1.5 text-[11px] text-zinc-400">
-                              ({fmtUSD(tpl.half_hour_usd, 2)})
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-2 text-right text-emerald-300">
-                          {fmtSats(tpl.economy_sats)}
-                          {tpl.economy_usd !== null && (
-                            <span className="ml-1.5 text-[11px] text-zinc-400">
-                              ({fmtUSD(tpl.economy_usd, 2)})
-                            </span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
+                    {feesData.templates.map(tpl => {
+                      const feeMarketUnavailable = feesData.consolidation.economy_sat_vb <= 0;
+                      return (
+                        <tr key={tpl.id} className="hover:bg-zinc-800/20">
+                          <td className="py-2 font-sans text-zinc-200">{tpl.label}</td>
+                          <td className="py-2 text-right text-zinc-400">{tpl.vbytes.toLocaleString()}</td>
+                          <td className="py-2 text-right text-zinc-100">
+                            {feeMarketUnavailable || tpl.next_block_sats <= 0 ? (
+                              <span className="text-zinc-500">unavailable</span>
+                            ) : (
+                              <>
+                                {fmtSats(tpl.next_block_sats)}
+                                {tpl.next_block_usd !== null && (
+                                  <span className="ml-1.5 text-[11px] text-zinc-400">
+                                    ({fmtUSD(tpl.next_block_usd, 2)})
+                                  </span>
+                                )}
+                              </>
+                            )}
+                          </td>
+                          <td className="py-2 text-right text-zinc-200">
+                            {feeMarketUnavailable || tpl.half_hour_sats <= 0 ? (
+                              <span className="text-zinc-500">unavailable</span>
+                            ) : (
+                              <>
+                                {fmtSats(tpl.half_hour_sats)}
+                                {tpl.half_hour_usd !== null && (
+                                  <span className="ml-1.5 text-[11px] text-zinc-400">
+                                    ({fmtUSD(tpl.half_hour_usd, 2)})
+                                  </span>
+                                )}
+                              </>
+                            )}
+                          </td>
+                          <td className="py-2 text-right text-emerald-300">
+                            {feeMarketUnavailable || tpl.economy_sats <= 0 ? (
+                              <span className="text-zinc-500">unavailable</span>
+                            ) : (
+                              <>
+                                {fmtSats(tpl.economy_sats)}
+                                {tpl.economy_usd !== null && (
+                                  <span className="ml-1.5 text-[11px] text-zinc-400">
+                                    ({fmtUSD(tpl.economy_usd, 2)})
+                                  </span>
+                                )}
+                              </>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

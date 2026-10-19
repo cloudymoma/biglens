@@ -13,7 +13,7 @@ interface NodeMapProps {
 const GEO_NAME_OVERRIDES: Record<string, string> = {
   US: 'United States of America',
   GB: 'United Kingdom',
-  CZ: 'Czechia',
+  CZ: 'Czech Republic',
   KR: 'South Korea',
   RU: 'Russia',
   TW: 'Taiwan',

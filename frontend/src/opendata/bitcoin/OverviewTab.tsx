@@ -611,7 +611,7 @@ export default function OverviewTab({ bqControl, bigquery, refreshTick }: Props)
           title="API vs On-Chain Verification Table (BigQuery)"
           description="Cross-checks public API metrics (mempool.space, Coin Metrics) against independent BigQuery crypto_bitcoin rollups (hashrate, tx count, active addresses, scheduled issuance, fees, miner revenue, and—once a UTXO baseline exists—circulating supply and MVRV)."
           bigquery={bigquery}
-          onEnableDisplay={() => bqControl.toggle()}
+          onEnableDisplay={bqControl.available ? bqControl.toggle : undefined}
         />
       ) : (
         <Panel

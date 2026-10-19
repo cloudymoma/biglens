@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import ReactECharts from 'echarts-for-react';
 import { AlertTriangle, Building2, CheckCircle2, Clock, Database, Download, Terminal } from 'lucide-react';
 import { EmptyState, ErrorBanner } from '../../dashboards/shared';
@@ -94,6 +94,29 @@ export default function HoldersTab({
   const latestCoinage = coinageRows.length > 0 ? coinageRows[coinageRows.length - 1] : null;
   const latestHolder = holderRows.length > 0 ? holderRows[holderRows.length - 1] : null;
 
+  useEffect(() => {
+    setBaselineOverride(null);
+  }, [onchainData?.baseline]);
+
+  const extractBaselineError = (e: unknown, fallback: string): string => {
+    if (typeof e === 'object' && e !== null && 'response' in e) {
+      const resp = (e as { response?: { data?: unknown } }).response;
+      const data = resp?.data;
+      if (typeof data === 'string' && data.trim()) {
+        return data.trim();
+      }
+      if (typeof data === 'object' && data !== null) {
+        const msg =
+          (data as { error?: unknown; message?: unknown }).error ??
+          (data as { message?: unknown }).message;
+        if (typeof msg === 'string' && msg.trim()) {
+          return msg.trim();
+        }
+      }
+    }
+    return e instanceof Error ? e.message : fallback;
+  };
+
   const handleDryRunBaseline = async () => {
     setBaselineBusy(true);
     setBaselineErr(null);
@@ -101,7 +124,7 @@ export default function HoldersTab({
       const plan = await dryRunBitcoinBaseline();
       setBaselinePlan(plan);
     } catch (e) {
-      setBaselineErr(e instanceof Error ? e.message : 'Baseline dry run failed');
+      setBaselineErr(extractBaselineError(e, 'Baseline dry run failed'));
     } finally {
       setBaselineBusy(false);
     }
@@ -116,7 +139,7 @@ export default function HoldersTab({
       setBaselineOverride(st);
       setBaselinePlan(null);
     } catch (e) {
-      setBaselineErr(e instanceof Error ? e.message : 'Baseline build failed');
+      setBaselineErr(extractBaselineError(e, 'Baseline build failed'));
     } finally {
       setBaselineBusy(false);
     }

@@ -93,10 +93,10 @@ export default function BitcoinTicker({
           <Layers className="h-3.5 w-3.5 text-sky-400" />
         </div>
         <div className="mt-1 font-mono text-lg font-bold text-zinc-100">
-          {live.mempool_vmb.toFixed(1)} vMB
+          {live.tip_height != null ? `${live.mempool_vmb.toFixed(1)} vMB` : '—'}
         </div>
         <div className="mt-0.5 text-[11px] text-zinc-400">
-          ~{live.blocks_to_clear.toFixed(1)} blocks to clear
+          {live.tip_height != null ? `~${live.blocks_to_clear.toFixed(1)} blocks to clear` : '—'}
         </div>
       </div>
 
