@@ -39,6 +39,7 @@ type Config struct {
 	PaymentCheck PaymentCheckConfig `yaml:"payment_check,omitempty"`
 	CryptoPrices CryptoPricesConfig `yaml:"crypto_prices,omitempty"`
 	Bitcoin      BitcoinConfig      `yaml:"bitcoin,omitempty"`
+	Stablecoin   StablecoinConfig   `yaml:"stablecoin,omitempty"`
 
 	// path is where this config was loaded from, so SaveConfig can write back.
 	path string
@@ -409,5 +410,83 @@ func (c BitcoinConfig) settings() btcSettings {
 		WhalesPerDay:        whalesPerDay,
 		BaselineAllowUI:     ub.AllowUI,
 		BaselineMinInterval: time.Duration(intervalDays) * 24 * time.Hour,
+	}
+}
+
+// StablecoinConfig configures the Stablecoins dashboard (stablecoin.md §8.6).
+// Every field has a code default, so an absent section means "enabled with
+// the default providers and no BigQuery jobs".
+type StablecoinConfig struct {
+	Enabled   *bool                    `yaml:"enabled,omitempty"`    // nil → true
+	Providers map[string]bool          `yaml:"providers,omitempty"`  // missing key → stableDefaultProviders
+	FactsFile string                   `yaml:"facts_file,omitempty"` // optional operator override for curated facts
+	BigQuery  StablecoinBigQueryConfig `yaml:"bigquery,omitempty"`
+}
+
+type StablecoinBigQueryConfig struct {
+	Jobs             bool  `yaml:"jobs,omitempty"`               // default false: operator opt-in
+	InitialDays      *int  `yaml:"initial_days,omitempty"`       // nil → 90; clamp [7, 730]
+	MonthlyBudgetGiB int   `yaml:"monthly_budget_gib,omitempty"` // ≤0 → 512; covers stable_eth + stable_tron
+	Tron             *bool `yaml:"tron,omitempty"`               // nil → true: include stable_tron
+}
+
+// stableDefaultProviders lists every keyless provider of the Stablecoins
+// dashboard (§4.1–4.4); false in conf.yaml means the source is never called.
+var stableDefaultProviders = map[string]bool{
+	"defillama":     true,
+	"circle":        true,
+	"tether":        true,
+	"coinbase":      true,
+	"kraken":        true,
+	"bitstamp":      true,
+	"okx":           true,
+	"binance":       true,
+	"curve":         true,
+	"blockscout":    true,
+	"ecb":           true,
+	"us_treasury":   true,
+	"rpc_supply":    true,
+	"rpc_controls":  true,
+	"uniswap_rpc":   true,
+	"chainlink_rpc": true,
+}
+
+// stableSettings is StablecoinConfig with defaults and clamps applied.
+type stableSettings struct {
+	Enabled     bool
+	Providers   map[string]bool
+	FactsFile   string
+	Jobs        bool
+	InitialDays int
+	BudgetBytes int64
+	Tron        bool
+}
+
+func (c StablecoinConfig) settings() stableSettings {
+	providers := make(map[string]bool, len(stableDefaultProviders))
+	for k, v := range stableDefaultProviders {
+		providers[k] = v
+	}
+	for k, v := range c.Providers {
+		if _, ok := stableDefaultProviders[k]; ok {
+			providers[k] = v
+		}
+	}
+	initialDays := 90
+	if c.BigQuery.InitialDays != nil {
+		initialDays = min(max(*c.BigQuery.InitialDays, 7), 730)
+	}
+	budgetGiB := c.BigQuery.MonthlyBudgetGiB
+	if budgetGiB <= 0 {
+		budgetGiB = 512
+	}
+	return stableSettings{
+		Enabled:     c.Enabled == nil || *c.Enabled,
+		Providers:   providers,
+		FactsFile:   c.FactsFile,
+		Jobs:        c.BigQuery.Jobs,
+		InitialDays: initialDays,
+		BudgetBytes: int64(budgetGiB) << 30,
+		Tron:        c.BigQuery.Tron == nil || *c.BigQuery.Tron,
 	}
 }

@@ -22,6 +22,7 @@ type APIHandler struct {
 	risk   *addressRiskService
 	prices *cryptoPriceSyncer
 	btc    *bitcoinService
+	stable *stablecoinService
 	sf     singleflight.Group
 }
 
@@ -37,6 +38,7 @@ func NewAPIHandler(bq *BQClient) *APIHandler {
 		cache:  NewCache(10 * time.Minute),
 		bundle: NewOKFBundle(bundlePath),
 		btc:    newBitcoinService(cfg),
+		stable: newStablecoinService(cfg),
 	}
 }
 

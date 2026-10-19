@@ -459,3 +459,131 @@ func TestBitcoinConfigProviderOverride(t *testing.T) {
 		t.Errorf("bigquery settings = jobs:%v budget:%d", s.Jobs, s.BudgetBytes)
 	}
 }
+
+func TestStablecoinConfigDefaults(t *testing.T) {
+	got := StablecoinConfig{}.settings()
+	if !got.Enabled {
+		t.Errorf("Enabled = false, want true")
+	}
+	if got.FactsFile != "" {
+		t.Errorf("FactsFile = %q, want empty", got.FactsFile)
+	}
+	if got.Jobs {
+		t.Errorf("Jobs = true, want false (operator opt-in)")
+	}
+	if got.InitialDays != 90 {
+		t.Errorf("InitialDays = %d, want 90", got.InitialDays)
+	}
+	if got.BudgetBytes != 512<<30 {
+		t.Errorf("BudgetBytes = %d, want %d (512 GiB)", got.BudgetBytes, int64(512<<30))
+	}
+	if !got.Tron {
+		t.Errorf("Tron = false, want true")
+	}
+	want := map[string]bool{
+		"defillama": true, "circle": true, "tether": true, "coinbase": true,
+		"kraken": true, "bitstamp": true, "okx": true, "binance": true,
+		"curve": true, "blockscout": true, "ecb": true, "us_treasury": true,
+		"rpc_supply": true, "rpc_controls": true, "uniswap_rpc": true, "chainlink_rpc": true,
+	}
+	if !reflect.DeepEqual(got.Providers, want) {
+		t.Errorf("Providers = %v, want %v", got.Providers, want)
+	}
+	if strings.Contains(string(mustMarshalYAML(t, &Config{})), "stablecoin") {
+		t.Error("an absent stablecoin section must stay absent on save")
+	}
+}
+
+func TestStablecoinConfigClamps(t *testing.T) {
+	ptr := func(n int) *int { return &n }
+	cases := []struct {
+		name        string
+		initialDays *int
+		budgetGiB   int
+		wantDays    int
+		wantBudget  int64
+	}{
+		{"absent", nil, 0, 90, 512 << 30},
+		{"zero days clamps up", ptr(0), 0, 7, 512 << 30},
+		{"negative days clamps up", ptr(-5), 0, 7, 512 << 30},
+		{"low edge", ptr(7), 0, 7, 512 << 30},
+		{"in range", ptr(120), 0, 120, 512 << 30},
+		{"high edge", ptr(730), 0, 730, 512 << 30},
+		{"above max clamps down", ptr(9999), 0, 730, 512 << 30},
+		{"negative budget uses default", nil, -1, 90, 512 << 30},
+		{"explicit budget", nil, 1024, 90, 1024 << 30},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var c StablecoinConfig
+			c.BigQuery.InitialDays = tc.initialDays
+			c.BigQuery.MonthlyBudgetGiB = tc.budgetGiB
+			s := c.settings()
+			if s.InitialDays != tc.wantDays {
+				t.Errorf("InitialDays = %d, want %d", s.InitialDays, tc.wantDays)
+			}
+			if s.BudgetBytes != tc.wantBudget {
+				t.Errorf("BudgetBytes = %d, want %d", s.BudgetBytes, tc.wantBudget)
+			}
+		})
+	}
+}
+
+func TestStablecoinConfigOverrides(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "conf.yaml")
+	src := `stablecoin:
+  enabled: true
+  providers:
+    binance: false
+    circle: false
+    not_a_provider: true
+  facts_file: "/etc/biglens/facts.json"
+  bigquery:
+    jobs: true
+    initial_days: 30
+    monthly_budget_gib: 256
+    tron: false
+`
+	if err := os.WriteFile(path, []byte(src), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := cfg.Stablecoin.settings()
+	if s.Providers["binance"] || s.Providers["circle"] {
+		t.Errorf("binance/circle should be false after override: %v", s.Providers)
+	}
+	if !s.Providers["defillama"] || !s.Providers["tether"] || !s.Providers["rpc_supply"] {
+		t.Errorf("unspecified providers lost defaults: %v", s.Providers)
+	}
+	if _, ok := s.Providers["not_a_provider"]; ok {
+		t.Errorf("unknown provider key must be ignored: %v", s.Providers)
+	}
+	if s.FactsFile != "/etc/biglens/facts.json" {
+		t.Errorf("FactsFile = %q", s.FactsFile)
+	}
+	if !s.Jobs || s.InitialDays != 30 || s.BudgetBytes != 256<<30 || s.Tron {
+		t.Errorf("bigquery settings = jobs:%v days:%d budget:%d tron:%v", s.Jobs, s.InitialDays, s.BudgetBytes, s.Tron)
+	}
+}
+
+func TestStablecoinConfigDisabled(t *testing.T) {
+	off := false
+	cfg := &Config{}
+	cfg.Stablecoin.Enabled = &off
+	if cfg.Stablecoin.settings().Enabled {
+		t.Fatal("enabled: false must disable the dashboard")
+	}
+	if svc := newStablecoinService(cfg); svc != nil {
+		t.Fatalf("newStablecoinService = %+v, want nil when disabled", svc)
+	}
+	if svc := newStablecoinService(&Config{}); svc == nil {
+		t.Fatal("newStablecoinService = nil, want a service when the section is absent (default on)")
+	}
+	if svc := newStablecoinService(nil); svc == nil {
+		t.Fatal("newStablecoinService(nil) = nil, want defaults (enabled)")
+	}
+}
