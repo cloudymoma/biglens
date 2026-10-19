@@ -596,19 +596,18 @@ type stableSupplySampler struct {
 	circle stableLastGood[circleSnapshot]
 	tether stableLastGood[tetherSnapshot]
 
-	mu           sync.Mutex
-	tetherRes    stableResult[tetherSnapshot]
-	tetherAt     time.Time
-	onchain      map[string]stableOnchainReading
-	onchainCode  string
-	rpcAt        time.Time
-	chartsDue    time.Time
-	ratesDue     time.Time
-	streak       map[string]int
-	recon        map[string][]StableReconOnchain
-	reconAsOf    time.Time
-	state        *stableSupplyState
-	historyRunAt time.Time
+	mu          sync.Mutex
+	tetherRes   stableResult[tetherSnapshot]
+	tetherAt    time.Time
+	onchain     map[string]stableOnchainReading
+	onchainCode string
+	rpcAt       time.Time
+	chartsDue   time.Time
+	ratesDue    time.Time
+	streak      map[string]int
+	recon       map[string][]StableReconOnchain
+	reconAsOf   time.Time
+	state       *stableSupplyState
 }
 
 func newStableSupplySampler(settings stableSettings, store *riskStore, ep stableEndpoints, rpcs func(string) []string, now func() time.Time) *stableSupplySampler {
@@ -631,15 +630,17 @@ func (s *stableSupplySampler) snapshot() *stableSupplyState {
 	return s.state
 }
 
-// tick runs one supply sample: fetch what is due, store it, recompute the view.
-func (s *stableSupplySampler) tick(ctx context.Context) {
+// tick runs one supply sample: fetch what is due, store it, recompute the
+// view. It reports whether every due upstream call succeeded.
+func (s *stableSupplySampler) tick(ctx context.Context) bool {
 	now := s.now().UTC()
-	in, rpcFresh := s.collect(ctx, now)
+	in, rpcFresh, ok := s.collect(ctx, now)
 	s.persist(ctx, in)
 	s.compute(ctx, in, rpcFresh, now)
+	return ok
 }
 
-func (s *stableSupplySampler) collect(ctx context.Context, now time.Time) (stableSupplyInputs, bool) {
+func (s *stableSupplySampler) collect(ctx context.Context, now time.Time) (stableSupplyInputs, bool, bool) {
 	var in stableSupplyInputs
 	var g errgroup.Group
 	g.Go(func() error {
@@ -743,7 +744,9 @@ func (s *stableSupplySampler) collect(ctx context.Context, now time.Time) (stabl
 		in.Onchain[k] = v
 	}
 	in.OnchainCode = s.onchainCode
-	return in, rpcDue
+	ok := (!s.enabled("defillama") || in.Llama.Code == "") && (!s.enabled("circle") || in.Circle.Code == "") &&
+		(!tetherDue || tetherRes.Code == "") && (!rpcDue || s.onchainCode == "")
+	return in, rpcDue, ok
 }
 
 // persist stores at most one observation per source per UTC hour, plus the
@@ -934,15 +937,15 @@ func (s *stableSupplySampler) compute(ctx context.Context, in stableSupplyInputs
 // syncHistory refreshes the DefiLlama daily supply history every 6 h
 // (stable_supply_daily, source "aggregator"): totalCirculating is native,
 // totalCirculatingUSD is USD (§5.1).
-func (s *stableSupplySampler) syncHistory(ctx context.Context) {
+func (s *stableSupplySampler) syncHistory(ctx context.Context) (ran, ok bool) {
 	now := s.now().UTC()
 	s.mu.Lock()
 	due := s.enabled("defillama") && !now.Before(s.chartsDue)
 	s.mu.Unlock()
 	if !due || s.store == nil {
-		return
+		return false, false
 	}
-	ok := true
+	ok = true
 	for _, def := range stableCoreAssets {
 		t0 := time.Now()
 		rows, code := fetchLlamaChart(ctx, s.ep, def.LlamaID, def.LlamaPeg)
@@ -972,21 +975,33 @@ func (s *stableSupplySampler) syncHistory(ctx context.Context) {
 	} else {
 		s.chartsDue = now.Add(stableRetryAfterFail)
 	}
-	s.historyRunAt = now
 	s.mu.Unlock()
+	return true, ok
+}
+
+func (s *stableSupplySampler) historyNextDue() time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.chartsDue
+}
+
+func (s *stableSupplySampler) ratesNextDue() time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ratesDue
 }
 
 // syncRates stores the ECB EUR/USD and €STR fixings and the 13-week T-bill
 // yield once a day (stable_rates_daily).
-func (s *stableSupplySampler) syncRates(ctx context.Context) {
+func (s *stableSupplySampler) syncRates(ctx context.Context) (ran, ok bool) {
 	now := s.now().UTC()
 	s.mu.Lock()
 	due := !now.Before(s.ratesDue)
 	s.mu.Unlock()
 	if !due || s.store == nil || (!s.enabled("ecb") && !s.enabled("us_treasury")) {
-		return
+		return false, false
 	}
-	ok := true
+	ok = true
 	var rows []stableRateDaily
 	addObs := func(series string, obs []stableRateObs) {
 		for _, o := range obs {
@@ -1032,6 +1047,7 @@ func (s *stableSupplySampler) syncRates(ctx context.Context) {
 		s.ratesDue = now.Add(stableRetryAfterFail)
 	}
 	s.mu.Unlock()
+	return true, ok
 }
 
 // stableSupplyHistory merges the issuer and aggregator daily series from

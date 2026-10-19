@@ -24,6 +24,7 @@ func main() {
 	force := flag.Bool("force", false, "bypass the minimum interval lock for --bitcoin-utxo-baseline (never bypasses budget)")
 	btcBaseline := flag.Bool("bitcoin-utxo-baseline", false, "build the Bitcoin UTXO baseline from BigQuery (dry run unless --yes), then exit")
 	btcResume := flag.String("bitcoin-bq-resume", "", "clear the stop flag for a Bitcoin BigQuery job (btc_onchain or btc_coinage) and exit")
+	stableVerify := flag.Bool("stablecoin-verify", false, "check every enabled stablecoin source against its live endpoint, print a pass/fail table and exit (non-zero on any failure)")
 	flag.Parse()
 
 	cfg, err := LoadConfig("conf.yaml")
@@ -36,6 +37,10 @@ func main() {
 
 	if *btcResume != "" {
 		os.Exit(runBtcResumeCLI(context.Background(), cfg, *btcResume))
+	}
+	if *stableVerify {
+		// Public HTTPS and RPC reads only: no BigQuery client is created.
+		os.Exit(runStableVerifyCLI(context.Background(), cfg))
 	}
 
 	logDir := "logs"
