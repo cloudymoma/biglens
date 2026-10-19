@@ -180,7 +180,7 @@ func computeBtcMiningPools(summary *btcMempoolPoolsSummary, period string) ([]Bt
 		},
 	}
 	if summary == nil || len(summary.Pools) == 0 {
-		return nil, conc
+		return []BtcMiningPoolRow{}, conc
 	}
 
 	var sumPoolBlocks int64
@@ -204,7 +204,7 @@ func computeBtcMiningPools(summary *btcMempoolPoolsSummary, period string) ([]Bt
 		shares["Unknown"] += totalBlocks - sumPoolBlocks
 	}
 	if totalBlocks <= 0 {
-		return nil, conc
+		return []BtcMiningPoolRow{}, conc
 	}
 
 	rows := make([]BtcMiningPoolRow, 0, len(summary.Pools))
@@ -395,8 +395,8 @@ func (h *APIHandler) buildBtcMiningData(ctx context.Context, r *http.Request, pe
 	halving := btcHalvingAt(tipHeight, now, avgBlockSec)
 
 	var (
-		hrPoints    []BtcHashratePoint
-		adjustments []BtcDifficultyHistoryPoint
+		hrPoints    = []BtcHashratePoint{}
+		adjustments = []BtcDifficultyHistoryPoint{}
 		ribbon      = BtcRibbonState{State: "warming_up"}
 		currHR      *float64
 		currDiff    *float64

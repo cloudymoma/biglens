@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import ReactECharts from 'echarts-for-react';
 import { Cpu, Download, Globe2, Pickaxe, Shield, Zap } from 'lucide-react';
 import type {
@@ -30,7 +30,7 @@ import {
   fmtNum,
 } from '../crypto/shared';
 import HelpTip from '../crypto/HelpTip';
-import { downloadCsv, fmtBTC, fmtPct, fmtUSD } from './format';
+import { downloadCsv, fmtBTCFromSats, fmtPct, fmtUSD } from './format';
 
 interface MiningTabProps {
   bqControl: BitcoinBigQueryControl;
@@ -108,8 +108,9 @@ export default function MiningTab({ bqControl, bigquery, refreshTick }: MiningTa
   const [poolFeeStr, setPoolFeeStr] = useState<string>('1');
   const [customJthStr, setCustomJthStr] = useState<string>('18');
 
+  const fetchMining = useCallback(() => fetchBitcoinMining(period), [period]);
   const miningPoll = usePolling<BtcMiningData>(
-    () => fetchBitcoinMining(period),
+    fetchMining,
     600_000,
     `btc-mining-${period}-${refreshTick}`,
   );
@@ -160,6 +161,10 @@ export default function MiningTab({ bqControl, bigquery, refreshTick }: MiningTa
 
   const latestChain =
     data.chain && data.chain.length > 0 ? data.chain[data.chain.length - 1] : null;
+  const hashrate = data.hashrate ?? [];
+  const hashprice = data.hashprice ?? [];
+  const pools = data.pools ?? [];
+  const sources = data.sources ?? [];
 
   return (
     <div className="space-y-6">
@@ -204,7 +209,7 @@ export default function MiningTab({ bqControl, bigquery, refreshTick }: MiningTa
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5">
-          {data.sources.map((s) => (
+          {sources.map((s) => (
             <SourceBadge key={s.id} source={s} />
           ))}
         </div>
@@ -317,7 +322,7 @@ export default function MiningTab({ bqControl, bigquery, refreshTick }: MiningTa
               grid: { left: 56, right: 24, top: 32, bottom: 24 },
               xAxis: {
                 type: 'category',
-                data: data.hashrate.map(p => p.date),
+                data: hashrate.map(p => p.date),
                 axisLabel: AXIS_LABEL,
               },
               yAxis: {
@@ -330,7 +335,7 @@ export default function MiningTab({ bqControl, bigquery, refreshTick }: MiningTa
                   name: 'Hashrate (EH/s)',
                   type: 'line',
                   showSymbol: false,
-                  data: data.hashrate.map(p => Number(p.hashrate_ehs.toFixed(2))),
+                  data: hashrate.map(p => Number(p.hashrate_ehs.toFixed(2))),
                   lineStyle: { color: '#71717a', width: 1.2 },
                   itemStyle: { color: '#71717a' },
                 },
@@ -338,7 +343,7 @@ export default function MiningTab({ bqControl, bigquery, refreshTick }: MiningTa
                   name: 'SMA30',
                   type: 'line',
                   showSymbol: false,
-                  data: data.hashrate.map(p =>
+                  data: hashrate.map(p =>
                     p.sma30_ehs != null ? Number(p.sma30_ehs.toFixed(2)) : null,
                   ),
                   lineStyle: { color: '#f59e0b', width: 2 },
@@ -348,19 +353,19 @@ export default function MiningTab({ bqControl, bigquery, refreshTick }: MiningTa
                   name: 'SMA60',
                   type: 'line',
                   showSymbol: false,
-                  data: data.hashrate.map(p =>
+                  data: hashrate.map(p =>
                     p.sma60_ehs != null ? Number(p.sma60_ehs.toFixed(2)) : null,
                   ),
                   lineStyle: { color: '#38bdf8', width: 2 },
                   itemStyle: { color: '#38bdf8' },
                 },
-                ...(bqControl.show && data.hashrate.some(p => p.implied_hashrate_ehs != null)
+                ...(bqControl.show && hashrate.some(p => p.implied_hashrate_ehs != null)
                   ? [
                       {
                         name: 'Implied Hashrate (BigQuery A2)',
                         type: 'line',
                         showSymbol: false,
-                        data: data.hashrate.map(p =>
+                        data: hashrate.map(p =>
                           p.implied_hashrate_ehs != null
                             ? Number(p.implied_hashrate_ehs.toFixed(2))
                             : null,
@@ -398,7 +403,7 @@ export default function MiningTab({ bqControl, bigquery, refreshTick }: MiningTa
               grid: { left: 56, right: 64, top: 32, bottom: 24 },
               xAxis: {
                 type: 'category',
-                data: data.hashprice.map(p => p.date),
+                data: hashprice.map(p => p.date),
                 axisLabel: AXIS_LABEL,
               },
               yAxis: [
@@ -419,7 +424,7 @@ export default function MiningTab({ bqControl, bigquery, refreshTick }: MiningTa
                   type: 'line',
                   yAxisIndex: 0,
                   showSymbol: false,
-                  data: data.hashprice.map(p =>
+                  data: hashprice.map(p =>
                     p.usd_per_ph_day != null ? Number(p.usd_per_ph_day.toFixed(2)) : null,
                   ),
                   lineStyle: { color: '#22c55e', width: 2 },
@@ -430,7 +435,7 @@ export default function MiningTab({ bqControl, bigquery, refreshTick }: MiningTa
                   type: 'line',
                   yAxisIndex: 1,
                   showSymbol: false,
-                  data: data.hashprice.map(p => Number(p.btc_per_ph_day.toFixed(6))),
+                  data: hashprice.map(p => Number(p.btc_per_ph_day.toFixed(6))),
                   lineStyle: { color: BTC_COLOR, width: 1.8 },
                   itemStyle: { color: BTC_COLOR },
                 },
@@ -480,7 +485,7 @@ export default function MiningTab({ bqControl, bigquery, refreshTick }: MiningTa
                 </tr>
               </thead>
               <tbody>
-                {data.pools.map(p => (
+                {pools.map(p => (
                   <tr key={p.slug || p.name} className="border-b border-zinc-800/30">
                     <td className="py-2 font-mono text-zinc-500">{p.rank}</td>
                     <td className="py-2 font-medium text-zinc-200">{p.name}</td>
@@ -768,10 +773,10 @@ export default function MiningTab({ bqControl, bigquery, refreshTick }: MiningTa
                         : '—'}
                     </td>
                     <td className="py-1.5 text-right font-mono text-zinc-300">
-                      {fmtBTC(r.scheduled_sats)}
+                      {fmtBTCFromSats(r.scheduled_sats)}
                     </td>
                     <td className="py-1.5 text-right font-mono text-zinc-300">
-                      {fmtBTC(r.claimed_sats)}
+                      {fmtBTCFromSats(r.claimed_sats)}
                     </td>
                     <td className="py-1.5 text-right font-mono text-amber-300">
                       {fmtPct(r.fee_share_pct, 2)}

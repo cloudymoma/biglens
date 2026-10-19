@@ -180,16 +180,8 @@ func (h *APIHandler) buildMarketsData(ctx context.Context) BtcMarketsData {
 	directMap := make(map[string]directResult)
 	var directMu sync.Mutex
 
-	if s.binance == nil {
-		s.binance = newBinanceAdapter(s.store, s.now)
-	}
-	s.binance.fapiBaseURL = btcBinanceFapiBaseURL
-	s.binance.dapiBaseURL = btcBinanceDapiBaseURL
-	s.binance.store = s.store
-	s.binance.now = s.now
-
 	adapters := []btcVenueAdapter{
-		s.binance,
+		s.getBinanceAdapter(),
 		newOKXAdapter(),
 		newCoinbaseAdapter(),
 		newKrakenAdapter(s.now),

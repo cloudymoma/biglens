@@ -375,3 +375,56 @@ func TestBtcBaselineReservesSizedMaxCap(t *testing.T) {
 		t.Fatalf("runCLI when maxCap (858.75 GiB) > budget (800 GiB) = %v, want errBtcOverBudget", err)
 	}
 }
+
+func TestBtcBaselineConfirmAsyncReturnsWhileBuilding(t *testing.T) {
+	ctx := context.Background()
+	store := newTestRiskStore(t)
+	s := (BitcoinConfig{}).settings()
+	s.Jobs = true
+	s.BaselineAllowUI = true
+	now := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
+
+	release := make(chan struct{})
+	src := &fakeBaselineSource{
+		dryBytes: 100 << 30,
+		rows:     []btcUTXOBaselineRow{{CreateDay: "2020-01-01", Sats: 100_000_000, UTXOs: 1}},
+		billed:   95 << 30,
+		onFetch: func() {
+			<-release
+		},
+	}
+	runner := newBtcBaselineRunner(store, s, src, func() time.Time { return now })
+	runner.confirmWait = 30 * time.Millisecond
+	readStore := newBtcReadStore(store, s, func() time.Time { return now })
+
+	plan, err := runner.dryRun(ctx)
+	if err != nil {
+		t.Fatalf("dryRun: %v", err)
+	}
+
+	// confirm should return nil after confirmWait (30ms) while FetchBaseline is still running.
+	if err := runner.confirm(ctx, plan.Token); err != nil {
+		t.Fatalf("confirm: %v", err)
+	}
+
+	stWhileRunning, err := readStore.baselineStatus(ctx)
+	if err != nil {
+		t.Fatalf("baselineStatus while running: %v", err)
+	}
+	if !stWhileRunning.Building || !stWhileRunning.Pending {
+		t.Fatalf("baselineStatus while running = %+v, want Building=true Pending=true", stWhileRunning)
+	}
+
+	// Unblock FetchBaseline and wait for commit.
+	close(release)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		st, _ := readStore.baselineStatus(ctx)
+		if st.Available && !st.Building {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	stFinal, _ := readStore.baselineStatus(ctx)
+	t.Fatalf("baseline did not finish background commit in time: %+v", stFinal)
+}

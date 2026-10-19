@@ -132,11 +132,12 @@ func registerBitcoinRoutes(mux *http.ServeMux, h *APIHandler, gzWrap func(http.H
 	if h == nil || h.btc == nil {
 		return
 	}
+	cop := http.NewCrossOriginProtection()
 	for _, rt := range bitcoinRoutes(h) {
 		if rt.Gzip {
 			mux.Handle(rt.Pattern, gzWrap(rt.Handler))
 		} else {
-			mux.Handle(rt.Pattern, logOnly(rt.Handler))
+			mux.Handle(rt.Pattern, logOnly(cop.Handler(http.HandlerFunc(rt.Handler))))
 		}
 	}
 }
@@ -155,7 +156,9 @@ func (h *APIHandler) btcCachedSource(ctx context.Context, cacheKey string, ttl t
 	}
 	nowStr := s.now().UTC().Format(time.RFC3339)
 	v, err := h.cachedFetch(cacheKey, ttl, func() (any, error) {
-		val, code := fetch(ctx)
+		fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 25*time.Second)
+		defer cancel()
+		val, code := fetch(fctx)
 		if code != "" {
 			return nil, fmt.Errorf("%s", code)
 		}

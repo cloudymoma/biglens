@@ -409,3 +409,77 @@ func TestBitnodesPersisted(t *testing.T) {
 		t.Errorf("statuses = %+v / %+v, want ok / ok", bitSt, dbipSt)
 	}
 }
+
+func TestClassifyBitnodesClientUnicodeNoPanic(t *testing.T) {
+	// 'Ⱥ' (U+023A, 2 bytes in UTF-8) expands to 'ⱥ' (U+2C65, 3 bytes) under strings.ToLower.
+	cases := []struct {
+		ua        string
+		wantCli   string
+		wantMajor string
+	}{
+		{
+			ua:        strings.Repeat("Ⱥ", 12) + "/Satoshi:28.1.0/",
+			wantCli:   "Bitcoin Core",
+			wantMajor: "28.x",
+		},
+		{
+			ua:        strings.Repeat("Ⱥ", 20) + "satoshi:",
+			wantCli:   "Bitcoin Core",
+			wantMajor: "Other",
+		},
+		{
+			ua:        "/İİİ/Satoshi:0.21.1(custom)/",
+			wantCli:   "Bitcoin Core",
+			wantMajor: "0.21.x",
+		},
+	}
+	for _, tc := range cases {
+		cli, major := classifyBitnodesClient(tc.ua)
+		if cli != tc.wantCli || major != tc.wantMajor {
+			t.Errorf("classifyBitnodesClient(%q) = (%q, %q), want (%q, %q)", tc.ua, cli, major, tc.wantCli, tc.wantMajor)
+		}
+	}
+}
+
+func TestBitnodesColdStartFailBackoff(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer srv.Close()
+
+	origBit := btcBitnodesLatestURL
+	btcBitnodesLatestURL = srv.URL + "/bitnodes"
+	defer func() { btcBitnodesLatestURL = origBit }()
+
+	store := openTestRiskStore(t)
+	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	settings := (BitcoinConfig{}).settings()
+	svc := &bitcoinService{
+		settings: settings,
+		store:    store,
+		now:      func() time.Time { return now },
+	}
+	ns := newBtcNodesSyncer(store, settings, t.TempDir(), svc.now)
+	svc.nodes = ns
+
+	// First cold-start call hits upstream and fails.
+	got1, bitSt1, _ := ns.get(context.Background(), svc)
+	if got1 != nil || bitSt1.Status != "error" {
+		t.Fatalf("first call: got=%v status=%+v", got1, bitSt1)
+	}
+	if hits.Load() != 1 {
+		t.Fatalf("hits after first call = %d, want 1", hits.Load())
+	}
+
+	// Second call 1 minute later must back off without hitting upstream again.
+	now = now.Add(1 * time.Minute)
+	got2, bitSt2, _ := ns.get(context.Background(), svc)
+	if got2 != nil || bitSt2.Status != "error" {
+		t.Fatalf("second call: got=%v status=%+v", got2, bitSt2)
+	}
+	if hits.Load() != 1 {
+		t.Fatalf("hits during backoff = %d, want 1", hits.Load())
+	}
+}

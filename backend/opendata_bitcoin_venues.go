@@ -165,11 +165,31 @@ func newBinanceAdapter(store *riskStore, now func() time.Time) *binanceAdapter {
 		now = time.Now
 	}
 	return &binanceAdapter{
-		fapiBaseURL: btcBinanceFapiBaseURL,
-		dapiBaseURL: btcBinanceDapiBaseURL,
-		store:       store,
-		now:         now,
+		store: store,
+		now:   now,
 	}
+}
+
+func (a *binanceAdapter) setDeps(store *riskStore, now func() time.Time) {
+	a.mu.Lock()
+	if store != nil {
+		a.store = store
+	}
+	if now != nil {
+		a.now = now
+	}
+	a.mu.Unlock()
+}
+
+func (a *binanceAdapter) getDeps() (*riskStore, func() time.Time) {
+	a.mu.Lock()
+	st := a.store
+	nw := a.now
+	a.mu.Unlock()
+	if nw == nil {
+		nw = time.Now
+	}
+	return st, nw
 }
 
 func (a *binanceAdapter) ID() string { return "binance" }
@@ -177,12 +197,13 @@ func (a *binanceAdapter) ID() string { return "binance" }
 func (a *binanceAdapter) isGeoBlocked(ctx context.Context, now time.Time) bool {
 	a.mu.Lock()
 	until := a.geoBlockedUntil
+	st := a.store
 	a.mu.Unlock()
 	if now.Before(until) {
 		return true
 	}
-	if a.store != nil {
-		if raw, ok, err := a.store.getBtcKV(ctx, btcBinanceGeoBlockedKey); err == nil && ok && raw != "" {
+	if st != nil {
+		if raw, ok, err := st.getBtcKV(ctx, btcBinanceGeoBlockedKey); err == nil && ok && raw != "" {
 			if t, pErr := time.Parse(time.RFC3339, raw); pErr == nil && now.Before(t) {
 				a.mu.Lock()
 				a.geoBlockedUntil = t
@@ -198,14 +219,16 @@ func (a *binanceAdapter) markGeoBlocked(ctx context.Context, now time.Time) {
 	until := now.UTC().Add(btcBinanceGeoBlockTTL)
 	a.mu.Lock()
 	a.geoBlockedUntil = until
+	st := a.store
 	a.mu.Unlock()
-	if a.store != nil {
-		_ = a.store.setBtcKV(ctx, btcBinanceGeoBlockedKey, until.Format(time.RFC3339))
+	if st != nil {
+		_ = st.setBtcKV(ctx, btcBinanceGeoBlockedKey, until.Format(time.RFC3339))
 	}
 }
 
 func (a *binanceAdapter) Fetch(ctx context.Context) (btcVenueDeriv, string) {
-	now := a.now().UTC()
+	_, nowFn := a.getDeps()
+	now := nowFn().UTC()
 	out := btcVenueDeriv{Venue: "binance", Kind: "cex_offshore", IntervalHours: 8}
 	if a.isGeoBlocked(ctx, now) {
 		return out, "geo_blocked"

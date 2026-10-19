@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 export interface PollingResult<T> {
   data: T | null;
@@ -12,6 +12,11 @@ export function usePolling<T>(
   key: string,
   enabled = true,
 ): PollingResult<T> {
+  const fetcherRef = useRef(fetcher);
+  useEffect(() => {
+    fetcherRef.current = fetcher;
+  });
+
   const [resolved, setResolved] = useState<{
     key: string;
     data: T | null;
@@ -26,7 +31,8 @@ export function usePolling<T>(
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
         return;
       }
-      fetcher()
+      fetcherRef
+        .current()
         .then(d => {
           if (!cancelled) {
             setResolved(prev => ({
@@ -63,7 +69,7 @@ export function usePolling<T>(
       cancelled = true;
       window.clearInterval(id);
     };
-  }, [fetcher, intervalMs, key, enabled]);
+  }, [intervalMs, key, enabled]);
 
   const isCurrent = resolved.key === key;
   return {

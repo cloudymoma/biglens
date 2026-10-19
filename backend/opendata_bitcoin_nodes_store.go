@@ -5,12 +5,16 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/netip"
 	"sync"
 	"time"
 )
 
-const btcNodesRefreshInterval = 6 * time.Hour
+const (
+	btcNodesRefreshInterval = 6 * time.Hour
+	btcNodesFailBackoff     = 5 * time.Minute
+)
 
 func saveBtcNodesSnapshot(ctx context.Context, store *riskStore, nodes BtcNodes) error {
 	if store == nil || store.db == nil {
@@ -78,6 +82,7 @@ type btcNodesSyncer struct {
 	activated  bool
 	inFlight   bool
 	lastSync   time.Time
+	lastFail   time.Time
 	cached     *BtcNodes
 	lastBitErr string
 	lastGeoErr string
@@ -112,7 +117,9 @@ func (ns *btcNodesSyncer) hourlyTick(ctx context.Context) {
 	}
 	now := ns.now().UTC()
 	ns.mu.Lock()
-	if !ns.activated || ns.inFlight || (!ns.lastSync.IsZero() && now.Sub(ns.lastSync) < btcNodesRefreshInterval) {
+	if !ns.activated || ns.inFlight ||
+		(!ns.lastSync.IsZero() && now.Sub(ns.lastSync) < btcNodesRefreshInterval) ||
+		(!ns.lastFail.IsZero() && now.Sub(ns.lastFail) < btcNodesFailBackoff) {
 		ns.mu.Unlock()
 		return
 	}
@@ -120,12 +127,23 @@ func (ns *btcNodesSyncer) hourlyTick(ctx context.Context) {
 	_, _, _ = ns.syncOnce(ctx)
 }
 
-func (ns *btcNodesSyncer) syncOnce(ctx context.Context) (*BtcNodes, string, string) {
+func (ns *btcNodesSyncer) syncOnce(ctx context.Context) (retNodes *BtcNodes, retBitErr string, retGeoErr string) {
 	if ns == nil {
 		return nil, "disabled", "disabled"
 	}
 	ns.syncMu.Lock()
 	defer ns.syncMu.Unlock()
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("btc nodes sync panic recovered", "recover", r)
+			ns.mu.Lock()
+			ns.lastBitErr = "bad_response"
+			ns.lastFail = ns.now().UTC()
+			retNodes = ns.cached
+			ns.mu.Unlock()
+			retBitErr = "bad_response"
+		}
+	}()
 
 	if !ns.settings.Providers["bitnodes"] {
 		return nil, "disabled", ""
@@ -136,6 +154,7 @@ func (ns *btcNodesSyncer) syncOnce(ctx context.Context) (*BtcNodes, string, stri
 	if code != "" || snap == nil {
 		ns.mu.Lock()
 		ns.lastBitErr = code
+		ns.lastFail = now
 		prev := ns.cached
 		ns.mu.Unlock()
 		if prev == nil && ns.store != nil {
@@ -176,6 +195,7 @@ func (ns *btcNodesSyncer) syncOnce(ctx context.Context) (*BtcNodes, string, stri
 	ns.mu.Lock()
 	ns.cached = &dist
 	ns.lastSync = now
+	ns.lastFail = time.Time{}
 	ns.lastBitErr = ""
 	ns.lastGeoErr = geoErr
 	ns.mu.Unlock()
@@ -190,7 +210,9 @@ func (ns *btcNodesSyncer) touchAsync() {
 	now := ns.now().UTC()
 	ns.mu.Lock()
 	ns.activated = true
-	if ns.inFlight || (!ns.lastSync.IsZero() && now.Sub(ns.lastSync) < btcNodesRefreshInterval) {
+	if ns.inFlight ||
+		(!ns.lastSync.IsZero() && now.Sub(ns.lastSync) < btcNodesRefreshInterval) ||
+		(!ns.lastFail.IsZero() && now.Sub(ns.lastFail) < btcNodesFailBackoff) {
 		ns.mu.Unlock()
 		return
 	}
@@ -198,12 +220,14 @@ func (ns *btcNodesSyncer) touchAsync() {
 	ns.mu.Unlock()
 
 	go func() {
+		defer func() {
+			ns.mu.Lock()
+			ns.inFlight = false
+			ns.mu.Unlock()
+		}()
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
 		_, _, _ = ns.syncOnce(ctx)
-		ns.mu.Lock()
-		ns.inFlight = false
-		ns.mu.Unlock()
 	}()
 }
 
@@ -281,7 +305,25 @@ func (ns *btcNodesSyncer) get(ctx context.Context, s *bitcoinService) (*BtcNodes
 		return cached, bitStatus, dbipStatus
 	}
 
-	// Cold start: no persisted snapshot yet; fetch once synchronously.
+	// Cold start: no persisted snapshot yet; fetch once synchronously unless in failure backoff.
+	now := ns.now().UTC()
+	ns.mu.Lock()
+	inBackoff := !ns.lastFail.IsZero() && now.Sub(ns.lastFail) < btcNodesFailBackoff
+	lastBitErr := ns.lastBitErr
+	ns.mu.Unlock()
+	if inBackoff {
+		if lastBitErr == "" {
+			lastBitErr = "bad_response"
+		}
+		bitStatus.Status = "error"
+		bitStatus.Error = lastBitErr
+		if dbipStatus.Status != "disabled" {
+			dbipStatus.Status = "error"
+			dbipStatus.Error = lastBitErr
+		}
+		return nil, bitStatus, dbipStatus
+	}
+
 	nodes, bitErr, geoErr := ns.syncOnce(ctx)
 	if nodes != nil {
 		if bitErr != "" {

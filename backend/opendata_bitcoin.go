@@ -40,6 +40,12 @@ var btcHTTPClient = &http.Client{
 		if len(via) > 1 {
 			return errBtcRedirectBlocked
 		}
+		if strings.ToLower(req.URL.Scheme) != "https" {
+			return errBtcRedirectBlocked
+		}
+		if port := req.URL.Port(); port != "" && port != "443" {
+			return errBtcRedirectBlocked
+		}
 		host := strings.ToLower(req.URL.Hostname())
 		if !btcAllowedRedirectHosts[host] {
 			return errBtcRedirectBlocked
@@ -80,6 +86,7 @@ type BtcBaselineStatus struct {
 	AsOf            string   `json:"as_of"`
 	BuiltAt         string   `json:"built_at"`
 	Pending         bool     `json:"pending"`
+	Building        bool     `json:"building,omitempty"`
 	BaselineSats    int64    `json:"baseline_sats"`
 	BaselineBTC     float64  `json:"baseline_btc"`
 	ExpectedSats    int64    `json:"expected_sats"`
@@ -305,11 +312,23 @@ type bitcoinService struct {
 	read      btcReadStore
 	lastGood  *btcLastGood
 	prices    *btcPriceSyncer
+	binanceMu sync.Mutex
 	binance   *binanceAdapter
 	nodes     *btcNodesSyncer
 	starter   btcBaselineStarter
 	projectID string
 	now       func() time.Time
+}
+
+func (s *bitcoinService) getBinanceAdapter() *binanceAdapter {
+	s.binanceMu.Lock()
+	defer s.binanceMu.Unlock()
+	if s.binance == nil {
+		s.binance = newBinanceAdapter(s.store, s.now)
+	} else {
+		s.binance.setDeps(s.store, s.now)
+	}
+	return s.binance
 }
 
 func newBitcoinService(cfg *Config) *bitcoinService {

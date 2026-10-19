@@ -726,6 +726,15 @@ func (r *btcReadStoreImpl) baselineStatus(ctx context.Context) (BtcBaselineStatu
 	if pendRaw, ok, _ := r.store.getBtcKV(ctx, "baseline_pending"); ok && pendRaw != "" {
 		out.Pending = true
 	}
+	var activeRes int64
+	nowStr := r.budgetEl.now().UTC().Format(time.RFC3339)
+	if err := r.store.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM btc_reservations WHERE job = ? AND expires_at > ?`,
+		btcBaselineJobID, nowStr,
+	).Scan(&activeRes); err == nil && activeRes > 0 {
+		out.Building = true
+		out.Pending = true
+	}
 	if metaRaw, ok, _ := r.store.getBtcKV(ctx, "baseline_meta"); ok && metaRaw != "" {
 		var saved BtcBaselineStatus
 		if json.Unmarshal([]byte(metaRaw), &saved) == nil {

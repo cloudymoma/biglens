@@ -107,13 +107,14 @@ type btcBaselineTokenEntry struct {
 }
 
 type btcBaselineRunner struct {
-	store     *riskStore
-	settings  btcSettings
-	budget    *btcBudget
-	src       btcBaselineQuerySource
-	now       func() time.Time
-	timeout   time.Duration
-	jobLookup func(jobID string) (int64, bool, error)
+	store       *riskStore
+	settings    btcSettings
+	budget      *btcBudget
+	src         btcBaselineQuerySource
+	now         func() time.Time
+	timeout     time.Duration
+	confirmWait time.Duration
+	jobLookup   func(jobID string) (int64, bool, error)
 
 	// Test hook invoked inside the handoff transaction before Commit.
 	beforeCommit func() error
@@ -266,7 +267,10 @@ func (r *btcBaselineRunner) dryRun(ctx context.Context) (btcBaselinePlan, error)
 	}, nil
 }
 
-// confirm consumes a single-use UI token and executes the baseline build.
+// confirm consumes a single-use UI token, reserves budget synchronously, and
+// runs the baseline build. If the build takes longer than confirmWait (default 2s),
+// confirm returns nil while the build continues in the background so the HTTP
+// response completes well within the server WriteTimeout.
 func (r *btcBaselineRunner) confirm(ctx context.Context, token string) error {
 	if !r.settings.Enabled || !r.settings.Jobs {
 		return errBtcJobsDisabled
@@ -281,8 +285,26 @@ func (r *btcBaselineRunner) confirm(ctx context.Context, token string) error {
 	if !ok || !now.Before(entry.expiresAt) {
 		return errBtcBaselineBadToken
 	}
-	_, err := r.execute(ctx, entry.endDate, entry.dryBytes, false)
-	return err
+	baseCtx := context.WithoutCancel(ctx)
+	resID, maxCap, timeout, err := r.reserveBaseline(baseCtx, entry.dryBytes, false)
+	if err != nil {
+		return err
+	}
+	wait := r.confirmWait
+	if wait <= 0 {
+		wait = 2 * time.Second
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, runErr := r.runReserved(baseCtx, resID, entry.endDate, entry.dryBytes, maxCap, timeout)
+		done <- runErr
+	}()
+	select {
+	case runErr := <-done:
+		return runErr
+	case <-time.After(wait):
+		return nil
+	}
 }
 
 // runCLI runs the CLI UTXO baseline flow: dry-run only when yes is false, or
@@ -324,14 +346,13 @@ func (r *btcBaselineRunner) runCLI(ctx context.Context, yes, force bool) (btcBas
 	return plan, st, err
 }
 
-func (r *btcBaselineRunner) execute(ctx context.Context, endDate civil.Date, dryBytes int64, force bool) (BtcBaselineStatus, error) {
+func (r *btcBaselineRunner) reserveBaseline(baseCtx context.Context, dryBytes int64, force bool) (string, int64, time.Duration, error) {
 	if !r.settings.Enabled || !r.settings.Jobs {
-		return BtcBaselineStatus{}, errBtcJobsDisabled
+		return "", 0, 0, errBtcJobsDisabled
 	}
 	if dryBytes > btcBaselineHardCapBytes {
-		return BtcBaselineStatus{}, errBtcOverBudget
+		return "", 0, 0, errBtcOverBudget
 	}
-	baseCtx := context.WithoutCancel(ctx)
 	minInterval := r.settings.BaselineMinInterval
 	if force {
 		minInterval = 0
@@ -344,9 +365,21 @@ func (r *btcBaselineRunner) execute(ctx context.Context, endDate civil.Date, dry
 	ttl := timeout + btcReservationGrace
 	resID, err := r.budget.reserveWithOpts(baseCtx, btcBaselineJobID, maxCap, btcBaselineHardCapBytes, ttl, minInterval)
 	if err != nil {
+		return "", 0, 0, err
+	}
+	return resID, maxCap, timeout, nil
+}
+
+func (r *btcBaselineRunner) execute(ctx context.Context, endDate civil.Date, dryBytes int64, force bool) (BtcBaselineStatus, error) {
+	baseCtx := context.WithoutCancel(ctx)
+	resID, maxCap, timeout, err := r.reserveBaseline(baseCtx, dryBytes, force)
+	if err != nil {
 		return BtcBaselineStatus{}, err
 	}
+	return r.runReserved(baseCtx, resID, endDate, dryBytes, maxCap, timeout)
+}
 
+func (r *btcBaselineRunner) runReserved(baseCtx context.Context, resID string, endDate civil.Date, dryBytes, maxCap int64, timeout time.Duration) (BtcBaselineStatus, error) {
 	rctx, cancel := context.WithTimeout(baseCtx, timeout)
 	defer cancel()
 	rctx = withSyncJobAttach(rctx, func(bqJobID string) {

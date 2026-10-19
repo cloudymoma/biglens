@@ -91,9 +91,9 @@ func classifyBitnodesClient(ua string) (client string, coreMajor string) {
 	switch {
 	case strings.Contains(lower, "knots"):
 		return "Bitcoin Knots", ""
-	case strings.Contains(ua, "Satoshi:") || strings.Contains(lower, "satoshi:"):
+	case strings.Contains(lower, "satoshi:"):
 		idx := strings.Index(lower, "satoshi:")
-		ver := ua[idx+len("satoshi:"):]
+		ver := lower[idx+len("satoshi:"):]
 		ver = strings.TrimPrefix(ver, "/")
 		if slash := strings.IndexAny(ver, "/("); slash >= 0 {
 			ver = ver[:slash]

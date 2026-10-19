@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -201,5 +202,79 @@ func TestBtcLastGood(t *testing.T) {
 	v, asOf, ok := lg.Get("k1")
 	if !ok || v.(int) != 42 || asOf != "2026-10-16T00:00:00Z" {
 		t.Errorf("Get(k1) = (%v, %q, %v)", v, asOf, ok)
+	}
+}
+
+func TestBtcCheckRedirectEnforcesHTTPSAndPort443(t *testing.T) {
+	req1, _ := http.NewRequest(http.MethodGet, "https://bitnodes.io/api/v1/snapshots/latest/", nil)
+	cases := []struct {
+		target string
+		wantOK bool
+	}{
+		{"https://btcnodes.io/api/v1/snapshots/latest/", true},
+		{"https://btcnodes.io:443/api/v1/snapshots/latest/", true},
+		{"http://btcnodes.io/api/v1/snapshots/latest/", false},
+		{"https://btcnodes.io:8443/api/v1/snapshots/latest/", false},
+		{"https://evil.example.com/api/v1/snapshots/latest/", false},
+	}
+	for _, tc := range cases {
+		req2, err := http.NewRequest(http.MethodGet, tc.target, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		gotErr := btcHTTPClient.CheckRedirect(req2, []*http.Request{req1})
+		if tc.wantOK && gotErr != nil {
+			t.Errorf("CheckRedirect(%q) = %v, want nil", tc.target, gotErr)
+		}
+		if !tc.wantOK && !errors.Is(gotErr, errBtcRedirectBlocked) {
+			t.Errorf("CheckRedirect(%q) = %v, want errBtcRedirectBlocked", tc.target, gotErr)
+		}
+	}
+}
+
+func TestBtcBaselineRouteCrossOriginProtection(t *testing.T) {
+	h := newTestBitcoinHandler(t)
+	mux := http.NewServeMux()
+	registerBitcoinRoutes(mux, h,
+		func(fn http.HandlerFunc) http.Handler { return fn },
+		func(next http.Handler) http.Handler { return next },
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/opendata/bitcoin/onchain/baseline", strings.NewReader(`{"action":"dry_run"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "cross-site")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("cross-site POST to baseline status = %d, want 403", rec.Code)
+	}
+}
+
+func TestBtcCachedSourceDetachesCallerContext(t *testing.T) {
+	h := newTestBitcoinHandler(t)
+	started := make(chan struct{})
+	release := make(chan struct{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan BtcSourceStatus, 1)
+	go func() {
+		_, st := h.btcCachedSource(ctx, "test:detach:ctx", 1*time.Minute, "mempool", func(fctx context.Context) (any, string) {
+			close(started)
+			<-release
+			if fctx.Err() != nil {
+				return nil, "canceled"
+			}
+			return "ok-value", ""
+		})
+		done <- st
+	}()
+
+	<-started
+	cancel() // Caller disconnects while fetch is in flight.
+	close(release)
+
+	st := <-done
+	if st.Status != "ok" {
+		t.Fatalf("btcCachedSource status after caller cancel = %+v, want ok", st)
 	}
 }

@@ -279,10 +279,10 @@ GDELT 是*新闻报道*的索引，而非经核实事件的登记册。每行是
 |---|---|---|
 | **Overview（总览）** | **10 张核心 KPI 卡片**（总市值 + 市值占比 Dominance、距历史最高价 ATH 回撤、30 日实现波动率 RV30 vs. Deribit DVOL 隐含波动率 + VRP、OI 加权资金费率 APR + 精选平台总持仓 OI、精选平台 vs. 全网申报衍生品/现货成交量比、Mayer 倍数及 2011 年以来历史分位、Coin Metrics MVRV 及历史分位、算力价格 Hashprice USD/BTC 每 PH/s/天、7 日交易所净流向，以及双行独立展示矿池 Nakamoto/HHI 与公网节点国家/ASN Nakamoto 的 **Concentration 集中度**卡片）、**1 年对数价格 + 200DMA + 200WMA**、**7 项描述性市场状态指标（Regime Indicators）**、**发行计划与托管持仓分布**、**市场情绪（Fear & Greed 恐慌贪婪指数）** | 1 年对数价格图上的**链上实现价格（Realized Price）**叠加线（需基线）与 **API vs. 链上交叉核验表**（8 项核心指标对比 mempool.space / Coin Metrics 与 BigQuery `crypto_bitcoin` 整数聪汇总 + CSV 导出；流通供应量与 MVRV 在未构建 UTXO 基线时标注 `needs baseline`） |
 | **Markets（市场结构）** | **现货交易所排行**（精选主流平台 Coinbase、Kraken、Binance、OKX、Bitstamp、Bybit、Upbit，含 Coinbase/Kraken/Binance/OKX 的 ±2% 盘口深度，以及默认折叠并标注 `unverified` 的全网申报平台）、**衍生品平台与合约对比**（Binance `BTCUSDT`/`BTCUSD_PERP`、OKX、Bybit、Hyperliquid、Deribit、Coinbase INTX、CME 参考行情，含持仓量 OI、24h 成交量、资金费率及年化 APR、基差 %；CoinGecko 聚合源的资金费率因单位混杂默认隐藏）、**交割期货期限结构（Basis Curve）**（Deribit、OKX、Binance 币本位）、**8 小时资金费率历史**、**实现波动率 vs. 隐含波动率（RV30 / RV90 / Deribit DVOL）** 与 **CFTC COT CME 比特币持仓报告**（Dealer、Asset Manager、Leveraged Funds、Other Reportables 四类机构净持仓与占 OI 比例 + CSV 导出） | *（纯市场微观结构标签页 —— 零 BigQuery 依赖）* |
-| **Valuation（周期估值）** | **长期周期对数价格图（`1y` / `5y` / `all`）**（收盘价、200DMA、200WMA、历次减半垂直标线）、**Mayer 倍数**及历史分位带（`0.8` / `1.4` / `2.4`）、**MVRV 比率**（`Coin Metrics CapMVRVCur` 主曲线及 2011 年以来历史分位）、**算力彩带（Hash Ribbon）**（30 日 vs. 60 日算力均线、矿工投降阴影区与复苏信号）、**Puell 倍数**（每日发行美元价值 ÷ 365 日均线）、**减半周期进度与历次减半后归一化收益对比曲线**（第 2、3、4、5 周期以减半日 = `1.0` 对齐）与 **2011 年以来月度/季度收益率热力图** | 周期图上的 **BigLens 链上实现价格**叠加线、**BigLens 链上 MVRV** 对比曲线及与 Coin Metrics 的 Δ% 徽章、**Puell 倍数链上交叉核验**徽章 |
+| **Valuation（周期估值）** | **长期周期对数价格图（`1y` / `4y` / `all`）**（收盘价、200DMA、200WMA、历次减半垂直标线）、**Mayer 倍数**及历史分位带（`0.8` / `1.4` / `2.4`）、**MVRV 比率**（`Coin Metrics CapMVRVCur` 主曲线及 2011 年以来历史分位）、**算力彩带（Hash Ribbon）**（30 日 vs. 60 日算力均线、矿工投降阴影区与复苏信号）、**Puell 倍数**（每日发行美元价值 ÷ 365 日均线）、**减半周期进度与历次减半后归一化收益对比曲线**（第 2、3、4、5 周期以减半日 = `1.0` 对齐）与 **2011 年以来月度/季度收益率热力图** | 周期图上的 **BigLens 链上实现价格**叠加线、**BigLens 链上 MVRV** 对比曲线及与 Coin Metrics 的 Δ% 徽章、**Puell 倍数链上交叉核验**徽章 |
 | **Holders & Flows（持仓与资金流）** | **交易所资金流与余额**（Coin Metrics Community 的 `FlowInExUSD`、`FlowOutExUSD`、净流量、交易所持仓 `SplyExNtv` 及占流通供应比例；当日 `flash` 行标注 `Provisional`）、**上市公司比特币金库 Top 20**（CoinGecko 披露持仓明细 + CSV 导出） | **UTXO 基线与供应量对账卡片**、**销毁币天（CDD）与休眠度（Dormancy）**、**老币复活量**（≥ 1 年 / 2 年 / 5 年）、**花费输出账龄分布**（12 个账龄分档）、**SOPR**（全量 / 剔除当日的 aSOPR / STH / LTH，受价格完整性门控）、**休眠巨鲸唤醒榜**（每日 Top 20，≥ 10 BTC 且账龄 ≥ 1 年 + CSV 导出），以及基于 UTXO 基线的 **HODL Waves**、**长短期持有者供应量（LTH/STH 155 天分界）**、**实现市值（Realized Cap）与分群实现价格**、**盈利供应占比（Supply in Profit %）** 与 **BigLens 链上 MVRV** |
 | **Fees & Block Space（手续费与区块空间）** | 内嵌实时 **GasLiveBar**（`btc` 模式）、**UTXO 归集窗口信号**（经济费率 ≤ 5 sat/vB 且内存池积压 ≤ 3 个区块）、**交易成本计算器**（6 种标准模板：140 vB 普通转账至 3,442 vB 的 50 输入归集）、**内存池历史积压**（折叠自 mempool.space 39 档费率直方图的 6 个区间）、**已出块费率分位数**（p10–p90） | **每日按交易加权费率分位数与矿工手续费收入**、**区块空间虚拟字节（vB）构成**（普通支付、UTXO 归集、批量代发、类铭文见证启发式、Runes 符文、OP_RETURN、coinbase）、**见证字节占比与 OP_RETURN / Runestone 统计**、**脚本类型采用率**（P2TR、P2WPKH、P2WSH、P2SH、P2PKH、Pay-to-Anchor）与 **输出金额分档分布** |
-| **Mining & Security（挖矿与网络安全）** | **全网算力（`3m` / `1y` / `3y`）与难度彩带**、**矿工收入构成**（区块补贴 vs. 手续费的 BTC/USD 趋势及手续费占安全预算比例）、**算力价格 Hashprice**（`$/PH/day` 与 `BTC/PH/day`）、**交互式矿机经济性与关机币价计算器**（内置 S19 XP、S21、S21 Pro、M60S 及自定义矿机，可实时调节电价 $/kWh、PUE、矿池费率 %、BTC 价格覆盖）、**矿池份额分布**（`24h` / `3d` / `1w` / `1m` / `1y` 及矿池中本聪系数 Nakamoto 与 HHI 指数），以及 **可达全节点分布**（Bitnodes + DB-IP Lite：IPv4 / IPv6 / Tor `.onion` / I2P / CJDNS 网络构成、客户端家族与版本分布、公网节点全球热力地图、Top 20 ASN 与云厂商托管占比、公网国家/ASN 的 Nakamoto 与 HHI 指标卡片 + CSV 导出） | **链上挖矿核验徽章**（将 mempool.space 的 7 日算力、每日出块数与矿工总收入对比 BigQuery `crypto_bitcoin` 链上汇总） |
+| **Mining & Security（挖矿与网络安全）** | **全网算力（`3m` / `1y` / `3y`）与难度彩带**、**矿工收入构成**（区块补贴 vs. 手续费的 BTC/USD 趋势及手续费占安全预算比例）、**算力价格 Hashprice**（`$/PH/day` 与 `BTC/PH/day`）、**交互式矿机经济性与关机币价计算器**（内置 S19 XP、S21、S21 Pro、M60S 及自定义矿机，可实时调节电价 $/kWh、PUE、矿池费率 %、BTC 价格覆盖）、**矿池份额分布**（`1w` 窗口及矿池中本聪系数 Nakamoto 与 HHI 指数），以及 **可达全节点分布**（Bitnodes + DB-IP Lite：IPv4 / IPv6 / Tor `.onion` / I2P / CJDNS 网络构成、客户端家族与版本分布、公网节点全球热力地图、Top 20 ASN 与云厂商托管占比、公网国家/ASN 的 Nakamoto 与 HHI 指标卡片 + CSV 导出） | **链上挖矿核验徽章**（将 mempool.space 的 7 日算力、每日出块数与矿工总收入对比 BigQuery `crypto_bitcoin` 链上汇总） |
 
 #### 公共 API 数据源与许可证
 
@@ -298,16 +298,16 @@ GDELT 是*新闻报道*的索引，而非经核实事件的登记册。每行是
 | **blockchain.com** | `blockchain_com` | 早期历史日收盘价冷启动（`2010-08-18` 至 `2015-07-19`） | 公开图表数据 |
 | **Deribit** | `deribit` | `BTC-PERPETUAL`、交割期货期限结构曲线、8 小时资金费率历史、30 日隐含波动率指数（`DVOL`） | 公开市场数据 |
 | **OKX** | `okx` | 现货（`BTC-USDT`）、±2% 盘口深度、`BTC-USDT-SWAP` / `BTC-USD-SWAP`、交割期货期限结构曲线、8 小时资金费率历史 | 公开市场数据 |
-| **Binance (`auto` / `direct` / `coingecko_only` / `off`)** | `binance` | 现货（`BTCUSDT`）、±2% 盘口深度、U 本位（`fapi`）与币本位（`dapi`）永续及交割合约、8 小时资金费率历史 | 公开市场数据；`auto` 模式下遇 HTTP `451` / `403` 自动切换至 `coingecko_only` 冷却 24 小时 |
+| **Binance (`true` / `false`，自动回退)** | `binance` | 现货（`BTCUSDT`）、±2% 盘口深度、U 本位（`fapi`）与币本位（`dapi`）永续及交割合约、8 小时资金费率历史 | 公开市场数据；开启（`true`）时遇 HTTP `451` / `403` 自动切换至 CoinGecko 回退源冷却 24 小时 |
 | **Hyperliquid** | `hyperliquid` | 链上 BTC 永续合约（`metaAndAssetCtxs`：标记/预言机价格、持仓量 OI、24h 成交量、1h 资金费率折算为 8h 与年化 APR） | 公共 API |
 | **CFTC 持仓报告 (Socrata)** | `cftc` | 每周 CME 比特币期货（代码 `133741`）TFF 金融期货交易商分类持仓（Dealer、Asset Manager、Leveraged Funds、Other Reportables） | 公有领域（美国政府公开数据） |
 | **alternative.me** | `alternative_me` | 每日加密市场恐慌与贪婪指数（0–100 及 30 天历史） | 需保留来源署名（"Source: alternative.me"） |
 | **Bitnodes** | `bitnodes` | 可达比特币 P2P 全节点快照（`snapshots/latest/`，支持白名单重定向至 `btcnodes.io`） | 公共 API |
-| **DB-IP Lite** | `dbip` | 月度本地 MMDB 库（`dbip-country-lite`、`dbip-asn-lite`），用于公网节点国家与 ASN/云厂商离线解析 | **CC BY 4.0** —— 必须在界面与文档保留署名 *"IP geolocation by DB-IP"* 并链接至 [db-ip.com](https://db-ip.com) |
+| **DB-IP Lite** | `dbip` | 月度本地 CSV.gz 库（`dbip-country-lite`、`dbip-asn-lite`），用于公网节点国家与 ASN/云厂商离线流式解析 | **CC BY 4.0** —— 必须在界面与文档保留署名 *"IP geolocation by DB-IP"* 并链接至 [db-ip.com](https://db-ip.com) |
 
-- **Binance 区域自适应回退（`auto` 模式）。** Binance 直连域名（`api.binance.com`、
+- **Binance 区域自适应回退。** Binance 直连域名（`api.binance.com`、
   `fapi.binance.com`、`dapi.binance.com`）在部分部署区域会返回 HTTP `451`。当
-  `bitcoin.providers.binance` 设为默认的 `"auto"` 时，BigLens 会优先尝试直连；一旦收到
+  `bitcoin.providers.binance` 设为默认的 `true` 时，BigLens 会优先尝试直连；一旦收到
   HTTP `451` 或 `403`，会自动记录 24 小时区域冷却期，并无缝改用 CoinGecko 聚合源提供
   Binance 现货与永续合约行情（前端徽章注明 `Binance (via CoinGecko)`；回退期间不展示需直连
   的 ±2% 盘口深度与币本位交割合约曲线点）。
@@ -350,7 +350,7 @@ GDELT 是*新闻报道*的索引，而非经核实事件的登记册。每行是
     687 GiB（约 `$4.20`），默认仅能由管理员通过 CLI 触发。
 - **跨进程事务级预算预留。** 无论是服务端后台任务还是 CLI 进程，在发起 BigQuery
   查询前都会先在 SQLite `BEGIN IMMEDIATE` 事务中按查询的 `MaximumBytesBilled` 硬上限
-  （`1.25×` dry-run 预估值，且受 `max_gib_per_run` 封顶）向 `btc_reservations` 写入预留，
+  （`1.25×` dry-run 预估值，且受各作业单次硬上限封顶）向 `btc_reservations` 写入预留，
   在作业提交后立即绑定 `bq_job_id`，并在结束时使用不受请求/超时取消影响的独立上下文将实际
   `totalBytesBilled` 结算进 `btc_budget`。每小时后台维护首先运行 `recoverStale`，通过
   BigQuery `jobs.get` 元数据查询（`0` 字节计费）回收过期预留——若进程在记录 `bq_job_id`
