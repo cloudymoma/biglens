@@ -13,7 +13,7 @@ import (
 
 const (
 	btcNodesRefreshInterval = 6 * time.Hour
-	btcNodesFailBackoff     = 5 * time.Minute
+	btcNodesFailBackoff     = 6 * time.Hour
 )
 
 func saveBtcNodesSnapshot(ctx context.Context, store *riskStore, nodes BtcNodes) error {

@@ -394,10 +394,11 @@ func (h *APIHandler) buildMarketsData(ctx context.Context) BtcMarketsData {
 					cdeOIUSD = *d.CDEOIUSD
 					hasCDEOI = true
 				}
-				// Direct sources contribute to OI-weighted funding (§10.1).
-				if d.FundingAPRPct != nil && d.OIUSD != nil && *d.OIUSD > 0 {
-					fundingWeightedSum += (*d.FundingAPRPct) * (*d.OIUSD)
-					fundingWeightOI += *d.OIUSD
+				// Direct sources contribute to OI-weighted funding (§10.1), weighted only by
+				// the open interest of the perpetual contract that produced the funding rate.
+				if d.FundingAPRPct != nil && d.PerpOIUSD != nil && *d.PerpOIUSD > 0 {
+					fundingWeightedSum += (*d.FundingAPRPct) * (*d.PerpOIUSD)
+					fundingWeightOI += *d.PerpOIUSD
 				}
 			} else if src.Status == "geo_blocked" && vID != "coinbase" && cgDeriv != nil {
 				if fb, ok := cgDeriv.FallbackVenues[vID]; ok {
@@ -482,6 +483,8 @@ func (h *APIHandler) buildMarketsData(ctx context.Context) BtcMarketsData {
 	if !hasCDEOI && cot != nil && cot.CDEOIBTC > 0 && refPriceUSD > 0 {
 		cdeOIUSD = cot.CDEOIBTC * refPriceUSD
 		hasCDEOI = true
+		totalOIUSD += cdeOIUSD
+		perpOIExclCME += cdeOIUSD
 	}
 
 	var oiShares []BtcOIShare

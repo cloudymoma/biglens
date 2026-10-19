@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"iter"
+	"log/slog"
 	"net/http"
 	"net/netip"
 	"os"
@@ -95,28 +96,41 @@ func streamDBIPCountryGz(path string) iter.Seq[dbipRangeRow] {
 	return func(yield func(dbipRangeRow) bool) {
 		f, err := os.Open(path)
 		if err != nil {
+			slog.Warn("dbip country open failed", "path", path, "error", err)
 			return
 		}
 		defer f.Close()
 		gz, err := gzip.NewReader(f)
 		if err != nil {
+			slog.Warn("dbip country gzip reader failed", "path", path, "error", err)
 			return
 		}
 		defer gz.Close()
 		cr := csv.NewReader(gz)
 		cr.FieldsPerRecord = -1
 		cr.ReuseRecord = true
+		var parseErrs int
+		defer func() {
+			if parseErrs > 0 {
+				slog.Warn("dbip country stream parse errors", "path", path, "errors", parseErrs)
+			}
+		}()
 		for {
 			rec, err := cr.Read()
 			if err != nil {
+				if !errors.Is(err, io.EOF) {
+					parseErrs++
+				}
 				return
 			}
 			if len(rec) < 3 {
+				parseErrs++
 				continue
 			}
 			start, err1 := netip.ParseAddr(strings.TrimSpace(rec[0]))
 			end, err2 := netip.ParseAddr(strings.TrimSpace(rec[1]))
 			if err1 != nil || err2 != nil {
+				parseErrs++
 				continue
 			}
 			row := dbipRangeRow{
@@ -135,32 +149,49 @@ func streamDBIPASNGz(path string) iter.Seq[dbipRangeRow] {
 	return func(yield func(dbipRangeRow) bool) {
 		f, err := os.Open(path)
 		if err != nil {
+			slog.Warn("dbip asn open failed", "path", path, "error", err)
 			return
 		}
 		defer f.Close()
 		gz, err := gzip.NewReader(f)
 		if err != nil {
+			slog.Warn("dbip asn gzip reader failed", "path", path, "error", err)
 			return
 		}
 		defer gz.Close()
 		cr := csv.NewReader(gz)
 		cr.FieldsPerRecord = -1
 		cr.ReuseRecord = true
+		var parseErrs int
+		defer func() {
+			if parseErrs > 0 {
+				slog.Warn("dbip asn stream parse errors", "path", path, "errors", parseErrs)
+			}
+		}()
 		for {
 			rec, err := cr.Read()
 			if err != nil {
+				if !errors.Is(err, io.EOF) {
+					parseErrs++
+				}
 				return
 			}
 			if len(rec) < 4 {
+				parseErrs++
 				continue
 			}
 			start, err1 := netip.ParseAddr(strings.TrimSpace(rec[0]))
 			end, err2 := netip.ParseAddr(strings.TrimSpace(rec[1]))
 			if err1 != nil || err2 != nil {
+				parseErrs++
 				continue
 			}
 			asn64, err := strconv.ParseUint(strings.TrimSpace(rec[2]), 10, 32)
-			if err != nil || asn64 == 0 {
+			if err != nil {
+				parseErrs++
+				continue
+			}
+			if asn64 == 0 {
 				continue
 			}
 			row := dbipRangeRow{
@@ -272,6 +303,10 @@ func ensureSingleDBIPFile(ctx context.Context, geoDir, kind, month string, minCo
 	}
 	written, copyErr := io.Copy(outFile, io.LimitReader(resp.Body, btcDBIPMaxBodyBytes))
 	closeErr := outFile.Close()
+	if written >= btcDBIPMaxBodyBytes {
+		_ = os.Remove(tmpPath)
+		return "", fmt.Errorf("dbip %s exceeds size limit (%d bytes)", kind, btcDBIPMaxBodyBytes)
+	}
 	if copyErr != nil || closeErr != nil || written <= 0 {
 		_ = os.Remove(tmpPath)
 		if prev := latestExistingDBIPFile(geoDir, kind); prev != "" {

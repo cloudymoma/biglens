@@ -30,7 +30,7 @@ func TestBtcRegimeIndicators(t *testing.T) {
 		DerivSpotMedian90d:   f(4.5),
 		DVOL:                 f(58.0),
 		RV30:                 f(48.0), // VRP = +10.0 > +5
-		Consolidation:        BtcConsolidationSignal{Open: true, Reason: "Economy fee 2 sat/vB, backlog 8 blocks"},
+		Consolidation:        BtcConsolidationSignal{Open: true, EconomySatVB: 2.0, Reason: "Economy fee 2 sat/vB, backlog 8 blocks"},
 		ExchangeNetFlow7dUSD: f(-420_000_000),
 	})
 	if len(sig1) != 7 {
@@ -65,7 +65,7 @@ func TestBtcRegimeIndicators(t *testing.T) {
 		DerivSpotMedian90d:   f(4.5),
 		DVOL:                 f(40.0),
 		RV30:                 f(50.0), // VRP = -10.0 < -5
-		Consolidation:        BtcConsolidationSignal{Open: false, Reason: "Economy fee 25 sat/vB > 10"},
+		Consolidation:        BtcConsolidationSignal{Open: false, EconomySatVB: 25.0, Reason: "Economy fee 25 sat/vB > 10"},
 		ExchangeNetFlow7dUSD: f(150_000_000),
 	})
 	want2 := map[string]string{
@@ -311,8 +311,8 @@ func TestBitcoinOverviewPartial(t *testing.T) {
 	if got.Cards.MajorDerivSpot == nil || math.Abs(*got.Cards.MajorDerivSpot-5.0) > 1e-6 {
 		t.Errorf("MajorDerivSpot = %v, want 5.0 ($8.1B / $1.62B)", got.Cards.MajorDerivSpot)
 	}
-	if got.Cards.Concentration.PoolNakamoto.Value <= 0 || got.Cards.Concentration.PoolNakamoto.Denominator != 1130 {
-		t.Errorf("PoolNakamoto = %+v, want value > 0 and denominator 1130", got.Cards.Concentration.PoolNakamoto)
+	if got.Cards.Concentration.PoolNakamoto.Value <= 0 || got.Cards.Concentration.PoolNakamoto.Denominator != 1101 {
+		t.Errorf("PoolNakamoto = %+v, want value > 0 and denominator 1101", got.Cards.Concentration.PoolNakamoto)
 	}
 	if got.Cards.Concentration.NodeClearnet != 103 || got.Cards.Concentration.NodeReachable != 300 {
 		t.Errorf("Node concentration clearnet/reachable = %d/%d, want 103/300", got.Cards.Concentration.NodeClearnet, got.Cards.Concentration.NodeReachable)
@@ -482,5 +482,55 @@ func TestBtcUnknownTipHeightReturnsNullFields(t *testing.T) {
 		if v, exists := supMap[k]; !exists || v != nil {
 			t.Fatalf("overview.supply.%s = %v, want null", k, v)
 		}
+	}
+}
+
+func TestBtcVerificationMinerRevenueUnavailableWithoutCM(t *testing.T) {
+	mempool144 := 450.0
+	rows := computeBtcVerificationRows(btcVerificationInputs{
+		Date:              "2026-10-15",
+		CMRow:             nil,
+		MempoolRewardsBTC: &mempool144,
+		OnchainDay: &BtcOnchainDay{
+			Date:         "2026-10-15",
+			Blocks:       150,
+			CoinbaseSats: 48_125_000_000,
+		},
+	})
+	var revRow *BtcVerificationRow
+	for i := range rows {
+		if rows[i].ID == "miner_revenue" {
+			revRow = &rows[i]
+			break
+		}
+	}
+	if revRow == nil {
+		t.Fatal("missing miner_revenue verification row")
+	}
+	if revRow.Status != "unavailable" || revRow.APIValue != nil {
+		var gotAPI float64
+		if revRow.APIValue != nil {
+			gotAPI = *revRow.APIValue
+		}
+		t.Fatalf("miner_revenue without same-day CM = {Status:%s APIValue:%.4f APILabel:%s}, want Status=unavailable APIValue=nil", revRow.Status, gotAPI, revRow.APILabel)
+	}
+}
+
+func TestBtcRegimeFeeMarketUnavailableWhenMempoolMissing(t *testing.T) {
+	sigs := computeBtcRegimeSignals(btcRegimeInputs{
+		Consolidation: consolidationSignal(0, 0),
+	})
+	var feeSig *BtcRegimeSignal
+	for i := range sigs {
+		if sigs[i].ID == "fee_market" {
+			feeSig = &sigs[i]
+			break
+		}
+	}
+	if feeSig == nil {
+		t.Fatal("missing fee_market regime signal")
+	}
+	if feeSig.State != "unavailable" {
+		t.Fatalf("fee_market state when EconomySatVB=0 = %q, want unavailable", feeSig.State)
 	}
 }

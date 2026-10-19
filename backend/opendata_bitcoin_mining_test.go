@@ -189,7 +189,7 @@ func TestBitcoinMiningPools(t *testing.T) {
 	if got.Concentration.Nakamoto.Value != 3 {
 		t.Errorf("Concentration.Nakamoto.Value = %v, want 3", got.Concentration.Nakamoto.Value)
 	}
-	if got.Concentration.Nakamoto.Denominator != 1130 || got.Concentration.Nakamoto.Method == "" || got.Concentration.Nakamoto.Unit == "" {
+	if got.Concentration.Nakamoto.Denominator != 1101 || got.Concentration.Nakamoto.Method == "" || got.Concentration.Nakamoto.Unit == "" {
 		t.Errorf("Concentration.Nakamoto metadata incomplete: %+v", got.Concentration.Nakamoto)
 	}
 	if math.Abs(got.Concentration.HHI.Value-1584.0) > 2.0 {
@@ -273,5 +273,39 @@ func TestBitcoinMiningChainDelta(t *testing.T) {
 	wantDelta := (implied - 1025.6) / 1025.6 * 100.0
 	if math.Abs(*ch.HashrateDeltaPct-wantDelta) > 0.01 {
 		t.Errorf("HashrateDeltaPct = %.4f%%, want %.4f%%", *ch.HashrateDeltaPct, wantDelta)
+	}
+}
+
+func TestComputeBtcMiningPoolsNakamotoDenominator(t *testing.T) {
+	// Subcase 1: 1000 total blocks where A=300, B=199, C=250, D=231, Unknown=20 -> knownBlocks = 980.
+	// A+B = 499 > 490 (50% of 980 known blocks), so Nakamoto Value = 2 and Denominator = 980
+	// (whereas against totalBlocks=1000, 499 <= 500 would give Value=3 and Denominator=1000).
+	_, conc980 := computeBtcMiningPools(&btcMempoolPoolsSummary{
+		BlockCount: 1000,
+		Pools: []btcMempoolPool{
+			{Name: "A", BlockCount: 300},
+			{Name: "B", BlockCount: 199},
+			{Name: "C", BlockCount: 250},
+			{Name: "D", BlockCount: 231},
+			{Name: "Unknown", BlockCount: 20},
+		},
+	}, "1w")
+	if conc980.Nakamoto.Value != 2 || conc980.Nakamoto.Denominator != 980 {
+		t.Fatalf("conc980.Nakamoto = {Value:%v Denominator:%d}, want Value=2 Denominator=980", conc980.Nakamoto.Value, conc980.Nakamoto.Denominator)
+	}
+
+	// Subcase 2: knownBlocks = 499 (A=240, B=199, C=60, Unknown=20, BlockCount=1000).
+	// A=240 <= 249.5, A+B=439 > 249.5 -> Value = 2, Denominator = 499.
+	_, conc499 := computeBtcMiningPools(&btcMempoolPoolsSummary{
+		BlockCount: 1000,
+		Pools: []btcMempoolPool{
+			{Name: "A", BlockCount: 240},
+			{Name: "B", BlockCount: 199},
+			{Name: "C", BlockCount: 60},
+			{Name: "Unknown", BlockCount: 20},
+		},
+	}, "1w")
+	if conc499.Nakamoto.Value != 2 || conc499.Nakamoto.Denominator != 499 {
+		t.Fatalf("conc499.Nakamoto = {Value:%v Denominator:%d}, want Value=2 Denominator=499", conc499.Nakamoto.Value, conc499.Nakamoto.Denominator)
 	}
 }

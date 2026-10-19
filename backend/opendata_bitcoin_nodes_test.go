@@ -483,3 +483,79 @@ func TestBitnodesColdStartFailBackoff(t *testing.T) {
 		t.Fatalf("hits during backoff = %d, want 1", hits.Load())
 	}
 }
+
+func TestBitnodesFailureBackoffSixHours(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	origBit := btcBitnodesLatestURL
+	btcBitnodesLatestURL = srv.URL + "/bitnodes"
+	defer func() { btcBitnodesLatestURL = origBit }()
+
+	store := openTestRiskStore(t)
+	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	settings := (BitcoinConfig{}).settings()
+	svc := &bitcoinService{
+		settings: settings,
+		store:    store,
+		now:      func() time.Time { return now },
+	}
+	ns := newBtcNodesSyncer(store, settings, t.TempDir(), svc.now)
+	svc.nodes = ns
+
+	// Initial call gets 429.
+	_, bitSt1, _ := ns.get(context.Background(), svc)
+	if bitSt1.Status != "error" || bitSt1.Error != "rate_limited" {
+		t.Fatalf("first call status = %+v, want error/rate_limited", bitSt1)
+	}
+	// Calls at +10m, +1h, +5h59m (via both get and hourlyTick) must not hit upstream again.
+	for _, d := range []time.Duration{10 * time.Minute, 1 * time.Hour, 5*time.Hour + 59*time.Minute} {
+		now = time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC).Add(d)
+		_, _, _ = ns.get(context.Background(), svc)
+		ns.hourlyTick(context.Background())
+	}
+	if hits.Load() != 1 {
+		t.Fatalf("upstream hits within 6h after 429 = %d, want 1", hits.Load())
+	}
+}
+
+func TestDBIPOversizedDownloadRejectedAndPreservesOldFile(t *testing.T) {
+	countryRaw, err := os.ReadFile(filepath.Join("testdata", "bitcoin", "dbip_country_sample.csv.gz"))
+	if err != nil {
+		t.Fatalf("read sample: %v", err)
+	}
+	origCap := btcDBIPMaxBodyBytes
+	btcDBIPMaxBodyBytes = int64(len(countryRaw) - 10)
+	defer func() { btcDBIPMaxBodyBytes = origCap }()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(countryRaw)
+	}))
+	defer srv.Close()
+
+	origURL := btcDBIPBaseURL
+	btcDBIPBaseURL = srv.URL
+	defer func() { btcDBIPBaseURL = origURL }()
+
+	geoDir := t.TempDir()
+	oldFile := filepath.Join(geoDir, "dbip-country-lite-2026-09.csv.gz")
+	if err := os.WriteFile(oldFile, countryRaw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	gotPath, err := ensureSingleDBIPFile(context.Background(), geoDir, "country", "2026-10", 3)
+	if err == nil {
+		t.Fatalf("ensureSingleDBIPFile with input exceeding cap (%d bytes) succeeded with path=%q, want error", btcDBIPMaxBodyBytes, gotPath)
+	}
+	if _, statErr := os.Stat(filepath.Join(geoDir, "dbip-country-lite-2026-10.csv.gz")); !os.IsNotExist(statErr) {
+		t.Fatalf("expected truncated 2026-10 file not to exist, statErr=%v", statErr)
+	}
+	keptRaw, err := os.ReadFile(oldFile)
+	if err != nil || len(keptRaw) != len(countryRaw) {
+		t.Fatalf("old file was not preserved intact: len=%d err=%v", len(keptRaw), err)
+	}
+}

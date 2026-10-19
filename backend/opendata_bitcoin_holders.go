@@ -382,13 +382,13 @@ func (m *btcHolderMaintenance) minSyncedCursor(ctx context.Context) string {
 	var curA, curB string
 	if stA, errA := m.store.getSyncState(ctx, btcOnchainJobID); errA == nil && stA.Cursor != "" {
 		curA = stA.Cursor
-	} else {
-		_ = m.store.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(day), '') FROM btc_onchain_daily`).Scan(&curA)
+	} else if err := m.store.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(day), '') FROM btc_onchain_daily`).Scan(&curA); err != nil {
+		slog.Warn("btc holders: fallback onchain day cursor query failed", "error", err)
 	}
 	if stB, errB := m.store.getSyncState(ctx, btcCoinageJobID); errB == nil && stB.Cursor != "" {
 		curB = stB.Cursor
-	} else {
-		_ = m.store.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(spend_day), '') FROM btc_spent_age_daily`).Scan(&curB)
+	} else if err := m.store.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(spend_day), '') FROM btc_spent_by_age`).Scan(&curB); err != nil {
+		slog.Warn("btc holders: fallback spend_day cursor query failed", "error", err)
 	}
 	if curA == "" || curB == "" {
 		return ""

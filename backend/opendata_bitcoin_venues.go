@@ -27,6 +27,7 @@ const (
 	btcBinanceGeoBlockedKey = "binance_geo_blocked_until"
 	btcBinanceCoinMSizeUSD  = 100.0
 	btcDefaultCDESizeBTC    = 0.01
+	btcMinBasisDaysToExpiry = 2.0
 )
 
 // BtcVenueRow is one line of the Markets venue board. Amounts in USD notional unless noted.
@@ -84,6 +85,7 @@ type btcVenueDeriv struct {
 	Deriv24hUSD   *float64
 	OIUSD         *float64
 	OIBTC         *float64
+	PerpOIUSD     *float64
 	Funding8hPct  *float64
 	FundingAPRPct *float64
 	PremiumPct    *float64
@@ -294,6 +296,7 @@ func (a *binanceAdapter) Fetch(ctx context.Context) (btcVenueDeriv, string) {
 	out.USDMVol24hUSD = btcFloatPtr(usdmVol)
 	out.USDMOIBTC = btcFloatPtr(usdmOIBTC)
 	out.USDMOIUSD = btcFloatPtr(usdmOIUSD)
+	out.PerpOIUSD = btcFloatPtr(usdmOIUSD)
 
 	if rate, ok := parseBtcFloat(fPrem.LastFundingRate); ok {
 		out.Funding8hPct = btcFloatPtr(rate * 100.0)
@@ -424,6 +427,7 @@ func (a *okxAdapter) Fetch(ctx context.Context) (btcVenueDeriv, string) {
 	out.Deriv24hUSD = btcFloatPtr(volBTC * mark)
 	out.OIUSD = btcFloatPtr(oiUSD)
 	out.OIBTC = btcFloatPtr(oiBTC)
+	out.PerpOIUSD = btcFloatPtr(oiUSD)
 
 	intervalHours := 8.0
 	ft, err1 := strconv.ParseInt(strings.TrimSpace(fundResp.Data[0].FundingTime), 10, 64)
@@ -600,6 +604,9 @@ func (a *coinbaseAdapter) Fetch(ctx context.Context) (btcVenueDeriv, string) {
 		if rate, ok := parseBtcFloat(cdeRaw.FutureProductDetails.FundingRate); ok {
 			out.Funding8hPct = btcFloatPtr(rate * (8.0 / intervalHours) * 100.0)
 			out.FundingAPRPct = btcFloatPtr(fundingAPR(rate, intervalHours))
+			if out.CDEOIUSD != nil && *out.CDEOIUSD > 0 {
+				out.PerpOIUSD = out.CDEOIUSD
+			}
 		}
 	}
 
@@ -713,6 +720,7 @@ func (a *krakenAdapter) Fetch(ctx context.Context) (btcVenueDeriv, string) {
 			foundPerp = true
 			out.MarkPrice = tk.MarkPrice
 			out.IndexPrice = tk.IndexPrice
+			out.PerpOIUSD = btcFloatPtr(oiUSD)
 			out.Funding8hPct = btcFloatPtr(tk.RelativeFundingRate * 8.0 * 100.0)
 			out.FundingAPRPct = btcFloatPtr(fundingAPR(tk.RelativeFundingRate, 1.0))
 			if tk.IndexPrice > 0 {
@@ -723,7 +731,7 @@ func (a *krakenAdapter) Fetch(ctx context.Context) (btcVenueDeriv, string) {
 
 		if exp, ok := parseKrakenFutureExpiry(sym, tk.MaturityTime); ok && exp.After(now) && tk.IndexPrice > 0 {
 			days := exp.Sub(now).Hours() / 24.0
-			if days > 0 {
+			if days >= btcMinBasisDaysToExpiry {
 				out.BasisPoints = append(out.BasisPoints, BtcBasisPoint{
 					Venue:        "kraken",
 					Instrument:   sym,
@@ -839,6 +847,7 @@ func (a *hyperliquidAdapter) Fetch(ctx context.Context) (btcVenueDeriv, string) 
 	out.Deriv24hUSD = btcFloatPtr(volUSD)
 	out.OIBTC = btcFloatPtr(oiBTC)
 	out.OIUSD = btcFloatPtr(oiBTC * mark)
+	out.PerpOIUSD = btcFloatPtr(oiBTC * mark)
 
 	if rate, ok := parseBtcFloat(c.Funding); ok {
 		out.Funding8hPct = btcFloatPtr(rate * 8.0 * 100.0)
@@ -947,6 +956,7 @@ func (a *deribitAdapter) Fetch(ctx context.Context) (btcVenueDeriv, string) {
 
 	totalVolUSD := r.Stats.VolumeUSD
 	totalOIUSD := r.OpenInterest
+	out.PerpOIUSD = btcFloatPtr(r.OpenInterest)
 
 	var bookResp struct {
 		Result []struct {
@@ -980,6 +990,9 @@ func (a *deribitAdapter) Fetch(ctx context.Context) (btcVenueDeriv, string) {
 			}
 			totalOIUSD += item.OpenInterest
 			totalVolUSD += item.VolumeUSD
+			if days < btcMinBasisDaysToExpiry {
+				continue
+			}
 			out.BasisPoints = append(out.BasisPoints, BtcBasisPoint{
 				Venue:        "deribit",
 				Instrument:   item.InstrumentName,

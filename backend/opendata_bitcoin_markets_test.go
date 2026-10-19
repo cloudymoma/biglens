@@ -539,3 +539,154 @@ func TestBtcMarketDailySnapshot(t *testing.T) {
 		t.Errorf("rows after re-run = %d, want 1", len(rows))
 	}
 }
+
+func TestBtcMarketsCFTCCDEFallbackIncludedInTotalOI(t *testing.T) {
+	up := startMarketsTestUpstream(t)
+	// Make direct Coinbase fail so CDE OI comes from the CFTC weekly fallback.
+	up.coinbaseStatus.Store(http.StatusInternalServerError)
+	up.binanceStatus.Store(http.StatusInternalServerError)
+	up.okxStatus.Store(http.StatusInternalServerError)
+	up.krakenStatus.Store(http.StatusInternalServerError)
+	up.deribitStatus.Store(http.StatusInternalServerError)
+	up.cgStatus.Store(http.StatusInternalServerError)
+
+	h := newTestBitcoinHandler(t)
+	h.btc.now = func() time.Time { return time.Date(2026, 10, 17, 1, 0, 0, 0, time.UTC) }
+
+	rec := httptest.NewRecorder()
+	h.BitcoinMarkets(rec, httptest.NewRequest(http.MethodGet, "/api/opendata/bitcoin/markets", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var data BtcMarketsData
+	if err := json.Unmarshal(rec.Body.Bytes(), &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	// Active venues with OI: Hyperliquid (41,064.00828 BTC * 81,484 = $3,346,060,650.69)
+	// and CME ((20,752*5 + 28,400*0.10) = 106,600 BTC * 81,484 = $8,686,194,400.00).
+	// CFTC CDE fallback: 173,743 * 0.01 = 1,737.43 BTC * 81,484 = $141,572,746.12.
+	// Hand-calculated totalOIUSD = (41064.00828 + 106600.0 + 1737.43) * 81484.0 = $12,173,827,796.81.
+	// Hand-calculated USRegulatedSharePct = (106600.0 + 1737.43) / (41064.00828 + 106600.0 + 1737.43) * 100 = 72.514286%.
+	wantTotalOI := (41064.00828 + 106600.0 + 1737.43) * 81484.0
+	wantUSRegPct := ((106600.0 + 1737.43) / (41064.00828 + 106600.0 + 1737.43)) * 100.0
+	if data.TotalOIUSD == nil || math.Abs(*data.TotalOIUSD-wantTotalOI) > 1.0 {
+		var got float64
+		if data.TotalOIUSD != nil {
+			got = *data.TotalOIUSD
+		}
+		t.Fatalf("TotalOIUSD with CFTC CDE fallback = %.2f, want %.2f", got, wantTotalOI)
+	}
+	if data.USRegulatedSharePct == nil || math.Abs(*data.USRegulatedSharePct-wantUSRegPct) > 1e-4 {
+		var got float64
+		if data.USRegulatedSharePct != nil {
+			got = *data.USRegulatedSharePct
+		}
+		t.Fatalf("USRegulatedSharePct = %.6f, want %.6f", got, wantUSRegPct)
+	}
+}
+
+func TestBtcMarketsFundingWeightedByPerpOIOnly(t *testing.T) {
+	now := time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		switch {
+		case strings.Contains(p, "/derivatives/api/v3/tickers"):
+			// Kraken: PF_XBTUSD perp OI = 1,000 BTC ($100M at $100k), relativeFundingRate = 0.0001 (87.6% APR),
+			// plus a huge dated future FF_XBTUSD_261225 with OI = 9,000 BTC ($900M).
+			_, _ = w.Write([]byte(`{"result":"success","tickers":[
+				{"symbol":"PF_XBTUSD","markPrice":100000,"indexPrice":100000,"vol24h":100,"openInterest":1000,"relativeFundingRate":0.0001,"suspended":false},
+				{"symbol":"FF_XBTUSD_261225","markPrice":102000,"indexPrice":100000,"vol24h":100,"openInterest":9000,"maturityTime":"2026-12-25T16:00:00Z","suspended":false}
+			]}`))
+		case strings.HasPrefix(p, "/public/ticker"):
+			// Deribit: BTC-PERPETUAL perp OI = $300M, funding_8h = 0.0002 (21.9% APR).
+			_, _ = w.Write([]byte(`{"result":{"instrument_name":"BTC-PERPETUAL","mark_price":100000,"index_price":100000,"open_interest":300000000,"funding_8h":0.0002,"stats":{"volume_usd":50000000}}}`))
+		case strings.HasPrefix(p, "/public/get_book_summary_by_currency"):
+			// Deribit dated future BTC-25DEC26 has $100M OI (should NOT dilute BTC-PERPETUAL funding weight).
+			_, _ = w.Write([]byte(`{"result":[{"instrument_name":"BTC-25DEC26","mark_price":102000,"estimated_delivery_price":100000,"open_interest":100000000,"volume_usd":10000000}]}`))
+		default:
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	}))
+	defer srv.Close()
+	stubAllBtcUpstreams(t, srv.URL)
+	btcKrakenFuturesTickURL = srv.URL + "/derivatives/api/v3/tickers"
+	btcDeribitBaseURL = srv.URL
+
+	h := newTestBitcoinHandler(t)
+	h.btc.now = func() time.Time { return now }
+
+	rec := httptest.NewRecorder()
+	h.BitcoinMarkets(rec, httptest.NewRequest(http.MethodGet, "/api/opendata/bitcoin/markets", nil))
+	var data BtcMarketsData
+	if err := json.Unmarshal(rec.Body.Bytes(), &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	// Perp weights only: Kraken PF = $100M at 87.6% APR, Deribit PERP = $300M at 21.9% APR.
+	// Weighted APR = (100M * 87.6 + 300M * 21.9) / 400M = 38.325% APR.
+	// (If total venue OI were used: Kraken $1,018M vs Deribit $400M -> 69.067% APR.)
+	wantAPR := (100e6*fundingAPR(0.0001, 1.0) + 300e6*fundingAPR(0.0002, 8.0)) / 400e6
+	if data.FundingOIWeightedAPR == nil || math.Abs(*data.FundingOIWeightedAPR-wantAPR) > 1e-4 {
+		var got float64
+		if data.FundingOIWeightedAPR != nil {
+			got = *data.FundingOIWeightedAPR
+		}
+		t.Fatalf("FundingOIWeightedAPR = %.4f, want %.4f (weighted by perp OI only)", got, wantAPR)
+	}
+}
+
+func TestBtcBasisExcludesNearExpiryUnderTwoDays(t *testing.T) {
+	now := time.Date(2026, 10, 17, 8, 48, 0, 0, time.UTC) // 0.3 days before 2026-10-17T16:00:00Z
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		switch {
+		case strings.Contains(p, "/derivatives/api/v3/tickers"):
+			_, _ = w.Write([]byte(`{"result":"success","tickers":[
+				{"symbol":"PF_XBTUSD","markPrice":100000,"indexPrice":100000,"vol24h":100,"openInterest":1000,"relativeFundingRate":0.0001,"suspended":false},
+				{"symbol":"FF_XBTUSD_261017","markPrice":100500,"indexPrice":100000,"vol24h":50,"openInterest":200,"maturityTime":"2026-10-17T16:00:00Z","suspended":false},
+				{"symbol":"FF_XBTUSD_261127","markPrice":101000,"indexPrice":100000,"vol24h":80,"openInterest":500,"maturityTime":"2026-11-27T16:00:00Z","suspended":false}
+			]}`))
+		case strings.HasPrefix(p, "/public/ticker"):
+			_, _ = w.Write([]byte(`{"result":{"instrument_name":"BTC-PERPETUAL","mark_price":100000,"index_price":100000,"open_interest":100000000,"funding_8h":0.0001,"stats":{"volume_usd":10000000}}}`))
+		case strings.HasPrefix(p, "/public/get_book_summary_by_currency"):
+			// BTC-18OCT26 settles at 2026-10-18T08:00:00Z (< 1 day away); BTC-25DEC26 settles > 60 days away.
+			_, _ = w.Write([]byte(`{"result":[
+				{"instrument_name":"BTC-18OCT26","mark_price":100500,"estimated_delivery_price":100000,"open_interest":10000000,"volume_usd":1000000},
+				{"instrument_name":"BTC-25DEC26","mark_price":102000,"estimated_delivery_price":100000,"open_interest":50000000,"volume_usd":5000000}
+			]}`))
+		default:
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	}))
+	defer srv.Close()
+	stubAllBtcUpstreams(t, srv.URL)
+	btcKrakenFuturesTickURL = srv.URL + "/derivatives/api/v3/tickers"
+	btcDeribitBaseURL = srv.URL
+
+	kr := newKrakenAdapter(func() time.Time { return now })
+	krOut, krCode := kr.Fetch(context.Background())
+	if krCode != "" {
+		t.Fatalf("kraken fetch code = %q", krCode)
+	}
+	for _, bp := range krOut.BasisPoints {
+		if bp.DaysToExpiry < 2.0 {
+			t.Fatalf("kraken BasisPoints contains near-expiry contract %s with DaysToExpiry=%.2f (< 2.0)", bp.Instrument, bp.DaysToExpiry)
+		}
+	}
+	if len(krOut.BasisPoints) != 1 || krOut.BasisPoints[0].Instrument != "FF_XBTUSD_261127" {
+		t.Fatalf("kraken BasisPoints = %+v, want only FF_XBTUSD_261127", krOut.BasisPoints)
+	}
+
+	db := newDeribitAdapter(func() time.Time { return now })
+	dbOut, dbCode := db.Fetch(context.Background())
+	if dbCode != "" {
+		t.Fatalf("deribit fetch code = %q", dbCode)
+	}
+	for _, bp := range dbOut.BasisPoints {
+		if bp.DaysToExpiry < 2.0 {
+			t.Fatalf("deribit BasisPoints contains near-expiry contract %s with DaysToExpiry=%.2f (< 2.0)", bp.Instrument, bp.DaysToExpiry)
+		}
+	}
+	if len(dbOut.BasisPoints) != 1 || dbOut.BasisPoints[0].Instrument != "BTC-25DEC26" {
+		t.Fatalf("deribit BasisPoints = %+v, want only BTC-25DEC26", dbOut.BasisPoints)
+	}
+}

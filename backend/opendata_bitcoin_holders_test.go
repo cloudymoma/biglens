@@ -682,3 +682,20 @@ func TestBtcHolderEngineHaltedExposedAndDeduped(t *testing.T) {
 		t.Fatalf("expected repeated halt on same day to preserve Since=%q, got %q", firstSince, resp2.HolderEngine.Since)
 	}
 }
+
+func TestMinSyncedCursorFallsBackToBtcSpentByAge(t *testing.T) {
+	ctx := context.Background()
+	store := openTestRiskStore(t)
+	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	seedMaintenanceChain(t, store, now)
+
+	// Clear sync_state for btc_coinage so minSyncedCursor must fall back to querying btc_spent_by_age.
+	if _, err := store.db.ExecContext(ctx, `DELETE FROM sync_state WHERE source = ?`, btcCoinageJobID); err != nil {
+		t.Fatal(err)
+	}
+	maint := newBtcHolderMaintenance(store, nil, func() time.Time { return now })
+	got := maint.minSyncedCursor(ctx)
+	if got != "2026-10-15" {
+		t.Fatalf("minSyncedCursor without sync_state = %q, want 2026-10-15 from btc_spent_by_age", got)
+	}
+}

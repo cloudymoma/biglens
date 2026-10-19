@@ -285,14 +285,20 @@ func computeBtcRegimeSignals(in btcRegimeInputs) []BtcRegimeSignal {
 		volatility.Summary = "DVOL or RV30 unavailable"
 	}
 
-	// 6. Fee market: consolidation rule -> window_open | closed.
+	// 6. Fee market: consolidation rule -> window_open | closed | unavailable.
 	feeMarket := BtcRegimeSignal{
 		ID:      "fee_market",
 		Label:   "Fee Market",
+		State:   "unavailable",
 		Rule:    fmt.Sprintf("Consolidation window: economy ≤ %.0f sat/vB and backlog ≤ %.0f blocks", btcConsolidationMaxSatVB, btcConsolidationMaxBlocks),
 		Summary: in.Consolidation.Reason,
 	}
-	if in.Consolidation.Open {
+	if in.Consolidation.EconomySatVB <= 0 {
+		feeMarket.State = "unavailable"
+		if feeMarket.Summary == "" {
+			feeMarket.Summary = "Mempool fee telemetry unavailable"
+		}
+	} else if in.Consolidation.Open {
 		feeMarket.State = "window_open"
 	} else {
 		feeMarket.State = "closed"
@@ -394,18 +400,6 @@ func computeBtcVerificationRows(in btcVerificationInputs) []BtcVerificationRow {
 	if cmIssBTC != nil && cmFeeBTC != nil && (ocDate == "" || cmDate == "" || cmDate == ocDate) {
 		sum := *cmIssBTC + *cmFeeBTC
 		apiMinerRev = &sum
-	} else if in.MempoolRewardsBTC != nil {
-		rev := *in.MempoolRewardsBTC
-		if in.OnchainDay != nil && in.OnchainDay.Blocks > 0 {
-			rev = rev * float64(in.OnchainDay.Blocks) / 144.0
-			apiMinerRevLabel = "mempool rewards (block-scaled)"
-		} else {
-			apiMinerRevLabel = "mempool rewards"
-		}
-		apiMinerRev = &rev
-	} else if cmIssBTC != nil && cmFeeBTC != nil {
-		sum := *cmIssBTC + *cmFeeBTC
-		apiMinerRev = &sum
 	}
 
 	m2Status := func(apiVal, chainVal *float64) (string, string) {
@@ -424,6 +418,10 @@ func computeBtcVerificationRows(in btcVerificationInputs) []BtcVerificationRow {
 	issStatus, issNote := m2Status(cmIssBTC, chainIssBTC)
 	feeStatus, feeNote := m2Status(cmFeeBTC, chainFeeBTC)
 	revStatus, revNote := m2Status(apiMinerRev, chainRevBTC)
+	if chainRevBTC != nil && apiMinerRev == nil {
+		revStatus = "unavailable"
+		revNote = "same-day Coin Metrics revenue unavailable"
+	}
 
 	var (
 		chainSupplyBTC *float64

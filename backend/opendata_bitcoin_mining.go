@@ -242,7 +242,7 @@ func computeBtcMiningPools(summary *btcMempoolPoolsSummary, period string) ([]Bt
 	conc.KnownBlocks = knownBlocks
 	conc.Nakamoto = BtcConcentrationMetric{
 		Value:       float64(nakamoto(shares, "Unknown")),
-		Denominator: totalBlocks,
+		Denominator: knownBlocks,
 		Unit:        unit,
 		CoveragePct: covPct,
 		Method:      "mempool.space pool attribution (Unknown excluded)",
