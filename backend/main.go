@@ -17,7 +17,7 @@ import (
 )
 
 func main() {
-	backfill := flag.Bool("address-risk-backfill", false, "backfill USDT/USDC freeze history from BigQuery, then exit")
+	backfill := flag.Bool("address-risk-backfill", false, "backfill USDT/USDC/EURC freeze history from BigQuery, then exit")
 	since := flag.String("since", "", "backfill from this date, YYYY-MM-DD (default 2017-11-28: full history)")
 	sinceDays := flag.Int("since-days", 0, "backfill the last N days (dev only; excludes --since)")
 	yes := flag.Bool("yes", false, "run the backfill; without it only a dry-run estimate is printed")

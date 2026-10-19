@@ -31,8 +31,8 @@ func TestFillTrend(t *testing.T) {
 		{"2026-09-02", "USDT", "freeze", 2}, {"2026-09-02", "USDC", "freeze", 1},
 		{"2026-09-03", "USDC", "unfreeze", 1}, {"2026-08-01", "USDT", "freeze", 9}, // outside coverage: dropped
 	}
-	got := fillTrend(d("2026-09-01"), d("2026-09-03"), "day", counts)
-	want := []riskTrendPoint{{"2026-09-01", 0, 0, 0}, {"2026-09-02", 2, 1, 0}, {"2026-09-03", 0, 0, 1}}
+	got := fillTrend(d("2026-09-01"), d("2026-09-03"), "day", counts, "")
+	want := []riskTrendPoint{{"2026-09-01", 0, 0, nil, 0}, {"2026-09-02", 2, 1, nil, 0}, {"2026-09-03", 0, 0, nil, 1}}
 	if len(got) != len(want) {
 		t.Fatalf("points = %+v", got)
 	}
@@ -41,7 +41,7 @@ func TestFillTrend(t *testing.T) {
 			t.Errorf("point %d = %+v, want %+v", i, got[i], want[i])
 		}
 	}
-	months := fillTrend(d("2017-11-28"), d("2018-02-03"), "month", []trendCount{{"2018-01", "USDT", "freeze", 4}})
+	months := fillTrend(d("2017-11-28"), d("2018-02-03"), "month", []trendCount{{"2018-01", "USDT", "freeze", 4}}, "")
 	var buckets []string
 	for _, p := range months {
 		buckets = append(buckets, p.Bucket)

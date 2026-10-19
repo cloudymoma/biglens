@@ -1,6 +1,6 @@
 package main
 
-// Manual backfill of USDT/USDC freeze history (spec §7.3):
+// Manual backfill of USDT/USDC/EURC freeze history (spec §7.3):
 //
 //	cd /opt/biglens/backend && sudo -u biglens ./biglens-server --address-risk-backfill [--since 2017-11-28 | --since-days N] [--yes]
 //
@@ -313,7 +313,8 @@ func runAddressRiskBackfill(ctx context.Context, src stablecoinSource, store *ri
 			saveBackfillFailure(ctx, store, meta, werr)
 			return werr
 		}
-		if err := store.insertStablecoinEvents(ctx, events, b.NewFrom, b.NewCursor, now); err != nil {
+		w := stablecoinWindow{Start: b.Start, End: b.End, NewFrom: b.NewFrom, NewCursor: b.NewCursor}
+		if err := store.insertStablecoinWindow(ctx, events, w, now); err != nil {
 			werr := fmt.Errorf("%s: store: %w", b.Label, err)
 			saveBackfillFailure(ctx, store, meta, werr)
 			return werr

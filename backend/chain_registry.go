@@ -101,7 +101,7 @@ const (
 )
 
 type registryToken struct {
-	Asset     string // USDT | USDC
+	Asset     string // USDT | USDC | EURC
 	Network   string // chain ID
 	Contract  string // EVM lowercase hex; TRON/Solana base58
 	Decimals  int
@@ -132,6 +132,14 @@ var registryTokens = []registryToken{
 	{Asset: "USDC", Network: "op", Contract: "0x7f5c764cbc14f9669b88837ca1490cca17c31607", Decimals: 6, Tier: tierBridged, Label: "USDC.e", FreezeSel: "fe575a87"},
 	{Asset: "USDC", Network: "base", Contract: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", Decimals: 6, Tier: tierNative, Label: "USDC", FreezeSel: "fe575a87"},
 	{Asset: "USDC", Network: "sol", Contract: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", Decimals: 6, Tier: tierNative, Label: "USDC", FreezeSel: "spl-account-state"},
+
+	// EURC (Circle, FiatToken on EVM; contracts, decimals and control state
+	// re-verified on-chain 2026-10-19, stablecoin.md Appendix A). Not in
+	// payAssets: Payment Check stays USDT/USDC. Address Risk's live freeze
+	// check and the Crypto Pulse supply matrix include these rows.
+	{Asset: "EURC", Network: "eth", Contract: "0x1abaea1f7c830bd89acc67ec4af516284b1bc33c", Decimals: 6, Tier: tierNative, Label: "EURC", FreezeSel: "fe575a87"},
+	{Asset: "EURC", Network: "base", Contract: "0x60a3e35cc302bfa44cb288bc5a4f316fdb1adb42", Decimals: 6, Tier: tierNative, Label: "EURC", FreezeSel: "fe575a87"},
+	{Asset: "EURC", Network: "sol", Contract: "HzwqbKZw8HxMN6bF2yFZNrht3c2iXXzpKcFu7uBEDKtr", Decimals: 6, Tier: tierNative, Label: "EURC", FreezeSel: "spl-account-state"},
 }
 
 var payAssets = map[string][]string{

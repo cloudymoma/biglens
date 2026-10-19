@@ -1094,6 +1094,9 @@ export interface AddressRiskSource {
   upstream_changed_at?: string;
   coverage_from?: string;
   cursor?: string;
+  // Tokens whose history starts later than coverage_from (Ethereum stablecoin
+  // source: EURC); coverage_from '' = not synced yet.
+  token_coverage?: { token: string; coverage_from: string }[];
   last_error?: string;
   hosts?: string[];
   sends_address: boolean;
@@ -1199,12 +1202,13 @@ export interface AddressRiskTrendPoint {
   bucket: string;
   usdt_freeze: number;
   usdc_freeze: number;
+  eurc_freeze: number | null; // null before EURC coverage starts (unknown, not 0)
   unfreeze: number;
 }
 
 export interface AddressRiskEvent {
   tx_hash: string;
-  token: 'USDT' | 'USDC';
+  token: 'USDT' | 'USDC' | 'EURC';
   action: 'freeze' | 'unfreeze' | 'destroy';
   address: string;
   amount: string;
@@ -1217,10 +1221,12 @@ export interface AddressRiskOverview {
   tron_empty?: boolean;
   coverage: { coverage_from: string; cursor: string; partial: boolean };
   tron_coverage?: { coverage_from: string; cursor: string; partial: boolean };
+  eurc_coverage_from: string; // '' = EURC freeze history not synced yet
   kpis: {
     ofac_count: number;
     usdt_frozen_count: number;
     usdc_frozen_count: number;
+    eurc_frozen_count: number;
     tron_usdt_frozen_count?: number;
     usdt_destroyed_total: string;
     mew_darklist_count: number;

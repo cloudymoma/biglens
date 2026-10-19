@@ -55,7 +55,8 @@ func TestServiceLookupEtherscanNotConfigured(t *testing.T) {
 		es.HelpURL != "https://docs.etherscan.io/set-up-your-api-key" || calls.Load() != 0 || res.AssociationScope != nil {
 		t.Errorf("etherscan source = %+v, calls %d", es, calls.Load())
 	}
-	want := "No records in the 9 sources checked. Not checked: Etherscan association analysis (no API key)."
+	// The seeded store predates EURC in the freeze sync (stablecoin.md §8.3).
+	want := "No records in the 9 sources checked. Not checked: Etherscan association analysis (no API key). EURC freeze history not synced yet."
 	if res.Summary.Text != want || strings.Join(res.Summary.Skipped, ",") != "etherscan" {
 		t.Errorf("summary = %+v", res.Summary)
 	}

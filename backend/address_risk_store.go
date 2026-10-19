@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"cloud.google.com/go/civil"
 	_ "modernc.org/sqlite"
 )
 
@@ -32,6 +33,10 @@ CREATE TABLE IF NOT EXISTS stablecoin_events (
   PRIMARY KEY (tx_hash, log_index)
 );
 CREATE INDEX IF NOT EXISTS idx_se_address ON stablecoin_events(address);
+CREATE TABLE IF NOT EXISTS stablecoin_token_coverage (
+  token         TEXT PRIMARY KEY,
+  coverage_from TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS list_entries (
   source    TEXT NOT NULL,
   address   TEXT NOT NULL,
@@ -324,17 +329,29 @@ func (s *riskStore) listHits(ctx context.Context, addr string) ([]listHit, error
 // "stablecoin" (spec §6).
 const stablecoinSourceID = "stablecoin_logs"
 
-// stablecoinEvent is one USDT/USDC blacklist log. Amount is set for destroy
-// events only, as a decimal string in the token's smallest unit.
+// stablecoinEvent is one USDT/USDC/EURC blacklist log. Amount is set for
+// destroy events only, as a decimal string in the token's smallest unit.
 type stablecoinEvent struct {
 	TxHash      string
 	LogIndex    int64
-	Token       string // "USDT" | "USDC"
+	Token       string // "USDT" | "USDC" | "EURC"
 	Action      string // "freeze" | "unfreeze" | "destroy"
 	Address     string
 	Amount      string
 	BlockNumber int64
 	BlockTime   string // RFC3339 UTC
+}
+
+// stablecoinLateTokens joined the freeze sync after USDT/USDC. Each keeps its
+// own coverage start in stablecoin_token_coverage (stablecoin.md §8.3): days
+// synced before a token was in the query hold none of its events.
+var stablecoinLateTokens = []string{"EURC"}
+
+// stablecoinWindow is one fetched batch [Start, End) plus the watermarks it
+// moves (see insertStablecoinEvents).
+type stablecoinWindow struct {
+	Start, End         civil.Date
+	NewFrom, NewCursor string
 }
 
 // insertStablecoinEvents writes a batch and moves the coverage watermarks in
@@ -343,7 +360,19 @@ type stablecoinEvent struct {
 // watermark alone. cursor only grows and coverage_from only shrinks, which
 // keeps a concurrent backfill CLI and service sync from moving either back.
 // coverage_from cannot use MIN(): the empty string sorts before every date.
+// Without a window, per-token coverage is left alone; the syncer and the
+// backfill use insertStablecoinWindow.
 func (s *riskStore) insertStablecoinEvents(ctx context.Context, events []stablecoinEvent, newFrom, newCursor string, now time.Time) error {
+	return s.insertStablecoinWindow(ctx, events, stablecoinWindow{NewFrom: newFrom, NewCursor: newCursor}, now)
+}
+
+// insertStablecoinWindow is insertStablecoinEvents for a batch fetched with
+// the current (EURC-aware) query over w.Start..w.End. A late token's coverage
+// starts at the first such batch that reaches the cursor (the day the sync
+// started including it) and later extends only through batches that touch
+// its covered range, so [coverage_from, cursor] stays gap-free per token.
+func (s *riskStore) insertStablecoinWindow(ctx context.Context, events []stablecoinEvent, w stablecoinWindow, now time.Time) error {
+	newFrom, newCursor := w.NewFrom, w.NewCursor
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin: %w", err)
@@ -376,7 +405,65 @@ func (s *riskStore) insertStablecoinEvents(ctx context.Context, events []stablec
 	if err != nil {
 		return fmt.Errorf("update watermarks: %w", err)
 	}
+	if w.Start.IsValid() && w.End.IsValid() && w.Start.Before(w.End) {
+		if err := extendStablecoinTokenCoverage(ctx, tx, w); err != nil {
+			return fmt.Errorf("token coverage: %w", err)
+		}
+	}
 	return tx.Commit()
+}
+
+func extendStablecoinTokenCoverage(ctx context.Context, tx *sql.Tx, w stablecoinWindow) error {
+	var cursor string
+	if err := tx.QueryRowContext(ctx, `SELECT cursor FROM sync_state WHERE source = ?`, stablecoinSourceID).Scan(&cursor); err != nil {
+		return err
+	}
+	start, last := w.Start.String(), w.End.AddDays(-1).String()
+	for _, token := range stablecoinLateTokens {
+		var from string
+		err := tx.QueryRowContext(ctx, `SELECT coverage_from FROM stablecoin_token_coverage WHERE token = ?`, token).Scan(&from)
+		if err != nil && err != sql.ErrNoRows {
+			return err
+		}
+		var next string
+		switch {
+		case from == "":
+			// First batch with the token in the query: it must reach the cursor.
+			if cursor != "" && last >= cursor {
+				next = start
+			}
+		case start < from && w.End.String() >= from:
+			// Contiguous with [from, cursor] (End is exclusive).
+			next = start
+		}
+		if next == "" {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO stablecoin_token_coverage(token, coverage_from) VALUES (?, ?)
+		  ON CONFLICT(token) DO UPDATE SET coverage_from = excluded.coverage_from`, token, next); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// stablecoinTokenCoverage returns the coverage start of each late token that
+// has one (absent: no batch with the token in the query has run yet).
+func (s *riskStore) stablecoinTokenCoverage(ctx context.Context) (map[string]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT token, coverage_from FROM stablecoin_token_coverage`)
+	if err != nil {
+		return nil, fmt.Errorf("token coverage: %w", err)
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var token, from string
+		if err := rows.Scan(&token, &from); err != nil {
+			return nil, fmt.Errorf("scan token coverage: %w", err)
+		}
+		out[token] = from
+	}
+	return out, rows.Err()
 }
 
 // latestStablecoinStateSQL is the single freeze-state rule (spec §6): the

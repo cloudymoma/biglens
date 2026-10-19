@@ -97,7 +97,8 @@ func TestCryptoTokensLive_CacheAndStaleFallback(t *testing.T) {
 		risk:  rs,
 	}
 
-	// 1. Cold call populates SQLite and returns 14 supply rows + 12 market rows.
+	// 1. Cold call populates SQLite and returns one supply row per registry token
+	// (17 with EURC on eth/base/sol) + one market row per catalog token.
 	rec1 := httptest.NewRecorder()
 	h.CryptoTokensLive(rec1, httptest.NewRequest("GET", "/api/opendata/crypto/tokens/live", nil))
 	if rec1.Code != http.StatusOK {

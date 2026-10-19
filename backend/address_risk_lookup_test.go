@@ -288,7 +288,7 @@ func TestServiceLookupGoPlusTimeout(t *testing.T) {
 	if gp.ID != "goplus" || gp.Status != "error" || gp.Error != "timeout" || !res.hasError() {
 		t.Errorf("goplus source = %+v", gp)
 	}
-	if res.Summary.Text != "Nothing found in 8 sources that completed; 1 could not be fully checked (see Sources)." {
+	if res.Summary.Text != "Nothing found in 8 sources that completed; 1 could not be fully checked (see Sources). EURC freeze history not synced yet." {
 		t.Errorf("text = %q", res.Summary.Text)
 	}
 }

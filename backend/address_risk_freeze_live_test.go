@@ -63,11 +63,13 @@ func TestCheckIssuerFreezeEVM(t *testing.T) {
 		}))
 		defer srv.Close()
 
+		// Ethereum has three freezable registry contracts: USDT, USDC, EURC.
 		states, code := checkIssuerFreeze(context.Background(), "eth", addr, "", []string{srv.URL})
-		if code != "" || len(states) != 2 {
-			t.Fatalf("got (%+v, %q), want 2 states and empty code", states, code)
+		if code != "" || len(states) != 3 {
+			t.Fatalf("got (%+v, %q), want 3 states and empty code", states, code)
 		}
-		if states[0].Token != "USDT" || !states[0].Frozen || states[1].Token != "USDC" || states[1].Frozen {
+		if states[0].Token != "USDT" || !states[0].Frozen || states[1].Token != "USDC" || states[1].Frozen ||
+			states[2].Token != "EURC" || states[2].Frozen {
 			t.Errorf("unexpected states: %+v", states)
 		}
 	})
@@ -324,6 +326,10 @@ func TestCheckIssuerFreezeSolana(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	eurcATA, err := deriveSolanaATA(holder, "HzwqbKZw8HxMN6bF2yFZNrht3c2iXXzpKcFu7uBEDKtr")
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	t.Run("indexed call refused (publicnode 403) falls back to canonical ATAs via one getMultipleAccounts", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -345,27 +351,30 @@ func TestCheckIssuerFreezeSolana(t *testing.T) {
 			}
 			var keys []string
 			json.Unmarshal(req.Params[0], &keys)
-			if len(keys) != 2 || keys[0] != usdtATA || keys[1] != usdcATA {
-				t.Fatalf("keys = %v, want [%s, %s]", keys, usdtATA, usdcATA)
+			if len(keys) != 3 || keys[0] != usdtATA || keys[1] != usdcATA || keys[2] != eurcATA {
+				t.Fatalf("keys = %v, want [%s, %s, %s]", keys, usdtATA, usdcATA, eurcATA)
 			}
 			var cfg map[string]string
 			json.Unmarshal(req.Params[1], &cfg)
 			if cfg["encoding"] != "jsonParsed" || cfg["commitment"] != "confirmed" {
 				t.Fatalf("cfg = %v, want encoding=jsonParsed commitment=confirmed", cfg)
 			}
-			w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"context":{"slot":454804650},"value":[null,{"data":{"parsed":{"info":{"state":"frozen"},"type":"account"},"program":"spl-token","space":165}}]}}`))
+			w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"context":{"slot":454804650},"value":[null,{"data":{"parsed":{"info":{"state":"frozen"},"type":"account"},"program":"spl-token","space":165}},null]}}`))
 		}))
 		defer srv.Close()
 
 		states, code := checkIssuerFreeze(context.Background(), "sol", holder, "", []string{srv.URL})
-		if code != "" || len(states) != 2 {
-			t.Fatalf("got (%+v, %q), want 2 states and empty error code", states, code)
+		if code != "" || len(states) != 3 {
+			t.Fatalf("got (%+v, %q), want 3 states and empty error code", states, code)
 		}
 		if states[0].Token != "USDT" || states[0].Frozen {
 			t.Errorf("USDT state = %+v, want unfrozen", states[0])
 		}
 		if states[1].Token != "USDC" || !states[1].Frozen {
 			t.Errorf("USDC state = %+v, want frozen", states[1])
+		}
+		if states[2].Token != "EURC" || states[2].Frozen {
+			t.Errorf("EURC state = %+v, want unfrozen (no account)", states[2])
 		}
 	})
 
@@ -400,6 +409,8 @@ func TestCheckIssuerFreezeSolana(t *testing.T) {
 					{"pubkey":"` + usdcATA + `","account":{"data":{"program":"spl-token","parsed":{"type":"account","info":{"state":"initialized"}}}}},
 					{"pubkey":"9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM","account":{"data":{"program":"spl-token","parsed":{"type":"account","info":{"state":"frozen"}}}}}
 				]}}`))
+			case "HzwqbKZw8HxMN6bF2yFZNrht3c2iXXzpKcFu7uBEDKtr":
+				w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"context":{"slot":1},"value":[]}}`))
 			default:
 				t.Errorf("unexpected mint filter %v", filter)
 			}
@@ -407,11 +418,14 @@ func TestCheckIssuerFreezeSolana(t *testing.T) {
 		defer srv.Close()
 
 		states, code := checkIssuerFreeze(context.Background(), "sol", holder, "", []string{srv.URL})
-		if code != "" || len(states) != 2 {
-			t.Fatalf("got (%+v, %q), want 2 states and empty error code", states, code)
+		if code != "" || len(states) != 3 {
+			t.Fatalf("got (%+v, %q), want 3 states and empty error code", states, code)
 		}
 		if states[0].Token != "USDT" || states[0].Frozen {
 			t.Errorf("USDT state = %+v, want unfrozen (no accounts)", states[0])
+		}
+		if states[2].Token != "EURC" || states[2].Frozen {
+			t.Errorf("EURC state = %+v, want unfrozen (no accounts)", states[2])
 		}
 		if states[1].Token != "USDC" || !states[1].Frozen {
 			t.Errorf("USDC state = %+v, want frozen via the non-canonical account", states[1])

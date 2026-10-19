@@ -30,6 +30,10 @@ const (
 	riskDestroyedFmt     = "Tether destroyed %s USDT"
 	riskCoverageFmt      = "Freeze history covers %s–%s only."
 	riskTronCoverageFmt  = "TRON freeze history covers %s–%s only."
+	// A late token (EURC) joined the Ethereum freeze sync after USDT/USDC and
+	// was not backfilled, so its history starts later (stablecoin.md §8.3).
+	riskTokenCoverageFmt  = "%s freeze history from %s."
+	riskTokenNotSyncedFmt = "%s freeze history not synced yet."
 
 	tronStablecoinFirstDay = "2019-04-16"
 
@@ -87,18 +91,26 @@ func riskSourcesFor(chain string) []string {
 var riskSkippedNotes = map[string]string{"etherscan": "Etherscan association analysis (no API key)"}
 
 type riskSource struct {
-	ID                string   `json:"id"`
-	Status            string   `json:"status"`
-	Error             string   `json:"error,omitempty"`
-	LastOKAt          string   `json:"last_ok_at,omitempty"`
-	UpstreamChangedAt string   `json:"upstream_changed_at,omitempty"`
-	CoverageFrom      string   `json:"coverage_from,omitempty"`
-	Cursor            string   `json:"cursor,omitempty"`
-	LastError         string   `json:"last_error,omitempty"`
-	Hosts             []string `json:"hosts,omitempty"`
-	SendsAddress      bool     `json:"sends_address"`
-	SignupURL         string   `json:"signup_url,omitempty"`
-	HelpURL           string   `json:"help_url,omitempty"`
+	ID                string `json:"id"`
+	Status            string `json:"status"`
+	Error             string `json:"error,omitempty"`
+	LastOKAt          string `json:"last_ok_at,omitempty"`
+	UpstreamChangedAt string `json:"upstream_changed_at,omitempty"`
+	CoverageFrom      string `json:"coverage_from,omitempty"`
+	Cursor            string `json:"cursor,omitempty"`
+	// TokenCoverage lists tokens whose history starts later than CoverageFrom
+	// (Ethereum stablecoin source: EURC); "" means not synced yet.
+	TokenCoverage []riskTokenCoverage `json:"token_coverage,omitempty"`
+	LastError     string              `json:"last_error,omitempty"`
+	Hosts         []string            `json:"hosts,omitempty"`
+	SendsAddress  bool                `json:"sends_address"`
+	SignupURL     string              `json:"signup_url,omitempty"`
+	HelpURL       string              `json:"help_url,omitempty"`
+}
+
+type riskTokenCoverage struct {
+	Token        string `json:"token"`
+	CoverageFrom string `json:"coverage_from"`
 }
 
 type riskCounts struct {
@@ -392,7 +404,18 @@ func buildRiskSummary(clues []riskClue, sources []riskSource) riskSummary {
 	}
 	unavailable := false
 	coverage := ""
+	var tokenNotes []string
 	for _, src := range sources {
+		if src.ID == "stablecoin" && src.Cursor != "" {
+			for _, tc := range src.TokenCoverage {
+				switch {
+				case tc.CoverageFrom == "":
+					tokenNotes = append(tokenNotes, fmt.Sprintf(riskTokenNotSyncedFmt, tc.Token))
+				case tc.CoverageFrom > src.CoverageFrom:
+					tokenNotes = append(tokenNotes, fmt.Sprintf(riskTokenCoverageFmt, tc.Token, tc.CoverageFrom))
+				}
+			}
+		}
 		if src.ID == "stablecoin" && src.Status == "partial" {
 			coverage = fmt.Sprintf(riskCoverageFmt, src.CoverageFrom, src.Cursor)
 		}
@@ -434,11 +457,14 @@ func buildRiskSummary(clues []riskClue, sources []riskSource) riskSummary {
 		s.Text = fmt.Sprintf("Nothing found in %s that completed; %d could not be fully checked (see Sources).",
 			plural(k, "source"), m)
 	}
-	if coverage != "" {
+	for _, note := range append(tokenNotes, coverage) {
+		if note == "" {
+			continue
+		}
 		if !strings.HasSuffix(s.Text, ".") {
 			s.Text += "."
 		}
-		s.Text += " " + coverage
+		s.Text += " " + note
 	}
 	if unavailable {
 		s.Text += " Local lists are unavailable on this server."
@@ -695,7 +721,7 @@ var riskLocalIDs = []string{"ofac", "mew_darklist", "stablecoin", "tron_stableco
 // localSources builds the local sources' status from one sync_state read,
 // filtered to the local sources applicable to chain (or all local sources when
 // chain == "", used by /sources).
-func (s *addressRiskService) localSources(chain string, states map[string]syncState, err error) []riskSource {
+func (s *addressRiskService) localSources(chain string, states map[string]syncState, tokenCov map[string]string, err error) []riskSource {
 	want := riskLocalIDs
 	if chain != "" {
 		want = riskSourcesFor(chain)
@@ -713,8 +739,14 @@ func (s *addressRiskService) localSources(chain string, states map[string]syncSt
 		switch id {
 		case "stablecoin":
 			st := states[stablecoinSourceID]
-			out = append(out, riskSource{ID: id, Status: stablecoinSourceStatus(st, now), LastOKAt: st.LastOKAt,
-				CoverageFrom: st.CoverageFrom, Cursor: st.Cursor, LastError: st.LastError})
+			src := riskSource{ID: id, Status: stablecoinSourceStatus(st, now), LastOKAt: st.LastOKAt,
+				CoverageFrom: st.CoverageFrom, Cursor: st.Cursor, LastError: st.LastError}
+			if st.Cursor != "" {
+				for _, token := range stablecoinLateTokens {
+					src.TokenCoverage = append(src.TokenCoverage, riskTokenCoverage{Token: token, CoverageFrom: tokenCov[token]})
+				}
+			}
+			out = append(out, src)
 		case "tron_stablecoin":
 			st := states[tronStablecoinSourceID]
 			out = append(out, riskSource{ID: id, Status: stablecoinSourceStatusFor(st, tronStablecoinFirstDay, now), LastOKAt: st.LastOKAt,
@@ -743,23 +775,28 @@ func (s *addressRiskService) localSources(chain string, states map[string]syncSt
 	return out
 }
 
-func (s *addressRiskService) readStates(ctx context.Context) (map[string]syncState, error) {
+func (s *addressRiskService) readStates(ctx context.Context) (map[string]syncState, map[string]string, error) {
 	if s.store == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
-	return s.store.allSyncStates(ctx)
+	states, err := s.store.allSyncStates(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	tokenCov, err := s.store.stablecoinTokenCoverage(ctx)
+	return states, tokenCov, err
 }
 
 // listSources reports all local sources' status for /sources.
 func (s *addressRiskService) listSources(ctx context.Context) []riskSource {
-	states, err := s.readStates(ctx)
-	return s.localSources("", states, err)
+	states, tokenCov, err := s.readStates(ctx)
+	return s.localSources("", states, tokenCov, err)
 }
 
 func (s *addressRiskService) localCheck(ctx context.Context, chain, addr string) ([]riskSource, []riskClue, []stablecoinState) {
 	want := riskSourcesFor(chain)
-	states, err := s.readStates(ctx)
-	sources := s.localSources(chain, states, err)
+	states, tokenCov, err := s.readStates(ctx)
+	sources := s.localSources(chain, states, tokenCov, err)
 	if s.store == nil || err != nil {
 		return sources, nil, nil
 	}

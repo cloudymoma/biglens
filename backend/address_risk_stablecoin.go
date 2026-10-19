@@ -1,6 +1,6 @@
 package main
 
-// USDT/USDC blacklist events from bigquery-public-data.crypto_ethereum.logs.
+// USDT/USDC/EURC blacklist events from bigquery-public-data.crypto_ethereum.logs.
 // BigQuery is used only by the background sync and the backfill CLI, never by
 // a lookup (spec D3). The logs view is DAY-partitioned on block_timestamp, so
 // the half-open date window prunes partitions; the address filter does not.
@@ -19,6 +19,10 @@ import (
 const (
 	usdtContract = "0xdac17f958d2ee523a2206206994597c13d831ec7"
 	usdcContract = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+	// eurcContract is Circle's EURC (FiatToken, same blacklist events as
+	// USDC). It joined the sync after USDT/USDC, so its history starts later
+	// (stablecoin_token_coverage); there is no EURC backfill.
+	eurcContract = "0x1abaea1f7c830bd89acc67ec4af516284b1bc33c"
 
 	topicUSDTAddedBlackList      = "0x42e160154868087d6bfdc0ca23d96a1c1cfa32f1b72ba9ba27b69b98a0d819dc" // AddedBlackList(address)
 	topicUSDTRemovedBlackList    = "0xd7e9ec6e6ecd65492dce6bf513cd6867560d49544421d0783ddf06e76c24470c" // RemovedBlackList(address)
@@ -35,8 +39,11 @@ const (
 
 var stablecoinFirstDate = civil.Date{Year: 2017, Month: time.November, Day: 28}
 
-// stablecoinSQL: USDT puts the target address in data (not indexed), USDC in
-// topics[1]. ELSE 'unfreeze' is safe because WHERE admits only the 5 topics.
+// stablecoinSQL: USDT puts the target address in data (not indexed), USDC and
+// EURC (both FiatToken) in topics[1]. Every contract has an explicit label and
+// the label CASE has no ELSE, so an unexpected contract yields a NULL token
+// that fails decoding instead of being stored under another token's name.
+// ELSE 'unfreeze' is safe because WHERE admits only the 5 topics.
 // The destroy amount is returned as hex and parsed with big.Int in Go.
 const stablecoinSQL = `
 SELECT
@@ -44,7 +51,11 @@ SELECT
   log_index,
   block_number,
   FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ', block_timestamp) AS block_time,
-  IF(address = '` + usdtContract + `', 'USDT', 'USDC') AS token,
+  CASE address
+    WHEN '` + usdtContract + `' THEN 'USDT'
+    WHEN '` + usdcContract + `' THEN 'USDC'
+    WHEN '` + eurcContract + `' THEN 'EURC'
+  END AS token,
   CASE topics[SAFE_OFFSET(0)]
     WHEN '` + topicUSDTAddedBlackList + `' THEN 'freeze'
     WHEN '` + topicUSDCBlacklisted + `' THEN 'freeze'
@@ -57,7 +68,7 @@ SELECT
      SUBSTR(data, 67, 64), '') AS amount_hex
 FROM ` + ethLogsTable + `
 WHERE block_timestamp >= TIMESTAMP(@start_date) AND block_timestamp < TIMESTAMP(@end_date)
-  AND address IN ('` + usdtContract + `', '` + usdcContract + `')
+  AND address IN ('` + usdtContract + `', '` + usdcContract + `', '` + eurcContract + `')
   AND topics[SAFE_OFFSET(0)] IN ('` + topicUSDTAddedBlackList + `', '` + topicUSDTRemovedBlackList + `',
     '` + topicUSDTDestroyedBlackFunds + `', '` + topicUSDCBlacklisted + `', '` + topicUSDCUnBlacklisted + `')`
 
@@ -95,7 +106,7 @@ func decodeStablecoinRow(r stablecoinRow) (stablecoinEvent, error) {
 	if !listAddressRe.MatchString(r.Address) {
 		return stablecoinEvent{}, fmt.Errorf("row %s:%d: bad address %q", r.TxHash, r.LogIndex, r.Address)
 	}
-	if r.Token != "USDT" && r.Token != "USDC" {
+	if r.Token != "USDT" && r.Token != "USDC" && r.Token != "EURC" {
 		return stablecoinEvent{}, fmt.Errorf("row %s:%d: bad token %q", r.TxHash, r.LogIndex, r.Token)
 	}
 	amount := ""

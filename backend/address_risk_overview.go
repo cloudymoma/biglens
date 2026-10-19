@@ -34,6 +34,7 @@ type riskOverviewKPIs struct {
 	OFACCount           int    `json:"ofac_count"`
 	USDTFrozenCount     int    `json:"usdt_frozen_count"`
 	USDCFrozenCount     int    `json:"usdc_frozen_count"`
+	EURCFrozenCount     int    `json:"eurc_frozen_count"` // since eurc_coverage_from only
 	TronUSDTFrozenCount int    `json:"tron_usdt_frozen_count"`
 	USDTDestroyedTotal  string `json:"usdt_destroyed_total"` // whole USDT, 2 decimals
 	MEWCount            int    `json:"mew_darklist_count"`
@@ -43,7 +44,10 @@ type riskTrendPoint struct {
 	Bucket     string `json:"bucket"`
 	USDTFreeze int    `json:"usdt_freeze"`
 	USDCFreeze int    `json:"usdc_freeze"`
-	Unfreeze   int    `json:"unfreeze"`
+	// EURCFreeze is null for buckets before EURC coverage starts: those days
+	// were synced without EURC in the query, so the count is unknown, not 0.
+	EURCFreeze *int `json:"eurc_freeze"`
+	Unfreeze   int  `json:"unfreeze"`
 }
 
 type riskTrend struct {
@@ -66,9 +70,12 @@ type riskOverview struct {
 	TronEmpty    bool                 `json:"tron_empty"`
 	Coverage     riskOverviewCoverage `json:"coverage"`
 	TronCoverage riskOverviewCoverage `json:"tron_coverage"`
-	KPIs         riskOverviewKPIs     `json:"kpis"`
-	Trend        riskTrend            `json:"trend"`
-	RecentEvents []riskRecentEvent    `json:"recent_events"`
+	// EURCCoverageFrom is the first day of EURC freeze history ("" = not
+	// synced yet); EURC joined the sync later than USDT/USDC (no backfill).
+	EURCCoverageFrom string            `json:"eurc_coverage_from"`
+	KPIs             riskOverviewKPIs  `json:"kpis"`
+	Trend            riskTrend         `json:"trend"`
+	RecentEvents     []riskRecentEvent `json:"recent_events"`
 }
 
 type trendCount struct {
@@ -86,7 +93,9 @@ func trendGranularity(from, cursor civil.Date) string {
 
 // fillTrend returns one point per bucket from coverage_from to cursor, with
 // zeros for buckets without events (a category axis would otherwise hide gaps).
-func fillTrend(from, cursor civil.Date, granularity string, counts []trendCount) []riskTrendPoint {
+// EURC counts start at the bucket holding eurcFrom ("" = no EURC history):
+// earlier buckets stay null.
+func fillTrend(from, cursor civil.Date, granularity string, counts []trendCount, eurcFrom string) []riskTrendPoint {
 	idx := map[string]*riskTrendPoint{}
 	var out []riskTrendPoint
 	if granularity == "day" {
@@ -101,8 +110,15 @@ func fillTrend(from, cursor civil.Date, granularity string, counts []trendCount)
 			}
 		}
 	}
+	eurcBucket := eurcFrom // YYYY-MM-DD
+	if granularity != "day" && len(eurcBucket) >= 7 {
+		eurcBucket = eurcBucket[:7] // YYYY-MM
+	}
 	for i := range out {
 		idx[out[i].Bucket] = &out[i]
+		if eurcBucket != "" && out[i].Bucket >= eurcBucket {
+			out[i].EURCFreeze = new(int)
+		}
 	}
 	for _, c := range counts {
 		p := idx[c.Bucket]
@@ -116,6 +132,8 @@ func fillTrend(from, cursor civil.Date, granularity string, counts []trendCount)
 			p.USDTFreeze += c.N
 		case c.Token == "USDC":
 			p.USDCFreeze += c.N
+		case c.Token == "EURC" && p.EURCFreeze != nil:
+			*p.EURCFreeze += c.N
 		}
 	}
 	return out
@@ -188,6 +206,11 @@ func (s *riskStore) buildOverview(ctx context.Context) (*riskOverview, error) {
 		KPIs:         riskOverviewKPIs{OFACCount: states["ofac"].RowCount, MEWCount: states["mew_darklist"].RowCount, USDTDestroyedTotal: "0.00"},
 		Trend:        riskTrend{Granularity: "day", Points: []riskTrendPoint{}},
 	}
+	tokenCov, err := s.stablecoinTokenCoverage(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ov.EURCCoverageFrom = tokenCov["EURC"]
 	latest, err := s.stablecoinStates(ctx, "")
 	if err != nil {
 		return nil, err
@@ -196,10 +219,13 @@ func (s *riskStore) buildOverview(ctx context.Context) (*riskOverview, error) {
 		if l.Action == "unfreeze" {
 			continue
 		}
-		if l.Token == "USDT" {
+		switch l.Token {
+		case "USDT":
 			ov.KPIs.USDTFrozenCount++
-		} else {
+		case "USDC":
 			ov.KPIs.USDCFrozenCount++
+		case "EURC":
+			ov.KPIs.EURCFrozenCount++
 		}
 	}
 	tronLatest, err := s.tronStablecoinStates(ctx, "")
@@ -232,7 +258,7 @@ func (s *riskStore) buildOverview(ctx context.Context) (*riskOverview, error) {
 		if err != nil {
 			return nil, err
 		}
-		ov.Trend.Points = fillTrend(from, cursor, ov.Trend.Granularity, counts)
+		ov.Trend.Points = fillTrend(from, cursor, ov.Trend.Granularity, counts, ov.EURCCoverageFrom)
 	}
 	if ov.RecentEvents, err = s.recentStablecoinEvents(ctx); err != nil {
 		return nil, err

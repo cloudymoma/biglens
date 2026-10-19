@@ -215,7 +215,7 @@ export const RISK_BADGES: Record<string, { label: string; color: string }> = {
 export const RISK_SOURCE_LABELS: Record<string, string> = {
   ofac: 'OFAC SDN (0xB10C)',
   mew_darklist: 'MEW darklist',
-  stablecoin: 'USDT/USDC freezes',
+  stablecoin: 'USDT/USDC/EURC freezes',
   tron_stablecoin: 'USDT freezes (TRON)',
   scam_lookalikes: 'Address-poisoning lookalikes',
   issuer_freeze: 'Issuer freeze (live)',

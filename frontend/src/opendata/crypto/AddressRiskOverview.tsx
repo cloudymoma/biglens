@@ -12,6 +12,7 @@ import ScamRadarPanel from './ScamRadarPanel';
 // Categorical colors only: red/orange are reserved for severity.
 const USDT_COLOR = '#60a5fa';
 const USDC_COLOR = '#a78bfa';
+const EURC_COLOR = '#2dd4bf';
 const UNFREEZE_COLOR = '#a1a1aa';
 
 const ACTION_LABELS: Record<string, string> = { freeze: 'Freeze', unfreeze: 'Unfreeze', destroy: 'Destroy' };
@@ -77,6 +78,9 @@ export default function AddressRiskOverview({ sources, onInspect }: {
   if (!data) return <p className="text-xs text-zinc-500">Loading overview…</p>;
 
   const since = data.coverage.partial ? `since ${data.coverage.coverage_from}` : 'full history';
+  // EURC joined the freeze sync later than USDT/USDC and was not backfilled.
+  const eurcFrom = data.eurc_coverage_from ?? '';
+  const eurcSince = eurcFrom ? `EURC freeze history from ${eurcFrom}` : 'EURC freeze history not synced yet';
   const tronEmpty = data.tron_empty ?? true;
   const tronSince = data.tron_coverage?.partial ? `since ${data.tron_coverage.coverage_from}` : 'full history';
   const statusById = new Map((sources?.lists ?? []).map(s => [s.id, s]));
@@ -93,10 +97,11 @@ export default function AddressRiskOverview({ sources, onInspect }: {
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-7 gap-3">
         <MetricCard label="OFAC addresses" value={fmtNum(data.kpis.ofac_count)} icon={<Landmark size={15} />} detail="OFAC-listed addresses (EVM, TRON, Bitcoin, Solana)" accentColor="#71717a" />
         <MetricCard label="USDT frozen now" value={data.empty ? '—' : fmtNum(data.kpis.usdt_frozen_count)} icon={<span className="inline-flex items-center gap-1"><TokenIcon symbol="USDT" size={14} /><Snowflake size={13} /></span>} detail={data.empty ? 'not synced' : since} accentColor={USDT_COLOR} />
         <MetricCard label="USDC frozen now" value={data.empty ? '—' : fmtNum(data.kpis.usdc_frozen_count)} icon={<span className="inline-flex items-center gap-1"><TokenIcon symbol="USDC" size={14} /><Snowflake size={13} /></span>} detail={data.empty ? 'not synced' : since} accentColor={USDC_COLOR} />
+        <MetricCard label="EURC frozen now" value={data.empty || !eurcFrom ? '—' : fmtNum(data.kpis.eurc_frozen_count ?? 0)} icon={<span className="inline-flex items-center gap-1"><TokenIcon symbol="EURC" size={14} /><Snowflake size={13} /></span>} detail={data.empty ? 'not synced' : eurcFrom ? `since ${eurcFrom}` : 'not synced yet'} accentColor={EURC_COLOR} />
         <MetricCard label="USDT frozen now (TRON)" value={tronErr || tronEmpty ? '—' : fmtNum(data.kpis.tron_usdt_frozen_count ?? 0)} icon={<span className="inline-flex items-center gap-1"><ChainIcon chain="tron" size={14} /><TokenIcon symbol="USDT" size={14} /></span>} detail={tronErr ? `sync error: ${tronErr}` : tronEmpty ? 'not synced' : tronSince} accentColor={USDT_COLOR} />
         <MetricCard label="USDT destroyed" value={data.empty ? '—' : fmtCompactUSD(data.kpis.usdt_destroyed_total)} valueTitle={data.empty ? undefined : fmtExactUSD(data.kpis.usdt_destroyed_total)} icon={<span className="inline-flex items-center gap-1"><TokenIcon symbol="USDT" size={14} /><Flame size={13} /></span>} detail={data.empty ? 'not synced' : `USDT · ${since}`} accentColor={USDT_COLOR} />
         <MetricCard label="MEW darklist" value={fmtNum(data.kpis.mew_darklist_count)} icon={<ListX size={15} />} detail="historical list, frozen since 2020-11" accentColor="#71717a" />
@@ -116,10 +121,11 @@ export default function AddressRiskOverview({ sources, onInspect }: {
             <span className="inline-flex items-center gap-2">
               <TokenIcon symbol="USDT" size={15} />
               <TokenIcon symbol="USDC" size={15} />
+              <TokenIcon symbol="EURC" size={15} />
               <span>Stablecoin freezes</span>
             </span>
           }
-          note={`per ${data.trend.granularity} · complete UTC days to ${data.coverage.cursor}`}
+          note={`per ${data.trend.granularity} · complete UTC days to ${data.coverage.cursor} · ${eurcSince}`}
         >
           <ReactECharts
             style={{ height: 240 }}
@@ -132,6 +138,8 @@ export default function AddressRiskOverview({ sources, onInspect }: {
               series: [
                 { name: 'USDT freeze', type: 'line', showSymbol: false, data: data.trend.points.map(p => p.usdt_freeze), lineStyle: { color: USDT_COLOR, width: 2 }, itemStyle: { color: USDT_COLOR } },
                 { name: 'USDC freeze', type: 'line', showSymbol: false, data: data.trend.points.map(p => p.usdc_freeze), lineStyle: { color: USDC_COLOR, width: 2 }, itemStyle: { color: USDC_COLOR } },
+                // null before EURC coverage: drawn as a gap, never as zero.
+                { name: 'EURC freeze', type: 'line', showSymbol: false, data: data.trend.points.map(p => p.eurc_freeze ?? null), lineStyle: { color: EURC_COLOR, width: 2 }, itemStyle: { color: EURC_COLOR } },
                 { name: 'Unfreeze', type: 'line', showSymbol: false, data: data.trend.points.map(p => p.unfreeze), lineStyle: { color: UNFREEZE_COLOR, width: 1, type: 'dashed' }, itemStyle: { color: UNFREEZE_COLOR } },
               ],
             }}

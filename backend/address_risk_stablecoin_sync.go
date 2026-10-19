@@ -1,6 +1,6 @@
 package main
 
-// Incremental + cold-start sync of USDT/USDC freeze events (spec §7.1, §7.2).
+// Incremental + cold-start sync of USDT/USDC/EURC freeze events (spec §7.1, §7.2).
 // Only complete UTC days are fetched, and only once BigQuery has exported
 // blocks at least 30 minutes past the window end; a cursor that moved past
 // missing data would lose those events forever.
@@ -187,7 +187,8 @@ func (s *stablecoinSyncer) sync(ctx context.Context) (stablecoinRun, bool) {
 		}
 		return stablecoinRun{start: start, end: end, billed: billed, errCode: bqErrCode(err)}, true
 	}
-	if err := s.store.insertStablecoinEvents(ctx, events, newFrom, end.AddDays(-1).String(), s.now()); err != nil {
+	w := stablecoinWindow{Start: start, End: end, NewFrom: newFrom, NewCursor: end.AddDays(-1).String()}
+	if err := s.store.insertStablecoinWindow(ctx, events, w, s.now()); err != nil {
 		slog.Error("address_risk store", "source", stablecoinSourceID, "error", err)
 		s.retryAfter = now.Add(stablecoinBilledRetry)
 		return stablecoinRun{start: start, end: end, billed: billed, errCode: "unavailable"}, true
