@@ -144,7 +144,7 @@ func TestTokenSupplyAndMarketCache(t *testing.T) {
 	}
 
 	markets := []TokenMarketRow{
-		{Address: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", Symbol: "USDC", PriceUSD: 1.0, HoldersCount: 9495898, Volume24hUSD: 21491450944, MarketCapUSD: 72642407980, UpdatedAt: now.Format(time.RFC3339)},
+		{Address: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", Symbol: "USDC", PriceUSD: btcFloatPtr(1.0), HoldersCount: 9495898, Volume24hUSD: 21491450944, MarketCapUSD: 72642407980, UpdatedAt: now.Format(time.RFC3339)},
 	}
 	if err := store.upsertTokenMarketCache(ctx, markets, now); err != nil {
 		t.Fatalf("upsertTokenMarketCache: %v", err)

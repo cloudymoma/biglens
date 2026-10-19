@@ -167,3 +167,93 @@ func TestCryptoTokensLive_CacheAndStaleFallback(t *testing.T) {
 		}
 	}
 }
+
+// TestRefreshMarketPulseNoStablecoinDollarFallback: a missing stablecoin price
+// must stay unknown (JSON null, stale) instead of being assumed to be $1, and
+// the last-good price from the previous rows must still apply. Asserted on the
+// JSON shape so the test is independent of the Go field type.
+func TestRefreshMarketPulseNoStablecoinDollarFallback(t *testing.T) {
+	// DefiLlama answers but omits every stablecoin; non-stablecoins are priced.
+	llamaSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		coins := map[string]any{}
+		for _, m := range majorTokenCatalog {
+			switch m.Category {
+			case "eth":
+				coins["ethereum:"+m.Address] = map[string]any{"price": 2500.0}
+			case "btc":
+				coins["ethereum:"+m.Address] = map[string]any{"price": 65000.0}
+			}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"coins": coins})
+	}))
+	defer llamaSrv.Close()
+	bsSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"is_scam":false,"reputation":"ok","token":{"holders_count":"10","volume_24h":"1","circulating_market_cap":"1"}}`))
+	}))
+	defer bsSrv.Close()
+	origLlama := defillamaCoinsURL
+	defillamaCoinsURL = llamaSrv.URL
+	defer func() { defillamaCoinsURL = origLlama }()
+
+	rs := newAddressRiskService(nil, nil)
+	rs.blockscoutURLs = map[string]string{"eth": bsSrv.URL}
+	h := &APIHandler{cache: NewCache(time.Minute), risk: rs}
+	now := time.Now().UTC()
+
+	stableRows := func(rows []TokenMarketRow) []map[string]any {
+		t.Helper()
+		var out []map[string]any
+		for _, r := range rows {
+			if majorTokenByAddr[strings.ToLower(r.Address)].Category != "stablecoin" {
+				continue
+			}
+			b, err := json.Marshal(r)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			var m map[string]any
+			if err := json.Unmarshal(b, &m); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			out = append(out, m)
+		}
+		if len(out) == 0 {
+			t.Fatal("catalog has no stablecoin rows")
+		}
+		return out
+	}
+
+	// 1. No previous rows: the price is unknown, so it must be null and stale.
+	rows, _ := h.refreshMarketPulse(context.Background(), nil, now)
+	for _, m := range stableRows(rows) {
+		if m["price_usd"] != nil {
+			t.Errorf("%v: price_usd = %v, want null (no $1 assumption)", m["symbol"], m["price_usd"])
+		}
+		if m["stale"] != true {
+			t.Errorf("%v: stale = %v, want true when the price is missing", m["symbol"], m["stale"])
+		}
+	}
+
+	// 2. Previous rows carry a real price: last-good applies instead of $1.
+	var prev []TokenMarketRow
+	for _, m := range majorTokenCatalog {
+		if m.Category != "stablecoin" {
+			continue
+		}
+		var r TokenMarketRow
+		raw := `{"address":"` + m.Address + `","symbol":"` + m.Symbol + `","price_usd":0.9997,"updated_at":"2026-10-19T00:00:00Z"}`
+		if err := json.Unmarshal([]byte(raw), &r); err != nil {
+			t.Fatalf("prev row: %v", err)
+		}
+		prev = append(prev, r)
+	}
+	rows, _ = h.refreshMarketPulse(context.Background(), prev, now)
+	for _, m := range stableRows(rows) {
+		if m["price_usd"] != 0.9997 {
+			t.Errorf("%v: price_usd = %v, want last-good 0.9997", m["symbol"], m["price_usd"])
+		}
+		if m["stale"] != true || m["updated_at"] != "2026-10-19T00:00:00Z" {
+			t.Errorf("%v: stale=%v updated_at=%v, want stale last-good row", m["symbol"], m["stale"], m["updated_at"])
+		}
+	}
+}

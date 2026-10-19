@@ -117,14 +117,16 @@ type TokenSupplyRow struct {
 }
 
 type TokenMarketRow struct {
-	Address      string  `json:"address"`
-	Symbol       string  `json:"symbol"`
-	PriceUSD     float64 `json:"price_usd"`
-	HoldersCount int64   `json:"holders_count"`
-	Volume24hUSD float64 `json:"volume_24h_usd"`
-	MarketCapUSD float64 `json:"market_cap_usd"`
-	UpdatedAt    string  `json:"updated_at"`
-	Stale        bool    `json:"stale,omitempty"`
+	Address string `json:"address"`
+	Symbol  string `json:"symbol"`
+	// PriceUSD is nil when no price is known: a stablecoin is never assumed
+	// to be worth $1 (that would hide a depeg or an upstream outage).
+	PriceUSD     *float64 `json:"price_usd"`
+	HoldersCount int64    `json:"holders_count"`
+	Volume24hUSD float64  `json:"volume_24h_usd"`
+	MarketCapUSD float64  `json:"market_cap_usd"`
+	UpdatedAt    string   `json:"updated_at"`
+	Stale        bool     `json:"stale,omitempty"`
 }
 
 func (s *riskStore) upsertTokenEconomyDaily(ctx context.Context, rows []tokenEconomyDailyRow, syncedAt time.Time) error {
@@ -405,7 +407,10 @@ ON CONFLICT(address) DO UPDATE SET
 	defer stmt.Close()
 	at := now.UTC().Format(time.RFC3339)
 	for _, r := range rows {
-		if _, err := stmt.ExecContext(ctx, strings.ToLower(r.Address), r.Symbol, r.PriceUSD, r.HoldersCount, r.Volume24hUSD, r.MarketCapUSD, at); err != nil {
+		if r.PriceUSD == nil {
+			continue // only known prices are cached; price_usd is NOT NULL
+		}
+		if _, err := stmt.ExecContext(ctx, strings.ToLower(r.Address), r.Symbol, *r.PriceUSD, r.HoldersCount, r.Volume24hUSD, r.MarketCapUSD, at); err != nil {
 			return err
 		}
 	}

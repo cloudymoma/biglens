@@ -282,20 +282,22 @@ func (h *APIHandler) refreshMarketPulse(ctx context.Context, prev []TokenMarketR
 		row := TokenMarketRow{
 			Address:      m.Address,
 			Symbol:       m.Symbol,
-			PriceUSD:     llamaPrices[m.Address],
 			HoldersCount: bsInfos[i].HoldersCount,
 			Volume24hUSD: bsInfos[i].Volume24hUSD,
 			MarketCapUSD: bsInfos[i].MarketCapUSD,
 			UpdatedAt:    at,
 		}
-		if row.PriceUSD == 0 && m.Category == "stablecoin" {
-			row.PriceUSD = 1.0
+		if p := llamaPrices[m.Address]; p > 0 {
+			row.PriceUSD = &p
 		}
-		if bsCodes[i] != "" || llamaCode != "" {
+		// A missing price stays unknown (nil) — never an assumed $1 — and
+		// marks the row stale so the last-good price below can apply.
+		if bsCodes[i] != "" || llamaCode != "" || row.PriceUSD == nil {
 			row.Stale = true
 			if hasOld {
-				if row.PriceUSD == 0 {
-					row.PriceUSD = old.PriceUSD
+				if row.PriceUSD == nil && old.PriceUSD != nil {
+					p := *old.PriceUSD
+					row.PriceUSD = &p
 				}
 				if row.HoldersCount == 0 {
 					row.HoldersCount = old.HoldersCount
@@ -381,7 +383,7 @@ func (h *APIHandler) CryptoTokensLive(w http.ResponseWriter, r *http.Request) {
 				if store != nil {
 					var fresh []TokenMarketRow
 					for _, r := range marketRows {
-						if !r.Stale && r.PriceUSD > 0 {
+						if !r.Stale && r.PriceUSD != nil && *r.PriceUSD > 0 {
 							fresh = append(fresh, r)
 						}
 					}

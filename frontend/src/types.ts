@@ -1022,7 +1022,7 @@ export interface TokenSupplyRow {
 export interface TokenMarketRow {
   address: string;
   symbol: string;
-  price_usd: number;
+  price_usd: number | null; // null: price unknown (never assumed $1)
   holders_count: number;
   volume_24h_usd: number;
   market_cap_usd: number;

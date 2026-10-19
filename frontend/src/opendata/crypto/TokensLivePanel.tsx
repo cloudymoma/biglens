@@ -152,7 +152,7 @@ export default function TokensLivePanel({
                     )}
                   </td>
                   <td className="py-1.5 text-right text-white">
-                    {m.price_usd > 0
+                    {m.price_usd != null && m.price_usd > 0
                       ? `$${m.price_usd >= 100 ? m.price_usd.toLocaleString(undefined, { maximumFractionDigits: 2 }) : m.price_usd.toFixed(4)}`
                       : '—'}
                   </td>
