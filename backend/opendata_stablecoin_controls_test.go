@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // Control state observed on-chain on 2026-10-19 (stablecoin.md Appendix A):
@@ -245,9 +246,9 @@ func newStableControlsStub(t *testing.T) (*stableControlsStub, func(string) []st
 	}))
 	t.Cleanup(tron.Close)
 	s.urls["tron"] = tron.URL
-	orig := tronGridBaseURL
-	tronGridBaseURL = tron.URL
-	t.Cleanup(func() { tronGridBaseURL = orig })
+	orig, origLim := tronGridBaseURL, tronGridLimiter
+	tronGridBaseURL, tronGridLimiter = tron.URL, rateLimiterUnlimited()
+	t.Cleanup(func() { tronGridBaseURL, tronGridLimiter = orig, origLim })
 	return s, func(network string) []string {
 		switch network {
 		case "eth":
@@ -402,5 +403,251 @@ func TestStableReadControls(t *testing.T) {
 	none := func(string) []string { return nil }
 	if r := stableReadDeployment(ctx, d, none, 0)["owner"]; r.Code != "unavailable" {
 		t.Errorf("no rpcs = %+v", r)
+	}
+}
+
+// S8 confirmation (§6.2): a change counts when two consecutive samples agree
+// or two different RPCs agree in one sample; the first confirmed snapshot is
+// the baseline; endpoints that disagree confirm nothing.
+func TestStableControlStep(t *testing.T) {
+	t0 := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	at := func(n int) time.Time { return t0.Add(time.Duration(n) * stableControlsTick) }
+	read := func(v, ep string) stableControlRead { return stableControlRead{Value: v, Endpoint: ep} }
+	bad := func(code string) stableControlRead { return stableControlRead{Code: code} }
+	st := stableControlState{Asset: "usdc", Chain: "eth", Field: "owner"}
+
+	// Cold start, one endpoint: pending, then the baseline on the next sample.
+	st, ev := stableControlStep(st, read("0xa", "e1"), nil, at(0))
+	if ev != nil || st.Value != nil || st.PendingValue == nil || *st.PendingValue != "0xa" {
+		t.Fatalf("first read = %+v %+v", st, ev)
+	}
+	st, ev = stableControlStep(st, read("0xa", "e1"), nil, at(1))
+	if ev != nil || st.Value == nil || *st.Value != "0xa" || !st.Baseline || st.ConfirmedBy != "two_samples" ||
+		!st.FirstSeen.Equal(at(0)) || !st.ConfirmedAt.Equal(at(1)) || st.PendingValue != nil {
+		t.Fatalf("baseline = %+v %+v", st, ev)
+	}
+	base := st
+
+	// Cold start, two endpoints agreeing: the baseline at once.
+	two, ev := stableControlStep(stableControlState{Field: "owner"}, read("0xa", "e1"), &stableControlRead{Value: "0xa", Endpoint: "e2"}, at(0))
+	if ev != nil || two.Value == nil || !two.Baseline || two.ConfirmedBy != "two_rpcs" {
+		t.Errorf("two-rpc baseline = %+v %+v", two, ev)
+	}
+
+	// A single-sample change does not fire, and a reverting read clears it.
+	st, ev = stableControlStep(base, read("0xb", "e1"), nil, at(2))
+	if ev != nil || *st.Value != "0xa" || st.PendingValue == nil || *st.PendingValue != "0xb" {
+		t.Fatalf("one sample of 0xb = %+v %+v", st, ev)
+	}
+	st, ev = stableControlStep(st, read("0xa", "e1"), nil, at(3))
+	if ev != nil || st.PendingValue != nil || !st.LastSeen.Equal(at(3)) {
+		t.Fatalf("revert = %+v %+v", st, ev)
+	}
+	// Two consecutive samples: the change is confirmed, first seen at the first.
+	st, _ = stableControlStep(st, read("0xb", "e1"), nil, at(4))
+	st, ev = stableControlStep(st, read("0xb", "e2"), nil, at(5))
+	if ev == nil || ev.Old != "0xa" || ev.New != "0xb" || ev.ConfirmedBy != "two_samples" || !ev.FirstSeen.Equal(at(4)) ||
+		!ev.DetectedAt.Equal(at(5)) || ev.Source != "rpc" || *st.Value != "0xb" || st.Baseline {
+		t.Fatalf("two samples = %+v %+v", st, ev)
+	}
+	// Two RPCs in one sample: confirmed at once (the immediate path).
+	st, ev = stableControlStep(st, read("0xc", "e1"), &stableControlRead{Value: "0xc", Endpoint: "e2"}, at(6))
+	if ev == nil || ev.Old != "0xb" || ev.New != "0xc" || ev.ConfirmedBy != "two_rpcs" || !ev.FirstSeen.Equal(at(6)) {
+		t.Fatalf("two rpcs = %+v %+v", st, ev)
+	}
+	confirmed := st
+
+	// Endpoints that disagree confirm nothing, and the disputed value is not
+	// confirmed by a later single read either; only two agreeing RPCs are.
+	st, ev = stableControlStep(confirmed, read("0xd", "e1"), &stableControlRead{Value: "0xc", Endpoint: "e2"}, at(7))
+	if ev != nil || st.LastCode != "rpc_disagreement" || st.PendingValue == nil || !st.PendingDisputed || *st.Value != "0xc" {
+		t.Fatalf("disagreement = %+v %+v", st, ev)
+	}
+	st, ev = stableControlStep(st, read("0xd", "e1"), &stableControlRead{Code: "timeout"}, at(8))
+	if ev != nil || *st.Value != "0xc" {
+		t.Fatalf("disputed then a single read = %+v %+v", st, ev)
+	}
+	st, ev = stableControlStep(st, read("0xd", "e2"), &stableControlRead{Value: "0xd", Endpoint: "e1"}, at(9))
+	if ev == nil || ev.New != "0xd" || ev.ConfirmedBy != "two_rpcs" || st.PendingDisputed || st.LastCode != "" {
+		t.Fatalf("agreement after a dispute = %+v %+v", st, ev)
+	}
+
+	// A pending value counts only from the previous sample: 40 minutes later
+	// it starts over.
+	st, _ = stableControlStep(confirmed, read("0xe", "e1"), nil, at(10))
+	st, ev = stableControlStep(st, read("0xe", "e1"), nil, at(10).Add(40*time.Minute))
+	if ev != nil || *st.Value != "0xc" || !st.PendingFirstSeen.Equal(at(10).Add(40*time.Minute)) {
+		t.Fatalf("expired pending = %+v %+v", st, ev)
+	}
+
+	// Read errors (a zero owner, a timeout) are not observations.
+	st, ev = stableControlStep(confirmed, bad("zero_address"), nil, at(11))
+	if ev != nil || *st.Value != "0xc" || st.LastCode != "zero_address" || !st.LastSeen.Equal(confirmed.LastSeen) || !st.LastReadAt.Equal(at(11)) {
+		t.Fatalf("zero address read = %+v %+v", st, ev)
+	}
+	// An SPL authority removed ("" = not set) is a change like any other.
+	spl := stableControlState{Field: "freeze_authority"}
+	spl, _ = stableControlStep(spl, read("7dGb", "s1"), &stableControlRead{Value: "7dGb", Endpoint: "s2"}, at(0))
+	spl, ev = stableControlStep(spl, read("", "s1"), &stableControlRead{Value: "", Endpoint: "s2"}, at(1))
+	if ev == nil || ev.Old != "7dGb" || ev.New != "" || spl.Value == nil || *spl.Value != "" {
+		t.Errorf("authority removed = %+v %+v", spl, ev)
+	}
+}
+
+func controlValue(t *testing.T, store *riskStore, asset, chain, field string) stableControlState {
+	t.Helper()
+	states, err := store.stableControlStates(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return states[asset+"|"+chain+"|"+field]
+}
+
+func TestStableControlsSampler(t *testing.T) {
+	stub, rpcs := newStableControlsStub(t)
+	store := newTestRiskStore(t)
+	ctx := context.Background()
+	clock := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	c := newStableControlsSampler(StablecoinConfig{}.settings(), store, rpcs, func() time.Time { return clock })
+	var mu sync.Mutex
+	fetches := map[string]int{}
+	c.onFetch = func(provider string, _ time.Duration, _ string) {
+		mu.Lock()
+		defer mu.Unlock()
+		fetches[provider]++
+	}
+	events := func() []stableControlEvent {
+		t.Helper()
+		evs, err := store.stableControlEvents(ctx, "", 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return evs
+	}
+
+	// First sample: Ethereum and Solana have two endpoints, so their baseline
+	// is confirmed at once; Base and TRON have one and wait for the next.
+	if ok := c.tick(ctx); !ok {
+		t.Fatal("first tick not ok")
+	}
+	for _, d := range stableControlDeployments {
+		key := d.Asset + "|" + d.Chain
+		for field, want := range stableControlsAppendixA[key] {
+			st := controlValue(t, store, d.Asset, d.Chain, field)
+			twoRPCs := d.Chain == "eth" || d.Chain == "sol"
+			switch {
+			case twoRPCs && (st.Value == nil || *st.Value != want || !st.Baseline || st.ConfirmedBy != "two_rpcs"):
+				t.Errorf("%s.%s after one sample = %+v, want the baseline %q", key, field, st, want)
+			case !twoRPCs && (st.Value != nil || st.PendingValue == nil || *st.PendingValue != want):
+				t.Errorf("%s.%s after one sample = %+v, want pending %q", key, field, st, want)
+			}
+		}
+	}
+	if fetches["rpc_controls"] != len(stableControlDeployments) {
+		t.Errorf("health fetches = %v, want one per deployment", fetches)
+	}
+	clock = clock.Add(stableControlsTick)
+	c.tick(ctx)
+	if st := controlValue(t, store, "usdt", "tron", "owner"); st.Value == nil || *st.Value != "TBPxhVAsuzoFnKyXtc1o2UySEydPHgATto" || st.ConfirmedBy != "two_samples" {
+		t.Errorf("tron owner after two samples = %+v", st)
+	}
+	if st := controlValue(t, store, "eurc", "base", "implementation"); st.Value == nil || !st.Baseline {
+		t.Errorf("base implementation after two samples = %+v", st)
+	}
+	if n := len(events()); n != 0 {
+		t.Fatalf("events after the baseline = %d, want 0", n)
+	}
+
+	// USDC paused on Ethereum: two endpoints agree in one sample, so the
+	// change is confirmed in that sample (the immediate-critical path).
+	stub.set("eth-a", "usdc", "eth", "paused", "true")
+	stub.set("eth-b", "usdc", "eth", "paused", "true")
+	clock = clock.Add(stableControlsTick)
+	c.tick(ctx)
+	evs := events()
+	if len(evs) != 1 || evs[0].Asset != "usdc" || evs[0].Field != "paused" || evs[0].Old != "false" || evs[0].New != "true" ||
+		evs[0].ConfirmedBy != "two_rpcs" || !evs[0].DetectedAt.Equal(clock) {
+		t.Fatalf("paused events = %+v", evs)
+	}
+
+	// A new EURC owner on Base (one endpoint) needs two samples.
+	stub.set("base-a", "eurc", "base", "owner", "0x00000000000000000000000000000000000000b1")
+	clock = clock.Add(stableControlsTick)
+	c.tick(ctx)
+	if n := len(events()); n != 1 {
+		t.Fatalf("one sample of a new Base owner fired: %d events", n)
+	}
+	clock = clock.Add(stableControlsTick)
+	c.tick(ctx)
+	evs = events()
+	if len(evs) != 2 || evs[0].Field != "owner" || evs[0].Chain != "base" || evs[0].New != "0x00000000000000000000000000000000000000b1" ||
+		evs[0].ConfirmedBy != "two_samples" || !evs[0].FirstSeen.Equal(clock.Add(-stableControlsTick)) {
+		t.Fatalf("base owner events = %+v (newest first)", evs)
+	}
+
+	// TRON USDT deprecated: one endpoint, so two samples (≤ 15 minutes).
+	stub.set("tron", "usdt", "tron", "deprecated", "true")
+	clock = clock.Add(stableControlsTick)
+	c.tick(ctx)
+	clock = clock.Add(stableControlsTick)
+	c.tick(ctx)
+	if evs = events(); len(evs) != 3 || evs[0].Chain != "tron" || evs[0].Field != "deprecated" || evs[0].New != "true" {
+		t.Fatalf("tron deprecated events = %+v", evs)
+	}
+
+	// One endpoint reporting a different USDT owner: the endpoints disagree
+	// (or the other one, as the primary, reads the confirmed value), so
+	// nothing is confirmed in any number of samples.
+	stub.set("eth-a", "usdt", "eth", "owner", "0x00000000000000000000000000000000000000ee")
+	for i := 0; i < 3; i++ {
+		clock = clock.Add(stableControlsTick)
+		c.tick(ctx)
+	}
+	if n := len(events()); n != 3 {
+		t.Fatalf("a lone endpoint confirmed a change: %d events", n)
+	}
+	if st := controlValue(t, store, "usdt", "eth", "owner"); *st.Value != "0xc6cde7c39eb2f0f0095f41570af89efc2c1ea828" {
+		t.Errorf("usdt owner = %+v", st)
+	}
+	stub.clear("eth-a")
+	stub.set("eth-a", "usdc", "eth", "paused", "true")
+
+	// A zero owner is a read error on both endpoints: no change, the code
+	// is kept, and the sample is not ok.
+	stub.set("eth-a", "eurc", "eth", "owner", zeroAddr)
+	stub.set("eth-b", "eurc", "eth", "owner", zeroAddr)
+	clock = clock.Add(stableControlsTick)
+	if ok := c.tick(ctx); ok {
+		t.Error("tick with a read error reported ok")
+	}
+	if st := controlValue(t, store, "eurc", "eth", "owner"); st.LastCode != "zero_address" || *st.Value != "0x3101386a38bef8b79e49f12dea12938a30e8af96" {
+		t.Errorf("eurc owner after a zero read = %+v", st)
+	}
+	if n := len(events()); n != 3 {
+		t.Errorf("events after a zero read = %d", n)
+	}
+
+	// Disabled: no calls at all.
+	before := stub.count("eth-a") + stub.count("tron") + stub.count("sol-a")
+	off := newStableControlsSampler(StablecoinConfig{Providers: map[string]bool{"rpc_controls": false}}.settings(), store, rpcs, func() time.Time { return clock })
+	off.tick(ctx)
+	if after := stub.count("eth-a") + stub.count("tron") + stub.count("sol-a"); after != before {
+		t.Errorf("disabled sampler made %d calls", after-before)
+	}
+}
+
+// The runner records the controls sampler in /meta health.
+func TestRunStableControlsOnce(t *testing.T) {
+	_, rpcs := newStableControlsStub(t)
+	clock := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	settings := StablecoinConfig{}.settings()
+	h := newStableHealth(settings, func() time.Time { return clock })
+	c := newStableControlsSampler(settings, newTestRiskStore(t), rpcs, func() time.Time { return clock })
+	runStableControlsOnce(context.Background(), c, h)
+	if s := h.sampler("controls"); s.LastOK == "" || s.NextDue != "2026-10-20T12:15:00Z" {
+		t.Errorf("controls sampler health = %+v", s)
+	}
+	if p := h.provider("rpc_controls"); p.Status != "ok" {
+		t.Errorf("rpc_controls provider = %+v", p)
 	}
 }

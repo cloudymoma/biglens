@@ -66,6 +66,9 @@ func TestStableHealthProviderList(t *testing.T) {
 	if k := byKey["kraken"]; !k.Enabled || k.Status != "pending" {
 		t.Errorf("kraken = %+v, want enabled and pending", k)
 	}
+	if c := byKey["rpc_controls"]; !c.Enabled || c.Status != "pending" {
+		t.Errorf("rpc_controls = %+v, want enabled and pending (M3 adapter)", c)
+	}
 	if e := byKey["ecb"]; e.Attribution == "" || e.Label == "" {
 		t.Errorf("ecb = %+v, want label and attribution", e)
 	}
@@ -115,9 +118,9 @@ func TestStableSamplerHealth(t *testing.T) {
 	if never := h.sampler("rates"); never.LastRun != "" || never.Stalled || never.ConsecutiveFailures != 0 {
 		t.Errorf("never-run sampler = %+v", never)
 	}
-	if names := h.samplers(); len(names) != 5 || names[0].Name != "peg" || names[1].Name != "peg_history" || names[2].Name != "supply" ||
-		names[3].Name != "supply_history" || names[4].Name != "rates" {
-		t.Errorf("samplers = %+v, want peg, peg_history, supply, supply_history, rates", names)
+	if names := h.samplers(); len(names) != 6 || names[0].Name != "peg" || names[1].Name != "peg_history" || names[2].Name != "supply" ||
+		names[3].Name != "supply_history" || names[4].Name != "rates" || names[5].Name != "controls" {
+		t.Errorf("samplers = %+v, want peg, peg_history, supply, supply_history, rates, controls", names)
 	}
 }
 

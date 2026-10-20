@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"log/slog"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -296,4 +299,392 @@ func stableReadDeployment(ctx context.Context, d stableControlDeployment, rpcs f
 		out[f.Name] = r
 	}
 	return out
+}
+
+// --- confirmation (S8) and the controls sampler ---
+
+const (
+	stableControlsTick = 15 * time.Minute
+	// stableControlPendingMaxAge: a pending value confirms only when it was
+	// seen in the previous sample.
+	stableControlPendingMaxAge = stableControlsTick * 3 / 2
+	stableControlsRunTimeout   = 3 * time.Minute
+
+	stableConfirmedTwoRPCs    = "two_rpcs"
+	stableConfirmedTwoSamples = "two_samples"
+)
+
+// stableControlState is one field's row in stable_control_state. Value is
+// nil until the baseline (the first confirmed snapshot) exists.
+type stableControlState struct {
+	Asset, Chain, Field string
+	Value               *string
+	FirstSeen           time.Time // first observation of the confirmed value
+	ConfirmedAt         time.Time
+	ConfirmedBy         string // two_rpcs | two_samples
+	LastSeen            time.Time
+	Baseline            bool // the value has not changed since monitoring began
+	PendingValue        *string
+	PendingFirstSeen    time.Time
+	PendingLastSeen     time.Time
+	PendingDisputed     bool // two endpoints disagreed on the pending value
+	LastReadAt          time.Time
+	LastCode            string // "" | a read error | rpc_disagreement
+	LastEndpoint        string
+}
+
+// stableControlEvent is one confirmed change (stable_control_events).
+type stableControlEvent struct {
+	DetectedAt          time.Time // when the change was confirmed
+	Asset, Chain, Field string
+	Old, New            string
+	FirstSeen           time.Time // first observation of the new value
+	Source              string    // rpc (bigquery with the opt-in jobs, v1.1)
+	ConfirmedBy         string
+	TxHash              string
+}
+
+// stableControlStep applies one sample to a field's state. second is the
+// same field read from another endpoint in the same sample; the sampler
+// reads it only when the value differs from the confirmed one (nil when
+// there is no other endpoint).
+func stableControlStep(st stableControlState, r stableControlRead, second *stableControlRead, now time.Time) (stableControlState, *stableControlEvent) {
+	st.LastReadAt = now
+	if r.Code != "" {
+		st.LastCode = r.Code
+		return st, nil
+	}
+	st.LastCode, st.LastEndpoint = "", r.Endpoint
+	v := r.Value
+	if st.Value != nil && *st.Value == v {
+		st.LastSeen = now
+		st.PendingValue, st.PendingDisputed = nil, false
+		st.PendingFirstSeen, st.PendingLastSeen = time.Time{}, time.Time{}
+		return st, nil
+	}
+	freshPending := st.PendingValue != nil && *st.PendingValue == v && now.Sub(st.PendingLastSeen) <= stableControlPendingMaxAge
+	setPending := func(disputed bool) {
+		if !freshPending {
+			st.PendingFirstSeen = now
+		}
+		st.PendingValue, st.PendingLastSeen, st.PendingDisputed = &v, now, disputed || (freshPending && st.PendingDisputed)
+	}
+	by := ""
+	switch {
+	case second != nil && second.Code == "" && second.Value == v:
+		by = stableConfirmedTwoRPCs
+	case second != nil && second.Code == "":
+		// Two endpoints disagree in one sample: nothing is confirmed, and the
+		// value can now only be confirmed by two agreeing endpoints.
+		setPending(true)
+		st.LastCode = "rpc_disagreement"
+		return st, nil
+	case freshPending && !st.PendingDisputed:
+		by = stableConfirmedTwoSamples
+	}
+	if by == "" {
+		setPending(false)
+		return st, nil
+	}
+	firstSeen := now
+	if freshPending && !st.PendingFirstSeen.IsZero() {
+		firstSeen = st.PendingFirstSeen
+	}
+	var ev *stableControlEvent
+	if st.Value != nil {
+		ev = &stableControlEvent{DetectedAt: now, Asset: st.Asset, Chain: st.Chain, Field: st.Field, Old: *st.Value, New: v,
+			FirstSeen: firstSeen, Source: "rpc", ConfirmedBy: by}
+	}
+	st.Baseline = st.Value == nil
+	st.Value, st.FirstSeen, st.ConfirmedAt, st.ConfirmedBy, st.LastSeen = &v, firstSeen, now, by, now
+	st.PendingValue, st.PendingDisputed = nil, false
+	st.PendingFirstSeen, st.PendingLastSeen = time.Time{}, time.Time{}
+	return st, ev
+}
+
+type stableControlsSampler struct {
+	settings stableSettings
+	store    *riskStore
+	rpcs     func(string) []string
+	now      func() time.Time
+	onFetch  func(provider string, took time.Duration, code string)
+
+	mu  sync.Mutex
+	seq int // samples taken; rotates the primary endpoint
+}
+
+func newStableControlsSampler(settings stableSettings, store *riskStore, rpcs func(string) []string, now func() time.Time) *stableControlsSampler {
+	return &stableControlsSampler{settings: settings, store: store, rpcs: rpcs, now: now}
+}
+
+// tick takes one sample of every monitored deployment and reports whether
+// every field was read.
+func (c *stableControlsSampler) tick(ctx context.Context) bool {
+	if !c.settings.Providers["rpc_controls"] || c.store == nil {
+		return true
+	}
+	ctx, cancel := context.WithTimeout(ctx, stableControlsRunTimeout)
+	defer cancel()
+	now := c.now().UTC()
+	c.mu.Lock()
+	seq := c.seq
+	c.seq++
+	c.mu.Unlock()
+	prev, err := c.store.stableControlStates(ctx)
+	if err != nil {
+		slog.Warn("stablecoin controls: read state", "error", err)
+		return false
+	}
+	type result struct {
+		states []stableControlState
+		events []stableControlEvent
+		ok     bool
+	}
+	results := make([]result, len(stableControlDeployments))
+	var wg sync.WaitGroup
+	for i, d := range stableControlDeployments {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			t0 := time.Now()
+			reads := stableReadDeployment(ctx, d, c.rpcs, seq)
+			res := result{ok: true}
+			code := ""
+			var splSecond map[string]stableControlRead
+			for _, f := range stableControlFields[d.Kind] {
+				r := reads[f.Name]
+				if r.Code != "" {
+					res.ok = false
+					if code == "" {
+						code = r.Code
+					}
+				}
+				key := d.Asset + "|" + d.Chain + "|" + f.Name
+				st, ok := prev[key]
+				if !ok {
+					st = stableControlState{Asset: d.Asset, Chain: d.Chain, Field: f.Name}
+				}
+				var second *stableControlRead
+				if r.Code == "" && (st.Value == nil || *st.Value != r.Value) {
+					if d.Kind == stableKindSPL {
+						if splSecond == nil {
+							splSecond = c.secondSPL(ctx, d, r.Endpoint)
+						}
+						if s, ok := splSecond[f.Name]; ok {
+							second = &s
+						}
+					} else {
+						second = c.secondRead(ctx, d, f, r.Endpoint)
+					}
+				}
+				st, ev := stableControlStep(st, r, second, now)
+				res.states = append(res.states, st)
+				if ev != nil {
+					res.events = append(res.events, *ev)
+					slog.Warn("stablecoin control change", "asset", d.Asset, "chain", d.Chain, "field", f.Name,
+						"old", ev.Old, "new", ev.New, "confirmed_by", ev.ConfirmedBy)
+				}
+			}
+			if c.onFetch != nil {
+				c.onFetch("rpc_controls", time.Since(t0), code)
+			}
+			results[i] = res
+		}()
+	}
+	wg.Wait()
+	ok := true
+	var states []stableControlState
+	var events []stableControlEvent
+	for _, r := range results {
+		ok = ok && r.ok
+		states = append(states, r.states...)
+		events = append(events, r.events...)
+	}
+	if err := c.store.saveStableControls(ctx, states, events); err != nil {
+		slog.Warn("stablecoin controls: store", "error", err)
+		return false
+	}
+	return ok
+}
+
+// otherEndpoint is the first endpoint of the chain whose host differs from
+// the one that answered ("" when there is none).
+func (c *stableControlsSampler) otherEndpoint(chain, answered string) string {
+	for _, ep := range stableControlEndpoints(chain, c.rpcs) {
+		if stableEndpointLabel(ep) != answered {
+			return ep
+		}
+	}
+	return ""
+}
+
+// secondRead reads one EVM field from another endpoint (nil when the chain
+// has only one).
+func (c *stableControlsSampler) secondRead(ctx context.Context, d stableControlDeployment, f stableControlField, answered string) *stableControlRead {
+	ep := c.otherEndpoint(d.Chain, answered)
+	tok, ok := d.token()
+	if ep == "" || !ok {
+		return nil
+	}
+	v, code := stableReadControlAt(ctx, d, tok, f, ep)
+	return &stableControlRead{Value: v, Endpoint: stableEndpointLabel(ep), Code: code}
+}
+
+// secondSPL reads a mint's authorities from another endpoint (nil when there
+// is none).
+func (c *stableControlsSampler) secondSPL(ctx context.Context, d stableControlDeployment, answered string) map[string]stableControlRead {
+	ep := c.otherEndpoint(d.Chain, answered)
+	tok, ok := d.token()
+	if ep == "" || !ok {
+		return map[string]stableControlRead{}
+	}
+	vals, code := stableReadSPLAt(ctx, ep, tok.Contract)
+	out := map[string]stableControlRead{}
+	for _, f := range stableControlFields[stableKindSPL] {
+		out[f.Name] = stableControlRead{Value: vals[f.Name], Endpoint: stableEndpointLabel(ep), Code: code}
+	}
+	return out
+}
+
+func runStableControlsOnce(ctx context.Context, c *stableControlsSampler, h *stableHealth) {
+	if !c.settings.Providers["rpc_controls"] {
+		return // provider off: no reads, and no run to report
+	}
+	if c.onFetch == nil && h != nil {
+		c.onFetch = h.recordFetch
+	}
+	start := c.now().UTC()
+	ok := c.tick(ctx)
+	if h != nil {
+		h.recordRun("controls", stableControlsTick, start, start.Add(stableControlsTick), ok)
+	}
+}
+
+// runStableControlsSampler samples the controls at boot and every 15 minutes
+// until ctx ends; a panic in one iteration is logged and the loop continues.
+func runStableControlsSampler(ctx context.Context, c *stableControlsSampler, h *stableHealth) {
+	t := time.NewTicker(stableControlsTick)
+	defer t.Stop()
+	for {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("stablecoin controls sampler panic", "panic", r)
+				}
+			}()
+			runStableControlsOnce(ctx, c, h)
+		}()
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
+}
+
+// --- store ---
+
+func stableNullTime(t time.Time) any {
+	if t.IsZero() {
+		return nil
+	}
+	return stableTS(t)
+}
+
+func stableNullStr(s *string) any {
+	if s == nil {
+		return nil
+	}
+	return *s
+}
+
+func (s *riskStore) stableControlStates(ctx context.Context) (map[string]stableControlState, error) {
+	if err := s.ensureStableSchema(ctx); err != nil {
+		return nil, err
+	}
+	rs, err := s.db.QueryContext(ctx, `SELECT asset, chain, field, value, first_seen, confirmed_at, confirmed_by, last_seen, is_baseline,
+pending_value, pending_first_seen, pending_last_seen, pending_disputed, last_read_at, last_code, last_endpoint FROM stable_control_state`)
+	if err != nil {
+		return nil, err
+	}
+	defer rs.Close()
+	out := map[string]stableControlState{}
+	for rs.Next() {
+		var st stableControlState
+		var value, pending, firstSeen, confirmedAt, lastSeen, pFirst, pLast, lastRead sql.NullString
+		var baseline, disputed int
+		if err := rs.Scan(&st.Asset, &st.Chain, &st.Field, &value, &firstSeen, &confirmedAt, &st.ConfirmedBy, &lastSeen, &baseline,
+			&pending, &pFirst, &pLast, &disputed, &lastRead, &st.LastCode, &st.LastEndpoint); err != nil {
+			return nil, err
+		}
+		if value.Valid {
+			v := value.String
+			st.Value = &v
+		}
+		if pending.Valid {
+			v := pending.String
+			st.PendingValue = &v
+		}
+		st.FirstSeen, st.ConfirmedAt, st.LastSeen = parseStableTS(firstSeen.String), parseStableTS(confirmedAt.String), parseStableTS(lastSeen.String)
+		st.PendingFirstSeen, st.PendingLastSeen, st.LastReadAt = parseStableTS(pFirst.String), parseStableTS(pLast.String), parseStableTS(lastRead.String)
+		st.Baseline, st.PendingDisputed = baseline == 1, disputed == 1
+		out[st.Asset+"|"+st.Chain+"|"+st.Field] = st
+	}
+	return out, rs.Err()
+}
+
+// saveStableControls writes one sample: every field's state and the
+// confirmed changes, in one transaction.
+func (s *riskStore) saveStableControls(ctx context.Context, states []stableControlState, events []stableControlEvent) error {
+	if err := s.ensureStableSchema(ctx); err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, st := range states {
+		b2i := map[bool]int{false: 0, true: 1}
+		if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO stable_control_state
+(asset, chain, field, value, first_seen, confirmed_at, confirmed_by, last_seen, is_baseline, pending_value, pending_first_seen,
+ pending_last_seen, pending_disputed, last_read_at, last_code, last_endpoint) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			st.Asset, st.Chain, st.Field, stableNullStr(st.Value), stableNullTime(st.FirstSeen), stableNullTime(st.ConfirmedAt), st.ConfirmedBy,
+			stableNullTime(st.LastSeen), b2i[st.Baseline], stableNullStr(st.PendingValue), stableNullTime(st.PendingFirstSeen),
+			stableNullTime(st.PendingLastSeen), b2i[st.PendingDisputed], stableNullTime(st.LastReadAt), st.LastCode, st.LastEndpoint); err != nil {
+			return err
+		}
+	}
+	for _, ev := range events {
+		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO stable_control_events
+(detected_at, asset, chain, field, old_value, new_value, first_seen, source, confirmed_by, tx_hash) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+			stableTS(ev.DetectedAt), ev.Asset, ev.Chain, ev.Field, ev.Old, ev.New, stableTS(ev.FirstSeen), ev.Source, ev.ConfirmedBy, ev.TxHash); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// stableControlEvents returns the newest changes first ("" asset: all).
+func (s *riskStore) stableControlEvents(ctx context.Context, asset string, limit int) ([]stableControlEvent, error) {
+	if err := s.ensureStableSchema(ctx); err != nil {
+		return nil, err
+	}
+	rs, err := s.db.QueryContext(ctx, `SELECT detected_at, asset, chain, field, old_value, new_value, first_seen, source, confirmed_by, tx_hash
+FROM stable_control_events WHERE (? = '' OR asset = ?) ORDER BY detected_at DESC, asset, chain, field LIMIT ?`, asset, asset, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rs.Close()
+	out := []stableControlEvent{}
+	for rs.Next() {
+		var ev stableControlEvent
+		var detected, first string
+		if err := rs.Scan(&detected, &ev.Asset, &ev.Chain, &ev.Field, &ev.Old, &ev.New, &first, &ev.Source, &ev.ConfirmedBy, &ev.TxHash); err != nil {
+			return nil, err
+		}
+		ev.DetectedAt, ev.FirstSeen = parseStableTS(detected), parseStableTS(first)
+		out = append(out, ev)
+	}
+	return out, rs.Err()
 }

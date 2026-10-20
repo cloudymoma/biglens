@@ -118,6 +118,38 @@ CREATE TABLE IF NOT EXISTS stable_dex_10m (
   shares_json TEXT,
   tvl_usd REAL,
   PRIMARY KEY (bucket, pool)
+);
+CREATE TABLE IF NOT EXISTS stable_control_state (
+  asset TEXT NOT NULL,
+  chain TEXT NOT NULL,
+  field TEXT NOT NULL,
+  value TEXT,
+  first_seen TEXT,
+  confirmed_at TEXT,
+  confirmed_by TEXT NOT NULL DEFAULT '',
+  last_seen TEXT,
+  is_baseline INTEGER NOT NULL DEFAULT 0,
+  pending_value TEXT,
+  pending_first_seen TEXT,
+  pending_last_seen TEXT,
+  pending_disputed INTEGER NOT NULL DEFAULT 0,
+  last_read_at TEXT,
+  last_code TEXT NOT NULL DEFAULT '',
+  last_endpoint TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (asset, chain, field)
+);
+CREATE TABLE IF NOT EXISTS stable_control_events (
+  detected_at TEXT NOT NULL,
+  asset TEXT NOT NULL,
+  chain TEXT NOT NULL,
+  field TEXT NOT NULL,
+  old_value TEXT NOT NULL,
+  new_value TEXT NOT NULL,
+  first_seen TEXT NOT NULL,
+  source TEXT NOT NULL,
+  confirmed_by TEXT NOT NULL DEFAULT '',
+  tx_hash TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (detected_at, asset, chain, field)
 );`
 
 // stableSnapshotRetention: supply snapshots are kept 180 days; the daily
@@ -481,7 +513,8 @@ SELECT day, series, value, fetched_at FROM stable_rates_daily WHERE series = ? A
 
 // pruneStable deletes rows older than each table's retention window and logs
 // how many rows it removed. Daily tables, Tether snapshots and rates are kept
-// forever.
+// forever, and so are the control tables: stable_control_state holds the
+// current value per field and stable_control_events the change log (§8.5).
 func (s *riskStore) pruneStable(ctx context.Context, now time.Time) (int64, error) {
 	if err := s.ensureStableSchema(ctx); err != nil {
 		return 0, err
