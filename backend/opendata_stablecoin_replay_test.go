@@ -220,12 +220,12 @@ func replayDaily(t *testing.T, name string) (d24, d7 map[string]float64) {
 }
 
 // The S4 flows inputs of each replay scenario (stablecoin.md §6.2 S4, §13):
-// the daily 24h and 7d changes on the days that decide the signal. S4 itself
-// is M4; these pins keep the scenarios faithful to the measured data (README
-// §3) so M4's replay tests what really happened.
+// the daily 24h and 7d changes on the days that decide the signal. These pins
+// keep the scenarios faithful to the measured data (README §3), so the signal
+// replay (TestStableReplayS4) tests what really happened.
 func TestStableReplayS4Scenarios(t *testing.T) {
-	// Must fire: a 24h drop of at least 3% (critical), still at 7d ≤ −2% on
-	// the next input, so S4's confirmation keeps it.
+	// Must fire: a 24h drop of at least 3%, followed by a 7d change ≤ −2% (a
+	// sustained decline, not a glitch).
 	for _, c := range []struct {
 		file, day, next string
 		d24             float64
@@ -238,8 +238,8 @@ func TestStableReplayS4Scenarios(t *testing.T) {
 			t.Errorf("%s: 24h %.2f%% on %s, next-day 7d %.2f%%; want %.2f%% and ≤ −2%%", c.file, d24[c.day], c.day, d7[c.next], c.d24)
 		}
 	}
-	// Must stay quiet: USDT's −1.38% on 2024-12-01 (warning on its 24h change
-	// alone) is never followed by a 7d change ≤ −2% in the window.
+	// USDT's −1.38% on 2024-12-01 is never followed by a 7d change ≤ −2% in
+	// the window (it is not reversed either: README §3).
 	d24, d7 := replayDaily(t, "charts_usdt_2024.json")
 	if round2(d24["2024-12-01"]) != -1.38 {
 		t.Errorf("usdt 2024-12-01 24h = %.3f%%", d24["2024-12-01"])
@@ -263,19 +263,19 @@ func TestStableReplayS4Scenarios(t *testing.T) {
 		{"2024-04-14", 1.242, -1.868, ""},
 		{"2024-04-17", 0.614, 0.895, ""},
 		{"2024-04-18", -6.483, -5.350, "critical on its 24h change"},
-		{"2024-04-19", 8.591, 2.679, "does not confirm 04-18"},
+		{"2024-04-19", 8.591, 2.679, "the rebound"},
 		{"2024-04-20", -4.450, -0.996, "critical on its 24h change"},
-		{"2024-04-21", 0.169, -2.045, "confirms 04-20 under §6.2 as written"},
+		{"2024-04-21", 0.169, -2.045, "kept 04-20 under the confirmation rule dropped in M3"},
 		{"2024-04-22", 7.284, 5.284, ""},
 	} {
 		if math.Abs(d24[w.day]-w.d24) > 0.01 || math.Abs(d7[w.day]-w.d7) > 0.01 {
 			t.Errorf("usdc %s: 24h %.3f%%, 7d %.3f%%; want %.3f%% and %.3f%% (%s)", w.day, d24[w.day], d7[w.day], w.d24, w.d7, w.decision)
 		}
 	}
-	// Read literally, §6.2's rule ("a level counts only if the next input
-	// still shows a 7d change ≤ −2%") drops 04-18 but keeps 04-20: the real
-	// series would put S4 at critical on 2024-04-21. M4 has to settle this
-	// before the quiet case can pass (m3_report.md, open questions).
+	// The dip spans five days. The confirmation rule dropped in M3 ("a level
+	// counts only if the next input still shows a 7d change ≤ −2%") would
+	// have put S4 at critical on 2024-04-21; the 3-point median S4 is
+	// replayed in TestStableReplayS4.
 	if !(d24["2024-04-18"] <= -3 && d7["2024-04-19"] > -2 && d24["2024-04-20"] <= -3 && d7["2024-04-21"] <= -2) {
 		t.Error("usdc 2024 glitch lost the shape that decides S4's confirmation")
 	}

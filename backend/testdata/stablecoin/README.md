@@ -52,13 +52,13 @@ assert against), and checks the replay shapes below. Don't hand-edit the fixture
 
 Short synthetic series that reproduce the shapes measured on the real data. `TestStableReplayFixtureShapes` pins them;
 `TestStableReplayS4Scenarios` pins the inputs of the S4 flows signal (24h and 7d supply changes) on the days that decide
-it.
+it. `TestStableReplayS1` and `TestStableReplayS4` replay the signals themselves on these series (stablecoin.md §13).
 
 | File | Window | Shape reproduced |
 |---|---|---|
 | `charts_usdt_2022-05.json` | 2022-04-28..06-15 | worst 24h −3.88% on 05-12; worst 7d −10.23% on 05-18 |
 | `charts_usdc_2023-03.json` | 2023-03-01..31 | worst 24h −3.65% on 03-12; worst 7d −15.17% on 03-17 |
-| `charts_usdt_2024.json` | 2024-11-20..12-31 | one-day glitch −1.38% on 12-01, rebound the next day; worst 7d −1.21% on 12-31 |
+| `charts_usdt_2024.json` | 2024-11-20..12-31 | the measured 24h changes (0.001% precision) on a made-up level: −1.38% on 12-01, not reversed (+0.063% on 12-02); worst 7d −1.21% on 12-31 |
 | `charts_usdc_2024.json` | 2024-04-01..26 | the measured 24h changes (0.001% precision) on a made-up level: an outflow of about 3% a week on 04-09..13, then a five-day dip and rebound, −6.483% on 04-18, +8.591%, −4.450%, +0.169%, +7.284% on 04-22; worst 7d −5.35% on 04-18 |
 | `prices_2022-05.json` | 2022-04-28..06-15 | tether in 05-09..16: 0 bps through 05-14, −10.54 bps on 05-15; the only day ≥ 30 bps is +32.7 bps on 05-01 |
 | `prices_2023-03.json` | 2023-03-01..31 | usd-coin 0.99755917 on 03-11, 0.961065 on 03-12, 0.991923 on 03-13; days ≥ 30 / ≥ 100 bps: usd-coin 10 / 1, tether 15 / 2 |
@@ -85,12 +85,13 @@ Sources: DefiLlama `stablecoincharts/all` and `stablecoinprices`, Bitstamp `ohlc
 - **Exact 30.0 bps.** A price of 1.003 is 30.0 bps off peg, but `1.003 − 1` is 29.99999999999989 bps in float64. A naive
   `>= 30` comparison misses those days and gives USDT 5 / USDC 9 for 2024 and 13 / 9 for March 2023, the counts quoted
   in `stablecoin.md` §13. Counting them gives 10 / 14 and 15 / 10. Both are pinned in the replay test.
-- **2024 supply-chart glitches.** USDT −1.379% on 2024-12-01 with a rebound (worst 7d −1.21% on 12-31); USDC −6.483% on
-  2024-04-18, +8.591% on 04-19 (worst 7d −5.35% on 04-18).
+- **2024 supply charts.** USDT −1.379% on 2024-12-01, not reversed: +0.063% on 12-02, then +0.398%, +0.241%, +0.523%,
+  +0.683% (worst 7d −1.21% on 12-31). USDC −6.483% on 2024-04-18, +8.591% on 04-19 (worst 7d −5.35% on 04-18).
 - **S4 inputs (fetched 2026-10-20).** Day after each drop, 7d change: USDT 2022-05-13 −4.545% (24h 0.000%); USDC
   2023-03-13 −6.945% (24h −0.473%); USDT 2024-12-02 +0.039% (no 7d change ≤ −2% in 2024-11-20..12-31). USDC April 2024
   (24h / 7d): 04-11 −0.312% / −2.104%, 04-12 +0.100% / −2.435%, 04-13 −0.904% / −2.998%, 04-14 +1.242% / −1.868%, 04-17
   +0.614% / +0.895%, 04-18 −6.483% / −5.350%, 04-19 +8.591% / +2.679%, 04-20 −4.450% / −0.996%, 04-21 +0.169% / −2.045%,
-  04-22 +7.284% / +5.284%. The USDC dip is not one day long: §6.2's S4 rule as written ("a level counts only if the next
-  input still shows a 7d change ≤ −2%") drops 04-18 but keeps 04-20's −4.450% (24h critical), because 04-21's 7d change is
-  −2.045%.
+  04-22 +7.284% / +5.284%. The USDC dip is not one day long, so a 3-point rolling median (S4 since M4) removes 04-18 and
+  04-19 but keeps 04-20: the median falls 2.968% that day (warning). 04-24's −1.020% shows on 04-25 (warning), and
+  04-10..14 sit at watch (7d −2.0% to −2.2% on the median). USDT's 2024-12-01 drop shows on 12-02 (median 24h −1.095%,
+  warning).
