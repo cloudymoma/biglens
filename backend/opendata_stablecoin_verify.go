@@ -408,6 +408,26 @@ func stableDecodeMeta(symHex, decHex string) (string, int, string) {
 	return sym, int(d.Int64()), ""
 }
 
+// TronGrid HTTP 429 (Appendix A note): one retry after Retry-After, or 2 s
+// without one. A Retry-After above the cap would stall the sampler, so it is
+// a read error instead.
+const (
+	stableTronRetryDefault = 2 * time.Second
+	stableTronRetryMax     = 10 * time.Second
+)
+
+// stableTronSleep waits before the retry (a test hook).
+var stableTronSleep = func(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
+
 // stableTronConstant runs a constant (view) call on a TRC-20 contract.
 func stableTronConstant(ctx context.Context, contract, selector string) (string, string) {
 	payload, err := json.Marshal(map[string]any{
@@ -416,7 +436,21 @@ func stableTronConstant(ctx context.Context, contract, selector string) (string,
 	if err != nil {
 		return "", "bad_request"
 	}
-	raw, code := tronGridDo(ctx, http.MethodPost, "/walletsolidity/triggerconstantcontract", payload)
+	const path = "/walletsolidity/triggerconstantcontract"
+	raw, code, retryAfter := tronGridDoRetryAfter(ctx, http.MethodPost, path, payload)
+	if code == "rate_limited" {
+		wait := retryAfter
+		if wait <= 0 {
+			wait = stableTronRetryDefault
+		}
+		if wait > stableTronRetryMax {
+			return "", code
+		}
+		if err := stableTronSleep(ctx, wait); err != nil {
+			return "", "timeout"
+		}
+		raw, code, _ = tronGridDoRetryAfter(ctx, http.MethodPost, path, payload)
+	}
 	if code != "" {
 		return "", code
 	}

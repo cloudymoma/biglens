@@ -31,6 +31,9 @@ const (
 	stableTronZero = "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb" // TRON's zero address in base58
 
 	stableControlCallTimeout = 8 * time.Second
+	// stableControlTronTimeout leaves room for one TronGrid retry after
+	// Retry-After (at most stableTronRetryMax).
+	stableControlTronTimeout = stableControlCallTimeout + stableTronRetryMax
 )
 
 // stableControlDeployment is one monitored deployment (Appendix A, plus
@@ -186,7 +189,11 @@ func stableEndpointLabel(u string) string {
 
 // stableReadControlAt reads one EVM or TRON field from one endpoint.
 func stableReadControlAt(ctx context.Context, d stableControlDeployment, tok registryToken, f stableControlField, endpoint string) (string, string) {
-	ctx, cancel := context.WithTimeout(ctx, stableControlCallTimeout)
+	timeout := stableControlCallTimeout
+	if d.Chain == "tron" {
+		timeout = stableControlTronTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	if d.Chain == "tron" {
 		word, code := stableTronConstant(ctx, tok.Contract, f.TronSig)
@@ -309,6 +316,9 @@ func stableReadDeployment(ctx context.Context, d stableControlDeployment, rpcs f
 
 const (
 	stableControlsTick = 15 * time.Minute
+	// stableControlsFirstDelay offsets the first sample from the supply
+	// sampler's boot burst (Appendix A note).
+	stableControlsFirstDelay = 2 * time.Minute
 	// stableControlPendingMaxAge: a pending value confirms only when it was
 	// seen in the previous sample.
 	stableControlPendingMaxAge = stableControlsTick * 3 / 2
@@ -417,12 +427,14 @@ type stableControlsSampler struct {
 	now      func() time.Time
 	onFetch  func(provider string, took time.Duration, code string)
 
+	firstDelay time.Duration // before the first sample after boot
+
 	mu  sync.Mutex
 	seq int // samples taken; rotates the primary endpoint
 }
 
 func newStableControlsSampler(settings stableSettings, store *riskStore, rpcs func(string) []string, now func() time.Time) *stableControlsSampler {
-	return &stableControlsSampler{settings: settings, store: store, rpcs: rpcs, now: now}
+	return &stableControlsSampler{settings: settings, store: store, rpcs: rpcs, now: now, firstDelay: stableControlsFirstDelay}
 }
 
 // tick takes one sample of every monitored deployment and reports whether
@@ -568,9 +580,19 @@ func runStableControlsOnce(ctx context.Context, c *stableControlsSampler, h *sta
 	}
 }
 
-// runStableControlsSampler samples the controls at boot and every 15 minutes
-// until ctx ends; a panic in one iteration is logged and the loop continues.
+// runStableControlsSampler samples the controls firstDelay after boot and
+// then every 15 minutes until ctx ends; a panic in one iteration is logged and
+// the loop continues.
 func runStableControlsSampler(ctx context.Context, c *stableControlsSampler, h *stableHealth) {
+	if c.firstDelay > 0 {
+		wait := time.NewTimer(c.firstDelay)
+		select {
+		case <-ctx.Done():
+			wait.Stop()
+			return
+		case <-wait.C:
+		}
+	}
 	t := time.NewTicker(stableControlsTick)
 	defer t.Stop()
 	for {
