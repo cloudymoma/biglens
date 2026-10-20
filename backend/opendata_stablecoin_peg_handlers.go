@@ -4,7 +4,6 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
-	"sort"
 	"strings"
 	"time"
 )
@@ -51,28 +50,24 @@ type StablePegPoint struct {
 	MinutesGE100 *int     `json:"minutes_ge_100,omitempty"`
 }
 
-// StableDepegDay is a day at ≥ 30 bps off peg in one source, in the asset's
-// numéraire.
-type StableDepegDay struct {
-	Day         string   `json:"day"`
-	Source      string   `json:"source"` // bitstamp_ohlc | defillama | consensus
-	Low         *float64 `json:"low,omitempty"`
-	High        *float64 `json:"high,omitempty"`
-	Close       *float64 `json:"close,omitempty"`
-	MinDevBps   *float64 `json:"min_dev_bps"`
-	MaxDevBps   *float64 `json:"max_dev_bps"`
-	MinutesGE30 *int     `json:"minutes_ge_30,omitempty"` // consensus only
-}
+// StableDepegDay, StableDepegMarker and StableLastDeviation are defined with
+// the classification rules in opendata_stablecoin_depeg.go.
 
 type StablePegAssetView struct {
 	StablePeg
 	SeriesResolution string           `json:"series_resolution"` // 5m | 1d
 	Series           []StablePegPoint `json:"series"`
-	// DepegDays lists every stored day at ≥ 30 bps off peg (newest first,
-	// at most 500; DepegDaysTotal counts them all).
-	DepegDays      []StableDepegDay   `json:"depeg_days"`
-	DepegDaysTotal int                `json:"depeg_days_total"`
-	Annotations    []stableAnnotation `json:"annotations"`
+	// DepegDays lists the stored days off peg by their daily close (newest
+	// first, at most 500; DepegDaysTotal counts them all). LowMarkers are
+	// the Bitstamp intraday lows shown on the history chart.
+	DepegDays      []StableDepegDay    `json:"depeg_days"`
+	DepegDaysTotal int                 `json:"depeg_days_total"`
+	LowMarkers     []StableDepegMarker `json:"low_markers"`
+	// LastGE100 is the newest ≥ 100 bps deviation in the stored history;
+	// null when there is none since HistoryFrom.
+	LastGE100   *StableLastDeviation `json:"last_ge_100"`
+	HistoryFrom string               `json:"history_from,omitempty"`
+	Annotations []stableAnnotation   `json:"annotations"`
 }
 
 type StableRelativePegView struct {
@@ -94,7 +89,8 @@ type StablePegResponse struct {
 	// core set (context).
 	Annotations           []stableAnnotation `json:"annotations"`
 	AnnotationsOverridden bool               `json:"annotations_overridden"`
-	DepegThresholdBps     float64            `json:"depeg_threshold_bps"`
+	DepegThresholdBps     float64            `json:"depeg_threshold_bps"` // a day's close; EURC on DefiLlama ÷ ECB uses each day's threshold_bps
+	LowMarkerBps          float64            `json:"low_marker_bps"`
 }
 
 func (s *stablecoinService) pegLatest() *stablePegResult {
@@ -111,7 +107,8 @@ func (s *stablecoinService) buildPeg(r *http.Request, assets []string, rangeLabe
 	res := s.pegLatest()
 	rg := stablePegRanges[rangeLabel]
 	out := StablePegResponse{Range: rangeLabel, WarmingUp: res == nil, Assets: []StablePegAssetView{}, Markets: []StableQuote{},
-		Annotations: s.facts.Annotations, AnnotationsOverridden: s.facts.AnnotationsOverridden, DepegThresholdBps: stableDepegThresholdBps}
+		Annotations: s.facts.Annotations, AnnotationsOverridden: s.facts.AnnotationsOverridden, DepegThresholdBps: stableDepegThresholdBps,
+		LowMarkerBps: stableLowMarkerBps}
 	if out.Annotations == nil {
 		out.Annotations = []stableAnnotation{}
 	}
@@ -127,7 +124,7 @@ func (s *stablecoinService) buildPeg(r *http.Request, assets []string, rangeLabe
 	var fxHistory map[string]float64
 	for _, id := range assets {
 		def, _ := stableAssetByID(id)
-		v := StablePegAssetView{Annotations: []stableAnnotation{}}
+		v := StablePegAssetView{Annotations: []stableAnnotation{}, DepegDays: []StableDepegDay{}, LowMarkers: []StableDepegMarker{}}
 		if res != nil {
 			v.StablePeg = res.Assets[id]
 		} else {
@@ -137,7 +134,9 @@ func (s *stablecoinService) buildPeg(r *http.Request, assets []string, rangeLabe
 		if def.Numeraire == "EUR" && fxHistory == nil {
 			fxHistory = s.ecbHistory(ctx)
 		}
-		v.DepegDays, v.DepegDaysTotal = s.depegDays(ctx, def, fxHistory)
+		if hist, ok := s.depegHistory(ctx, def, fxHistory, now); ok {
+			v.DepegDays, v.DepegDaysTotal, v.LowMarkers, v.LastGE100, v.HistoryFrom = hist.Days, hist.Total, hist.Markers, hist.LastGE100, hist.HistoryFrom
+		}
 		for _, a := range out.Annotations {
 			if strings.EqualFold(a.Asset, def.Symbol) {
 				v.Annotations = append(v.Annotations, a)
@@ -201,59 +200,36 @@ func (s *stablecoinService) ecbHistory(ctx context.Context) map[string]float64 {
 	return out
 }
 
-// depegDays collects the days at ≥ 30 bps off peg from the Bitstamp candles,
-// BigLens's own consensus rollup and DefiLlama's daily price (EURC through
-// the ECB rate of the day).
-func (s *stablecoinService) depegDays(ctx context.Context, def stableAssetDef, fx map[string]float64) ([]StableDepegDay, int) {
-	days := []StableDepegDay{}
+// depegHistory reads one asset's stored history (consensus rollup, Bitstamp
+// candles for the pairs in stableOHLCPairs, DefiLlama prices) and applies
+// the §7.2 classification. ok is false without a store.
+func (s *stablecoinService) depegHistory(ctx context.Context, def stableAssetDef, fx map[string]float64, now time.Time) (stableDepegHistory, bool) {
 	if s.store == nil {
-		return days, 0
+		return stableDepegHistory{}, false
 	}
-	off := func(lo, hi *float64) bool {
-		return (lo != nil && stableBpsAtLeast(*lo, stableDepegThresholdBps)) || (hi != nil && stableBpsAtLeast(*hi, stableDepegThresholdBps))
+	in := stableDepegInputs{Numeraire: def.Numeraire, ECB: fx, Today: now.Format(time.DateOnly)}
+	var err error
+	if in.Rollup, err = s.store.stablePegDailySeries(ctx, def.ID, stablePegSourceConsensus, "0000-01-01"); err != nil {
+		slog.Warn("stablecoin depeg history read", "asset", def.ID, "source", stablePegSourceConsensus, "error", err)
 	}
-	for _, src := range []string{stablePegSourceBitstamp, stablePegSourceConsensus} {
-		rows, err := s.store.stablePegDailySeries(ctx, def.ID, src, "0000-01-01")
-		if err != nil {
-			slog.Warn("stablecoin depeg history read", "asset", def.ID, "source", src, "error", err)
+	for _, p := range stableOHLCPairs {
+		if p.Asset != def.ID {
+			continue
 		}
-		for _, r := range rows {
-			if !off(r.MinDevBps, r.MaxDevBps) {
-				continue
-			}
-			days = append(days, StableDepegDay{Day: r.Day, Source: src, Low: r.Low, High: r.High, Close: r.Close,
-				MinDevBps: r.MinDevBps, MaxDevBps: r.MaxDevBps, MinutesGE30: r.MinutesGE30})
+		if in.Candles, err = s.store.stablePegDailySeries(ctx, def.ID, stablePegSourceBitstamp, "0000-01-01"); err != nil {
+			slog.Warn("stablecoin depeg history read", "asset", def.ID, "source", stablePegSourceBitstamp, "error", err)
 		}
 	}
 	if gecko, ok := stableGeckoIDs[def.ID]; ok {
-		rows, err := s.store.stablePriceDailySeries(ctx, gecko, "0000-01-01")
-		if err != nil {
+		if in.Prices, err = s.store.stablePriceDailySeries(ctx, gecko, "0000-01-01"); err != nil {
 			slog.Warn("stablecoin price history read", "asset", def.ID, "error", err)
 		}
-		for _, r := range rows {
-			var dev *float64
-			if def.Numeraire == "EUR" {
-				dev = stableDevFromUSD(r.PriceUSD, r.Day, fx)
-			} else {
-				dev = stableF((r.PriceUSD - 1) * 1e4)
-			}
-			if dev == nil || !stableBpsAtLeast(*dev, stableDepegThresholdBps) {
-				continue
-			}
-			days = append(days, StableDepegDay{Day: r.Day, Source: stablePriceSourceLlama, MinDevBps: dev, MaxDevBps: dev})
-		}
 	}
-	sort.SliceStable(days, func(i, j int) bool {
-		if days[i].Day != days[j].Day {
-			return days[i].Day > days[j].Day
-		}
-		return days[i].Source < days[j].Source
-	})
-	total := len(days)
-	if len(days) > stableDepegDaysMax {
-		days = days[:stableDepegDaysMax]
+	h := stableClassifyDepeg(in)
+	if len(h.Days) > stableDepegDaysMax {
+		h.Days = h.Days[:stableDepegDaysMax]
 	}
-	return days, total
+	return h, true
 }
 
 func (h *APIHandler) StablecoinPeg(w http.ResponseWriter, r *http.Request) {

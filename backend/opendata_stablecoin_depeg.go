@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/url"
 	"sort"
 	"time"
@@ -47,9 +48,10 @@ var stableOHLCFrom = time.Date(2019, 1, 1, 0, 0, 0, 0, time.UTC)
 var stableGeckoIDs = map[string]string{"usdt": "tether", "usdc": "usd-coin", "eurc": "euro-coin"}
 
 // stableOHLCPairs are the Bitstamp daily candles per core asset, priced in
-// the asset's numéraire.
+// the asset's numéraire. EURC has none: Bitstamp's eurceur book is too thin
+// for a history (§7.2), so EURC's history is DefiLlama ÷ the ECB rate.
 var stableOHLCPairs = []struct{ Asset, Pair, Label string }{
-	{"usdt", "usdtusd", "USDT/USD"}, {"usdc", "usdcusd", "USDC/USD"}, {"eurc", "eurceur", "EURC/EUR"},
+	{"usdt", "usdtusd", "USDT/USD"}, {"usdc", "usdcusd", "USDC/USD"},
 }
 
 type stablePriceDaily struct {
@@ -351,16 +353,215 @@ func (p *stablePegSampler) syncOHLC(ctx context.Context, asset, pair, label stri
 }
 
 // stableDevFromUSD converts a USD price of a EUR coin to deviation bps with
-// the ECB rate of that day or the nearest earlier one within 5 days.
+// the ECB rate of the same day (§7.2); without one (weekends, holidays) the
+// day has no value. DefiLlama's daily price and the ECB fix are taken at
+// different times of day, which is why EURC's day threshold is 100 bps.
 func stableDevFromUSD(priceUSD float64, day string, fx map[string]float64) *float64 {
-	d, err := time.Parse(time.DateOnly, day)
-	if err != nil {
-		return nil
-	}
-	for i := 0; i <= 5; i++ {
-		if r, ok := fx[d.AddDate(0, 0, -i).Format(time.DateOnly)]; ok && r > 0 {
-			return stableF((priceUSD/r - 1) * 1e4)
-		}
+	if r, ok := fx[day]; ok && r > 0 {
+		return stableF((priceUSD/r - 1) * 1e4)
 	}
 	return nil
+}
+
+// Depeg-day classification (stablecoin.md §7.2, "Depeg history").
+const (
+	// stableDepegEURLlamaBps is EURC's day threshold on DefiLlama ÷ the ECB
+	// rate of the day (their timing mismatch); the consensus close and USD
+	// coins use stableDepegThresholdBps.
+	stableDepegEURLlamaBps = 100.0
+	// stableLowMarkerBps: a Bitstamp low is a marker only this far off, and
+	// only on a day whose candle close, consensus close or DefiLlama price is
+	// at least stableDepegThresholdBps off.
+	stableLowMarkerBps = 100.0
+	// stableLastDevBps and stableIntradayMinutes define "the last ≥ 100 bps
+	// deviation": a close or a marker that far off, or a consensus day with
+	// at least 15 minutes (S1's window) of samples that far off.
+	stableLastDevBps      = 100.0
+	stableIntradayMinutes = 15
+)
+
+// StableDepegDay is a day off peg by its daily close: the BigLens consensus
+// rollup close, else DefiLlama's daily price (EURC: ÷ the same-day ECB rate).
+type StableDepegDay struct {
+	Day          string  `json:"day"`
+	Source       string  `json:"source"` // consensus | defillama
+	Close        float64 `json:"close"`  // in the asset's numéraire
+	CloseDevBps  float64 `json:"close_dev_bps"`
+	ThresholdBps float64 `json:"threshold_bps"` // 30; EURC on DefiLlama ÷ ECB: 100
+	// Consensus days only.
+	MinDevBps    *float64 `json:"min_dev_bps,omitempty"`
+	MaxDevBps    *float64 `json:"max_dev_bps,omitempty"`
+	MinutesGE30  *int     `json:"minutes_ge_30,omitempty"`
+	MinutesGE100 *int     `json:"minutes_ge_100,omitempty"`
+}
+
+// StableDepegMarker is a Bitstamp intraday low shown on the history chart.
+type StableDepegMarker struct {
+	Day       string   `json:"day"`
+	Source    string   `json:"source"` // bitstamp_ohlc
+	Low       float64  `json:"low"`
+	LowDevBps float64  `json:"low_dev_bps"`
+	Close     *float64 `json:"close"` // the candle's close
+	// ConfirmedBy lists what was ≥ 30 bps off that day: bitstamp_close |
+	// consensus | defillama.
+	ConfirmedBy []string `json:"confirmed_by"`
+}
+
+// StableLastDeviation is the newest day at ≥ 100 bps off peg in the stored
+// history.
+type StableLastDeviation struct {
+	Day       string  `json:"day"`
+	Source    string  `json:"source"` // consensus | consensus_intraday | defillama | bitstamp_ohlc
+	DevBps    float64 `json:"dev_bps"`
+	DaysSince int     `json:"days_since"`
+}
+
+type stableDepegInputs struct {
+	Numeraire string
+	Rollup    []stablePegDaily   // BigLens consensus, daily
+	Candles   []stablePegDaily   // Bitstamp daily candles (USD coins only)
+	Prices    []stablePriceDaily // DefiLlama, USD
+	ECB       map[string]float64 // EUR/USD by day (EUR coins)
+	Today     string             // YYYY-MM-DD, for days_since
+}
+
+type stableDepegHistory struct {
+	Days        []StableDepegDay // newest first
+	Total       int
+	Markers     []StableDepegMarker // newest first
+	LastGE100   *StableLastDeviation
+	HistoryFrom string // the first stored day with a close or a candle; "" without history
+}
+
+// stableClassifyDepeg applies the §7.2 rules to one asset's stored history.
+func stableClassifyDepeg(in stableDepegInputs) stableDepegHistory {
+	type dayIn struct {
+		roll     *stablePegDaily
+		candle   *stablePegDaily
+		llama    *float64 // price in the numéraire
+		llamaDev *float64
+	}
+	days := map[string]*dayIn{}
+	at := func(d string) *dayIn {
+		if days[d] == nil {
+			days[d] = &dayIn{}
+		}
+		return days[d]
+	}
+	for i := range in.Rollup {
+		if r := &in.Rollup[i]; r.Close != nil {
+			at(r.Day).roll = r
+		}
+	}
+	for i := range in.Candles {
+		if c := &in.Candles[i]; c.Low != nil {
+			at(c.Day).candle = c
+		}
+	}
+	for _, p := range in.Prices {
+		dev, price := stableF((p.PriceUSD-1)*1e4), p.PriceUSD
+		if in.Numeraire == "EUR" {
+			if dev = stableDevFromUSD(p.PriceUSD, p.Day, in.ECB); dev == nil {
+				continue
+			}
+			price = p.PriceUSD / in.ECB[p.Day]
+		}
+		d := at(p.Day)
+		d.llama, d.llamaDev = &price, dev
+	}
+	keys := make([]string, 0, len(days))
+	for k := range days {
+		keys = append(keys, k)
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(keys)))
+
+	out := stableDepegHistory{Days: []StableDepegDay{}, Markers: []StableDepegMarker{}}
+	if len(keys) > 0 {
+		out.HistoryFrom = keys[len(keys)-1]
+	}
+	last := func(day, source string, dev float64) {
+		if out.LastGE100 == nil {
+			out.LastGE100 = &StableLastDeviation{Day: day, Source: source, DevBps: dev, DaysSince: stableDaysBetween(day, in.Today)}
+		}
+	}
+	for _, k := range keys {
+		d := days[k]
+		var closeDev *float64
+		switch {
+		case d.roll != nil:
+			r := d.roll
+			dev := (*r.Close - 1) * 1e4
+			closeDev = &dev
+			if stableBpsAtLeast(dev, stableDepegThresholdBps) {
+				out.Days = append(out.Days, StableDepegDay{Day: k, Source: stablePegSourceConsensus, Close: *r.Close, CloseDevBps: dev,
+					ThresholdBps: stableDepegThresholdBps, MinDevBps: r.MinDevBps, MaxDevBps: r.MaxDevBps, MinutesGE30: r.MinutesGE30, MinutesGE100: r.MinutesGE100})
+			}
+		case d.llamaDev != nil:
+			closeDev = d.llamaDev
+			thr := stableDepegThresholdBps
+			if in.Numeraire == "EUR" {
+				thr = stableDepegEURLlamaBps
+			}
+			if stableBpsAtLeast(*d.llamaDev, thr) {
+				out.Days = append(out.Days, StableDepegDay{Day: k, Source: stablePriceSourceLlama, Close: *d.llama, CloseDevBps: *d.llamaDev, ThresholdBps: thr})
+			}
+		}
+		var marker *StableDepegMarker
+		if c := d.candle; c != nil {
+			lowDev := (*c.Low - 1) * 1e4
+			var by []string
+			if c.Close != nil && stableBpsAtLeast((*c.Close-1)*1e4, stableDepegThresholdBps) {
+				by = append(by, "bitstamp_close")
+			}
+			if d.roll != nil && stableBpsAtLeast((*d.roll.Close-1)*1e4, stableDepegThresholdBps) {
+				by = append(by, stablePegSourceConsensus)
+			}
+			if d.llamaDev != nil && stableBpsAtLeast(*d.llamaDev, stableDepegThresholdBps) {
+				by = append(by, stablePriceSourceLlama)
+			}
+			if stableBpsAtLeast(lowDev, stableLowMarkerBps) && len(by) > 0 {
+				marker = &StableDepegMarker{Day: k, Source: stablePegSourceBitstamp, Low: *c.Low, LowDevBps: lowDev, Close: c.Close, ConfirmedBy: by}
+				out.Markers = append(out.Markers, *marker)
+			}
+		}
+		// The newest ≥ 100 bps deviation: the close, then the consensus
+		// samples, then a shown marker.
+		switch {
+		case closeDev != nil && stableBpsAtLeast(*closeDev, stableLastDevBps):
+			src := stablePriceSourceLlama
+			if d.roll != nil {
+				src = stablePegSourceConsensus
+			}
+			last(k, src, *closeDev)
+		case d.roll != nil && d.roll.MinutesGE100 != nil && *d.roll.MinutesGE100 >= stableIntradayMinutes:
+			last(k, "consensus_intraday", stableWorstDev(d.roll.MinDevBps, d.roll.MaxDevBps))
+		case marker != nil:
+			last(k, stablePegSourceBitstamp, marker.LowDevBps)
+		}
+	}
+	out.Total = len(out.Days)
+	return out
+}
+
+// stableWorstDev is the deviation with the larger magnitude.
+func stableWorstDev(lo, hi *float64) float64 {
+	switch {
+	case lo == nil && hi == nil:
+		return 0
+	case lo == nil:
+		return *hi
+	case hi == nil || math.Abs(*lo) >= math.Abs(*hi):
+		return *lo
+	}
+	return *hi
+}
+
+// stableDaysBetween counts calendar days from a to b (YYYY-MM-DD).
+func stableDaysBetween(a, b string) int {
+	ta, errA := time.Parse(time.DateOnly, a)
+	tb, errB := time.Parse(time.DateOnly, b)
+	if errA != nil || errB != nil {
+		return 0
+	}
+	return int(tb.Sub(ta).Hours() / 24)
 }

@@ -58,19 +58,39 @@ func TestStablecoinPegEndpoint(t *testing.T) {
 	if usdc.SeriesResolution != "5m" || len(usdc.Series) != 1 || usdc.Series[0].Consensus == nil || usdc.Series[0].DispBps == nil {
 		t.Errorf("usdc series = %s %+v", usdc.SeriesResolution, usdc.Series)
 	}
-	// Depeg history: the Bitstamp intraday low of 2023-03-11 and the DefiLlama
-	// 2023-03-12 row are days at ≥ 30 bps; annotations for the asset.
-	var low, llama bool
+	// Depeg history (§7.2): a day counts by its close. USDC's DefiLlama
+	// 2023-03-12 row (−389 bps) is a depeg day; 2023-03-11 (−24 bps) is not,
+	// but its Bitstamp low 0.80526 is a marker, confirmed by the candle's own
+	// close (−315 bps).
+	byDay := map[string]StableDepegDay{}
 	for _, d := range usdc.DepegDays {
-		if d.Day == "2023-03-11" && d.Source == stablePegSourceBitstamp && d.MinDevBps != nil && math.Abs(*d.MinDevBps-(0.80526-1)*1e4) < 1e-9 {
-			low = true
-		}
-		if d.Day == "2023-03-12" && d.Source == stablePriceSourceLlama && d.MinDevBps != nil && math.Abs(*d.MinDevBps-(0.961065-1)*1e4) < 1e-9 {
-			llama = true
-		}
+		byDay[d.Day] = d
 	}
-	if !low || !llama {
-		t.Errorf("depeg days lack the 2023-03 lows (bitstamp %v, defillama %v): %+v", low, llama, usdc.DepegDays)
+	if d, ok := byDay["2023-03-12"]; !ok || d.Source != stablePriceSourceLlama || math.Abs(d.CloseDevBps-(0.961065-1)*1e4) > 1e-9 || d.ThresholdBps != 30 {
+		t.Errorf("usdc 2023-03-12 = %+v (listed %v)", d, ok)
+	}
+	if d, ok := byDay["2023-03-11"]; ok {
+		t.Errorf("2023-03-11 counted by its intraday low: %+v", d)
+	}
+	if usdc.DepegDaysTotal != 10 || len(usdc.DepegDays) != 10 {
+		t.Errorf("usdc depeg days = %d (listed %d), want the 10 DefiLlama days at ≥ 30 bps", usdc.DepegDaysTotal, len(usdc.DepegDays))
+	}
+	var marks []string
+	for _, m := range usdc.LowMarkers {
+		marks = append(marks, m.Day+":"+strings.Join(m.ConfirmedBy, "+"))
+	}
+	if got := strings.Join(marks, " "); got != "2023-03-13:bitstamp_close+defillama 2023-03-12:bitstamp_close+defillama 2023-03-11:bitstamp_close" {
+		t.Errorf("usdc low markers = %s", got)
+	}
+	if m := usdc.LowMarkers[2]; m.Low != 0.80526 || math.Abs(m.LowDevBps-(0.80526-1)*1e4) > 1e-9 {
+		t.Errorf("usdc 2023-03-11 marker = %+v", m)
+	}
+	since := int(clock.Sub(time.Date(2023, 3, 13, 0, 0, 0, 0, time.UTC)).Hours() / 24)
+	if l := usdc.LastGE100; l == nil || l.Day != "2023-03-13" || l.Source != stablePegSourceBitstamp || math.Abs(l.DevBps+500) > 1e-9 || l.DaysSince != since {
+		t.Errorf("usdc last ≥ 100 bps = %+v, want the 2023-03-13 low, %d days ago", l, since)
+	}
+	if usdc.HistoryFrom != "2023-03-01" || resp.LowMarkerBps != 100 {
+		t.Errorf("usdc history from %q, low marker threshold %v", usdc.HistoryFrom, resp.LowMarkerBps)
 	}
 	if len(usdc.Annotations) != 1 || usdc.Annotations[0].Date != "2023-03-11" {
 		t.Errorf("usdc annotations = %+v", usdc.Annotations)
@@ -84,10 +104,33 @@ func TestStablecoinPegEndpoint(t *testing.T) {
 		t.Errorf("annotations %d (overridden %v), threshold %v", len(resp.Annotations), resp.AnnotationsOverridden, resp.DepegThresholdBps)
 	}
 
-	// EURC: euro terms, with the EUR-only flags.
+	// EURC: euro terms, with the EUR-only flags. A stored eurceur candle
+	// (written before M3) is never used: no markers for EURC.
+	lo, cl := 0.95, 0.96
+	if err := h.stable.store.upsertStablePegDaily(context.Background(), []stablePegDaily{{Day: "2026-10-18", Asset: "eurc", Source: stablePegSourceBitstamp,
+		Low: &lo, Close: &cl, MinDevBps: stableF(-500), MaxDevBps: stableF(0), Samples: 1, UpdatedAt: clock}}); err != nil {
+		t.Fatal(err)
+	}
+	h.cache = NewCache(time.Minute)
 	eurc := decodeStable[StablePegResponse](t, stableGet(t, h.StablecoinPeg, "/api/opendata/stablecoin/peg?asset=eurc")).Assets[0]
 	if eurc.Numeraire != "EUR" || eurc.SecondDirectEURVenue == nil || eurc.PartiallyDependent == nil {
 		t.Errorf("eurc = %+v", eurc.StablePeg)
+	}
+	if len(eurc.LowMarkers) != 0 || eurc.LastGE100 != nil || len(eurc.DepegDays) != 0 {
+		t.Errorf("eurc history: markers %+v, last ≥ 100 %+v, days %+v", eurc.LowMarkers, eurc.LastGE100, eurc.DepegDays)
+	}
+	// USDT: the 2022-05-13 wick (low −110 bps, close −20, no DefiLlama row)
+	// is not a marker; the newest ≥ 100 bps day is DefiLlama's 2023-03-21.
+	usdt := decodeStable[StablePegResponse](t, stableGet(t, h.StablecoinPeg, "/api/opendata/stablecoin/peg?asset=usdt")).Assets[0]
+	marks = nil
+	for _, m := range usdt.LowMarkers {
+		marks = append(marks, m.Day+":"+strings.Join(m.ConfirmedBy, "+"))
+	}
+	if got := strings.Join(marks, " "); got != "2022-05-12:bitstamp_close 2022-05-11:bitstamp_close" {
+		t.Errorf("usdt low markers = %s", got)
+	}
+	if l := usdt.LastGE100; usdt.DepegDaysTotal != 15 || l == nil || l.Day != "2023-03-21" || l.Source != stablePriceSourceLlama {
+		t.Errorf("usdt: %d depeg days, last ≥ 100 bps %+v", usdt.DepegDaysTotal, l)
 	}
 	// All assets; long ranges use the daily rollup.
 	all := decodeStable[StablePegResponse](t, stableGet(t, h.StablecoinPeg, "/api/opendata/stablecoin/peg?range=all"))

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -234,6 +235,10 @@ func TestSyncDepegHistory(t *testing.T) {
 	if eurc, _ := store.stablePegDailySeries(ctx, "eurc", stablePegSourceBitstamp, "2000-01-01"); len(eurc) != 0 {
 		t.Errorf("eurc candles = %d, want none (no fixture)", len(eurc))
 	}
+	// Bitstamp's eurceur book is too thin for the history (§7.2): never read.
+	if q := stub.queries("/bitstamp/api/v2/ohlc/eurceur/"); len(q) != 0 {
+		t.Errorf("eurceur candles requested: %v", q)
+	}
 	qs := stub.queries("/bitstamp/api/v2/ohlc/usdcusd/")
 	// 03-06 (2 candles), 03-10 (4), 03-14 (2), 03-18 (none; the next window starts after the clock).
 	windows := []time.Time{p.ohlcFrom, p.ohlcFrom.AddDate(0, 0, 4), p.ohlcFrom.AddDate(0, 0, 8), p.ohlcFrom.AddDate(0, 0, 12)}
@@ -302,5 +307,123 @@ func TestRunStablePegOnceRunsHistory(t *testing.T) {
 	}
 	if hist == nil || hist.LastOK == "" || hist.NextDue == "" {
 		t.Errorf("peg_history health = %+v", hist)
+	}
+}
+
+// Depeg-day classification (§7.2): a day counts by its daily close (the
+// BigLens consensus rollup, else DefiLlama), a Bitstamp low is a marker only
+// when ≥ 100 bps off and confirmed by a close ≥ 30 bps off that day, and
+// EURC's DefiLlama days use the same-day ECB rate at 100 bps.
+func TestStableClassifyDepeg(t *testing.T) {
+	f := func(v float64) *float64 { return &v }
+	n := func(v int) *int { return &v }
+	roll := func(day string, close, minDev float64, ge100 int) stablePegDaily {
+		return stablePegDaily{Day: day, Source: stablePegSourceConsensus, Close: f(close), MinDevBps: f(minDev), MaxDevBps: f((close - 1) * 1e4),
+			MinutesGE30: n(ge100 + 30), MinutesGE100: n(ge100), Samples: 288}
+	}
+	candle := func(day string, low, close float64) stablePegDaily {
+		return stablePegDaily{Day: day, Source: stablePegSourceBitstamp, Low: f(low), Close: f(close), High: f(1.0001),
+			MinDevBps: f((low - 1) * 1e4), MaxDevBps: f(1), Samples: 1}
+	}
+	price := func(day string, p float64) stablePriceDaily {
+		return stablePriceDaily{Day: day, GeckoID: "usd-coin", PriceUSD: p, Source: stablePriceSourceLlama}
+	}
+	usd := stableDepegInputs{Numeraire: "USD", Today: "2024-01-20",
+		Rollup: []stablePegDaily{
+			roll("2024-01-10", 0.9968, -40, 0),   // close −32 bps: a depeg day, although DefiLlama is at par
+			roll("2024-01-12", 0.9990, -120, 20), // close −10 bps outranks DefiLlama's −50; 20 min at ≥ 100 bps
+		},
+		Prices: []stablePriceDaily{
+			price("2024-01-10", 0.9999),
+			price("2024-01-11", 0.9965), // no rollup: DefiLlama −35 bps
+			price("2024-01-12", 0.9950),
+			price("2024-01-13", 0.9980),
+			price("2024-01-14", 0.99756),
+			price("2024-01-16", 1.003), // exactly +30 bps (29.99999999999989 in float64)
+		},
+		Candles: []stablePegDaily{
+			candle("2024-01-13", 0.9850, 0.9990),   // a −150 bps wick; close −10, DefiLlama −20: no marker
+			candle("2024-01-14", 0.80526, 0.96853), // confirmed by the candle's own close (−315 bps)
+			candle("2024-01-15", 0.9905, 0.9960),   // low −95 bps: under the marker threshold
+			candle("2024-01-16", 0.99, 1.0),        // low exactly −100 bps, confirmed by DefiLlama at exactly 30
+		},
+	}
+	h := stableClassifyDepeg(usd)
+	type day struct {
+		day, source string
+		dev, thr    float64
+	}
+	want := []day{{"2024-01-16", "defillama", 30, 30}, {"2024-01-11", "defillama", -35, 30}, {"2024-01-10", "consensus", -32, 30}}
+	if len(h.Days) != len(want) || h.Total != len(want) {
+		t.Fatalf("usd days = %+v (total %d), want %v", h.Days, h.Total, want)
+	}
+	for i, w := range want {
+		d := h.Days[i]
+		if d.Day != w.day || d.Source != w.source || math.Abs(d.CloseDevBps-w.dev) > 1e-6 || d.ThresholdBps != w.thr {
+			t.Errorf("usd day %d = %+v, want %+v", i, d, w)
+		}
+	}
+	if d := h.Days[2]; d.MinutesGE30 == nil || *d.MinutesGE30 != 30 || d.Close != 0.9968 {
+		t.Errorf("consensus day = %+v, want its close and minutes", d)
+	}
+	if len(h.Markers) != 2 || h.Markers[0].Day != "2024-01-16" || h.Markers[1].Day != "2024-01-14" {
+		t.Fatalf("usd markers = %+v, want 2024-01-16 and 2024-01-14", h.Markers)
+	}
+	if m := h.Markers[0]; strings.Join(m.ConfirmedBy, ",") != "defillama" || m.Low != 0.99 || m.Source != stablePegSourceBitstamp {
+		t.Errorf("marker 2024-01-16 = %+v", m)
+	}
+	if m := h.Markers[1]; strings.Join(m.ConfirmedBy, ",") != "bitstamp_close" || m.Close == nil || *m.Close != 0.96853 ||
+		math.Abs(m.LowDevBps-(0.80526-1)*1e4) > 1e-9 {
+		t.Errorf("marker 2024-01-14 = %+v", m)
+	}
+	if l := h.LastGE100; l == nil || l.Day != "2024-01-16" || l.Source != stablePegSourceBitstamp || l.DaysSince != 4 || math.Abs(l.DevBps+100) > 1e-6 {
+		t.Errorf("last ≥ 100 bps = %+v, want the 2024-01-16 marker, 4 days ago", h.LastGE100)
+	}
+	if h.HistoryFrom != "2024-01-10" {
+		t.Errorf("history from %q", h.HistoryFrom)
+	}
+	// Without the candles, the newest ≥ 100 bps deviation is the consensus
+	// on 2024-01-12: 20 minutes at ≥ 100 bps (S1's 15-minute window).
+	noCandles := usd
+	noCandles.Candles = nil
+	if l := stableClassifyDepeg(noCandles).LastGE100; l == nil || l.Day != "2024-01-12" || l.Source != "consensus_intraday" || l.DevBps != -120 || l.DaysSince != 8 {
+		t.Errorf("last ≥ 100 bps without candles = %+v", l)
+	}
+	// 10 minutes is not sustained: nothing at ≥ 100 bps in the history.
+	short := noCandles
+	short.Rollup = []stablePegDaily{roll("2024-01-12", 0.9990, -120, 10)}
+	if h := stableClassifyDepeg(short); h.LastGE100 != nil || h.HistoryFrom != "2024-01-10" {
+		t.Errorf("10 minutes at ≥ 100 bps: last %+v, history from %q", h.LastGE100, h.HistoryFrom)
+	}
+
+	// EURC: euro terms. The consensus close counts at 30 bps; DefiLlama's
+	// USD price ÷ the same-day ECB rate at 100 bps; no same-day rate (a
+	// Saturday) leaves the day unclassified.
+	eur := stableDepegInputs{Numeraire: "EUR", Today: "2024-01-20",
+		Rollup: []stablePegDaily{roll("2024-01-18", 1.0035, 0, 0)},
+		Prices: []stablePriceDaily{
+			price("2024-01-13", 1.1500), // Saturday: Friday's rate would make it +267.9 bps
+			price("2024-01-15", 1.1350), // ÷ 1.12 = +133.9 bps
+			price("2024-01-16", 1.1260), // ÷ 1.12 = +53.6 bps: under 100
+		},
+		ECB: map[string]float64{"2024-01-12": 1.12, "2024-01-15": 1.12, "2024-01-16": 1.12},
+	}
+	h = stableClassifyDepeg(eur)
+	if len(h.Days) != 2 || h.Days[0].Day != "2024-01-18" || h.Days[0].Source != "consensus" || h.Days[0].ThresholdBps != 30 ||
+		h.Days[1].Day != "2024-01-15" || h.Days[1].Source != "defillama" || h.Days[1].ThresholdBps != 100 ||
+		math.Abs(h.Days[1].CloseDevBps-(1.1350/1.12-1)*1e4) > 1e-9 || math.Abs(h.Days[1].Close-1.1350/1.12) > 1e-12 {
+		t.Fatalf("eurc days = %+v", h.Days)
+	}
+	if len(h.Markers) != 0 || h.LastGE100 == nil || h.LastGE100.Day != "2024-01-15" || h.LastGE100.DaysSince != 5 || h.HistoryFrom != "2024-01-15" {
+		t.Errorf("eurc markers %+v, last ≥ 100 %+v, history from %q", h.Markers, h.LastGE100, h.HistoryFrom)
+	}
+	// The same-day rule.
+	if v := stableDevFromUSD(1.15, "2024-01-13", eur.ECB); v != nil {
+		t.Errorf("Saturday deviation = %v, want none without a same-day rate", *v)
+	}
+	// Empty inputs: nothing, never a substitute.
+	if h := stableClassifyDepeg(stableDepegInputs{Numeraire: "USD", Today: "2024-01-20"}); len(h.Days) != 0 || h.Days == nil ||
+		len(h.Markers) != 0 || h.Markers == nil || h.LastGE100 != nil || h.HistoryFrom != "" {
+		t.Errorf("empty history = %+v", h)
 	}
 }
