@@ -33,7 +33,8 @@ const (
 	stableControlCallTimeout = 8 * time.Second
 )
 
-// stableControlDeployment is one monitored deployment (Appendix A).
+// stableControlDeployment is one monitored deployment (Appendix A, plus
+// native USDC on the L2s per its M3 note; bridged tiers are not monitored).
 type stableControlDeployment struct{ Asset, Chain, Kind string }
 
 var stableControlDeployments = []stableControlDeployment{
@@ -42,6 +43,9 @@ var stableControlDeployments = []stableControlDeployment{
 	{"usdt", "sol", stableKindSPL},
 	{"usdc", "eth", stableKindFiatToken},
 	{"usdc", "sol", stableKindSPL},
+	{"usdc", "arb", stableKindFiatToken},
+	{"usdc", "op", stableKindFiatToken},
+	{"usdc", "base", stableKindFiatToken},
 	{"eurc", "eth", stableKindFiatToken},
 	{"eurc", "base", stableKindFiatToken},
 	{"eurc", "sol", stableKindSPL},

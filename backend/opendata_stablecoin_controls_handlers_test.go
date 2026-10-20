@@ -45,7 +45,9 @@ func TestStablecoinControlsEndpoint(t *testing.T) {
 		t.Fatalf("cold status %d", rec.Code)
 	}
 	cold := decodeStable[StableControlsResponse](t, rec)
-	if len(cold.Assets) != 1 || len(cold.Assets[0].Deployments) != 2 || len(cold.Changes) != 0 || cold.Quarantined != nil {
+	// USDC: Ethereum, Solana and the native deployments on Arbitrum,
+	// Optimism and Base.
+	if len(cold.Assets) != 1 || len(cold.Assets[0].Deployments) != 5 || len(cold.Changes) != 0 || cold.Quarantined != nil {
 		t.Fatalf("cold controls = %+v", cold)
 	}
 	d := controlsDeployment(t, cold, "usdc", "eth")

@@ -37,6 +37,19 @@ var stableControlsAppendixA = map[string]map[string]string{
 		"blacklister": "0x8415c913a925586b5169b0322f6ead8f5c9a1ead", "pauser": "0xfa223f7bb88c8df670bb3acdf16fcb3abbc01c50",
 		"rescuer": zeroAddr, "paused": "false"},
 	"eurc|sol": {"mint_authority": "Hy9168u7b2Toujh8SJKtKK8DWbyaBbXPzxm337R4o4XY", "freeze_authority": "6FF2CPcL6fat16QVJH6W27DeBcX7TSqbwY3a5wtyVJLC"},
+	// Native USDC on the L2s (monitored since M4; Appendix A lists no control
+	// values for them, so these are made-up test addresses).
+	"usdc|arb":  stableControlsSyntheticFiatToken("a1"),
+	"usdc|op":   stableControlsSyntheticFiatToken("0a"),
+	"usdc|base": stableControlsSyntheticFiatToken("ba"),
+}
+
+// stableControlsSyntheticFiatToken is a FiatToken control set with made-up
+// addresses tagged by a two-hex-digit prefix.
+func stableControlsSyntheticFiatToken(tag string) map[string]string {
+	addr := func(n string) string { return "0x" + tag + strings.Repeat("0", 36) + n }
+	return map[string]string{"implementation": addr("01"), "admin": addr("02"), "owner": addr("03"), "master_minter": addr("04"),
+		"blacklister": addr("05"), "pauser": addr("06"), "rescuer": zeroAddr, "paused": "false"}
 }
 
 // stableControlsStub answers the control reads: two EVM endpoints (a, b),
@@ -224,7 +237,7 @@ func newStableControlsStub(t *testing.T) (*stableControlsStub, func(string) []st
 		s.urls[endpoint] = srv.URL
 		return srv
 	}
-	evmA, evmB, base, solA, solB := evm("eth-a"), evm("eth-b"), evm("base-a"), sol("sol-a"), sol("sol-b")
+	evmA, evmB, base, arb, op, solA, solB := evm("eth-a"), evm("eth-b"), evm("base-a"), evm("arb-a"), evm("op-a"), sol("sol-a"), sol("sol-b")
 	tron := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if st := s.begin("tron"); st != 0 {
 			w.WriteHeader(st)
@@ -255,6 +268,10 @@ func newStableControlsStub(t *testing.T) (*stableControlsStub, func(string) []st
 			return []string{evmA.URL, evmB.URL}
 		case "base":
 			return []string{base.URL}
+		case "arb":
+			return []string{arb.URL}
+		case "op":
+			return []string{op.URL}
 		case "sol":
 			return []string{solA.URL, solB.URL}
 		}
@@ -274,9 +291,10 @@ func stableControlKindOf(dep string) string {
 
 func TestStableControlDeployments(t *testing.T) {
 	want := map[string]string{"usdt|eth": stableKindTether, "usdt|tron": stableKindTether, "usdt|sol": stableKindSPL,
-		"usdc|eth": stableKindFiatToken, "usdc|sol": stableKindSPL, "eurc|eth": stableKindFiatToken, "eurc|base": stableKindFiatToken, "eurc|sol": stableKindSPL}
+		"usdc|eth": stableKindFiatToken, "usdc|sol": stableKindSPL, "eurc|eth": stableKindFiatToken, "eurc|base": stableKindFiatToken, "eurc|sol": stableKindSPL,
+		"usdc|arb": stableKindFiatToken, "usdc|op": stableKindFiatToken, "usdc|base": stableKindFiatToken}
 	if len(stableControlDeployments) != len(want) {
-		t.Fatalf("deployments = %d, want %d (Appendix A)", len(stableControlDeployments), len(want))
+		t.Fatalf("deployments = %d, want %d (Appendix A and its M3 note)", len(stableControlDeployments), len(want))
 	}
 	for _, d := range stableControlDeployments {
 		key := d.Asset + "|" + d.Chain
