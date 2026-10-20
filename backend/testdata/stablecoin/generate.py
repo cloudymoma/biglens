@@ -534,7 +534,10 @@ def word(n):
 
 
 tick = int(math.floor(math.log(UNI_PRICE) / math.log(1.0001)))
-slot0 = "0x" + word(sqrt_x96) + word(tick) + word(8) + word(107) + word(300) + word(300) + word(68) + word(1)
+# slot0() returns 7 words: sqrtPriceX96, tick, observationIndex, observationCardinality,
+# observationCardinalityNext, feeProtocol, unlocked.
+slot0 = "0x" + word(sqrt_x96) + word(tick) + word(107) + word(300) + word(300) + word(68) + word(1)
+assert len(slot0) == 2 + 7 * 64
 write("uniswap_v3_usdc_usdt_rpc.json", [
     {"request": {"to": pool, "data": "0x0dfe1681"}, "response": {"jsonrpc": "2.0", "id": 1, "result": "0x" + word(0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48)}},
     {"request": {"to": pool, "data": "0xd21220a7"}, "response": {"jsonrpc": "2.0", "id": 1, "result": "0x" + word(0xdac17f958d2ee523a2206206994597c13d831ec7)}},
