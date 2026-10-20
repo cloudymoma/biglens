@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -322,8 +324,42 @@ type StableSupplyAsset struct {
 	// UnmappedChains lists source chain names outside the canonical map;
 	// their rows are kept (source-prefixed keys), never merged or dropped.
 	UnmappedChains []StableUnmappedChain `json:"unmapped_chains"`
+	DataHealth     StableDataHealth      `json:"data_health"`
 
 	issuerAt time.Time
+}
+
+// StableDataHealth carries the S13 inputs known before the M4 signal engine.
+// Only the checks listed in Checks are evaluated; normal means none of them
+// failed.
+type StableDataHealth struct {
+	State   string               `json:"state"`   // normal | watch
+	Checks  []string             `json:"checks"`  // evaluated S13 inputs: tether_sum
+	Reasons []StableHealthReason `json:"reasons"` // why the state is above normal
+}
+
+type StableHealthReason struct {
+	Code   string `json:"code"` // tether_sum_mismatch
+	Asset  string `json:"asset"`
+	Source string `json:"source"`
+	Detail string `json:"detail"`
+}
+
+func newStableDataHealth() StableDataHealth {
+	return StableDataHealth{State: "normal", Checks: []string{}, Reasons: []StableHealthReason{}}
+}
+
+// merge folds another asset's health into h (the /meta view).
+func (h *StableDataHealth) merge(o StableDataHealth) {
+	for _, c := range o.Checks {
+		if !slices.Contains(h.Checks, c) {
+			h.Checks = append(h.Checks, c)
+		}
+	}
+	h.Reasons = append(h.Reasons, o.Reasons...)
+	if o.State == "watch" {
+		h.State = "watch"
+	}
 }
 
 type StableUnmappedChain struct {
@@ -531,11 +567,42 @@ func buildStableSupplyAsset(def stableAssetDef, in stableSupplyInputs) StableSup
 	// Source badges.
 	a.Sources = append(a.Sources, func() BtcSourceStatus {
 		if def.Issuer == "tether" {
-			return stableSourceStatus("tether", in.Tether)
+			st := stableSourceStatus("tether", in.Tether)
+			if in.Tether.Has && in.Tether.Value.Degraded {
+				// Served with a badge, never blocked (§6 S12).
+				if st.Status == "ok" {
+					st.Status = "degraded"
+				}
+				if st.Error == "" {
+					st.Error = in.Tether.Value.DegradedReason
+				}
+			}
+			return st
 		}
 		return stableSourceStatus("circle", in.Circle)
 	}(), stableSourceStatus("defillama", in.Llama), stableOnchainSourceStatus(def, in))
+	a.DataHealth = stableAssetDataHealth(def, in)
 	return a
+}
+
+// stableAssetDataHealth evaluates the S13 inputs available before M4: the
+// Tether sum check (Σ per-chain circulating vs total_liabilities) puts S13
+// at watch while it fails.
+func stableAssetDataHealth(def stableAssetDef, in stableSupplyInputs) StableDataHealth {
+	h := newStableDataHealth()
+	if def.Issuer != "tether" || !in.Tether.Has {
+		return h
+	}
+	h.Checks = append(h.Checks, "tether_sum")
+	if tz := in.Tether.Value; tz.Degraded {
+		detail := "per-chain circulating does not sum to total_liabilities"
+		if tz.SumMismatchPct != nil {
+			detail = fmt.Sprintf("per-chain circulating differs from total_liabilities by %+.4f%% (tolerance 0.01%%)", *tz.SumMismatchPct)
+		}
+		h.State = "watch"
+		h.Reasons = append(h.Reasons, StableHealthReason{Code: "tether_sum_mismatch", Asset: def.ID, Source: "tether", Detail: detail})
+	}
+	return h
 }
 
 func stableOnchainSourceStatus(def stableAssetDef, in stableSupplyInputs) BtcSourceStatus {

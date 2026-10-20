@@ -107,6 +107,13 @@ func stableVerifyChecks(ctx context.Context, settings stableSettings, ep stableE
 
 	if settings.Providers["tether"] {
 		snap, code := fetchTetherTransparency(ctx, ep, now)
+		if code == "" && snap.Degraded {
+			// The dashboard serves such an update with a badge; verify fails (§8.7).
+			code = snap.DegradedReason
+			if snap.SumMismatchPct != nil {
+				code = fmt.Sprintf("%s: per-chain sum vs total_liabilities %+.4f%%", snap.DegradedReason, *snap.SumMismatchPct)
+			}
+		}
 		detail := ""
 		if code == "" {
 			detail = fmt.Sprintf("%d chains, sum = total_liabilities within 0.01%%, update %s", len(snap.Chains), snap.UpdatedAt.Format("2006-01-02 15:04Z"))

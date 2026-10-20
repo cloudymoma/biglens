@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -139,13 +138,17 @@ func TestParseTetherShape(t *testing.T) {
 			t.Errorf("%s: accepted", name)
 		}
 	}
-	// A per-chain sum that no longer matches total_liabilities (> 0.01%) is format drift.
-	_, err = parseTetherTransparency([]byte(strings.Replace(good, `"total_liabilities": "100"`, `"total_liabilities": "100.02"`, 1)), at)
-	if !errors.Is(err, errTetherSumMismatch) {
-		t.Errorf("sum mismatch: err = %v, want errTetherSumMismatch", err)
+	// A per-chain sum that no longer matches total_liabilities (> 0.01%) is
+	// served with a degraded flag (§6 S12, "Tether sum check"), never blocked.
+	snap, err = parseTetherTransparency([]byte(strings.Replace(good, `"total_liabilities": "100"`, `"total_liabilities": "100.02"`, 1)), at)
+	if err != nil || !snap.Degraded || snap.DegradedReason != "sum_mismatch" || snap.CirculatingSumNative != 100 || len(snap.Chains) != 2 ||
+		snap.TotalLiabilitiesUSD == nil || *snap.TotalLiabilitiesUSD != 100.02 {
+		t.Errorf("sum mismatch: %+v, %v (want the data with a degraded flag)", snap, err)
 	}
-	if _, err := parseTetherTransparency([]byte(strings.Replace(good, `"total_liabilities": "100"`, `"total_liabilities": "100.005"`, 1)), at); err != nil {
-		t.Errorf("sum within 0.01%% rejected: %v", err)
+	approxPtr(t, "sum mismatch pct", snap.SumMismatchPct, (100-100.02)/100.02*100, 1e-9)
+	snap, err = parseTetherTransparency([]byte(strings.Replace(good, `"total_liabilities": "100"`, `"total_liabilities": "100.005"`, 1)), at)
+	if err != nil || snap.Degraded || snap.DegradedReason != "" {
+		t.Errorf("sum within 0.01%%: %+v, %v (want not degraded)", snap, err)
 	}
 }
 
@@ -178,8 +181,8 @@ func TestFetchIssuersFromStub(t *testing.T) {
 		t.Errorf("tether: code %q, update %d", code, snap.UpdateID)
 	}
 	ep.TetherURL = srv.URL + "/tether-drift"
-	if _, code := fetchTetherTransparency(ctx, ep, time.Now()); code != "shape_drift" {
-		t.Errorf("tether drift: code %q, want shape_drift", code)
+	if snap, code := fetchTetherTransparency(ctx, ep, time.Now()); code != "" || !snap.Degraded || len(snap.Chains) != fxTetherChains {
+		t.Errorf("tether drift: code %q, degraded %v, %d chains (want the data, flagged degraded)", code, snap.Degraded, len(snap.Chains))
 	}
 	ep.CircleURL = srv.URL + "/missing"
 	if _, code := fetchCircleStablecoins(ctx, ep, time.Now()); code != "not_found" {

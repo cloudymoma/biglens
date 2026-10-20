@@ -88,12 +88,14 @@ type StableMeta struct {
 	Facts         StableMetaFacts        `json:"facts"`
 	BigQuery      StableMetaBigQuery     `json:"bigquery"`
 	CoverageNotes []string               `json:"coverage_notes"`
+	// DataHealth merges every asset's S13 inputs (pre-M4: the Tether sum check).
+	DataHealth StableDataHealth `json:"data_health"`
 }
 
 var stableCoverageNotes = []string{
 	"On-chain totals are read on eth, arb, op, base, tron and sol only; other chains are issuer- or aggregator-reported.",
 	"DefiLlama list values are USD (native × DefiLlama price); they are converted to native units with the price from the same response.",
-	"USDT per-chain issuer figures come from Tether's transparency JSON, which updates about once a day; the issuer vs on-chain check only compares readings at most 15 minutes apart.",
+	"USDT per-chain issuer figures come from Tether's transparency JSON, which updates about once a day; the issuer vs on-chain check compares the latest Tether update with the latest on-chain total and needs 2 consecutive Tether updates. USDC and EURC pairs are compared only when the readings are at most 15 minutes apart.",
 }
 
 func (s *stablecoinService) buildMeta() StableMeta {
@@ -117,6 +119,12 @@ func (s *stablecoinService) buildMeta() StableMeta {
 	}
 	m.BigQuery = StableMetaBigQuery{Jobs: s.settings.Jobs, Status: "not_in_v1", InitialDays: s.settings.InitialDays,
 		MonthlyBudgetGiB: s.settings.BudgetBytes >> 30, Tron: s.settings.Tron}
+	m.DataHealth = newStableDataHealth()
+	if state := s.snapshot(); state != nil {
+		for _, def := range stableCoreAssets {
+			m.DataHealth.merge(state.Assets[def.ID].DataHealth)
+		}
+	}
 	return m
 }
 
@@ -146,6 +154,7 @@ type StableLiveAsset struct {
 	CirculatingSource    string   `json:"circulating_source,omitempty"` // issuer | aggregator
 	CirculatingAsOf      string   `json:"circulating_as_of,omitempty"`
 	CirculatingStale     bool     `json:"circulating_stale,omitempty"`
+	CirculatingDegraded  bool     `json:"circulating_degraded,omitempty"` // the issuer source is degraded (Tether sum check)
 	NetIssuance24hNative *float64 `json:"net_issuance_24h_native"`
 	NetIssuance24hPct    *float64 `json:"net_issuance_24h_pct"`
 	NetIssuance24hSource string   `json:"net_issuance_24h_source,omitempty"`
@@ -178,16 +187,16 @@ func (s *stablecoinService) buildLive() StableLive {
 		la := StableLiveAsset{Asset: def.ID, Symbol: def.Symbol, Numeraire: def.Numeraire}
 		if state != nil {
 			a := state.Assets[def.ID]
-			issuerStale := false
+			issuerStale, issuerDegraded := false, false
 			for _, src := range a.Sources {
-				if src.ID == def.Issuer && src.Status == "stale" {
-					issuerStale = true
+				if src.ID == def.Issuer {
+					issuerStale, issuerDegraded = src.Status == "stale", src.Status == "degraded"
 				}
 			}
 			switch {
 			case a.Totals.IssuerCirculatingNative != nil:
 				la.CirculatingNative, la.CirculatingSource, la.CirculatingAsOf = a.Totals.IssuerCirculatingNative, "issuer", a.Totals.IssuerAsOf
-				la.CirculatingStale = issuerStale
+				la.CirculatingStale, la.CirculatingDegraded = issuerStale, issuerDegraded
 			case a.Totals.AggregatorCirculatingNative != nil:
 				la.CirculatingNative, la.CirculatingSource, la.CirculatingAsOf = a.Totals.AggregatorCirculatingNative, "aggregator", a.Totals.AggregatorAsOf
 			}

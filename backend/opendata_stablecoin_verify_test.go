@@ -123,6 +123,7 @@ func TestStableVerifyFailures(t *testing.T) {
 		name     string
 		mutate   func(*stableStub) stableEndpoints
 		provider string
+		detail   string // expected in the FAIL line, when set
 	}{
 		{"defillama id drift", func(s *stableStub) stableEndpoints {
 			drift := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -132,7 +133,7 @@ func TestStableVerifyFailures(t *testing.T) {
 			ep := s.endpoints()
 			ep.LlamaBase = drift.URL
 			return ep
-		}, "defillama"},
+		}, "defillama", ""},
 		{"tether sum mismatch", func(s *stableStub) stableEndpoints {
 			body := strings.Replace(string(readStableFixture(t, "tether_transparency.json")),
 				`"total_liabilities": "`+fxTetherLiabilitiesStr+`"`, `"total_liabilities": "1`+fxTetherLiabilitiesStr+`"`, 1)
@@ -141,18 +142,18 @@ func TestStableVerifyFailures(t *testing.T) {
 			ep := s.endpoints()
 			ep.TetherURL = bad.URL
 			return ep
-		}, "tether"},
+		}, "tether", "sum_mismatch"},
 		{"circle outage", func(s *stableStub) stableEndpoints {
 			s.setFail("/circle", http.StatusServiceUnavailable)
 			return s.endpoints()
-		}, "circle"},
+		}, "circle", ""},
 		{"ecb html", func(s *stableStub) stableEndpoints {
 			html := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("<html>maintenance</html>")) }))
 			t.Cleanup(html.Close)
 			ep := s.endpoints()
 			ep.ECBBase = html.URL
 			return ep
-		}, "ecb"},
+		}, "ecb", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -163,12 +164,12 @@ func TestStableVerifyFailures(t *testing.T) {
 			}
 			found := false
 			for _, line := range strings.Split(out, "\n") {
-				if strings.HasPrefix(line, "FAIL") && strings.Contains(line, tc.provider) {
+				if strings.HasPrefix(line, "FAIL") && strings.Contains(line, tc.provider) && strings.Contains(line, tc.detail) {
 					found = true
 				}
 			}
 			if !found {
-				t.Errorf("no FAIL line for %s:\n%s", tc.provider, out)
+				t.Errorf("no FAIL line for %s (%q):\n%s", tc.provider, tc.detail, out)
 			}
 		})
 	}

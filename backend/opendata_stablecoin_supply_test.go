@@ -786,6 +786,59 @@ func TestStableSupplySamplerTick(t *testing.T) {
 	}
 }
 
+// Tether totals that don't add up: the data is served with a degraded badge
+// and S13 goes to watch (§6 S12, "Tether sum check"); nothing is blocked.
+func TestStableTetherDegradedServed(t *testing.T) {
+	stub := newStableStub(t)
+	body := strings.Replace(string(readStableFixture(t, "tether_transparency.json")),
+		`"total_liabilities": "`+fxTetherLiabilitiesStr+`"`, `"total_liabilities": "1`+fxTetherLiabilitiesStr+`"`, 1)
+	if !strings.Contains(body, `"total_liabilities": "1`+fxTetherLiabilitiesStr+`"`) {
+		t.Fatal("fixture edit did not apply (test bug)")
+	}
+	drift := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(body)) }))
+	defer drift.Close()
+	ep := stub.endpoints()
+	ep.TetherURL = drift.URL
+	store := newTestRiskStore(t)
+	clock := time.Date(2026, 10, 19, 13, 20, 0, 0, time.UTC)
+	s := newStableSupplySampler(StablecoinConfig{Providers: map[string]bool{"rpc_supply": false}}.settings(), store, ep, nil,
+		func() time.Time { return clock })
+	s.tick(context.Background())
+	usdt := s.snapshot().Assets["usdt"]
+	approxPtr(t, "usdt issuer total (served)", usdt.Totals.IssuerCirculatingNative, fxTetherLiabilitiesUSD, 1e-3)
+	var tether *BtcSourceStatus
+	for i := range usdt.Sources {
+		if usdt.Sources[i].ID == "tether" {
+			tether = &usdt.Sources[i]
+		}
+	}
+	if tether == nil || tether.Status != "degraded" || tether.Error != "sum_mismatch" || tether.AsOf == "" {
+		t.Errorf("tether source = %+v, want degraded/sum_mismatch", tether)
+	}
+	h := usdt.DataHealth
+	if h.State != "watch" || len(h.Reasons) != 1 || h.Reasons[0].Code != "tether_sum_mismatch" || h.Reasons[0].Source != "tether" ||
+		h.Reasons[0].Asset != "usdt" || h.Reasons[0].Detail == "" || len(h.Checks) != 1 || h.Checks[0] != "tether_sum" {
+		t.Errorf("usdt data health = %+v, want watch with the Tether sum reason", h)
+	}
+	if u := s.snapshot().Assets["usdc"].DataHealth; u.State != "normal" || len(u.Reasons) != 0 || u.Checks == nil || len(u.Checks) != 0 {
+		t.Errorf("usdc data health = %#v, want normal with no checks", u)
+	}
+	// Stored like any other update.
+	var n int
+	_ = store.db.QueryRow(`SELECT COUNT(*) FROM stable_tether_snapshots`).Scan(&n)
+	if n != 1 || countStableRows(t, store, `WHERE asset = 'usdt' AND source = 'issuer'`) != fxTetherChains+1 {
+		t.Errorf("tether snapshots %d, usdt issuer rows %d", n, countStableRows(t, store, `WHERE asset = 'usdt' AND source = 'issuer'`))
+	}
+
+	// Totals that add up: the check passes.
+	s2 := newStableSupplySampler(StablecoinConfig{Providers: map[string]bool{"rpc_supply": false}}.settings(), newTestRiskStore(t),
+		stub.endpoints(), nil, func() time.Time { return clock })
+	s2.tick(context.Background())
+	if h := s2.snapshot().Assets["usdt"].DataHealth; h.State != "normal" || len(h.Reasons) != 0 || len(h.Checks) != 1 {
+		t.Errorf("usdt data health with a clean Tether update = %+v", h)
+	}
+}
+
 func TestStableSupplySamplerDisabledProvider(t *testing.T) {
 	stub := newStableStub(t)
 	rpcs, _, _ := stableRPCStub(t)

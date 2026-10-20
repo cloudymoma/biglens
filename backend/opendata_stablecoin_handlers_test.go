@@ -98,6 +98,47 @@ func TestStablecoinMeta(t *testing.T) {
 	if len(meta.CoverageNotes) == 0 {
 		t.Error("coverage notes missing")
 	}
+	if !strings.Contains(strings.Join(meta.CoverageNotes, " "), "2 consecutive Tether updates") {
+		t.Errorf("coverage notes do not describe the USDT check: %v", meta.CoverageNotes)
+	}
+	// S13 before M4: only the Tether sum check is evaluated.
+	if meta.DataHealth.State != "normal" || len(meta.DataHealth.Checks) != 1 || meta.DataHealth.Checks[0] != "tether_sum" || len(meta.DataHealth.Reasons) != 0 {
+		t.Errorf("data health = %+v", meta.DataHealth)
+	}
+}
+
+// A Tether update whose chains don't sum to total_liabilities is served with
+// a degraded flag: /meta data_health goes to watch and /live flags USDT.
+func TestStablecoinTetherDegraded(t *testing.T) {
+	stub := newStableStub(t)
+	body := strings.Replace(string(readStableFixture(t, "tether_transparency.json")),
+		`"total_liabilities": "`+fxTetherLiabilitiesStr+`"`, `"total_liabilities": "1`+fxTetherLiabilitiesStr+`"`, 1)
+	drift := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(body)) }))
+	defer drift.Close()
+	ep := stub.endpoints()
+	ep.TetherURL = drift.URL
+	clock := time.Date(2026, 10, 19, 13, 20, 0, 0, time.UTC)
+	h := newStableTestHandler(t, StablecoinConfig{Providers: map[string]bool{"rpc_supply": false}}, ep, nil, &clock)
+	cold := decodeStable[StableMeta](t, stableGet(t, h.StablecoinMeta, "/api/opendata/stablecoin/meta"))
+	if cold.DataHealth.State != "normal" || len(cold.DataHealth.Checks) != 0 {
+		t.Errorf("cold data health = %+v, want nothing evaluated", cold.DataHealth)
+	}
+	runStableOnce(context.Background(), h.stable.supply, h.stable.health)
+	h.cache = NewCache(time.Minute)
+	meta := decodeStable[StableMeta](t, stableGet(t, h.StablecoinMeta, "/api/opendata/stablecoin/meta"))
+	if meta.DataHealth.State != "watch" || len(meta.DataHealth.Reasons) != 1 || meta.DataHealth.Reasons[0].Code != "tether_sum_mismatch" {
+		t.Errorf("meta data health = %+v, want watch", meta.DataHealth)
+	}
+	live := decodeStable[StableLive](t, stableGet(t, h.StablecoinLive, "/api/opendata/stablecoin/live"))
+	for _, a := range live.Assets {
+		if want := a.Asset == "usdt"; a.CirculatingDegraded != want || (want && a.CirculatingNative == nil) {
+			t.Errorf("live %s = %+v, want degraded=%v with the value served", a.Asset, a, want)
+		}
+	}
+	sup := decodeStable[StableSupplyResponse](t, stableGet(t, h.StablecoinSupply, "/api/opendata/stablecoin/supply?asset=usdt"))
+	if a := sup.Assets[0]; a.DataHealth.State != "watch" || a.Totals.IssuerCirculatingNative == nil {
+		t.Errorf("supply usdt = %+v", a)
+	}
 }
 
 func TestStablecoinLive(t *testing.T) {

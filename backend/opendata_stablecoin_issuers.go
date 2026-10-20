@@ -152,11 +152,9 @@ func fetchCircleStablecoins(ctx context.Context, ep stableEndpoints, now time.Ti
 
 // --- Tether ---
 
-// errTetherSumMismatch: Σ per-chain circulating no longer equals
-// total_liabilities, so the per-chain formula (§5.1) cannot be trusted.
-var errTetherSumMismatch = errors.New("per-chain circulating does not sum to total_liabilities")
-
 // tetherSumTolerance is the relative tolerance of the §5.1 sum check (0.01%).
+// A larger gap marks the snapshot degraded: the per-chain formula may no
+// longer hold, but the data is still served with a badge (§6 S12).
 const tetherSumTolerance = 1e-4
 
 type tetherSnapshot struct {
@@ -168,6 +166,11 @@ type tetherSnapshot struct {
 	ShareholderEquityUSD *float64
 	Chains               []tetherChain
 	CirculatingSumNative float64
+	// SumMismatchPct is (Σ per-chain circulating − total_liabilities) /
+	// total_liabilities × 100; beyond 0.01% the snapshot is Degraded.
+	SumMismatchPct *float64
+	Degraded       bool
+	DegradedReason string // sum_mismatch
 }
 
 type tetherChain struct {
@@ -226,8 +229,11 @@ func parseTetherTransparency(body []byte, fetchedAt time.Time) (tetherSnapshot, 
 			out.CirculatingSumNative += ch.CirculatingNative
 			out.Chains = append(out.Chains, ch)
 		}
-		if math.Abs(out.CirculatingSumNative-e.TotalLiabilities.V)/e.TotalLiabilities.V > tetherSumTolerance {
-			return tetherSnapshot{}, fmt.Errorf("%w: %.2f vs %.2f", errTetherSumMismatch, out.CirculatingSumNative, e.TotalLiabilities.V)
+		rel := (out.CirculatingSumNative - e.TotalLiabilities.V) / e.TotalLiabilities.V
+		pct := rel * 100
+		out.SumMismatchPct = &pct
+		if math.Abs(rel) > tetherSumTolerance {
+			out.Degraded, out.DegradedReason = true, "sum_mismatch"
 		}
 		return out, nil
 	}
@@ -240,9 +246,6 @@ func fetchTetherTransparency(ctx context.Context, ep stableEndpoints, now time.T
 		return tetherSnapshot{}, code
 	}
 	snap, err := parseTetherTransparency(body, now)
-	if errors.Is(err, errTetherSumMismatch) {
-		return tetherSnapshot{}, "shape_drift"
-	}
 	if err != nil {
 		return tetherSnapshot{}, "bad_response"
 	}
