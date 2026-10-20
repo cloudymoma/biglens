@@ -28,8 +28,11 @@ type stablePegSampler struct {
 	now      func() time.Time
 	// onFetch reports every upstream call (provider health); may be nil.
 	onFetch func(provider string, took time.Duration, code string)
-	// ohlcLimit overrides Bitstamp's page size (tests); 0 = stableOHLCPage.
+	// ohlcLimit and ohlcFrom override Bitstamp's window size and the
+	// bootstrap start (tests); zero values mean stableOHLCPage and
+	// stableOHLCFrom.
 	ohlcLimit int
+	ohlcFrom  time.Time
 
 	mu         sync.Mutex
 	poolOK     bool // the pool identity check passed once

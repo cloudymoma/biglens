@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -34,10 +33,26 @@ func TestParseStablecoinPrices(t *testing.T) {
 	if err != nil || len(rows) != 1 || rows[0].GeckoID != "tether" || rows[0].Day != "2023-03-13" {
 		t.Errorf("filtered = %+v, %v", rows, err)
 	}
+	// The live response starts with an undated row ("date": 0) and carries
+	// string prices for some other coins; neither may reject the response,
+	// and a malformed value of a wanted coin only drops that value.
+	live := `[{"date": 0, "prices": {"tether": 1.0002, "frankencoin": "abc"}},
+	  {"date": 1678665600, "prices": {"tether": 1, "frankencoin": "1.1017182", "usd-coin": "n/a"}},
+	  {"date": 1678752000, "prices": {"tether": 0.9999, "usd-coin": 0.9991, "euro-coin": -1}}]`
+	rows, err = parseStablecoinPrices([]byte(live), want)
+	if err != nil || len(rows) != 3 {
+		t.Fatalf("live-shaped rows = %+v, %v (want tether ×2 and usd-coin on 2023-03-14)", rows, err)
+	}
+	for _, r := range rows {
+		if r.Day < "2023-03-13" || (r.GeckoID != "tether" && r.GeckoID != "usd-coin") {
+			t.Errorf("unexpected row %+v", r)
+		}
+	}
 	for name, body := range map[string]string{
 		"not json":       `<html>`,
 		"an object":      `{"prices": []}`,
 		"empty":          `[]`,
+		"only undated":   `[{"date": 0, "prices": {"tether": 1}}]`,
 		"bad date":       `[{"date": "soon", "prices": {"tether": 1}}]`,
 		"bad price":      `[{"date": 1678665600, "prices": {"tether": "one"}}]`,
 		"negative price": `[{"date": 1678665600, "prices": {"tether": -1}}]`,
@@ -152,10 +167,6 @@ func (d *depegStub) queries(path string) []string {
 
 func newDepegStub(t *testing.T) *depegStub {
 	t.Helper()
-	ohlc := map[string][]byte{
-		"usdtusd": readStableFixture(t, "replay/bitstamp_ohlc_usdtusd_2022-05.json"),
-		"usdcusd": readStableFixture(t, "replay/bitstamp_ohlc_usdcusd_2023-03.json"),
-	}
 	prices := readStableFixture(t, "replay/prices_2023-03.json")
 	exr := readStableFixture(t, "ecb_exr_usd.json")
 	d := &depegStub{hits: map[string][]string{}}
@@ -169,36 +180,7 @@ func newDepegStub(t *testing.T) *depegStub {
 		case r.URL.Path == "/ecb/EXR/D.USD.EUR.SP00.A":
 			w.Write(exr)
 		case strings.HasPrefix(r.URL.Path, "/bitstamp/api/v2/ohlc/"):
-			pair := strings.Trim(strings.TrimPrefix(r.URL.Path, "/bitstamp/api/v2/ohlc/"), "/")
-			q := r.URL.Query()
-			if q.Get("step") != "86400" {
-				w.WriteHeader(http.StatusBadRequest)
-				return
-			}
-			start, _ := strconv.ParseInt(q.Get("start"), 10, 64)
-			limit, _ := strconv.Atoi(q.Get("limit"))
-			label := map[string]string{"usdtusd": "USDT/USD", "usdcusd": "USDC/USD", "eurceur": "EURC/EUR"}[pair]
-			var doc struct {
-				Data struct {
-					Pair string            `json:"pair"`
-					OHLC []json.RawMessage `json:"ohlc"`
-				} `json:"data"`
-			}
-			if b, ok := ohlc[pair]; ok {
-				_ = json.Unmarshal(b, &doc)
-			}
-			out := []json.RawMessage{}
-			for _, c := range doc.Data.OHLC {
-				var ts struct {
-					Timestamp string `json:"timestamp"`
-				}
-				_ = json.Unmarshal(c, &ts)
-				if v, _ := strconv.ParseInt(ts.Timestamp, 10, 64); v >= start && len(out) < limit {
-					out = append(out, c)
-				}
-			}
-			b, _ := json.Marshal(map[string]any{"data": map[string]any{"pair": label, "ohlc": out}})
-			w.Write(b)
+			serveStableOHLC(t, w, r, strings.Trim(strings.TrimPrefix(r.URL.Path, "/bitstamp/api/v2/ohlc/"), "/"))
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -215,9 +197,14 @@ func TestSyncDepegHistory(t *testing.T) {
 	stub := newDepegStub(t)
 	store := newTestRiskStore(t)
 	ctx := context.Background()
-	clock := time.Date(2026, 10, 19, 13, 21, 0, 0, time.UTC)
+	// A clock just after the replay window keeps the 4-day candle windows few.
+	clock := time.Date(2023, 3, 19, 12, 0, 0, 0, time.UTC)
 	p := newStablePegSampler(StablecoinConfig{}.settings(), store, stub.endpoints(), nil, func() time.Time { return clock })
+	// Start two days before the first candle: the first window is partly
+	// before the data, as a window before a pair's listing is (live: USDT's
+	// first 1000-day window held only 109 candles), and paging must go on.
 	p.ohlcLimit = 4
+	p.ohlcFrom = time.Date(2023, 3, 6, 0, 0, 0, 0, time.UTC)
 	ran, ok := p.syncDepegHistory(ctx)
 	if !ran || !ok {
 		t.Fatalf("first sync: ran %v ok %v", ran, ok)
@@ -229,7 +216,8 @@ func TestSyncDepegHistory(t *testing.T) {
 	if pr, _ := store.stablePriceDailySeries(ctx, "usd-coin", "2023-03-12"); len(pr) == 0 || pr[0].Day != "2023-03-12" || pr[0].PriceUSD != 0.961065 {
 		t.Errorf("usd-coin from 2023-03-12 = %+v", pr)
 	}
-	// Bitstamp daily candles, paged 4 at a time: the intraday lows.
+	// Bitstamp daily candles in 4-day windows (Bitstamp answers start..start
+	// + limit days, not limit candles): the intraday lows.
 	usdc, _ := store.stablePegDailySeries(ctx, "usdc", stablePegSourceBitstamp, "2000-01-01")
 	if len(usdc) != 8 {
 		t.Fatalf("usdc candles = %d, want 8", len(usdc))
@@ -243,12 +231,19 @@ func TestSyncDepegHistory(t *testing.T) {
 			}
 		}
 	}
-	if usdt, _ := store.stablePegDailySeries(ctx, "usdt", stablePegSourceBitstamp, "2000-01-01"); len(usdt) != 8 {
-		t.Errorf("usdt candles = %d, want 8", len(usdt))
+	if eurc, _ := store.stablePegDailySeries(ctx, "eurc", stablePegSourceBitstamp, "2000-01-01"); len(eurc) != 0 {
+		t.Errorf("eurc candles = %d, want none (no fixture)", len(eurc))
 	}
 	qs := stub.queries("/bitstamp/api/v2/ohlc/usdcusd/")
-	if len(qs) != 3 || !strings.Contains(qs[0], "start="+strconv.FormatInt(stableOHLCFrom.Unix(), 10)) || !strings.Contains(qs[0], "limit=4") {
-		t.Errorf("usdcusd requests = %v (want 3 pages from %v)", qs, stableOHLCFrom)
+	// 03-06 (2 candles), 03-10 (4), 03-14 (2), 03-18 (none; the next window starts after the clock).
+	windows := []time.Time{p.ohlcFrom, p.ohlcFrom.AddDate(0, 0, 4), p.ohlcFrom.AddDate(0, 0, 8), p.ohlcFrom.AddDate(0, 0, 12)}
+	if len(qs) != len(windows) {
+		t.Fatalf("usdcusd requests = %v, want %d windows", qs, len(windows))
+	}
+	for i, w := range windows {
+		if !strings.Contains(qs[i], "start="+strconv.FormatInt(w.Unix(), 10)) || !strings.Contains(qs[i], "limit=4") {
+			t.Errorf("usdcusd request %d = %q, want start %v", i, qs[i], w)
+		}
 	}
 	// The ECB EUR/USD history (for EURC's DefiLlama prices) is loaded once.
 	if q := stub.queries("/ecb/EXR/D.USD.EUR.SP00.A"); len(q) != 1 || !strings.Contains(q[0], "lastNObservations=1500") {
@@ -270,7 +265,7 @@ func TestSyncDepegHistory(t *testing.T) {
 	}
 	qs = stub.queries("/bitstamp/api/v2/ohlc/usdcusd/")
 	resume := time.Date(2023, 3, 12, 0, 0, 0, 0, time.UTC).Unix() // newest 2023-03-15 − 3 days
-	if len(qs) < 4 || !strings.Contains(qs[3], "start="+strconv.FormatInt(resume, 10)) {
+	if len(qs) < 5 || !strings.Contains(qs[4], "start="+strconv.FormatInt(resume, 10)) {
 		t.Errorf("incremental requests = %v, want start=%d", qs, resume)
 	}
 	if fx := stub.queries("/ecb/EXR/D.USD.EUR.SP00.A"); len(fx) != 1 {

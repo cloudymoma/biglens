@@ -118,7 +118,9 @@ func newStableVenueStub(t *testing.T) *stableVenueStub {
 }
 
 // serveStableOHLC answers Bitstamp's daily candles from the replay fixtures
-// (usdtusd 2022-05, usdcusd 2023-03; eurceur has none), paged by start/limit.
+// (usdtusd 2022-05, usdcusd 2023-03; eurceur has none). Like the real
+// endpoint, start and limit select a time window (start up to start + limit
+// days), not a number of candles.
 func serveStableOHLC(t *testing.T, w http.ResponseWriter, r *http.Request, pair string) {
 	files := map[string]string{"usdtusd": "replay/bitstamp_ohlc_usdtusd_2022-05.json", "usdcusd": "replay/bitstamp_ohlc_usdcusd_2023-03.json"}
 	labels := map[string]string{"usdtusd": "USDT/USD", "usdcusd": "USDC/USD", "eurceur": "EURC/EUR"}
@@ -143,7 +145,7 @@ func serveStableOHLC(t *testing.T, w http.ResponseWriter, r *http.Request, pair 
 			Timestamp string `json:"timestamp"`
 		}
 		_ = json.Unmarshal(c, &ts)
-		if v, _ := strconv.ParseInt(ts.Timestamp, 10, 64); v >= start && len(out) < limit {
+		if v, _ := strconv.ParseInt(ts.Timestamp, 10, 64); v >= start && v < start+int64(limit)*86400 {
 			out = append(out, c)
 		}
 	}

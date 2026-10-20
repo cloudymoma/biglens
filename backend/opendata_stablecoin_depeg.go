@@ -21,8 +21,10 @@ import (
 
 const (
 	stableDepegEvery = 24 * time.Hour
-	// stableOHLCPage is Bitstamp's maximum candles per request; a full page
-	// means there may be more.
+	// stableOHLCPage is Bitstamp's maximum limit. With step=86400, start and
+	// limit select the window start .. start + limit days (verified live:
+	// usdtusd from 2021-06-01 with limit 5 answers nothing, with limit 20 the
+	// 11 candles from its 2021-06-10 listing), so paging walks the windows.
 	stableOHLCPage     = 1000
 	stableOHLCMaxPages = 10
 	// stableOHLCOverlap: the daily refresh re-reads the last 3 days, so the
@@ -59,34 +61,37 @@ type stablePriceDaily struct {
 }
 
 // parseStablecoinPrices reads /stablecoinprices ([{date, prices{gecko: usd}}])
-// for the wanted gecko ids. A null price is absent; a malformed row fails
-// the whole response.
+// for the wanted gecko ids. The live response starts with an undated row
+// ("date": 0), which is skipped, and other coins' values may be strings, so
+// only wanted values are decoded; a null or malformed wanted value is
+// dropped. A response without a single usable value is an error.
 func parseStablecoinPrices(body []byte, want map[string]bool) ([]stablePriceDaily, error) {
 	var raw []struct {
-		Date   stableNum             `json:"date"`
-		Prices map[string]*stableNum `json:"prices"`
+		Date   stableNum                  `json:"date"`
+		Prices map[string]json.RawMessage `json:"prices"`
 	}
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil, fmt.Errorf("decode: %w", err)
 	}
-	if len(raw) == 0 {
-		return nil, errors.New("no rows")
-	}
 	var out []stablePriceDaily
 	for _, r := range raw {
 		if !r.Date.Set || r.Date.V <= 0 {
-			return nil, errors.New("bad date")
+			continue // the undated row
 		}
 		day := time.Unix(int64(r.Date.V), 0).UTC().Format(time.DateOnly)
-		for gecko, p := range r.Prices {
-			if !want[gecko] || p == nil || !p.Set {
+		for gecko, v := range r.Prices {
+			if !want[gecko] {
 				continue
 			}
-			if !(p.V > 0) {
-				return nil, fmt.Errorf("%s %s: non-positive price", day, gecko)
+			var p stableNum
+			if json.Unmarshal(v, &p) != nil || !p.Set || !(p.V > 0) {
+				continue
 			}
 			out = append(out, stablePriceDaily{Day: day, GeckoID: gecko, PriceUSD: p.V, Source: stablePriceSourceLlama})
 		}
+	}
+	if len(out) == 0 {
+		return nil, errors.New("no usable prices")
 	}
 	return out, nil
 }
@@ -306,34 +311,32 @@ func errCode(err error) string {
 	return ""
 }
 
-// syncOHLC pages through one pair's daily candles from the newest stored day
-// (minus the overlap) or, on the first run, from stableOHLCFrom.
+// syncOHLC walks one pair's daily candles window by window, from the newest
+// stored day (minus the overlap) or, on the first run, from stableOHLCFrom,
+// until the window starts after now.
 func (p *stablePegSampler) syncOHLC(ctx context.Context, asset, pair, label string, now time.Time) string {
-	start, bootstrap := stableOHLCFrom, true
+	start := stableOHLCFrom
+	if !p.ohlcFrom.IsZero() {
+		start = p.ohlcFrom
+	}
 	if last, err := p.store.stableLatestPegDay(ctx, asset, stablePegSourceBitstamp); err == nil && last != "" {
 		if d, err := time.Parse(time.DateOnly, last); err == nil {
-			start, bootstrap = d.Add(-stableOHLCOverlap), false
+			start = d.Add(-stableOHLCOverlap)
 		}
 	}
 	limit := p.ohlcLimit
 	if limit <= 0 {
 		limit = stableOHLCPage
 	}
-	gotAny := false
-	for page := 0; page < stableOHLCMaxPages && start.Before(now); page++ {
+	window := time.Duration(limit) * 24 * time.Hour
+	for page := 0; page < stableOHLCMaxPages && start.Before(now); page, start = page+1, start.Add(window) {
 		rows, code := p.venues.fetchBitstampOHLC(ctx, pair, label, start, limit)
 		if code != "" {
 			return code
 		}
 		if len(rows) == 0 {
-			if !bootstrap || gotAny {
-				return "" // no newer candles
-			}
-			// Bootstrap before the listing date: move on by one page span.
-			start = start.Add(time.Duration(limit) * 24 * time.Hour)
-			continue
+			continue // a window before the listing, or a gap
 		}
-		gotAny = true
 		daily := make([]stablePegDaily, 0, len(rows))
 		for _, c := range rows {
 			o, h, l, cl := c.Open, c.High, c.Low, c.Close
@@ -343,10 +346,6 @@ func (p *stablePegSampler) syncOHLC(ctx context.Context, asset, pair, label stri
 		if err := p.store.upsertStablePegDaily(ctx, daily); err != nil {
 			return "store_error"
 		}
-		if len(rows) < limit {
-			return ""
-		}
-		start = time.Unix(rows[len(rows)-1].TS, 0).UTC().Add(24 * time.Hour)
 	}
 	return ""
 }
