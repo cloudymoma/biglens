@@ -54,8 +54,10 @@ type stableVenueQuote struct {
 	Last        *float64
 	VolBase     *float64  // 24h volume in base units
 	VolQuote    *float64  // 24h volume in quote units, when the venue reports it
-	TS          time.Time // the venue's own quote time; zero when it gives none (Kraken)
-	FetchedAt   time.Time
+	TS          time.Time // the venue's own ticker time (Bitstamp, OKX, Binance); zero when it gives none
+	// LastTrade is Coinbase's ticker time: its last trade, not a book time.
+	LastTrade time.Time
+	FetchedAt time.Time
 	// Code is "" for a usable quote, else why not: a stableFetch code,
 	// bad_response (shape check), disabled (provider off or product not
 	// listed) or paused (Binance after a geo-block).
@@ -127,7 +129,7 @@ func parseCoinbaseTicker(body []byte, product string, at time.Time) (stableVenue
 	if err != nil {
 		return q, errors.New("bad time")
 	}
-	q.Last, q.VolBase, q.TS = raw.Price.ptr(), raw.Volume.ptr(), ts.UTC()
+	q.Last, q.VolBase, q.LastTrade = raw.Price.ptr(), raw.Volume.ptr(), ts.UTC()
 	return q, nil
 }
 

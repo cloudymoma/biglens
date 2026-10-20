@@ -18,6 +18,9 @@ const (
 	stablePegMaxSpreadBps = 50.0
 	stablePegMinVolUSD    = 50_000.0
 	stableVenueCap        = 0.5
+	// stablePegMaxLastTradeAge: a Coinbase quote whose last trade is older
+	// than this is stale, however fresh the fetch (§5.2).
+	stablePegMaxLastTradeAge = time.Hour
 )
 
 // StableQuote is one market or consensus input with its filter outcome.
@@ -32,11 +35,14 @@ type StableQuote struct {
 	Mid       *float64 `json:"mid"`
 	SpreadBps *float64 `json:"spread_bps"`
 	VolUSD    *float64 `json:"vol_usd"` // 24h volume in USD; a derived input's is its smaller leg's
-	// AgeSeconds counts from the venue's own quote time (fetch time when the
-	// venue gives none) to the sample.
-	AgeSeconds *int64   `json:"age_seconds"`
-	Weight     *float64 `json:"weight"` // share of the consensus weight after the venue cap (0–1)
-	Included   bool     `json:"included"`
+	// AgeSeconds counts from the fetch to the sample, for every venue
+	// (§5.2).
+	AgeSeconds *int64 `json:"age_seconds"`
+	// LastTradeAgeS is information only (Coinbase, whose ticker time is
+	// its last trade): the quote is stale when it exceeds an hour.
+	LastTradeAgeS *int64   `json:"last_trade_age_s,omitempty"`
+	Weight        *float64 `json:"weight"` // share of the consensus weight after the venue cap (0–1)
+	Included      bool     `json:"included"`
 	// ExcludeReason: stale | wide_spread | low_volume | leg_excluded |
 	// fx_unavailable | bad_response | disabled | paused | a fetch code.
 	ExcludeReason string `json:"exclude_reason,omitempty"`
@@ -124,13 +130,20 @@ func stableEvalMarket(raw stableVenueQuote, kind, numeraire string, now time.Tim
 	bid, ask := raw.Bid, raw.Ask
 	mid := (bid + ask) / 2
 	q.Bid, q.Ask, q.Mid = stableF(bid), stableF(ask), stableF(mid)
-	ts := raw.TS
-	if ts.IsZero() {
-		ts = raw.FetchedAt
-	}
-	age := now.Sub(ts)
+	// The age counts from the fetch for every venue (§5.2). A venue's own
+	// time only flags a malformed response when it runs more than the
+	// maximum age ahead of the fetch.
+	age := now.Sub(raw.FetchedAt)
 	secs := int64(math.Round(age.Seconds()))
 	q.AgeSeconds = &secs
+	future := !raw.TS.IsZero() && raw.TS.Sub(raw.FetchedAt) > stablePegMaxAge
+	var tradeAge time.Duration
+	if !raw.LastTrade.IsZero() {
+		tradeAge = now.Sub(raw.LastTrade)
+		ts := int64(math.Round(tradeAge.Seconds()))
+		q.LastTradeAgeS = &ts
+		future = future || raw.LastTrade.Sub(raw.FetchedAt) > stablePegMaxAge
+	}
 	reason := ""
 	if checkSpread {
 		q.SpreadBps = stableF((ask - bid) / mid * 1e4)
@@ -145,8 +158,10 @@ func stableEvalMarket(raw stableVenueQuote, kind, numeraire string, now time.Tim
 	switch {
 	case age > stablePegMaxAge:
 		q.ExcludeReason = "stale"
-	case -age > stablePegMaxAge: // a quote time in the future
+	case -age > stablePegMaxAge || future: // a fetch or venue time in the future
 		q.ExcludeReason = "bad_response"
+	case tradeAge > stablePegMaxLastTradeAge:
+		q.ExcludeReason = "stale"
 	case checkSpread && *q.SpreadBps > stablePegMaxSpreadBps:
 		q.ExcludeReason = "wide_spread"
 	case reason != "":
@@ -199,6 +214,7 @@ func stableDerive(num, den StableQuote, pair, numeraire string) StableQuote {
 		a := max(*num.AgeSeconds, *den.AgeSeconds)
 		q.AgeSeconds = &a
 	}
+	q.LastTradeAgeS = stableOlder(num.LastTradeAgeS, den.LastTradeAgeS)
 	switch {
 	case !num.Included || !den.Included:
 		q.ExcludeReason = "leg_excluded"
@@ -208,6 +224,17 @@ func stableDerive(num, den StableQuote, pair, numeraire string) StableQuote {
 		q.Included = true
 	}
 	return q
+}
+
+// stableOlder is the larger of two optional ages (nil when neither is set).
+func stableOlder(a, b *int64) *int64 {
+	switch {
+	case a == nil:
+		return b
+	case b == nil || *a >= *b:
+		return a
+	}
+	return b
 }
 
 // stableMedian is the plain median (mean of the middle two for an even count).
@@ -425,7 +452,7 @@ func stableComputePeg(in stablePegInputs) stablePegResult {
 	krEURCUSD, krEURUSD := market("kraken", "EURCUSD"), market("kraken", "ZEURZUSD")
 	cbEURC := market("coinbase", "EURC-USDC")
 	cross := StableQuote{Venue: "coinbase", Pair: "EURC-EUR (EURC-USDC × USDC consensus ÷ EUR/USD)", Numeraire: "EUR", Kind: "cross",
-		Legs: []string{"coinbase|EURC-USDC", "consensus|usdc", "fx|eur_usd"}, VolUSD: cbEURC.VolUSD, AgeSeconds: cbEURC.AgeSeconds}
+		Legs: []string{"coinbase|EURC-USDC", "consensus|usdc", "fx|eur_usd"}, VolUSD: cbEURC.VolUSD, AgeSeconds: cbEURC.AgeSeconds, LastTradeAgeS: cbEURC.LastTradeAgeS}
 	if cbEURC.Mid != nil && usdc.Consensus != nil && res.FX.EURUSD != nil {
 		k := *usdc.Consensus / *res.FX.EURUSD
 		cross.Mid, cross.Bid, cross.Ask = stableF(*cbEURC.Mid*k), stableF(*cbEURC.Bid*k), stableF(*cbEURC.Ask*k)
@@ -463,7 +490,7 @@ func stableComputePeg(in stablePegInputs) stablePegResult {
 	// Relative peg: USDT per USDC.
 	rel := StableRelativePeg{Pair: "USDC/USDT", AsOf: stableFmt(now)}
 	inv := StableQuote{Venue: "coinbase", Pair: "1/USDT-USDC", Numeraire: "USDT", Kind: "inverse", Legs: []string{"coinbase|USDT-USDC"},
-		VolUSD: cbUSDTUSDC.VolUSD, AgeSeconds: cbUSDTUSDC.AgeSeconds, Included: cbUSDTUSDC.Included, ExcludeReason: cbUSDTUSDC.ExcludeReason}
+		VolUSD: cbUSDTUSDC.VolUSD, AgeSeconds: cbUSDTUSDC.AgeSeconds, LastTradeAgeS: cbUSDTUSDC.LastTradeAgeS, Included: cbUSDTUSDC.Included, ExcludeReason: cbUSDTUSDC.ExcludeReason}
 	if cbUSDTUSDC.Mid != nil {
 		inv.Mid, inv.Bid, inv.Ask = stableF(1 / *cbUSDTUSDC.Mid), stableF(1 / *cbUSDTUSDC.Ask), stableF(1 / *cbUSDTUSDC.Bid)
 		inv.SpreadBps = stableF((*inv.Ask - *inv.Bid) / *inv.Mid * 1e4)

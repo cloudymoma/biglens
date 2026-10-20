@@ -91,8 +91,17 @@ func TestStableComputePegFixtures(t *testing.T) {
 	if q, ok := quoteOf(usdt.Quotes, "kraken", "direct"); !ok || !q.Included || q.Weight == nil || math.Abs(*q.Weight-0.5) > 1e-12 {
 		t.Errorf("usdt kraken quote = %+v", q)
 	}
-	if q, _ := quoteOf(usdt.Quotes, "coinbase", "direct"); q.VolUSD == nil || math.Abs(*q.VolUSD-fxCoinbaseUSDTUSDVol*cb) > 1e-3 || q.AgeSeconds == nil || *q.AgeSeconds != 29 {
+	// Quote age counts from the fetch for every venue (§5.2). Coinbase's
+	// ticker time is its last trade (29 s before the sample here), kept as
+	// last_trade_age_s; the other venues' own times are not ages.
+	if q, _ := quoteOf(usdt.Quotes, "coinbase", "direct"); q.VolUSD == nil || math.Abs(*q.VolUSD-fxCoinbaseUSDTUSDVol*cb) > 1e-3 ||
+		q.AgeSeconds == nil || *q.AgeSeconds != 0 || q.LastTradeAgeS == nil || *q.LastTradeAgeS != 29 {
 		t.Errorf("usdt coinbase quote = %+v", q)
+	}
+	for _, venue := range []string{"kraken", "bitstamp"} {
+		if q, _ := quoteOf(usdt.Quotes, venue, "direct"); q.AgeSeconds == nil || *q.AgeSeconds != 0 || q.LastTradeAgeS != nil {
+			t.Errorf("usdt %s age = %v, last trade age = %v; want 0 and none", venue, q.AgeSeconds, q.LastTradeAgeS)
+		}
 	}
 
 	// USDC: Kraken and Bitstamp direct, plus Coinbase derived from
@@ -107,6 +116,10 @@ func TestStableComputePegFixtures(t *testing.T) {
 	approxPtr(t, "usdc derived mid", der.Mid, cbUSDTUSD/cbUSDTUSDC, 1e-12)
 	approxPtr(t, "usdc derived bid", der.Bid, fxCoinbaseUSDTUSDBid/fxCoinbaseUSDTUSDCAsk, 1e-12)
 	approxPtr(t, "usdc derived vol (smaller leg)", der.VolUSD, math.Min(fxCoinbaseUSDTUSDVol*cbUSDTUSD, fxCoinbaseUSDTUSDCVol*cbUSDTUSDC), 1e-3)
+	// The older of the legs' last trades (USDT-USD 29 s, USDT-USDC 28 s).
+	if der.LastTradeAgeS == nil || *der.LastTradeAgeS != 29 {
+		t.Errorf("usdc derived last trade age = %v, want 29", der.LastTradeAgeS)
+	}
 	krC, bsC := mid(fxKrakenUSDCUSDBid, fxKrakenUSDCUSDAsk), mid(fxBitstampUSDCUSDBid, fxBitstampUSDCUSDAsk)
 	if usdc.State != "ok" || usdc.VenuesUsed != 3 {
 		t.Fatalf("usdc = %+v", usdc)
@@ -133,7 +146,7 @@ func TestStableComputePegFixtures(t *testing.T) {
 	krDirect := mid(fxKrakenEURCEURBid, fxKrakenEURCEURAsk)
 	krDerived := mid(fxKrakenEURCUSDBid, fxKrakenEURCUSDAsk) / mid(fxKrakenZEURZUSDBid, fxKrakenZEURZUSDAsk)
 	cross := mid(fxCoinbaseEURCUSDCBid, fxCoinbaseEURCUSDCAsk) * *usdc.Consensus / fx
-	if q, ok := quoteOf(eurc.Quotes, "coinbase", "cross"); !ok || !q.Included || len(q.Legs) != 3 {
+	if q, ok := quoteOf(eurc.Quotes, "coinbase", "cross"); !ok || !q.Included || len(q.Legs) != 3 || q.LastTradeAgeS == nil || *q.LastTradeAgeS != 27 {
 		t.Errorf("eurc cross = %+v", q)
 	}
 	// Kraken's group price is its weighted median: the derived input
@@ -166,6 +179,9 @@ func TestStableComputePegFixtures(t *testing.T) {
 	if q, ok := quoteOf(rel.Quotes, "uniswap", "dex"); !ok || !q.Included || q.SpreadBps != nil || q.VolUSD != nil {
 		t.Errorf("uniswap quote = %+v", q)
 	}
+	if q, ok := quoteOf(rel.Quotes, "coinbase", "inverse"); !ok || q.LastTradeAgeS == nil || *q.LastTradeAgeS != 28 {
+		t.Errorf("coinbase inverse = %+v, want last trade age 28", q)
+	}
 	// Every raw market is evaluated for the venue table.
 	if len(res.Markets) != len(stableVenuePairs)+1 {
 		t.Errorf("markets = %d, want %d (venue pairs + Uniswap)", len(res.Markets), len(stableVenuePairs)+1)
@@ -182,17 +198,57 @@ func TestStablePegFilters(t *testing.T) {
 		}
 		return in
 	}
-	// Stale: a quote older than 300 s.
+	// Stale: a quote fetched more than 300 s before the sample.
 	res := stableComputePeg(mutate(func(q *stableVenueQuote) {
 		if q.Venue == "bitstamp" && q.Pair == "usdtusd" {
-			q.TS = base.Now.Add(-301 * time.Second)
+			q.FetchedAt = base.Now.Add(-301 * time.Second)
 		}
 	}))
-	if q, _ := quoteOf(res.Assets["usdt"].Quotes, "bitstamp", "direct"); q.Included || q.ExcludeReason != "stale" {
+	if q, _ := quoteOf(res.Assets["usdt"].Quotes, "bitstamp", "direct"); q.Included || q.ExcludeReason != "stale" || q.AgeSeconds == nil || *q.AgeSeconds != 301 {
 		t.Errorf("stale bitstamp = %+v", q)
 	}
 	if res.Assets["usdt"].VenuesUsed != 2 {
 		t.Errorf("usdt venues with bitstamp stale = %d", res.Assets["usdt"].VenuesUsed)
+	}
+	// A venue's own ticker time is not the quote age: an old one is fine,
+	// one more than 300 s ahead of the fetch is a malformed response.
+	res = stableComputePeg(mutate(func(q *stableVenueQuote) {
+		if q.Venue == "bitstamp" && q.Pair == "usdtusd" {
+			q.TS = q.FetchedAt.Add(-10 * time.Minute)
+		}
+		if q.Venue == "okx" {
+			q.TS = q.FetchedAt.Add(301 * time.Second)
+		}
+	}))
+	if q, _ := quoteOf(res.Assets["usdt"].Quotes, "bitstamp", "direct"); !q.Included || *q.AgeSeconds != 0 {
+		t.Errorf("bitstamp with an old ticker time = %+v, want included at age 0", q)
+	}
+	if q, _ := quoteOf(res.Relative.Quotes, "okx", "direct"); q.Included || q.ExcludeReason != "bad_response" {
+		t.Errorf("okx with a future ticker time = %+v", q)
+	}
+	// Coinbase: the last trade is information until it is more than an
+	// hour old; then the quote is stale, and so is what derives from it.
+	lastTrade := func(age time.Duration) stablePegInputs {
+		return mutate(func(q *stableVenueQuote) {
+			if q.Venue == "coinbase" && q.Pair == "USDT-USD" {
+				q.LastTrade = base.Now.Add(-age)
+			}
+		})
+	}
+	res = stableComputePeg(lastTrade(time.Hour))
+	if q, _ := quoteOf(res.Assets["usdt"].Quotes, "coinbase", "direct"); !q.Included || q.LastTradeAgeS == nil || *q.LastTradeAgeS != 3600 {
+		t.Errorf("coinbase last trade exactly 1 h old = %+v, want included", q)
+	}
+	res = stableComputePeg(lastTrade(time.Hour + time.Second))
+	if q, _ := quoteOf(res.Assets["usdt"].Quotes, "coinbase", "direct"); q.Included || q.ExcludeReason != "stale" || *q.LastTradeAgeS != 3601 || *q.AgeSeconds != 0 {
+		t.Errorf("coinbase last trade 1 h 1 s old = %+v, want stale", q)
+	}
+	if q, _ := quoteOf(res.Assets["usdc"].Quotes, "coinbase", "derived"); q.Included || q.ExcludeReason != "leg_excluded" {
+		t.Errorf("usdc derived from a stale leg = %+v", q)
+	}
+	res = stableComputePeg(lastTrade(-301 * time.Second))
+	if q, _ := quoteOf(res.Assets["usdt"].Quotes, "coinbase", "direct"); q.Included || q.ExcludeReason != "bad_response" {
+		t.Errorf("coinbase last trade in the future = %+v, want bad_response", q)
 	}
 	// Wide spread (> 50 bps).
 	res = stableComputePeg(mutate(func(q *stableVenueQuote) {

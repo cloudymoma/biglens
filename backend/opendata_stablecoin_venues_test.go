@@ -172,8 +172,9 @@ func TestParseCoinbaseTicker(t *testing.T) {
 		q.Ask != fxCoinbaseUSDTUSDAsk || q.VolBase == nil || *q.VolBase != fxCoinbaseUSDTUSDVol || q.Last == nil {
 		t.Errorf("USDT-USD = %+v", q)
 	}
-	if want := time.Date(2026, 10, 19, 13, 20, 30, 596866968, time.UTC); !q.TS.Equal(want) || !q.FetchedAt.Equal(at) {
-		t.Errorf("times = %v / %v", q.TS, q.FetchedAt)
+	// Coinbase's ticker time is the last trade, not a book time (§5.2).
+	if want := time.Date(2026, 10, 19, 13, 20, 30, 596866968, time.UTC); !q.LastTrade.Equal(want) || !q.TS.IsZero() || !q.FetchedAt.Equal(at) {
+		t.Errorf("times: last trade %v, ticker %v, fetched %v", q.LastTrade, q.TS, q.FetchedAt)
 	}
 	good := string(fixtureBody(t, "coinbase_tickers.json", "EURC-USDC"))
 	for name, body := range map[string]string{
