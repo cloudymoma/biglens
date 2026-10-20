@@ -323,7 +323,8 @@ type stableControlState struct {
 	ConfirmedAt         time.Time
 	ConfirmedBy         string // two_rpcs | two_samples
 	LastSeen            time.Time
-	Baseline            bool // the value has not changed since monitoring began
+	Baseline            bool      // the value has not changed since monitoring began
+	BaselineAt          time.Time // when the first value was confirmed; kept across changes
 	PendingValue        *string
 	PendingFirstSeen    time.Time
 	PendingLastSeen     time.Time
@@ -396,6 +397,9 @@ func stableControlStep(st stableControlState, r stableControlRead, second *stabl
 			FirstSeen: firstSeen, Source: "rpc", ConfirmedBy: by}
 	}
 	st.Baseline = st.Value == nil
+	if st.Baseline {
+		st.BaselineAt = now
+	}
 	st.Value, st.FirstSeen, st.ConfirmedAt, st.ConfirmedBy, st.LastSeen = &v, firstSeen, now, by, now
 	st.PendingValue, st.PendingDisputed = nil, false
 	st.PendingFirstSeen, st.PendingLastSeen = time.Time{}, time.Time{}
@@ -603,7 +607,7 @@ func (s *riskStore) stableControlStates(ctx context.Context) (map[string]stableC
 		return nil, err
 	}
 	rs, err := s.db.QueryContext(ctx, `SELECT asset, chain, field, value, first_seen, confirmed_at, confirmed_by, last_seen, is_baseline,
-pending_value, pending_first_seen, pending_last_seen, pending_disputed, last_read_at, last_code, last_endpoint FROM stable_control_state`)
+baseline_at, pending_value, pending_first_seen, pending_last_seen, pending_disputed, last_read_at, last_code, last_endpoint FROM stable_control_state`)
 	if err != nil {
 		return nil, err
 	}
@@ -611,10 +615,10 @@ pending_value, pending_first_seen, pending_last_seen, pending_disputed, last_rea
 	out := map[string]stableControlState{}
 	for rs.Next() {
 		var st stableControlState
-		var value, pending, firstSeen, confirmedAt, lastSeen, pFirst, pLast, lastRead sql.NullString
+		var value, pending, firstSeen, confirmedAt, lastSeen, baselineAt, pFirst, pLast, lastRead sql.NullString
 		var baseline, disputed int
 		if err := rs.Scan(&st.Asset, &st.Chain, &st.Field, &value, &firstSeen, &confirmedAt, &st.ConfirmedBy, &lastSeen, &baseline,
-			&pending, &pFirst, &pLast, &disputed, &lastRead, &st.LastCode, &st.LastEndpoint); err != nil {
+			&baselineAt, &pending, &pFirst, &pLast, &disputed, &lastRead, &st.LastCode, &st.LastEndpoint); err != nil {
 			return nil, err
 		}
 		if value.Valid {
@@ -627,7 +631,7 @@ pending_value, pending_first_seen, pending_last_seen, pending_disputed, last_rea
 		}
 		st.FirstSeen, st.ConfirmedAt, st.LastSeen = parseStableTS(firstSeen.String), parseStableTS(confirmedAt.String), parseStableTS(lastSeen.String)
 		st.PendingFirstSeen, st.PendingLastSeen, st.LastReadAt = parseStableTS(pFirst.String), parseStableTS(pLast.String), parseStableTS(lastRead.String)
-		st.Baseline, st.PendingDisputed = baseline == 1, disputed == 1
+		st.Baseline, st.PendingDisputed, st.BaselineAt = baseline == 1, disputed == 1, parseStableTS(baselineAt.String)
 		out[st.Asset+"|"+st.Chain+"|"+st.Field] = st
 	}
 	return out, rs.Err()
@@ -647,10 +651,10 @@ func (s *riskStore) saveStableControls(ctx context.Context, states []stableContr
 	for _, st := range states {
 		b2i := map[bool]int{false: 0, true: 1}
 		if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO stable_control_state
-(asset, chain, field, value, first_seen, confirmed_at, confirmed_by, last_seen, is_baseline, pending_value, pending_first_seen,
- pending_last_seen, pending_disputed, last_read_at, last_code, last_endpoint) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+(asset, chain, field, value, first_seen, confirmed_at, confirmed_by, last_seen, is_baseline, baseline_at, pending_value, pending_first_seen,
+ pending_last_seen, pending_disputed, last_read_at, last_code, last_endpoint) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			st.Asset, st.Chain, st.Field, stableNullStr(st.Value), stableNullTime(st.FirstSeen), stableNullTime(st.ConfirmedAt), st.ConfirmedBy,
-			stableNullTime(st.LastSeen), b2i[st.Baseline], stableNullStr(st.PendingValue), stableNullTime(st.PendingFirstSeen),
+			stableNullTime(st.LastSeen), b2i[st.Baseline], stableNullTime(st.BaselineAt), stableNullStr(st.PendingValue), stableNullTime(st.PendingFirstSeen),
 			stableNullTime(st.PendingLastSeen), b2i[st.PendingDisputed], stableNullTime(st.LastReadAt), st.LastCode, st.LastEndpoint); err != nil {
 			return err
 		}

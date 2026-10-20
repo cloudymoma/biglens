@@ -35,6 +35,7 @@ func stablecoinRoutes(h *APIHandler) []stablecoinRoute {
 		{Pattern: "/api/opendata/stablecoin/supply", Handler: h.StablecoinSupply},
 		{Pattern: "/api/opendata/stablecoin/peg", Handler: h.StablecoinPeg},
 		{Pattern: "/api/opendata/stablecoin/chains", Handler: h.StablecoinChains},
+		{Pattern: "/api/opendata/stablecoin/controls", Handler: h.StablecoinControls},
 	}
 }
 

@@ -58,6 +58,8 @@ func stableVerifyRPCStub(t *testing.T, symbols map[string]string, solDecimals in
 		switch call.Data {
 		case "0x0dfe1681", "0xd21220a7", "0xddca3f43", "0x3850c7bd":
 			res = pool[call.Data]
+		case "0x5c975abb", "0x0e136b19", "0x38a63183", "0x26976e3f": // paused, deprecated, rescuer, upgradedAddress
+			res = "0x" + strings.Repeat("0", 64)
 		case "0x95d89b41":
 			res = "0x" + abiString(symbolFor(strings.ToLower(call.To)))
 		case "0x313ce567":
@@ -69,7 +71,8 @@ func stableVerifyRPCStub(t *testing.T, symbols map[string]string, solDecimals in
 	}))
 	t.Cleanup(evm.Close)
 	sol := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, `{"jsonrpc":"2.0","id":1,"result":{"value":{"data":{"parsed":{"type":"mint","info":{"decimals":%d,"supply":"1000000"}}}}}}`, solDecimals)
+		fmt.Fprintf(w, `{"jsonrpc":"2.0","id":1,"result":{"value":{"data":{"parsed":{"type":"mint","info":{"decimals":%d,"supply":"1000000",`+
+			`"mintAuthority":"BJE5MMbqXjVwjAF7oxwPYXnTXDyspzZyt4vwenNw5ruG","freezeAuthority":"7dGbd2QZcCKcTndnHcTL8q7SMVXAkp688NTQYwrRCrar"}}}}}}`, solDecimals)
 	}))
 	t.Cleanup(sol.Close)
 	tron := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -80,15 +83,18 @@ func stableVerifyRPCStub(t *testing.T, symbols map[string]string, solDecimals in
 		b, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(b, &req)
 		res := fmt.Sprintf("%064x", 6)
-		if req.Selector == "symbol()" {
+		switch req.Selector {
+		case "symbol()":
 			res = abiString(symbolFor(req.Contract))
+		case "paused()", "deprecated()", "upgradedAddress()":
+			res = strings.Repeat("0", 64)
 		}
 		fmt.Fprintf(w, `{"result":{"result":true},"constant_result":["%s"]}`, res)
 	}))
 	t.Cleanup(tron.Close)
-	orig := tronGridBaseURL
-	tronGridBaseURL = tron.URL
-	t.Cleanup(func() { tronGridBaseURL = orig })
+	orig, origLim := tronGridBaseURL, tronGridLimiter
+	tronGridBaseURL, tronGridLimiter = tron.URL, rateLimiterUnlimited()
+	t.Cleanup(func() { tronGridBaseURL, tronGridLimiter = orig, origLim })
 	return func(network string) []string {
 		if network == "sol" {
 			return []string{sol.URL}
@@ -147,7 +153,9 @@ func TestStableVerifyPass(t *testing.T) {
 	for _, want := range []string{"PASS", "defillama", "circle", "tether", "ecb", "us_treasury", "rpc_supply", "EURC sol",
 		// M2 providers: every venue pair, the traps, the candles, DefiLlama prices and the pool.
 		"coinbase", "USDT-USDC", "EURC-USDC", "USDC-USD", "kraken", "USDTZUSD", "ZEURZUSD", "bitstamp", "eurceur", "eurcusd",
-		"daily OHLC usdcusd", "okx", "USDC-USDT", "binance", "USDCUSDT", "/stablecoinprices", "uniswap_rpc", "slot0"} {
+		"daily OHLC usdcusd", "okx", "USDC-USDT", "binance", "USDCUSDT", "/stablecoinprices", "uniswap_rpc", "slot0",
+		// M3: every control field of every monitored deployment.
+		"rpc_controls", "USDT tron controls", "EURC base controls", "USDC sol controls"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
 		}

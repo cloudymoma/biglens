@@ -423,7 +423,7 @@ func TestStableControlStep(t *testing.T) {
 	}
 	st, ev = stableControlStep(st, read("0xa", "e1"), nil, at(1))
 	if ev != nil || st.Value == nil || *st.Value != "0xa" || !st.Baseline || st.ConfirmedBy != "two_samples" ||
-		!st.FirstSeen.Equal(at(0)) || !st.ConfirmedAt.Equal(at(1)) || st.PendingValue != nil {
+		!st.FirstSeen.Equal(at(0)) || !st.ConfirmedAt.Equal(at(1)) || st.PendingValue != nil || !st.BaselineAt.Equal(at(1)) {
 		t.Fatalf("baseline = %+v %+v", st, ev)
 	}
 	base := st
@@ -447,8 +447,8 @@ func TestStableControlStep(t *testing.T) {
 	st, _ = stableControlStep(st, read("0xb", "e1"), nil, at(4))
 	st, ev = stableControlStep(st, read("0xb", "e2"), nil, at(5))
 	if ev == nil || ev.Old != "0xa" || ev.New != "0xb" || ev.ConfirmedBy != "two_samples" || !ev.FirstSeen.Equal(at(4)) ||
-		!ev.DetectedAt.Equal(at(5)) || ev.Source != "rpc" || *st.Value != "0xb" || st.Baseline {
-		t.Fatalf("two samples = %+v %+v", st, ev)
+		!ev.DetectedAt.Equal(at(5)) || ev.Source != "rpc" || *st.Value != "0xb" || st.Baseline || !st.BaselineAt.Equal(at(1)) {
+		t.Fatalf("two samples = %+v %+v (the baseline time is kept)", st, ev)
 	}
 	// Two RPCs in one sample: confirmed at once (the immediate path).
 	st, ev = stableControlStep(st, read("0xc", "e1"), &stableControlRead{Value: "0xc", Endpoint: "e2"}, at(6))

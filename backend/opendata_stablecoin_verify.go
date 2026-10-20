@@ -181,6 +181,44 @@ func stableVerifyChecks(ctx context.Context, settings stableSettings, ep stableE
 	} else {
 		skip("rpc_supply")
 	}
+	res = append(res, stableVerifyControlChecks(ctx, settings, rpcs)...)
+	return res
+}
+
+// stableVerifyControlChecks reads every control field of every monitored
+// deployment (§8.7: "every control getter resolves"); a read error fails.
+func stableVerifyControlChecks(ctx context.Context, settings stableSettings, rpcs func(string) []string) []stableVerifyResult {
+	if !settings.Providers["rpc_controls"] || rpcs == nil {
+		return []stableVerifyResult{{"SKIP", "rpc_controls", "all checks", "disabled in conf.yaml"}}
+	}
+	short := func(v string) string {
+		if len(v) > 14 {
+			return v[:8] + "…" + v[len(v)-4:]
+		}
+		if v == "" {
+			return "none"
+		}
+		return v
+	}
+	var res []stableVerifyResult
+	for _, d := range stableControlDeployments {
+		reads := stableReadDeployment(ctx, d, rpcs, 0)
+		var bad, parts []string
+		for _, f := range stableControlFields[d.Kind] {
+			r := reads[f.Name]
+			if r.Code != "" {
+				bad = append(bad, f.Name+": "+r.Code)
+				continue
+			}
+			parts = append(parts, f.Name+"="+short(r.Value))
+		}
+		check := fmt.Sprintf("%s %s controls (%s, %d fields)", strings.ToUpper(d.Asset), d.Chain, d.Kind, len(stableControlFields[d.Kind]))
+		if len(bad) > 0 {
+			res = append(res, stableVerifyResult{"FAIL", "rpc_controls", check, strings.Join(bad, ", ")})
+			continue
+		}
+		res = append(res, stableVerifyResult{"PASS", "rpc_controls", check, strings.Join(parts, " ")})
+	}
 	return res
 }
 

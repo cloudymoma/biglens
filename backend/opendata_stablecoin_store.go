@@ -129,6 +129,7 @@ CREATE TABLE IF NOT EXISTS stable_control_state (
   confirmed_by TEXT NOT NULL DEFAULT '',
   last_seen TEXT,
   is_baseline INTEGER NOT NULL DEFAULT 0,
+  baseline_at TEXT,
   pending_value TEXT,
   pending_first_seen TEXT,
   pending_last_seen TEXT,
