@@ -163,7 +163,10 @@ func main() {
 		api.stable.health = newStableHealth(api.stable.settings, time.Now)
 		api.stable.supply = newStableSupplySampler(api.stable.settings, rstore, defaultStableEndpoints(), api.payRPCs, time.Now)
 		api.stable.supply.onFetch = api.stable.health.recordFetch
+		api.stable.peg = newStablePegSampler(api.stable.settings, rstore, defaultStableEndpoints(), api.payRPCs, time.Now)
+		api.stable.peg.onFetch = api.stable.health.recordFetch
 		go runStableSamplers(ctx, api.stable.supply, api.stable.health)
+		go runStablePegSampler(ctx, api.stable.peg, api.stable.health)
 	}
 
 	mux := http.NewServeMux()

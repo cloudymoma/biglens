@@ -19,6 +19,7 @@ type stablecoinService struct {
 	// Wired in main once the shared store and RPC lists exist; nil until then.
 	store  *riskStore
 	supply *stableSupplySampler
+	peg    *stablePegSampler
 	health *stableHealth
 }
 

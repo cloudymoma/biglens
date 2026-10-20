@@ -79,7 +79,7 @@ func TestStablecoinMeta(t *testing.T) {
 	if len(meta.Assets) != 3 || meta.Assets[2].ID != "eurc" || meta.Assets[2].Numeraire != "EUR" {
 		t.Errorf("assets = %+v", meta.Assets)
 	}
-	if len(meta.Providers) != len(stableProviderRegistry) || len(meta.Samplers) != 3 {
+	if len(meta.Providers) != len(stableProviderRegistry) || len(meta.Samplers) != 4 {
 		t.Fatalf("providers %d samplers %d", len(meta.Providers), len(meta.Samplers))
 	}
 	byKey := map[string]StableProviderHealth{}

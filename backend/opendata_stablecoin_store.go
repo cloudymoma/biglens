@@ -7,8 +7,9 @@ import (
 	"time"
 )
 
-// Stablecoin storage (stablecoin.md §8.5): the M1 tables only. Amounts carry
-// their unit in the column name; NULL means unknown and is never written as 0.
+// Stablecoin storage (stablecoin.md §8.5): the M1 supply tables and the M2
+// peg tables. Amounts carry their unit in the column name; NULL means unknown
+// and is never written as 0.
 const stableSchema = `
 CREATE TABLE IF NOT EXISTS stable_supply_snapshots (
   ts TEXT NOT NULL,
@@ -55,11 +56,73 @@ CREATE TABLE IF NOT EXISTS stable_rates_daily (
   value REAL NOT NULL,
   fetched_at TEXT NOT NULL,
   PRIMARY KEY (day, series)
+);
+CREATE TABLE IF NOT EXISTS stable_quotes_5m (
+  bucket TEXT NOT NULL,
+  venue TEXT NOT NULL,
+  pair TEXT NOT NULL,
+  bid REAL,
+  ask REAL,
+  mid REAL,
+  last REAL,
+  vol_usd REAL,
+  spread_bps REAL,
+  age_seconds INTEGER,
+  included INTEGER NOT NULL,
+  exclude_reason TEXT,
+  PRIMARY KEY (bucket, venue, pair)
+);
+CREATE TABLE IF NOT EXISTS stable_peg_5m (
+  bucket TEXT NOT NULL,
+  asset TEXT NOT NULL,
+  numeraire TEXT NOT NULL,
+  state TEXT NOT NULL,
+  consensus REAL,
+  dev_bps REAL,
+  disp_bps REAL,
+  single_venue_price REAL,
+  inputs_used INTEGER NOT NULL,
+  venues_used INTEGER NOT NULL,
+  PRIMARY KEY (bucket, asset)
+);
+CREATE TABLE IF NOT EXISTS stable_peg_daily (
+  day TEXT NOT NULL,
+  asset TEXT NOT NULL,
+  source TEXT NOT NULL,
+  open REAL,
+  high REAL,
+  low REAL,
+  close REAL,
+  min_dev_bps REAL,
+  max_dev_bps REAL,
+  minutes_ge_30 INTEGER,
+  minutes_ge_100 INTEGER,
+  samples INTEGER NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (day, asset, source)
+);
+CREATE TABLE IF NOT EXISTS stable_dex_10m (
+  bucket TEXT NOT NULL,
+  pool TEXT NOT NULL,
+  price REAL,
+  tick INTEGER,
+  sqrt_price_x96 TEXT,
+  shares_json TEXT,
+  tvl_usd REAL,
+  PRIMARY KEY (bucket, pool)
 );`
 
 // stableSnapshotRetention: supply snapshots are kept 180 days; the daily
 // tables keep one row per day forever (§8.5 "180 d, then daily").
 const stableSnapshotRetention = 180 * 24 * time.Hour
+
+// Peg retention (§8.5): venue quotes 30 days; 5-minute peg samples and DEX
+// readings 180 days, then stable_peg_daily keeps the day forever.
+const (
+	stableQuotesRetention = 30 * 24 * time.Hour
+	stablePegRetention    = 180 * 24 * time.Hour
+	stableDexRetention    = 180 * 24 * time.Hour
+)
 
 // Rate series stored in stable_rates_daily; the unit is part of the name.
 const (
@@ -408,24 +471,36 @@ SELECT day, series, value, fetched_at FROM stable_rates_daily WHERE series = ? A
 	return out, rs.Err()
 }
 
-// pruneStable deletes supply snapshots older than the retention window and
-// logs how many rows it removed. Daily tables, Tether snapshots and rates are
-// kept forever.
+// pruneStable deletes rows older than each table's retention window and logs
+// how many rows it removed. Daily tables, Tether snapshots and rates are kept
+// forever.
 func (s *riskStore) pruneStable(ctx context.Context, now time.Time) (int64, error) {
 	if err := s.ensureStableSchema(ctx); err != nil {
 		return 0, err
 	}
-	cutoff := stableTS(now.Add(-stableSnapshotRetention))
-	res, err := s.db.ExecContext(ctx, `DELETE FROM stable_supply_snapshots WHERE ts < ?`, cutoff)
-	if err != nil {
-		return 0, err
+	var total int64
+	for _, t := range []struct {
+		table, column string
+		keep          time.Duration
+	}{
+		{"stable_supply_snapshots", "ts", stableSnapshotRetention},
+		{"stable_quotes_5m", "bucket", stableQuotesRetention},
+		{"stable_peg_5m", "bucket", stablePegRetention},
+		{"stable_dex_10m", "bucket", stableDexRetention},
+	} {
+		cutoff := stableTS(now.Add(-t.keep))
+		res, err := s.db.ExecContext(ctx, `DELETE FROM `+t.table+` WHERE `+t.column+` < ?`, cutoff)
+		if err != nil {
+			return total, err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return total, err
+		}
+		slog.Info("stablecoin retention prune", "table", t.table, "cutoff", cutoff, "deleted", n)
+		total += n
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return 0, err
-	}
-	slog.Info("stablecoin retention prune", "table", "stable_supply_snapshots", "cutoff", cutoff, "deleted", n)
-	return n, nil
+	return total, nil
 }
 
 // hasStableSnapshotInHour reports whether any snapshot of asset/source was

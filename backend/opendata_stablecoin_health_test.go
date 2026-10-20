@@ -58,9 +58,13 @@ func TestStableHealthProviderList(t *testing.T) {
 	if b := byKey["binance"]; b.Enabled || b.Status != "disabled" {
 		t.Errorf("binance = %+v, want disabled", b)
 	}
-	// Keys without an M1 adapter are reported as not in use, not as failing.
-	if k := byKey["kraken"]; !k.Enabled || k.Status != "not_in_use" {
-		t.Errorf("kraken = %+v, want enabled but not_in_use", k)
+	// Keys without an adapter yet are reported as not in use, not as failing;
+	// a provider with an adapter that has not been called yet is pending.
+	if c := byKey["curve"]; !c.Enabled || c.Status != "not_in_use" {
+		t.Errorf("curve = %+v, want enabled but not_in_use", c)
+	}
+	if k := byKey["kraken"]; !k.Enabled || k.Status != "pending" {
+		t.Errorf("kraken = %+v, want enabled and pending", k)
 	}
 	if e := byKey["ecb"]; e.Attribution == "" || e.Label == "" {
 		t.Errorf("ecb = %+v, want label and attribution", e)
@@ -111,8 +115,8 @@ func TestStableSamplerHealth(t *testing.T) {
 	if never := h.sampler("rates"); never.LastRun != "" || never.Stalled || never.ConsecutiveFailures != 0 {
 		t.Errorf("never-run sampler = %+v", never)
 	}
-	if names := h.samplers(); len(names) != 3 || names[0].Name != "supply" || names[1].Name != "supply_history" || names[2].Name != "rates" {
-		t.Errorf("samplers = %+v, want supply, supply_history, rates", names)
+	if names := h.samplers(); len(names) != 4 || names[0].Name != "peg" || names[1].Name != "supply" || names[2].Name != "supply_history" || names[3].Name != "rates" {
+		t.Errorf("samplers = %+v, want peg, supply, supply_history, rates", names)
 	}
 }
 

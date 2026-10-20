@@ -14,7 +14,8 @@ import (
 
 // stableProviderInterval is how often each provider is called in this build.
 // A provider whose last success is older than 3 intervals is stale (S13);
-// keys without an entry have no adapter yet (venues, DEX and controls: M2+).
+// keys without an entry have no adapter yet (Curve, Blockscout, controls and
+// Chainlink: M3 and v1.1).
 var stableProviderInterval = map[string]time.Duration{
 	"defillama":   stableSupplyTick,
 	"circle":      stableSupplyTick,
@@ -22,13 +23,19 @@ var stableProviderInterval = map[string]time.Duration{
 	"rpc_supply":  stableRPCEvery,
 	"ecb":         stableRatesEvery,
 	"us_treasury": stableRatesEvery,
+	"coinbase":    stablePegTick,
+	"kraken":      stablePegTick,
+	"bitstamp":    stablePegTick,
+	"okx":         stablePegTick,
+	"binance":     stablePegTick,
+	"uniswap_rpc": stablePegTick,
 }
 
 // stableSamplerDefs lists the samplers in /meta order.
 var stableSamplerDefs = []struct {
 	Name     string
 	Interval time.Duration
-}{{"supply", stableSupplyTick}, {"supply_history", stableChartsEvery}, {"rates", stableRatesEvery}}
+}{{"peg", stablePegTick}, {"supply", stableSupplyTick}, {"supply_history", stableChartsEvery}, {"rates", stableRatesEvery}}
 
 // stableStallIntervals: a sampler that missed this many intervals in a row
 // is stalled (logged once; S13 watch in M4).
