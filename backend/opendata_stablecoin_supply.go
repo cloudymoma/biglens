@@ -373,6 +373,11 @@ type stableSupplyState struct {
 	Assets         map[string]StableSupplyAsset
 	MarketTotalUSD *float64
 	MarketAsOf     time.Time
+	// Llama is the DefiLlama list behind the watchlist (§7.2), with its
+	// fetch time and whether it is the last good copy.
+	Llama      *llamaStableSnapshot
+	LlamaAsOf  time.Time
+	LlamaStale bool
 }
 
 // --- pure computation ---
@@ -1234,6 +1239,8 @@ func (s *stableSupplySampler) compute(ctx context.Context, in stableSupplyInputs
 			}
 		}
 		state.MarketTotalUSD, state.MarketAsOf = stableF(total), in.Llama.AsOf
+		snap := in.Llama.Value
+		state.Llama, state.LlamaAsOf, state.LlamaStale = &snap, in.Llama.AsOf, in.Llama.Stale
 	}
 	// The Tether info check reads stored snapshots, so it runs before the
 	// lock; both S12 on-chain views refresh on RPC ticks only.

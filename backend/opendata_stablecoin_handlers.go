@@ -8,7 +8,8 @@ import (
 )
 
 // Stablecoins dashboard HTTP API (stablecoin.md §9): /meta, /live, /supply
-// and /peg. Handlers read memory and SQLite only and never call upstreams.
+// and /peg here; /overview, /reserves, /chains and /controls in their own
+// files. Handlers read memory and SQLite only and never call upstreams.
 // Upstream failures show as source badges and nulls with HTTP 200; a disabled
 // dashboard answers 404.
 
@@ -32,8 +33,10 @@ func stablecoinRoutes(h *APIHandler) []stablecoinRoute {
 	return []stablecoinRoute{
 		{Pattern: "/api/opendata/stablecoin/meta", Handler: h.StablecoinMeta},
 		{Pattern: "/api/opendata/stablecoin/live", Handler: h.StablecoinLive},
+		{Pattern: "/api/opendata/stablecoin/overview", Handler: h.StablecoinOverview},
 		{Pattern: "/api/opendata/stablecoin/supply", Handler: h.StablecoinSupply},
 		{Pattern: "/api/opendata/stablecoin/peg", Handler: h.StablecoinPeg},
+		{Pattern: "/api/opendata/stablecoin/reserves", Handler: h.StablecoinReserves},
 		{Pattern: "/api/opendata/stablecoin/chains", Handler: h.StablecoinChains},
 		{Pattern: "/api/opendata/stablecoin/controls", Handler: h.StablecoinControls},
 	}
