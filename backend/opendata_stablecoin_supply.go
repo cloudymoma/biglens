@@ -93,17 +93,59 @@ func stableProviderMeta(id string) btcProviderDef {
 	return btcProviderDef{ID: id, Label: id}
 }
 
-// stableChainKeyMap maps each source's chain names onto BigLens network ids
-// for the six chains with on-chain infrastructure; other chains keep a slug
-// of the source's own name.
-var stableChainKeyMap = map[string]map[string]string{
-	"circle":    {"ETH": "eth", "ARB": "arb", "OP": "op", "BASE": "base", "SOL": "sol", "TRX": "tron"},
-	"tether":    {"Ethereum": "eth", "Tron": "tron", "Solana": "sol"},
-	"defillama": {"Ethereum": "eth", "Tron": "tron", "Solana": "sol", "Arbitrum": "arb", "OP Mainnet": "op", "Optimism": "op", "Base": "base"},
+// stableChainCanon is the one explicit map from each source's chain names to
+// a canonical chain key (§6 S12, "Chain names"), so the same chain merges
+// into one row across Circle, Tether and DefiLlama. Registry chains use the
+// BigLens network ids (eth, arb, op, base, sol, tron). Non-obvious pairs were
+// checked against live amounts on 2026-10-20: Circle PAH, Tether "Polkadot
+// Asset Hub" and DefiLlama "Polkadot" agree exactly, as do Circle EDGE and
+// DefiLlama "edgeX L1"; Circle HYPEREVM and DefiLlama "Hyperliquid L1" are
+// the same network (DefiLlama adds bridged USDC). DefiLlama "Statemine"
+// (Kusama Asset Hub) and "Osmosis" are other chains and stay unmapped.
+var stableChainCanon = map[string]map[string]string{
+	"circle": {
+		"ALGO": "algorand", "APTOS": "aptos", "ARB": "arb", "ARC": "arc", "AVAX": "avax", "BASE": "base", "CELO": "celo",
+		"CODEX": "codex", "CRONOS": "cronos", "EDGE": "edge", "ETH": "eth", "HBAR": "hedera", "HYPEREVM": "hyperliquid",
+		"INJECTIVE": "injective", "INK": "ink", "LINEA": "linea", "MONAD": "monad", "MORPH": "morph", "NEAR": "near",
+		"NOBLE": "noble", "OP": "op", "PAH": "polkadot_asset_hub", "PHAROS": "pharos", "PLASMA": "plasma", "PLUME": "plume",
+		"POLY": "polygon", "SEI": "sei", "SOL": "sol", "SONIC": "sonic", "STRK": "starknet", "SUI": "sui", "TRX": "tron",
+		"UNI": "unichain", "WORLDCHAIN": "worldchain", "XDC": "xdc", "XLAYER": "xlayer", "XLM": "stellar", "XRP": "xrpl",
+		"ZKS": "zksync",
+	},
+	"tether": {
+		"Aptos": "aptos", "Avalanche": "avax", "BNB Smart Chain": "bsc", "Celo": "celo", "Cosmos": "cosmos", "Ethereum": "eth",
+		"Kaia": "kaia", "Liquid": "liquid", "Near": "near", "Polkadot Asset Hub": "polkadot_asset_hub", "Solana": "sol",
+		"Tezos": "tezos", "Ton": "ton", "Tron": "tron",
+	},
+	"defillama": {
+		"Algorand": "algorand", "Aptos": "aptos", "Arbitrum": "arb", "Arc": "arc", "Avalanche": "avax", "BSC": "bsc", "Base": "base",
+		"Celo": "celo", "Codex": "codex", "Cronos": "cronos", "edgeX L1": "edge", "Ethereum": "eth", "Hedera": "hedera",
+		"Hyperliquid L1": "hyperliquid", "Injective": "injective", "Ink": "ink", "Kaia": "kaia", "Linea": "linea",
+		"Monad": "monad", "Morph": "morph", "Near": "near", "Noble": "noble", "OP Mainnet": "op", "Optimism": "op",
+		"Pharos": "pharos", "Plasma": "plasma", "Plume Mainnet": "plume", "Polkadot": "polkadot_asset_hub", "Polygon": "polygon",
+		"Sei": "sei", "Solana": "sol", "Sonic": "sonic", "Starknet": "starknet", "Stellar": "stellar", "Sui": "sui",
+		"TON": "ton", "Tezos": "tezos", "Tron": "tron", "Unichain": "unichain", "World Chain": "worldchain",
+		"X Layer": "xlayer", "XDC": "xdc", "XRPL": "xrpl", "ZKsync Era": "zksync",
+	},
 }
 
+// stableChainLabels names the canonical chains outside the chain registry.
+var stableChainLabels = map[string]string{
+	"algorand": "Algorand", "aptos": "Aptos", "arc": "Arc", "avax": "Avalanche", "bsc": "BNB Smart Chain", "celo": "Celo",
+	"codex": "Codex", "cosmos": "Cosmos", "cronos": "Cronos", "edge": "edgeX", "hedera": "Hedera", "hyperliquid": "Hyperliquid",
+	"injective": "Injective", "ink": "Ink", "kaia": "Kaia", "linea": "Linea", "liquid": "Liquid Network", "monad": "Monad",
+	"morph": "Morph", "near": "NEAR", "noble": "Noble", "pharos": "Pharos", "plasma": "Plasma", "plume": "Plume",
+	"polkadot_asset_hub": "Polkadot Asset Hub", "polygon": "Polygon", "sei": "Sei", "sonic": "Sonic", "starknet": "Starknet",
+	"stellar": "Stellar", "sui": "Sui", "tezos": "Tezos", "ton": "TON", "unichain": "Unichain", "worldchain": "World Chain",
+	"xdc": "XDC Network", "xlayer": "X Layer", "xrpl": "XRP Ledger", "zksync": "ZKsync Era",
+}
+
+// stableChainKey returns the canonical key of a source's chain name. A name
+// outside stableChainCanon is unmapped: it gets a source-prefixed slug
+// ("defillama:cardano"), so it keeps its own row and never merges with
+// another source.
 func stableChainKey(source, name string) string {
-	if k, ok := stableChainKeyMap[source][name]; ok {
+	if k, ok := stableChainCanon[source][name]; ok {
 		return k
 	}
 	var b strings.Builder
@@ -117,8 +159,12 @@ func stableChainKey(source, name string) string {
 			}
 		}
 	}
-	return strings.TrimSuffix(b.String(), "_")
+	return source + ":" + strings.TrimSuffix(b.String(), "_")
 }
+
+// stableChainUnmapped reports whether a chain key came from a name outside
+// the canonical map.
+func stableChainUnmapped(key string) bool { return strings.Contains(key, ":") }
 
 // stableOnchainKey is a registry deployment's chain key: the network for the
 // native tier, network + ".bridged" for a bridged representation.
@@ -154,7 +200,8 @@ type StableSupplyRow struct {
 	ChainLabel                  string   `json:"chain_label"`
 	Tier                        string   `json:"tier,omitempty"` // native | bridged (registry deployments)
 	TokenLabel                  string   `json:"token_label,omitempty"`
-	Verified                    bool     `json:"verified"` // BigLens reads this deployment on-chain
+	Verified                    bool     `json:"verified"`           // BigLens reads this deployment on-chain
+	Unmapped                    bool     `json:"unmapped,omitempty"` // the source's chain name is not in the canonical map
 	IssuerCirculatingNative     *float64 `json:"issuer_circulating_native"`
 	IssuerUnissuedNative        *float64 `json:"issuer_unissued_native,omitempty"`    // Tether notIssued
 	IssuerQuarantinedNative     *float64 `json:"issuer_quarantined_native,omitempty"` // Tether quarantined
@@ -272,8 +319,16 @@ type StableSupplyAsset struct {
 	Reconcile   StableReconcile     `json:"reconcile"`
 	History     []StableSupplyDay   `json:"history"`
 	Sources     []BtcSourceStatus   `json:"sources"`
+	// UnmappedChains lists source chain names outside the canonical map;
+	// their rows are kept (source-prefixed keys), never merged or dropped.
+	UnmappedChains []StableUnmappedChain `json:"unmapped_chains"`
 
 	issuerAt time.Time
+}
+
+type StableUnmappedChain struct {
+	Source string `json:"source"` // circle | tether | defillama
+	Name   string `json:"name"`
 }
 
 // stableSupplyState is the sampler's latest view.
@@ -332,14 +387,20 @@ func stableSourceStatus[T any](id string, r stableResult[T]) BtcSourceStatus {
 func buildStableSupplyAsset(def stableAssetDef, in stableSupplyInputs) StableSupplyAsset {
 	a := StableSupplyAsset{Asset: def.ID, Symbol: def.Symbol, Numeraire: def.Numeraire,
 		Chains: []StableSupplyRow{}, NetIssuance: []StableNetIssuance{}, History: []StableSupplyDay{},
-		Reconcile: StableReconcile{Onchain: []StableReconOnchain{}}}
+		Reconcile: StableReconcile{Onchain: []StableReconOnchain{}}, UnmappedChains: []StableUnmappedChain{}}
 	rows := map[string]*StableSupplyRow{}
 	row := func(key, label string) *StableSupplyRow {
 		r, ok := rows[key]
 		if !ok {
 			r = &StableSupplyRow{Chain: key, ChainLabel: label}
-			if info, mapped := chains[strings.TrimSuffix(key, ".bridged")]; mapped && !strings.HasSuffix(key, ".bridged") {
+			if info, registry := chains[key]; registry {
 				r.ChainLabel = info.Label
+			} else if l, named := stableChainLabels[key]; named {
+				r.ChainLabel = l
+			}
+			if stableChainUnmapped(key) {
+				r.Unmapped = true
+				a.UnmappedChains = append(a.UnmappedChains, StableUnmappedChain{Source: strings.SplitN(key, ":", 2)[0], Name: label})
 			}
 			rows[key] = r
 		}

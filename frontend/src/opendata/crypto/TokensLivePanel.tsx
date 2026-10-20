@@ -62,12 +62,15 @@ export default function TokensLivePanel({
 
   const totalUSDT = supplyMatrix.filter(r => r.asset === 'USDT').reduce((a, r) => a + r.supply, 0);
   const totalUSDC = supplyMatrix.filter(r => r.asset === 'USDC').reduce((a, r) => a + r.supply, 0);
+  const totalEURC = supplyMatrix.filter(r => r.asset === 'EURC').reduce((a, r) => a + r.supply, 0);
+  // Supply is in tokens: USD coins read as $, EURC as €.
+  const unit = (seriesName: string) => (seriesName.startsWith('EURC') ? '€' : '$');
 
   return (
     <div className="grid lg:grid-cols-2 gap-4">
       <Panel
-        title="Live Cross-Chain Stablecoin Supply (USDT vs USDC)"
-        note={`totalSupply() via keyless RPCs · USDT $${fmtNum(totalUSDT)} · USDC $${fmtNum(totalUSDC)} · ${live.as_of ? ago(live.as_of) : 'live'}`}
+        title="Live Cross-Chain Stablecoin Supply (USDT, USDC, EURC)"
+        note={`totalSupply() via keyless RPCs · USDT $${fmtNum(totalUSDT)} · USDC $${fmtNum(totalUSDC)} · EURC €${fmtNum(totalEURC)} · ${live.as_of ? ago(live.as_of) : 'live'}`}
       >
         <ReactECharts
           style={{ height: 260 }}
@@ -75,14 +78,17 @@ export default function TokensLivePanel({
             tooltip: {
               trigger: 'axis',
               ...CHART_TOOLTIP,
-              valueFormatter: (v: number) => `$${fmtNum(v)}`,
+              formatter: (params: { axisValueLabel: string; marker: string; seriesName: string; value: number }[]) =>
+                [params[0]?.axisValueLabel ?? '', ...params
+                  .filter(p => p.value > 0)
+                  .map(p => `${p.marker}${p.seriesName}: ${unit(p.seriesName)}${fmtNum(p.value)}`)].join('<br/>'),
             },
             legend: { textStyle: { color: '#a1a1aa', fontSize: 11 }, top: 0 },
             grid: { left: 64, right: 20, top: 32, bottom: 28 },
             xAxis: { type: 'category', data: netLabels, axisLabel: AXIS_LABEL },
             yAxis: {
               type: 'value',
-              axisLabel: { ...AXIS_LABEL, formatter: (v: number) => `$${fmtNum(v)}` },
+              axisLabel: { ...AXIS_LABEL, formatter: (v: number) => fmtNum(v) },
               splitLine: SPLIT_LINE,
             },
             series: [
@@ -113,6 +119,13 @@ export default function TokensLivePanel({
                 stack: 'USDC',
                 data: NETWORK_ORDER.map(n => sumSupply('USDC', n, 'bridged')),
                 itemStyle: { color: '#93c5fd' },
+              },
+              {
+                name: 'EURC (native)',
+                type: 'bar',
+                stack: 'EURC',
+                data: NETWORK_ORDER.map(n => sumSupply('EURC', n, 'native')),
+                itemStyle: { color: '#a855f7' },
               },
             ],
           }}

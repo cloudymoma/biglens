@@ -15,23 +15,109 @@ import (
 
 func TestStableChainKeys(t *testing.T) {
 	cases := []struct{ source, name, want string }{
-		{"circle", "ETH", "eth"}, {"circle", "ARB", "arb"}, {"circle", "OP", "op"}, {"circle", "BASE", "base"},
-		{"circle", "SOL", "sol"}, {"circle", "TRX", "tron"}, {"circle", "AVAX", "avax"}, {"circle", "XLM", "xlm"},
-		{"tether", "Ethereum", "eth"}, {"tether", "Tron", "tron"}, {"tether", "Solana", "sol"},
-		{"tether", "BNB Smart Chain", "bnb_smart_chain"}, {"tether", "Polkadot Asset Hub", "polkadot_asset_hub"},
-		{"defillama", "Ethereum", "eth"}, {"defillama", "Arbitrum", "arb"}, {"defillama", "OP Mainnet", "op"},
-		{"defillama", "Optimism", "op"}, {"defillama", "Base", "base"}, {"defillama", "Solana", "sol"},
-		{"defillama", "Tron", "tron"}, {"defillama", "BSC", "bsc"}, {"defillama", "Hyperliquid L1", "hyperliquid_l1"},
+		// The same chain under each source's name gets one key.
+		{"circle", "AVAX", "avax"}, {"tether", "Avalanche", "avax"}, {"defillama", "Avalanche", "avax"},
+		{"circle", "ETH", "eth"}, {"tether", "Ethereum", "eth"}, {"defillama", "Ethereum", "eth"},
+		{"circle", "TRX", "tron"}, {"tether", "Tron", "tron"}, {"defillama", "Tron", "tron"},
+		{"circle", "SOL", "sol"}, {"tether", "Solana", "sol"}, {"defillama", "Solana", "sol"},
+		{"circle", "ARB", "arb"}, {"defillama", "Arbitrum", "arb"},
+		{"circle", "OP", "op"}, {"defillama", "OP Mainnet", "op"}, {"defillama", "Optimism", "op"},
+		{"circle", "BASE", "base"}, {"defillama", "Base", "base"},
+		{"circle", "POLY", "polygon"}, {"defillama", "Polygon", "polygon"},
+		{"circle", "XLM", "stellar"}, {"defillama", "Stellar", "stellar"},
+		{"circle", "XRP", "xrpl"}, {"defillama", "XRPL", "xrpl"},
+		{"circle", "PAH", "polkadot_asset_hub"}, {"tether", "Polkadot Asset Hub", "polkadot_asset_hub"}, {"defillama", "Polkadot", "polkadot_asset_hub"},
+		{"tether", "BNB Smart Chain", "bsc"}, {"defillama", "BSC", "bsc"},
+		{"circle", "HYPEREVM", "hyperliquid"}, {"defillama", "Hyperliquid L1", "hyperliquid"},
+		{"circle", "EDGE", "edge"}, {"defillama", "edgeX L1", "edge"},
+		{"circle", "ZKS", "zksync"}, {"defillama", "ZKsync Era", "zksync"},
+		{"tether", "Ton", "ton"}, {"defillama", "TON", "ton"},
+		// Not in the map: a source-prefixed key, never merged with another source.
+		{"defillama", "Cardano", "defillama:cardano"}, {"defillama", "Statemine", "defillama:statemine"},
+		{"circle", "NEWCHAIN", "circle:newchain"}, {"tether", "Some Chain", "tether:some_chain"},
 	}
 	for _, c := range cases {
 		if got := stableChainKey(c.source, c.name); got != c.want {
 			t.Errorf("stableChainKey(%s, %q) = %q, want %q", c.source, c.name, got, c.want)
+		}
+		if unmapped := strings.Contains(c.want, ":"); stableChainUnmapped(c.want) != unmapped {
+			t.Errorf("stableChainUnmapped(%q) = %v, want %v", c.want, !unmapped, unmapped)
+		}
+	}
+	// Every chain the issuers report today is mapped (the fixtures carry the
+	// live chain lists), and the registry networks are reachable from each
+	// source that lists them.
+	in, _ := stableFixtureInputs(t)
+	for sym, coin := range in.Circle.Value.Coins {
+		for _, c := range coin.Chains {
+			if k := stableChainKey("circle", c.Chain); stableChainUnmapped(k) {
+				t.Errorf("Circle %s chain %q is unmapped", sym, c.Chain)
+			}
+		}
+	}
+	for _, c := range in.Tether.Value.Chains {
+		if k := stableChainKey("tether", c.Name); stableChainUnmapped(k) {
+			t.Errorf("Tether chain %q is unmapped", c.Name)
+		}
+	}
+	for source, names := range stableChainCanon {
+		seen := map[string]string{}
+		for name, key := range names {
+			if key == "" || strings.ContainsAny(key, ": ") || strings.ToLower(key) != key {
+				t.Errorf("%s %q maps to a malformed key %q", source, name, key)
+			}
+			// One name per chain within a source, except DefiLlama's two names for OP.
+			if other, dup := seen[key]; dup && !(source == "defillama" && key == "op") {
+				t.Errorf("%s maps both %q and %q to %q", source, other, name, key)
+			}
+			seen[key] = name
 		}
 	}
 	native, _ := lookupRegistryToken("arb", "0xaf88d065e77c8cc2239327c5edb3a432268e5831")
 	bridged, _ := lookupRegistryToken("arb", "0xff970a61a04b1ca14834a43f5de4533ebddb5cc8")
 	if stableOnchainKey(native) != "arb" || stableOnchainKey(bridged) != "arb.bridged" {
 		t.Errorf("on-chain keys = %q / %q, want arb / arb.bridged", stableOnchainKey(native), stableOnchainKey(bridged))
+	}
+}
+
+// Chains outside the map are reported, never dropped or merged.
+func TestBuildStableSupplyUnmappedChains(t *testing.T) {
+	in, _ := stableFixtureInputs(t)
+	def, _ := stableAssetByID("eurc")
+	a := buildStableSupplyAsset(def, in)
+	want := map[string]string{"defillama:cardano": "Cardano", "defillama:icp": "ICP", "defillama:tempo": "Tempo"}
+	for key, label := range want {
+		r := rowByChain(t, a, key)
+		if !r.Unmapped || r.ChainLabel != label || r.AggregatorCirculatingNative == nil || r.IssuerCirculatingNative != nil {
+			t.Errorf("%s row = %+v", key, r)
+		}
+	}
+	if len(a.UnmappedChains) != len(want) {
+		t.Errorf("unmapped chains = %+v, want %d", a.UnmappedChains, len(want))
+	}
+	for _, u := range a.UnmappedChains {
+		if u.Source != "defillama" || want["defillama:"+strings.ToLower(u.Name)] != u.Name {
+			t.Errorf("unmapped chain = %+v", u)
+		}
+	}
+	for _, r := range a.Chains {
+		if _, isWanted := want[r.Chain]; r.Unmapped != isWanted {
+			t.Errorf("row %s unmapped = %v", r.Chain, r.Unmapped)
+		}
+	}
+	// Mapped chains merge across sources (Circle AVAX and DefiLlama Avalanche)
+	// under the canonical label.
+	if avax := rowByChain(t, a, "avax"); avax.IssuerCirculatingNative == nil || avax.AggregatorCirculatingNative == nil || avax.ChainLabel != "Avalanche" {
+		t.Errorf("avax row = %+v", avax)
+	}
+	// USDT: Tether's BNB Smart Chain row (0 issued) and DefiLlama's BSC row are one chain.
+	usdt, _ := stableAssetByID("usdt")
+	b := buildStableSupplyAsset(usdt, in)
+	if bsc := rowByChain(t, b, "bsc"); bsc.IssuerCirculatingNative == nil || *bsc.IssuerCirculatingNative != 0 || bsc.AggregatorCirculatingNative == nil {
+		t.Errorf("usdt bsc row = %+v", bsc)
+	}
+	if b.UnmappedChains == nil || len(b.UnmappedChains) != 0 {
+		t.Errorf("usdt unmapped chains = %#v, want an empty list", b.UnmappedChains)
 	}
 }
 
