@@ -2,61 +2,61 @@
  {
   "date": "1792022400",
   "totalCirculating": {
-   "peggedUSD": 184015317489
+   "peggedUSD": 156080000000
   },
   "totalUnreleased": {
-   "peggedUSD": 9488320844
+   "peggedUSD": 8100000000
   },
   "totalCirculatingUSD": {
-   "peggedUSD": 183854605808
+   "peggedUSD": 155986352000
   }
  },
  {
   "date": "1792108800",
   "totalCirculating": {
-   "peggedUSD": 183633294617
+   "peggedUSD": 155930000000
   },
   "totalUnreleased": {
-   "peggedUSD": 9870343700
+   "peggedUSD": 8150000000
   },
   "totalCirculatingUSD": {
-   "peggedUSD": 183462599098
+   "peggedUSD": 155844238500
   }
  },
  {
   "date": "1792195200",
   "totalCirculating": {
-   "peggedUSD": 183634369673
+   "peggedUSD": 155890000000
   },
   "totalUnreleased": {
-   "peggedUSD": 9869268642
+   "peggedUSD": 8150000000
   },
   "totalCirculatingUSD": {
-   "peggedUSD": 183473384175
+   "peggedUSD": 155808937200
   }
  },
  {
   "date": "1792281600",
   "totalCirculating": {
-   "peggedUSD": 183545469669
+   "peggedUSD": 155820000000
   },
   "totalUnreleased": {
-   "peggedUSD": 9958168642
+   "peggedUSD": 8190000000
   },
   "totalCirculatingUSD": {
-   "peggedUSD": 183405854230
+   "peggedUSD": 155742090000
   }
  },
  {
   "date": "1792368000",
   "totalCirculating": {
-   "peggedUSD": 183575869667.3
+   "peggedUSD": 155858000000.5
   },
   "totalUnreleased": {
-   "peggedUSD": 9927768641.69
+   "peggedUSD": 8185000000.25
   },
   "totalCirculatingUSD": {
-   "peggedUSD": 183461303036.01
+   "peggedUSD": 155781629580.5
   },
   "totalMintedUSD": {
    "peggedUSD": 0

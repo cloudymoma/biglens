@@ -1,62 +1,87 @@
-# Stablecoin Dashboard Test Fixtures (M0)
+# Stablecoin Dashboard Test Fixtures (synthetic)
 
-Captured on `2026-10-19` between 13:00 and 14:00 UTC (`User-Agent: biglens/1.0`) for the design in the untracked
-`stablecoin.md` (§4, §13, Appendix E). Each file preserves the exact upstream JSON shape; trimming only removes array
-elements or object members, never renames or retypes fields. All files are ≤ 64 KB. These fixtures are for offline
-tests only; BigLens is personal-use (see `stablecoin.md` §4.6) and the data is not redistributed.
+**Every value in these files is made up.** The files reproduce the *shape* of the upstream responses that were captured
+on 2026-10-19 (M0) for the design in the untracked `stablecoin.md` (§4, §13, Appendix E): field names, JSON types
+(string vs integer vs float, including mixed types), nesting, key order and the upstream quirks listed in §2. A
+key-path and JSON-type comparison against the captured responses found 0 differences in all 22 JSON files.
+
+Kept because they are identifiers or public facts, not provider data: chain names and codes, pair and product names,
+contract and pool addresses, dates, the Tether update id (`1792193400` = 2026-10-16T23:30:00Z) and the SDMX codelist
+ids. The repository is public, and the captured responses may not be republished (e.g. DefiLlama, `stablecoin.md`
+§8.7), so the real values appear only as cited facts in §3.
+
+`generate.py` writes every file here and `../../opendata_stablecoin_fixtures_test.go` (the `fx…` Go constants the tests
+assert against), and checks the replay shapes below. Don't hand-edit the fixtures; change the script and run
+`python3 generate.py` from this directory.
 
 ## 1. Inventory
 
-| File | Upstream URL | Trimming rule (size) | Terms |
-|---|---|---|---|
-| `defillama_stablecoins.json` | `https://stablecoins.llama.fi/stablecoins?includePrices=true` | USDT(1)/USDC(2) top-6 chains; EURC(50) all chains (units evidence §5.1); 2 other peggedEUR + 1 non-USD/EUR peg (watchlist exclusion test) (14.3 KB) | test use only |
-| `defillama_charts_eurc.json` | `https://stablecoins.llama.fi/stablecoincharts/all?stablecoin=50` | last 5 daily rows (1.1 KB) | test use only |
-| `defillama_charts_usdt.json` | `https://stablecoins.llama.fi/stablecoincharts/all?stablecoin=1` | last 5 daily rows (1.1 KB) | test use only |
-| `replay/charts_usdt_2022-05.json` | `https://stablecoins.llama.fi/stablecoincharts/all?stablecoin=1` | 2022-04-15..2022-06-15 (USDT redemption wave) (10.9 KB) | test use only |
-| `replay/charts_usdc_2023-03.json` | `https://stablecoins.llama.fi/stablecoincharts/all?stablecoin=2` | 2023-02-15..2023-03-31 (USDC/SVB) (8.9 KB) | test use only |
-| `replay/charts_usdt_2024.json` | `https://stablecoins.llama.fi/stablecoincharts/all?stablecoin=1` | 2024 quiet year; keys date,totalCirculating,totalCirculatingUSD only (53.1 KB) | test use only |
-| `replay/charts_usdc_2024.json` | `https://stablecoins.llama.fi/stablecoincharts/all?stablecoin=2` | 2024 quiet year; keys date,totalCirculating,totalCirculatingUSD only (52.5 KB) | test use only |
-| `replay/prices_2022-05.json` | `https://stablecoins.llama.fi/stablecoinprices` | 2022-04-15..2022-06-15; tether/usd-coin/euro-coin only (6.2 KB) | test use only |
-| `replay/prices_2023-03.json` | `https://stablecoins.llama.fi/stablecoinprices` | 2023-02-15..2023-03-31; tether/usd-coin/euro-coin only (5.3 KB) | test use only |
-| `replay/prices_2024.json` | `https://stablecoins.llama.fi/stablecoinprices` | 2024; tether/usd-coin only (31.6 KB) | test use only |
-| `circle_stablecoins.json` | `https://api.circle.com/v1/stablecoins` | full response (7.7 KB) | Undocumented public endpoint — test use only |
-| `tether_transparency.json` | `https://app.tether.to/transparency.json` | full response (mixed string/number types preserved) (11.6 KB) | Tether transparency page (outside main ToS) — test use only |
-| `kraken_ticker.json` | `https://api.kraken.com/0/public/Ticker?pair=USDTUSD,USDCUSD,EURCEUR,EURCUSD,EURUSD` | full (renamed result keys preserved) (2.3 KB) | Kraken terms (own use) — test use only |
-| `coinbase_tickers.json` | `https://api.exchange.coinbase.com/products/{id}/ticker` | USDT-USD, USDT-USDC, EURC-USDC, plus USDC-USD (expected HTTP 400 trap) (0.8 KB) | Coinbase market data terms (personal/research) — test use only |
-| `bitstamp_tickers.json` | `https://www.bitstamp.net/api/v2/ticker/{pair}/` | 4 valid pairs; eurcusd = unknown-pair trap (list trimmed to first 3, original length kept) (2.7 KB) | Bitstamp public API — test use only |
-| `okx_ticker.json` | `https://www.okx.com/api/v5/market/ticker?instId=USDC-USDT` | full (0.5 KB) | OKX API agreement (personal use) — test use only |
-| `binance_ticker24h.json` | `https://api.binance.com/api/v3/ticker/24hr?symbol=USDCUSDT` | full (status recorded; 451/403 = geo-block path) (0.6 KB) | Binance public API — test use only |
-| `uniswap_v3_usdc_usdt_rpc.json` | `https://ethereum-rpc.publicnode.com` | eth_call token0(), token1(), fee(), slot0() on pool 0x3416cf6c708da44db2624d63ea0aaef7113527c6 (1.3 KB) | Public chain state |
-| `chainlink_feeds_rpc.json` | `https://ethereum-rpc.publicnode.com` | eth_call latestRoundData(), decimals(), description() on USDC/USD, USDT/USD, EUR/USD (3.2 KB) | Public chain state |
-| `curve_3pool.json` | `https://api.curve.finance/v1/getPools/ethereum/main` | poolData trimmed to 3pool only; envelope kept (2.8 KB) | Curve public API — test use only |
-| `ecb_exr_usd.json` | `https://data-api.ecb.europa.eu/service/data/EXR/D.USD.EUR.SP00.A?lastNObservations=3&format=jsondata` | last 3 observations (5.4 KB) | ECB data reuse policy (attribution: "Source: ECB") |
-| `ecb_estr.json` | `https://data-api.ecb.europa.eu/service/data/EST/B.EU000A2X2A25.WT?lastNObservations=3&format=jsondata` | last 3 observations (5.3 KB) | ECB data reuse policy (attribution: "Source: ECB") |
-| `treasury_bill_rates.csv` | `https://home.treasury.gov/resource-center/data-chart-center/interest-rates/daily-treasury-rates.csv/2026/all?type=daily_treasury_bill_rates&field_tdr_date_value=2026&page&_format=csv` | header + first 5 rows (newest first) (0.8 KB) | US Treasury — public domain |
-| `blockscout_usdc_holders.json` | `https://{eth,base}.blockscout.com/api/v2/tokens/{usdc}/holders and /tokens/{usdc}` | holders items trimmed to 5; HTTP status recorded (base 403 seen in M0) (6.4 KB) | Blockscout hosted API — test use only |
-| `replay/bitstamp_ohlc_usdcusd_2023-03.json` | `https://www.bitstamp.net/api/v2/ohlc/usdcusd/?step=86400&limit=8&start=1678233600` | 8 daily candles around the event (intraday lows) (1.3 KB) | Bitstamp public API — test use only |
-| `replay/bitstamp_ohlc_usdtusd_2022-05.json` | `https://www.bitstamp.net/api/v2/ohlc/usdtusd/?step=86400&limit=8&start=1652054400` | 8 daily candles around the event (intraday lows) (1.3 KB) | Bitstamp public API — test use only |
+| File | Mimics | Contents |
+|---|---|---|
+| `defillama_stablecoins.json` | `stablecoins.llama.fi/stablecoins?includePrices=true` | USDT (id 1) and USDC (id 2) with their top-6 chains; EURC (id 50) with all 13 chains; EURT (dead, `price: null`), EURS (`peggedEUR`) and VOLT (`peggedVAR`, neither USD nor EUR) |
+| `defillama_charts_usdt.json`, `defillama_charts_eurc.json` | `stablecoins.llama.fi/stablecoincharts/all?stablecoin={1,50}` | 5 daily rows, 2026-10-15..19; settled days are integers, the last day is floats plus `totalMintedUSD`/`totalBridgedToUSD` |
+| `circle_stablecoins.json` | `api.circle.com/v1/stablecoins` | USDC on 39 chains, EURC on 9 chains, string amounts, per-chain `updateDate` |
+| `tether_transparency.json` | `app.tether.to/transparency.json` | `data` (legacy per-chain keys) and `data_formatted` (14 `blockChains`) for USD₮, XAU₮ and MXN₮; Σ(totalAuthorized − notIssued − quarantined) = USD₮ `total_liabilities` exactly |
+| `kraken_ticker.json` | `api.kraken.com/0/public/Ticker?pair=USDTUSD,USDCUSD,EURCEUR,EURCUSD,EURUSD` | one batched response |
+| `coinbase_tickers.json` | `api.exchange.coinbase.com/products/{id}/ticker` | USDT-USD, USDT-USDC, EURC-USDC, and the USDC-USD 404 |
+| `bitstamp_tickers.json` | `www.bitstamp.net/api/v2/ticker/{pair}/` | usdtusd, usdcusd, eurceur (thin book), eurusd, and the unknown-pair list response |
+| `okx_ticker.json`, `binance_ticker24h.json` | OKX `market/ticker?instId=USDC-USDT`, Binance `ticker/24hr?symbol=USDCUSDT` | one ticker each, HTTP status recorded |
+| `uniswap_v3_usdc_usdt_rpc.json` | `eth_call` on pool `0x3416cf6c708da44db2624d63ea0aaef7113527c6` | token0(), token1(), fee(), slot0(); price 1.00065 USDT per USDC |
+| `chainlink_feeds_rpc.json`, `curve_3pool.json`, `blockscout_usdc_holders.json` | Chainlink feeds, Curve `getPools/ethereum/main`, Blockscout holders | v1.1 sources (not used yet) |
+| `ecb_exr_usd.json`, `ecb_estr.json` | ECB SDMX-JSON `EXR/D.USD.EUR.SP00.A`, `EST/B.EU000A2X2A25.WT` | last 3 observations; full SDMX structure |
+| `treasury_bill_rates.csv` | US Treasury daily bill rates CSV | header plus 5 rows, newest first |
+| `replay/*` | DefiLlama charts and prices, Bitstamp daily OHLC | scenario series, see §3 |
 
-## 2. Traps captured on purpose
+## 2. Traps reproduced on purpose
 
 | Trap | Fixture | What a parser must do |
 |---|---|---|
-| Bitstamp unknown pair returns HTTP 200 with the full ticker **list** (276 entries) | `bitstamp_tickers.json` → `eurcusd_unknown_pair` | Require a JSON object with `bid`/`ask`/`last`; a list is `bad_response` |
-| Kraken renames result keys (`USDTUSD` → `USDTZUSD`, `EURUSD` → `ZEURZUSD`) | `kraken_ticker.json` | Map by returned key, not requested pair |
-| Coinbase has no `USDC-USD` book: **HTTP 404** (not 400) | `coinbase_tickers.json` → `USDC-USD` | Treat 4xx on a known-missing product as `disabled`, not an outage |
-| Tether mixed string/number amounts | `tether_transparency.json` | Accept both JSON string and number |
-| DefiLlama `peggedEUR` list values are **USD** | `defillama_stablecoins.json` (id 50) | Normalize: native = value ÷ same-response `price` (§5.1) |
-| DefiLlama charts `totalCirculating` is **native** | `defillama_charts_eurc.json` | Use as native; `totalCirculatingUSD` is USD |
-| Non-USD/EUR peg in the list | `defillama_stablecoins.json` (last asset) | Excluded from the watchlist |
-| Blockscout Base behind a Cloudflare challenge (HTTP 403, HTML body) | `blockscout_usdc_holders.json` → `base` | Non-JSON 403 is `blocked`, never parsed; source badge `error` |
-| Binance geo-block path | `binance_ticker24h.json` records the HTTP status (200 at capture) | Reuse `../bitcoin/binance_451.json` for the 451 path |
+| Bitstamp answers an unknown pair with HTTP 200 and the full ticker **list** (276 entries upstream; 3 kept, `body_len` records 276) | `bitstamp_tickers.json` → `eurcusd_unknown_pair` | Require an object with `bid`/`ask`/`last`; a list is `bad_response` |
+| Kraken renames result keys (`USDTUSD` → `USDTZUSD`, `EURUSD` → `ZEURZUSD`) | `kraken_ticker.json` | Map by the returned key, not the requested pair |
+| Coinbase has no `USDC-USD` book: **HTTP 404** | `coinbase_tickers.json` → `USDC-USD` | A 404 on a known-missing product is `disabled`, not an outage |
+| Tether amounts are strings, integers or floats, varying by coin and chain | `tether_transparency.json` | Accept every JSON number form and numeric strings |
+| DefiLlama list values are USD for **every** peg type (value = native × same-response `price`) | `defillama_stablecoins.json` | Normalize: native = value ÷ `price`. Units evidence: each core coin's `circulatingPrevDay` ÷ `price` equals its chart's native total for 2026-10-18 |
+| DefiLlama charts `totalCirculating` is **native** | `defillama_charts_*.json` | Use as native; `totalCirculatingUSD` is USD |
+| A dead coin with `price: null` | `defillama_stablecoins.json` (EURT) | Native amounts unknown (null), USD kept |
+| A peg that is neither USD nor EUR | `defillama_stablecoins.json` (VOLT, `peggedVAR`) | Excluded from the watchlist |
+| Blockscout Base behind a Cloudflare challenge (HTTP 403, HTML body) | `blockscout_usdc_holders.json` → `base` | A non-JSON 403 is `blocked`, never parsed |
+| Blockscout tag meta key with a trailing space (`"tagIcon "`), null `metadata` | `blockscout_usdc_holders.json` → `eth` | Don't depend on optional metadata |
+| Binance geo-block path | `binance_ticker24h.json` (HTTP 200 at capture) | Reuse `../bitcoin/binance_451.json` for the 451 path |
 
-## 3. Replay windows (`replay/`)
+## 3. Replay scenarios (`replay/`)
 
-DefiLlama daily data (`charts_*`, `prices_*`) plus Bitstamp daily OHLC for intraday lows. Observed values used by the
-§13 replay assertions:
+Short synthetic series that reproduce the shapes measured on the real data. `TestStableReplayFixtureShapes` pins them.
 
-| Event | DefiLlama daily | Bitstamp daily low | Flows (DefiLlama `totalCirculating`) |
-|---|---|---|---|
-| USDT 2022-05 | worst −11 bps (2022-05-15) — **does not show the depeg** | 0.91011 on 2022-05-12 | worst 24h −3.88% (05-12), worst 7d −10.23% (05-18) |
-| USDC 2023-03 | 0.99756 on 03-11, **0.96107 on 03-12** | 0.80526 on 2023-03-11 | worst 24h −3.65% (03-12), worst 7d −15.17% (03-17) |
-| 2024 (quiet) | days ≥ 30 bps: USDT 5, USDC 9; ≥ 100 bps: 0; max 60 / 80 bps | — | — |
+| File | Window | Shape reproduced |
+|---|---|---|
+| `charts_usdt_2022-05.json` | 2022-04-28..06-15 | worst 24h −3.88% on 05-12; worst 7d −10.23% on 05-18 |
+| `charts_usdc_2023-03.json` | 2023-03-01..31 | worst 24h −3.65% on 03-12; worst 7d −15.17% on 03-17 |
+| `charts_usdt_2024.json` | 2024-11-20..12-31 | one-day glitch −1.38% on 12-01, rebound the next day; worst 7d −1.21% on 12-31 |
+| `charts_usdc_2024.json` | 2024-04-08..26 | one-day glitch −6.48% on 04-18, +8.59% on 04-19; worst 7d −5.35% on 04-18 |
+| `prices_2022-05.json` | 2022-04-28..06-15 | tether in 05-09..16: 0 bps through 05-14, −10.54 bps on 05-15; the only day ≥ 30 bps is +32.7 bps on 05-01 |
+| `prices_2023-03.json` | 2023-03-01..31 | usd-coin 0.99755917 on 03-11, 0.961065 on 03-12, 0.991923 on 03-13; days ≥ 30 / ≥ 100 bps: usd-coin 10 / 1, tether 15 / 2 |
+| `prices_2024.json` | 2024, sparse | days ≥ 30 bps: tether 10, usd-coin 14 (max 60 and 80 bps); none ≥ 100 bps |
+| `bitstamp_ohlc_usdtusd_2022-05.json` | 8 days from 2022-05-09 | low 0.91011 on 05-12 (open 0.99523, high 0.99939, close 0.99675) |
+| `bitstamp_ohlc_usdcusd_2023-03.json` | 8 days from 2023-03-08 | low 0.80526 on 03-11 (open 0.99729, high 0.99975, close 0.96853) |
+
+### Measured on the real data (cited facts)
+
+Sources: DefiLlama `stablecoincharts/all` and `stablecoinprices`, Bitstamp `ohlc/{pair}` daily candles, fetched
+2026-10-19.
+
+- **USDT, May 2022.** DefiLlama daily price over 05-09..05-16: 0 bps through 05-14, −10.54 bps on 05-15, −8.82 bps on
+  05-16. Over the whole 2022-04-15..06-15 window the extremes are +32.7 bps on 05-01 (a premium, the only day ≥ 30 bps)
+  and −17 bps on 06-14. Bitstamp daily low 0.91011 on 05-12. Supply: worst 24h −3.876% on 05-12, worst 7d −10.225% on
+  05-18.
+- **USDC, March 2023.** DefiLlama daily price 0.99755917 on 03-11, 0.961065 on 03-12 (−389 bps), 0.991923 on 03-13.
+  Bitstamp daily low 0.80526 on 03-11. Supply: worst 24h −3.647% on 03-12, worst 7d −15.172% on 03-17. USDT traded at a
+  premium from 03-13 to 03-26 (+100 bps on 03-13, +110 bps on 03-21).
+- **2024.** USDT days off peg by ≥ 30 bps: 02-15 +40, 08-08 +60, 10-07 −33.5, 10-25 −46.58, 11-11 +50, plus five days at
+  exactly +30.0 bps (01-02, 03-20, 07-13, 07-20, 10-06). USDC: 01-10 −30.4, 02-15 +50, 03-05 −30.5, 03-07 −34.8, 03-20
+  +60, 08-08 +50, 10-25 −38.63, 11-11 +80, 11-26 −31.5, plus five days at exactly +30.0 bps (01-02, 03-01, 03-15, 07-13,
+  11-25). None ≥ 100 bps.
+- **Exact 30.0 bps.** A price of 1.003 is 30.0 bps off peg, but `1.003 − 1` is 29.99999999999989 bps in float64. A naive
+  `>= 30` comparison misses those days and gives USDT 5 / USDC 9 for 2024 and 13 / 9 for March 2023, the counts quoted
+  in `stablecoin.md` §13. Counting them gives 10 / 14 and 15 / 10. Both are pinned in the replay test.
+- **2024 supply-chart glitches.** USDT −1.379% on 2024-12-01 with a rebound (worst 7d −1.21% on 12-31); USDC −6.483% on
+  2024-04-18, +8.591% on 04-19 (worst 7d −5.35% on 04-18).

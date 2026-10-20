@@ -1,3296 +1,380 @@
 [
  {
-  "date": "1704067200",
-  "totalCirculating": {
-   "peggedUSD": 91677928371
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 91665918562
-  }
- },
- {
-  "date": "1704153600",
-  "totalCirculating": {
-   "peggedUSD": 91682127370
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 91957173752
-  }
- },
- {
-  "date": "1704240000",
-  "totalCirculating": {
-   "peggedUSD": 92020117112
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 92020117112
-  }
- },
- {
-  "date": "1704326400",
-  "totalCirculating": {
-   "peggedUSD": 92411788606
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 92356526357
-  }
- },
- {
-  "date": "1704412800",
-  "totalCirculating": {
-   "peggedUSD": 92780444258
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 92873224702
-  }
- },
- {
-  "date": "1704499200",
-  "totalCirculating": {
-   "peggedUSD": 93320401318
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 93320401318
-  }
- },
- {
-  "date": "1704585600",
-  "totalCirculating": {
-   "peggedUSD": 93528001318
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 93621529319
-  }
- },
- {
-  "date": "1704672000",
-  "totalCirculating": {
-   "peggedUSD": 93596751318
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 93585145320
-  }
- },
- {
-  "date": "1704758400",
-  "totalCirculating": {
-   "peggedUSD": 94063288707
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 94057456783
-  }
- },
- {
-  "date": "1704844800",
-  "totalCirculating": {
-   "peggedUSD": 94368207275
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 94228636696
-  }
- },
- {
-  "date": "1704931200",
-  "totalCirculating": {
-   "peggedUSD": 94591242888
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 94685834131
-  }
- },
- {
-  "date": "1705017600",
-  "totalCirculating": {
-   "peggedUSD": 94980329573
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 94980329573
-  }
- },
- {
-  "date": "1705104000",
-  "totalCirculating": {
-   "peggedUSD": 94982958944
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 94942211254
-  }
- },
- {
-  "date": "1705190400",
-  "totalCirculating": {
-   "peggedUSD": 94982958944
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 94959118221
-  }
- },
- {
-  "date": "1705276800",
-  "totalCirculating": {
-   "peggedUSD": 94982958938
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 95077941897
-  }
- },
- {
-  "date": "1705363200",
-  "totalCirculating": {
-   "peggedUSD": 95093844052
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 95014535787
-  }
- },
- {
-  "date": "1705449600",
-  "totalCirculating": {
-   "peggedUSD": 95101372849
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 95068943281
-  }
- },
- {
-  "date": "1705536000",
-  "totalCirculating": {
-   "peggedUSD": 95137139323
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 95040194578
-  }
- },
- {
-  "date": "1705622400",
-  "totalCirculating": {
-   "peggedUSD": 95033236391
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 94924423335
-  }
- },
- {
-  "date": "1705708800",
-  "totalCirculating": {
-   "peggedUSD": 95033236391
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 94904086222
-  }
- },
- {
-  "date": "1705795200",
-  "totalCirculating": {
-   "peggedUSD": 95033236391
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 94976881682
-  }
- },
- {
-  "date": "1705881600",
-  "totalCirculating": {
-   "peggedUSD": 94902945511
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 94791054938
-  }
- },
- {
-  "date": "1705968000",
-  "totalCirculating": {
-   "peggedUSD": 94865026114
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 94865026114
-  }
- },
- {
-  "date": "1706054400",
-  "totalCirculating": {
-   "peggedUSD": 95563944196
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 95659508140
-  }
- },
- {
-  "date": "1706140800",
-  "totalCirculating": {
-   "peggedUSD": 95540986301
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 95512228464
-  }
- },
- {
-  "date": "1706227200",
-  "totalCirculating": {
-   "peggedUSD": 95543581705
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 95543581705
-  }
- },
- {
-  "date": "1706313600",
-  "totalCirculating": {
-   "peggedUSD": 96023872796
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 95967218711
-  }
- },
- {
-  "date": "1706400000",
-  "totalCirculating": {
-   "peggedUSD": 96022872795
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 95969099987
-  }
- },
- {
-  "date": "1706486400",
-  "totalCirculating": {
-   "peggedUSD": 96022872795
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 96019704040
-  }
- },
- {
-  "date": "1706572800",
-  "totalCirculating": {
-   "peggedUSD": 96040095474
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 96040095474
-  }
- },
- {
-  "date": "1706659200",
-  "totalCirculating": {
-   "peggedUSD": 96187066652
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 96140512112
-  }
- },
- {
-  "date": "1706745600",
-  "totalCirculating": {
-   "peggedUSD": 96206404754
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 96000234428
-  }
- },
- {
-  "date": "1706832000",
-  "totalCirculating": {
-   "peggedUSD": 96208938476
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 96305147414
-  }
- },
- {
-  "date": "1706918400",
-  "totalCirculating": {
-   "peggedUSD": 96218466557
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 96202494292
-  }
- },
- {
-  "date": "1707004800",
-  "totalCirculating": {
-   "peggedUSD": 96218466557
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 96135237584
-  }
- },
- {
-  "date": "1707091200",
-  "totalCirculating": {
-   "peggedUSD": 96219105918
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 96181869124
-  }
- },
- {
-  "date": "1707177600",
-  "totalCirculating": {
-   "peggedUSD": 96223618245
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 96064849275
-  }
- },
- {
-  "date": "1707264000",
-  "totalCirculating": {
-   "peggedUSD": 96168527921
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 96080918392
-  }
- },
- {
-  "date": "1707350400",
-  "totalCirculating": {
-   "peggedUSD": 96173255742
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 96269428997
-  }
- },
- {
-  "date": "1707436800",
-  "totalCirculating": {
-   "peggedUSD": 96193378383
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 96289571761
-  }
- },
- {
-  "date": "1707523200",
-  "totalCirculating": {
-   "peggedUSD": 96208378383
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 96208378383
-  }
- },
- {
-  "date": "1707609600",
-  "totalCirculating": {
-   "peggedUSD": 96328878383
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 96425207261
-  }
- },
- {
-  "date": "1707696000",
-  "totalCirculating": {
-   "peggedUSD": 96462258382
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 96558720640
-  }
- },
- {
-  "date": "1707782400",
-  "totalCirculating": {
-   "peggedUSD": 96655458382
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 96637770433
-  }
- },
- {
-  "date": "1707868800",
-  "totalCirculating": {
-   "peggedUSD": 96787758381
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 96787758381
-  }
- },
- {
-  "date": "1707955200",
-  "totalCirculating": {
-   "peggedUSD": 96948454100
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 97336247917
-  }
- },
- {
-  "date": "1708041600",
-  "totalCirculating": {
-   "peggedUSD": 97334361243
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 97304868931
-  }
- },
- {
-  "date": "1708128000",
-  "totalCirculating": {
-   "peggedUSD": 97537110494
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 97634647604
-  }
- },
- {
-  "date": "1708214400",
-  "totalCirculating": {
-   "peggedUSD": 97644529575
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 97742174104
-  }
- },
- {
-  "date": "1708300800",
-  "totalCirculating": {
-   "peggedUSD": 97674223122
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 97664260351
-  }
- },
- {
-  "date": "1708387200",
-  "totalCirculating": {
-   "peggedUSD": 97694587262
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 97666842000
-  }
- },
- {
-  "date": "1708473600",
-  "totalCirculating": {
-   "peggedUSD": 97805414635
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 97787711855
-  }
- },
- {
-  "date": "1708560000",
-  "totalCirculating": {
-   "peggedUSD": 97828950767
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 97712632144
-  }
- },
- {
-  "date": "1708646400",
-  "totalCirculating": {
-   "peggedUSD": 97830410207
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 97751167575
-  }
- },
- {
-  "date": "1708732800",
-  "totalCirculating": {
-   "peggedUSD": 97897857760
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 97897857760
-  }
- },
- {
-  "date": "1708819200",
-  "totalCirculating": {
-   "peggedUSD": 97897857760
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 97836769496
-  }
- },
- {
-  "date": "1708905600",
-  "totalCirculating": {
-   "peggedUSD": 97897857458
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 97888948753
-  }
- },
- {
-  "date": "1708992000",
-  "totalCirculating": {
-   "peggedUSD": 98106291060
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 98076466747
-  }
- },
- {
-  "date": "1709078400",
-  "totalCirculating": {
-   "peggedUSD": 98378060190
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 98378060190
-  }
- },
- {
-  "date": "1709164800",
-  "totalCirculating": {
-   "peggedUSD": 98695532864
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 98654376826
-  }
- },
- {
-  "date": "1709251200",
-  "totalCirculating": {
-   "peggedUSD": 98834150546
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 98932984696
-  }
- },
- {
-  "date": "1709337600",
-  "totalCirculating": {
-   "peggedUSD": 99173460259
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 99272633719
-  }
- },
- {
-  "date": "1709424000",
-  "totalCirculating": {
-   "peggedUSD": 99422260259
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 99422260259
-  }
- },
- {
-  "date": "1709510400",
-  "totalCirculating": {
-   "peggedUSD": 99525850149
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 99724901849
-  }
- },
- {
-  "date": "1709596800",
-  "totalCirculating": {
-   "peggedUSD": 100038817337
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 100238894972
-  }
- },
- {
-  "date": "1709683200",
-  "totalCirculating": {
-   "peggedUSD": 100434401358
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 100534835759
-  }
- },
- {
-  "date": "1709769600",
-  "totalCirculating": {
-   "peggedUSD": 100752179979
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 100622511924
-  }
- },
- {
-  "date": "1709856000",
-  "totalCirculating": {
-   "peggedUSD": 101039338406
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 101241417082
-  }
- },
- {
-  "date": "1709942400",
-  "totalCirculating": {
-   "peggedUSD": 101586455788
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 101789628700
-  }
- },
- {
-  "date": "1710028800",
-  "totalCirculating": {
-   "peggedUSD": 101812755784
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 102016381296
-  }
- },
- {
-  "date": "1710115200",
-  "totalCirculating": {
-   "peggedUSD": 102012255784
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 102012255784
-  }
- },
- {
-  "date": "1710201600",
-  "totalCirculating": {
-   "peggedUSD": 102428495868
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 102367141199
-  }
- },
- {
-  "date": "1710288000",
-  "totalCirculating": {
-   "peggedUSD": 102656982792
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 102759639775
-  }
- },
- {
-  "date": "1710374400",
-  "totalCirculating": {
-   "peggedUSD": 103124150069
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 103227274219
-  }
- },
- {
-  "date": "1710460800",
-  "totalCirculating": {
-   "peggedUSD": 103256569684
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 103463082823
-  }
- },
- {
-  "date": "1710547200",
-  "totalCirculating": {
-   "peggedUSD": 103308077351
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 103514693506
-  }
- },
- {
-  "date": "1710633600",
-  "totalCirculating": {
-   "peggedUSD": 103403077351
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 103506480428
-  }
- },
- {
-  "date": "1710720000",
-  "totalCirculating": {
-   "peggedUSD": 103403287141
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 103368853847
-  }
- },
- {
-  "date": "1710806400",
-  "totalCirculating": {
-   "peggedUSD": 103656755951
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 103656755951
-  }
- },
- {
-  "date": "1710892800",
-  "totalCirculating": {
-   "peggedUSD": 103767644673
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 104078947607
-  }
- },
- {
-  "date": "1710979200",
-  "totalCirculating": {
-   "peggedUSD": 103892152366
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 103892152366
-  }
- },
- {
-  "date": "1711065600",
-  "totalCirculating": {
-   "peggedUSD": 104042110539
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 104146152650
-  }
- },
- {
-  "date": "1711152000",
-  "totalCirculating": {
-   "peggedUSD": 104007508096
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 103950511982
-  }
- },
- {
-  "date": "1711238400",
-  "totalCirculating": {
-   "peggedUSD": 103997508096
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 104101505605
-  }
- },
- {
-  "date": "1711324800",
-  "totalCirculating": {
-   "peggedUSD": 104002508096
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 103871776944
-  }
- },
- {
-  "date": "1711411200",
-  "totalCirculating": {
-   "peggedUSD": 104231823342
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 104231823342
-  }
- },
- {
-  "date": "1711497600",
-  "totalCirculating": {
-   "peggedUSD": 104358215527
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 104350179944
-  }
- },
- {
-  "date": "1711584000",
-  "totalCirculating": {
-   "peggedUSD": 104438284293
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 104542722577
-  }
- },
- {
-  "date": "1711670400",
-  "totalCirculating": {
-   "peggedUSD": 104488442732
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 104488442732
-  }
- },
- {
-  "date": "1711756800",
-  "totalCirculating": {
-   "peggedUSD": 104489471207
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 104467632908
-  }
- },
- {
-  "date": "1711843200",
-  "totalCirculating": {
-   "peggedUSD": 104489471207
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 104593960679
-  }
- },
- {
-  "date": "1711929600",
-  "totalCirculating": {
-   "peggedUSD": 104430769909
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 104430769909
-  }
- },
- {
-  "date": "1712016000",
-  "totalCirculating": {
-   "peggedUSD": 104642068610
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 104583887620
-  }
- },
- {
-  "date": "1712102400",
-  "totalCirculating": {
-   "peggedUSD": 105262851088
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 105162325065
-  }
- },
- {
-  "date": "1712188800",
-  "totalCirculating": {
-   "peggedUSD": 106128909629
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 106235038539
-  }
- },
- {
-  "date": "1712275200",
-  "totalCirculating": {
-   "peggedUSD": 106577580717
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 106577367562
-  }
- },
- {
-  "date": "1712361600",
-  "totalCirculating": {
-   "peggedUSD": 106790630717
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 106897421348
-  }
- },
- {
-  "date": "1712448000",
-  "totalCirculating": {
-   "peggedUSD": 106876390717
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 106876390717
-  }
- },
- {
-  "date": "1712534400",
-  "totalCirculating": {
-   "peggedUSD": 106877390717
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 106813371160
-  }
- },
- {
-  "date": "1712620800",
-  "totalCirculating": {
-   "peggedUSD": 107027788864
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 106940561216
-  }
- },
- {
-  "date": "1712707200",
-  "totalCirculating": {
-   "peggedUSD": 107160428303
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 107111455988
-  }
- },
- {
-  "date": "1712793600",
-  "totalCirculating": {
-   "peggedUSD": 107238627404
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 107193158226
-  }
- },
- {
-  "date": "1712880000",
-  "totalCirculating": {
-   "peggedUSD": 107277465966
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 107384743432
-  }
- },
- {
-  "date": "1712966400",
-  "totalCirculating": {
-   "peggedUSD": 107330394387
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 107437724782
-  }
- },
- {
-  "date": "1713052800",
-  "totalCirculating": {
-   "peggedUSD": 107660374387
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 107634212916
-  }
- },
- {
-  "date": "1713139200",
-  "totalCirculating": {
-   "peggedUSD": 107695174387
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 107695174387
-  }
- },
- {
-  "date": "1713225600",
-  "totalCirculating": {
-   "peggedUSD": 108064841620
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 108172906462
-  }
- },
- {
-  "date": "1713312000",
-  "totalCirculating": {
-   "peggedUSD": 108741585291
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 108850326877
-  }
- },
- {
-  "date": "1713398400",
-  "totalCirculating": {
-   "peggedUSD": 109092586086
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 109037057960
-  }
- },
- {
-  "date": "1713484800",
-  "totalCirculating": {
-   "peggedUSD": 109517186689
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 109626703875
-  }
- },
- {
-  "date": "1713571200",
-  "totalCirculating": {
-   "peggedUSD": 109818107184
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 109818107184
-  }
- },
- {
-  "date": "1713657600",
-  "totalCirculating": {
-   "peggedUSD": 109834873894
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 109834873894
-  }
- },
- {
-  "date": "1713744000",
-  "totalCirculating": {
-   "peggedUSD": 109832373894
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 109770538268
-  }
- },
- {
-  "date": "1713830400",
-  "totalCirculating": {
-   "peggedUSD": 110176193831
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 110176193831
-  }
- },
- {
-  "date": "1713916800",
-  "totalCirculating": {
-   "peggedUSD": 110369006778
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 110322541426
-  }
- },
- {
-  "date": "1714003200",
-  "totalCirculating": {
-   "peggedUSD": 110369006778
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 110356203973
-  }
- },
- {
-  "date": "1714089600",
-  "totalCirculating": {
-   "peggedUSD": 110369006778
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 110338434563
-  }
- },
- {
-  "date": "1714176000",
-  "totalCirculating": {
-   "peggedUSD": 110369006778
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 110235570648
-  }
- },
- {
-  "date": "1714262400",
-  "totalCirculating": {
-   "peggedUSD": 110347920449
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 110245517579
-  }
- },
- {
-  "date": "1714348800",
-  "totalCirculating": {
-   "peggedUSD": 110347842716
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 110265964617
-  }
- },
- {
-  "date": "1714435200",
-  "totalCirculating": {
-   "peggedUSD": 110412147302
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 110324811294
-  }
- },
- {
-  "date": "1714521600",
-  "totalCirculating": {
-   "peggedUSD": 110402299123
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 110376575387
-  }
- },
- {
-  "date": "1714608000",
-  "totalCirculating": {
-   "peggedUSD": 110350061982
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 110209255303
-  }
- },
- {
-  "date": "1714694400",
-  "totalCirculating": {
-   "peggedUSD": 110339251952
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 110314646299
-  }
- },
- {
-  "date": "1714780800",
-  "totalCirculating": {
-   "peggedUSD": 110503046757
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 110613549804
-  }
- },
- {
-  "date": "1714867200",
-  "totalCirculating": {
-   "peggedUSD": 110634861194
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 110745496055
-  }
- },
- {
-  "date": "1714953600",
-  "totalCirculating": {
-   "peggedUSD": 110636188433
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 110636188433
-  }
- },
- {
-  "date": "1715040000",
-  "totalCirculating": {
-   "peggedUSD": 110821623436
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 110932445060
-  }
- },
- {
-  "date": "1715126400",
-  "totalCirculating": {
-   "peggedUSD": 110787681018
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 110782806360
-  }
- },
- {
-  "date": "1715212800",
-  "totalCirculating": {
-   "peggedUSD": 110789599190
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 110741959662
-  }
- },
- {
-  "date": "1715299200",
-  "totalCirculating": {
-   "peggedUSD": 110739444345
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 110736343640
-  }
- },
- {
-  "date": "1715385600",
-  "totalCirculating": {
-   "peggedUSD": 110603634075
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 110519575313
-  }
- },
- {
-  "date": "1715472000",
-  "totalCirculating": {
-   "peggedUSD": 110603634065
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 110603634065
-  }
- },
- {
-  "date": "1715558400",
-  "totalCirculating": {
-   "peggedUSD": 110588634065
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 110573815188
-  }
- },
- {
-  "date": "1715644800",
-  "totalCirculating": {
-   "peggedUSD": 110595556329
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 110595556329
-  }
- },
- {
-  "date": "1715731200",
-  "totalCirculating": {
-   "peggedUSD": 110683196744
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 110662498986
-  }
- },
- {
-  "date": "1715817600",
-  "totalCirculating": {
-   "peggedUSD": 110717237401
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 110717237401
-  }
- },
- {
-  "date": "1715904000",
-  "totalCirculating": {
-   "peggedUSD": 110899115803
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 110899115803
-  }
- },
- {
-  "date": "1715990400",
-  "totalCirculating": {
-   "peggedUSD": 111028849260
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 111016525058
-  }
- },
- {
-  "date": "1716076800",
-  "totalCirculating": {
-   "peggedUSD": 111128449259
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 111124893148
-  }
- },
- {
-  "date": "1716163200",
-  "totalCirculating": {
-   "peggedUSD": 111128449259
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 111128449259
-  }
- },
- {
-  "date": "1716249600",
-  "totalCirculating": {
-   "peggedUSD": 111057749078
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 111052418306
-  }
- },
- {
-  "date": "1716336000",
-  "totalCirculating": {
-   "peggedUSD": 111423759590
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 111409831620
-  }
- },
- {
-  "date": "1716422400",
-  "totalCirculating": {
-   "peggedUSD": 111446156187
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 111427321786
-  }
- },
- {
-  "date": "1716508800",
-  "totalCirculating": {
-   "peggedUSD": 111590570266
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 111572269413
-  }
- },
- {
-  "date": "1716595200",
-  "totalCirculating": {
-   "peggedUSD": 111588108138
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 111550949298
-  }
- },
- {
-  "date": "1716681600",
-  "totalCirculating": {
-   "peggedUSD": 111588108133
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 111588108133
-  }
- },
- {
-  "date": "1716768000",
-  "totalCirculating": {
-   "peggedUSD": 111589908132
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 111560113627
-  }
- },
- {
-  "date": "1716854400",
-  "totalCirculating": {
-   "peggedUSD": 111606077061
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 111500832530
-  }
- },
- {
-  "date": "1716940800",
-  "totalCirculating": {
-   "peggedUSD": 111603568790
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 111440850787
-  }
- },
- {
-  "date": "1717027200",
-  "totalCirculating": {
-   "peggedUSD": 111604510878
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 111469246211
-  }
- },
- {
-  "date": "1717113600",
-  "totalCirculating": {
-   "peggedUSD": 111616920065
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 111547940808
-  }
- },
- {
-  "date": "1717200000",
-  "totalCirculating": {
-   "peggedUSD": 111762088179
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 111670666791
-  }
- },
- {
-  "date": "1717286400",
-  "totalCirculating": {
-   "peggedUSD": 111830758178
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 111742411880
-  }
- },
- {
-  "date": "1717372800",
-  "totalCirculating": {
-   "peggedUSD": 111790758178
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 111768176445
-  }
- },
- {
-  "date": "1717459200",
-  "totalCirculating": {
-   "peggedUSD": 112253386803
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 112253386803
-  }
- },
- {
-  "date": "1717545600",
-  "totalCirculating": {
-   "peggedUSD": 112254796393
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 112246152774
-  }
- },
- {
-  "date": "1717632000",
-  "totalCirculating": {
-   "peggedUSD": 112315084780
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 112315084780
-  }
- },
- {
-  "date": "1717718400",
-  "totalCirculating": {
-   "peggedUSD": 112355387840
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 112350781269
-  }
- },
- {
-  "date": "1717804800",
-  "totalCirculating": {
-   "peggedUSD": 112376137266
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 112364113019
-  }
- },
- {
-  "date": "1717891200",
-  "totalCirculating": {
-   "peggedUSD": 112374987252
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 112352062755
-  }
- },
- {
-  "date": "1717977600",
-  "totalCirculating": {
-   "peggedUSD": 112403987892
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 112352057250
-  }
- },
- {
-  "date": "1718064000",
-  "totalCirculating": {
-   "peggedUSD": 112409287892
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 112400182740
-  }
- },
- {
-  "date": "1718150400",
-  "totalCirculating": {
-   "peggedUSD": 112411964316
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 112403196183
-  }
- },
- {
-  "date": "1718236800",
-  "totalCirculating": {
-   "peggedUSD": 112457053102
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 112392502753
-  }
- },
- {
-  "date": "1718323200",
-  "totalCirculating": {
-   "peggedUSD": 112453723055
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 112360161557
-  }
- },
- {
-  "date": "1718409600",
-  "totalCirculating": {
-   "peggedUSD": 112472971806
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 112438892495
-  }
- },
- {
-  "date": "1718496000",
-  "totalCirculating": {
-   "peggedUSD": 112472301806
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 112404705952
-  }
- },
- {
-  "date": "1718582400",
-  "totalCirculating": {
-   "peggedUSD": 112473915172
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 112469528689
-  }
- },
- {
-  "date": "1718668800",
-  "totalCirculating": {
-   "peggedUSD": 112465611554
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 112434908442
-  }
- },
- {
-  "date": "1718755200",
-  "totalCirculating": {
-   "peggedUSD": 112519098919
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 112429308678
-  }
- },
- {
-  "date": "1718841600",
-  "totalCirculating": {
-   "peggedUSD": 112519060290
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 112422743974
-  }
- },
- {
-  "date": "1718928000",
-  "totalCirculating": {
-   "peggedUSD": 112804377136
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 112727670160
-  }
- },
- {
-  "date": "1719014400",
-  "totalCirculating": {
-   "peggedUSD": 112804714097
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 112768729394
-  }
- },
- {
-  "date": "1719100800",
-  "totalCirculating": {
-   "peggedUSD": 112844714097
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 112745185060
-  }
- },
- {
-  "date": "1719187200",
-  "totalCirculating": {
-   "peggedUSD": 112844714097
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 112712121558
-  }
- },
- {
-  "date": "1719273600",
-  "totalCirculating": {
-   "peggedUSD": 112837386516
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 112837386516
-  }
- },
- {
-  "date": "1719360000",
-  "totalCirculating": {
-   "peggedUSD": 112732648639
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 112675718651
-  }
- },
- {
-  "date": "1719446400",
-  "totalCirculating": {
-   "peggedUSD": 112636116562
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 112501741675
-  }
- },
- {
-  "date": "1719532800",
-  "totalCirculating": {
-   "peggedUSD": 112659805872
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 112456905562
-  }
- },
- {
-  "date": "1719619200",
-  "totalCirculating": {
-   "peggedUSD": 112690515631
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 112511901163
-  }
- },
- {
-  "date": "1719705600",
-  "totalCirculating": {
-   "peggedUSD": 112775515629
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 112633305704
-  }
- },
- {
-  "date": "1719792000",
-  "totalCirculating": {
-   "peggedUSD": 112739012075
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 112644085827
-  }
- },
- {
-  "date": "1719878400",
-  "totalCirculating": {
-   "peggedUSD": 112651358402
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 112528906376
-  }
- },
- {
-  "date": "1719964800",
-  "totalCirculating": {
-   "peggedUSD": 112497795679
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 112414097319
-  }
- },
- {
-  "date": "1720051200",
-  "totalCirculating": {
-   "peggedUSD": 112471997936
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 112321847819
-  }
- },
- {
-  "date": "1720137600",
-  "totalCirculating": {
-   "peggedUSD": 112355735371
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 112468091106
-  }
- },
- {
-  "date": "1720224000",
-  "totalCirculating": {
-   "peggedUSD": 112245912309
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 112245912309
-  }
- },
- {
-  "date": "1720310400",
-  "totalCirculating": {
-   "peggedUSD": 112231905142
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 112181849713
-  }
- },
- {
-  "date": "1720396800",
-  "totalCirculating": {
-   "peggedUSD": 112231905142
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 112192511744
-  }
- },
- {
-  "date": "1720483200",
-  "totalCirculating": {
-   "peggedUSD": 112229273118
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 112141060909
-  }
- },
- {
-  "date": "1720569600",
-  "totalCirculating": {
-   "peggedUSD": 112271931338
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 112268563180
-  }
- },
- {
-  "date": "1720656000",
-  "totalCirculating": {
-   "peggedUSD": 112364578514
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 112364578514
-  }
- },
- {
-  "date": "1720742400",
-  "totalCirculating": {
-   "peggedUSD": 112371024626
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 112371024626
-  }
- },
- {
-  "date": "1720828800",
-  "totalCirculating": {
-   "peggedUSD": 112190715732
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 112527287879
-  }
- },
- {
-  "date": "1720915200",
-  "totalCirculating": {
-   "peggedUSD": 112469048012
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 112469048012
-  }
- },
- {
-  "date": "1721001600",
-  "totalCirculating": {
-   "peggedUSD": 112539048012
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 112651587060
-  }
- },
- {
-  "date": "1721088000",
-  "totalCirculating": {
-   "peggedUSD": 112864302779
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 112977167082
-  }
- },
- {
-  "date": "1721174400",
-  "totalCirculating": {
-   "peggedUSD": 113216677692
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 113216677692
-  }
- },
- {
-  "date": "1721260800",
-  "totalCirculating": {
-   "peggedUSD": 113624539190
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 113605223018
-  }
- },
- {
-  "date": "1721347200",
-  "totalCirculating": {
-   "peggedUSD": 113678352175
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 113678352175
-  }
- },
- {
-  "date": "1721433600",
-  "totalCirculating": {
-   "peggedUSD": 113859727368
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 114201306550
-  }
- },
- {
-  "date": "1721520000",
-  "totalCirculating": {
-   "peggedUSD": 114021327368
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 114015056195
-  }
- },
- {
-  "date": "1721606400",
-  "totalCirculating": {
-   "peggedUSD": 114066827367
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 114180894195
-  }
- },
- {
-  "date": "1721692800",
-  "totalCirculating": {
-   "peggedUSD": 114307338921
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 114307338921
-  }
- },
- {
-  "date": "1721779200",
-  "totalCirculating": {
-   "peggedUSD": 114471818448
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 114433699332
-  }
- },
- {
-  "date": "1721865600",
-  "totalCirculating": {
-   "peggedUSD": 114453302193
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 114424345507
-  }
- },
- {
-  "date": "1721952000",
-  "totalCirculating": {
-   "peggedUSD": 114336302185
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 114315607314
-  }
- },
- {
-  "date": "1722038400",
-  "totalCirculating": {
-   "peggedUSD": 114381331841
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 114325513751
-  }
- },
- {
-  "date": "1722124800",
-  "totalCirculating": {
-   "peggedUSD": 114469974704
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 114459557936
-  }
- },
- {
-  "date": "1722211200",
-  "totalCirculating": {
-   "peggedUSD": 114469974704
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 114459214526
-  }
- },
- {
-  "date": "1722297600",
-  "totalCirculating": {
-   "peggedUSD": 114513725531
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 114513725531
-  }
- },
- {
-  "date": "1722384000",
-  "totalCirculating": {
-   "peggedUSD": 114518259273
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 114518259273
-  }
- },
- {
-  "date": "1722470400",
-  "totalCirculating": {
-   "peggedUSD": 114547619142
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 114662166761
-  }
- },
- {
-  "date": "1722556800",
-  "totalCirculating": {
-   "peggedUSD": 114553402686
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 114667956088
-  }
- },
- {
-  "date": "1722643200",
-  "totalCirculating": {
-   "peggedUSD": 114594788858
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 114709383647
-  }
- },
- {
-  "date": "1722729600",
-  "totalCirculating": {
-   "peggedUSD": 114579788856
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 114694368645
-  }
- },
- {
-  "date": "1722816000",
-  "totalCirculating": {
-   "peggedUSD": 114579788856
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 114694368645
-  }
- },
- {
-  "date": "1722902400",
-  "totalCirculating": {
-   "peggedUSD": 114457553704
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 114572011258
-  }
- },
- {
-  "date": "1722988800",
-  "totalCirculating": {
-   "peggedUSD": 114578293183
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 114556867042
-  }
- },
- {
-  "date": "1723075200",
-  "totalCirculating": {
-   "peggedUSD": 114966872515
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 115656673750
-  }
- },
- {
-  "date": "1723161600",
-  "totalCirculating": {
-   "peggedUSD": 115416775013
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 115532191788
-  }
- },
- {
-  "date": "1723248000",
-  "totalCirculating": {
-   "peggedUSD": 115574281399
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 115574281399
-  }
- },
- {
-  "date": "1723334400",
-  "totalCirculating": {
-   "peggedUSD": 115640681399
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 115445826851
-  }
- },
- {
-  "date": "1723420800",
-  "totalCirculating": {
-   "peggedUSD": 115640681399
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 115756322080
-  }
- },
- {
-  "date": "1723507200",
-  "totalCirculating": {
-   "peggedUSD": 115889054746
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 115889054746
-  }
- },
- {
-  "date": "1723593600",
-  "totalCirculating": {
-   "peggedUSD": 116129081961
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 116129081961
-  }
- },
- {
-  "date": "1723680000",
-  "totalCirculating": {
-   "peggedUSD": 116534312382
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 116650846694
-  }
- },
- {
-  "date": "1723766400",
-  "totalCirculating": {
-   "peggedUSD": 116709344091
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 116699423797
-  }
- },
- {
-  "date": "1723852800",
-  "totalCirculating": {
-   "peggedUSD": 116833969260
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 116833969260
-  }
- },
- {
-  "date": "1723939200",
-  "totalCirculating": {
-   "peggedUSD": 116887299260
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 116887299260
-  }
- },
- {
-  "date": "1724025600",
-  "totalCirculating": {
-   "peggedUSD": 116888957760
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 116888957760
-  }
- },
- {
-  "date": "1724112000",
-  "totalCirculating": {
-   "peggedUSD": 116995756969
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 116995756969
-  }
- },
- {
-  "date": "1724198400",
-  "totalCirculating": {
-   "peggedUSD": 117276576505
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 117262503316
-  }
- },
- {
-  "date": "1724284800",
-  "totalCirculating": {
-   "peggedUSD": 117408263940
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 117371515154
-  }
- },
- {
-  "date": "1724371200",
-  "totalCirculating": {
-   "peggedUSD": 117648169338
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 117648169338
-  }
- },
- {
-  "date": "1724457600",
-  "totalCirculating": {
-   "peggedUSD": 117713064005
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 117627722034
-  }
- },
- {
-  "date": "1724544000",
-  "totalCirculating": {
-   "peggedUSD": 117842339087
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 117960181426
-  }
- },
- {
-  "date": "1724630400",
-  "totalCirculating": {
-   "peggedUSD": 117844216713
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 117826540080
-  }
- },
- {
-  "date": "1724716800",
-  "totalCirculating": {
-   "peggedUSD": 117979455231
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 117910201291
-  }
- },
- {
-  "date": "1724803200",
-  "totalCirculating": {
-   "peggedUSD": 117937170815
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 118055107985
-  }
- },
- {
-  "date": "1724889600",
-  "totalCirculating": {
-   "peggedUSD": 118086718409
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 118071957569
-  }
- },
- {
-  "date": "1724976000",
-  "totalCirculating": {
-   "peggedUSD": 118207965633
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 118195672005
-  }
- },
- {
-  "date": "1725062400",
-  "totalCirculating": {
-   "peggedUSD": 118210924869
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 118210924869
-  }
- },
- {
-  "date": "1725148800",
-  "totalCirculating": {
-   "peggedUSD": 118210924869
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 118025215506
-  }
- },
- {
-  "date": "1725235200",
-  "totalCirculating": {
-   "peggedUSD": 118211124869
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 118329335994
-  }
- },
- {
-  "date": "1725321600",
-  "totalCirculating": {
-   "peggedUSD": 118123924395
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 118081163534
-  }
- },
- {
-  "date": "1725408000",
-  "totalCirculating": {
-   "peggedUSD": 118124409888
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 118120984280
-  }
- },
- {
-  "date": "1725494400",
-  "totalCirculating": {
-   "peggedUSD": 118136891800
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 118128267807
-  }
- },
- {
-  "date": "1725580800",
-  "totalCirculating": {
-   "peggedUSD": 118118409375
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 118099392311
-  }
- },
- {
-  "date": "1725667200",
-  "totalCirculating": {
-   "peggedUSD": 118173609123
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 118133075576
-  }
- },
- {
-  "date": "1725753600",
-  "totalCirculating": {
-   "peggedUSD": 118177509123
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 118094548512
-  }
- },
- {
-  "date": "1725840000",
-  "totalCirculating": {
-   "peggedUSD": 118177509123
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 118177509123
-  }
- },
- {
-  "date": "1725926400",
-  "totalCirculating": {
-   "peggedUSD": 118420988938
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 118539409927
-  }
- },
- {
-  "date": "1726012800",
-  "totalCirculating": {
-   "peggedUSD": 118433539059
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 118433539059
-  }
- },
- {
-  "date": "1726099200",
-  "totalCirculating": {
-   "peggedUSD": 118434788760
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 118416549802
-  }
- },
- {
-  "date": "1726185600",
-  "totalCirculating": {
-   "peggedUSD": 118383833822
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 118373416045
-  }
- },
- {
-  "date": "1726272000",
-  "totalCirculating": {
-   "peggedUSD": 118608616138
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 118608616138
-  }
- },
- {
-  "date": "1726358400",
-  "totalCirculating": {
-   "peggedUSD": 119047660344
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 119047660344
-  }
- },
- {
-  "date": "1726444800",
-  "totalCirculating": {
-   "peggedUSD": 118812287090
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 118931099377
-  }
- },
- {
-  "date": "1726531200",
-  "totalCirculating": {
-   "peggedUSD": 118728250450
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 118689782497
-  }
- },
- {
-  "date": "1726617600",
-  "totalCirculating": {
-   "peggedUSD": 118853251348
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 118972104600
-  }
- },
- {
-  "date": "1726704000",
-  "totalCirculating": {
-   "peggedUSD": 118896720603
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 118896720603
-  }
- },
- {
-  "date": "1726790400",
-  "totalCirculating": {
-   "peggedUSD": 119067964666
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 118997000159
-  }
- },
- {
-  "date": "1726876800",
-  "totalCirculating": {
-   "peggedUSD": 119161364466
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 119161364466
-  }
- },
- {
-  "date": "1726963200",
-  "totalCirculating": {
-   "peggedUSD": 119157360693
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 119276518054
-  }
- },
- {
-  "date": "1727049600",
-  "totalCirculating": {
-   "peggedUSD": 119157360693
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 119157360693
-  }
- },
- {
-  "date": "1727136000",
-  "totalCirculating": {
-   "peggedUSD": 119238696383
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 119209005948
-  }
- },
- {
-  "date": "1727222400",
-  "totalCirculating": {
-   "peggedUSD": 119229928664
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 119190344327
-  }
- },
- {
-  "date": "1727308800",
-  "totalCirculating": {
-   "peggedUSD": 119274429856
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 119274429856
-  }
- },
- {
-  "date": "1727395200",
-  "totalCirculating": {
-   "peggedUSD": 119347429356
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 119347429356
-  }
- },
- {
-  "date": "1727481600",
-  "totalCirculating": {
-   "peggedUSD": 119405929000
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 119381689597
-  }
- },
- {
-  "date": "1727568000",
-  "totalCirculating": {
-   "peggedUSD": 119406925003
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 119406925003
-  }
- },
- {
-  "date": "1727654400",
-  "totalCirculating": {
-   "peggedUSD": 119622396997
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 119462461852
-  }
- },
- {
-  "date": "1727740800",
-  "totalCirculating": {
-   "peggedUSD": 119650346135
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 119594589074
-  }
- },
- {
-  "date": "1727827200",
-  "totalCirculating": {
-   "peggedUSD": 119650346135
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 119650346135
-  }
- },
- {
-  "date": "1727913600",
-  "totalCirculating": {
-   "peggedUSD": 119633735737
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 119633735737
-  }
- },
- {
-  "date": "1728000000",
-  "totalCirculating": {
-   "peggedUSD": 119635112439
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 119613458484
-  }
- },
- {
-  "date": "1728086400",
-  "totalCirculating": {
-   "peggedUSD": 119653257237
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 119613173396
-  }
- },
- {
-  "date": "1728172800",
-  "totalCirculating": {
-   "peggedUSD": 119670028849
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 120029038935
-  }
- },
- {
-  "date": "1728259200",
-  "totalCirculating": {
-   "peggedUSD": 119670467363
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 119268972945
-  }
- },
- {
-  "date": "1728345600",
-  "totalCirculating": {
-   "peggedUSD": 119850367555
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 119800509802
-  }
- },
- {
-  "date": "1728432000",
-  "totalCirculating": {
-   "peggedUSD": 119841275909
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 119733298919
-  }
- },
- {
-  "date": "1728518400",
-  "totalCirculating": {
-   "peggedUSD": 119849377370
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 119728449348
-  }
- },
- {
-  "date": "1728604800",
-  "totalCirculating": {
-   "peggedUSD": 119725377367
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 119678684469
-  }
- },
- {
-  "date": "1728691200",
-  "totalCirculating": {
-   "peggedUSD": 119729627115
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 119713343886
-  }
- },
- {
-  "date": "1728777600",
-  "totalCirculating": {
-   "peggedUSD": 119731227066
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 119731227066
-  }
- },
- {
-  "date": "1728864000",
-  "totalCirculating": {
-   "peggedUSD": 119731227066
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 119970689520
-  }
- },
- {
-  "date": "1728950400",
-  "totalCirculating": {
-   "peggedUSD": 119759196663
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 119759196663
-  }
- },
- {
-  "date": "1729036800",
-  "totalCirculating": {
-   "peggedUSD": 119801443876
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 119729083804
-  }
- },
- {
-  "date": "1729123200",
-  "totalCirculating": {
-   "peggedUSD": 119966698833
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 119849731302
-  }
- },
- {
-  "date": "1729209600",
-  "totalCirculating": {
-   "peggedUSD": 120002859304
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 119987498938
-  }
- },
- {
-  "date": "1729296000",
-  "totalCirculating": {
-   "peggedUSD": 120087102221
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 120061403581
-  }
- },
- {
-  "date": "1729382400",
-  "totalCirculating": {
-   "peggedUSD": 120152102217
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 120029907529
-  }
- },
- {
-  "date": "1729468800",
-  "totalCirculating": {
-   "peggedUSD": 120179102217
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 119892595237
-  }
- },
- {
-  "date": "1729555200",
-  "totalCirculating": {
-   "peggedUSD": 120202666053
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 120113836282
-  }
- },
- {
-  "date": "1729641600",
-  "totalCirculating": {
-   "peggedUSD": 120190604126
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 120080509533
-  }
- },
- {
-  "date": "1729728000",
-  "totalCirculating": {
-   "peggedUSD": 120204789939
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 120108145288
-  }
- },
- {
-  "date": "1729814400",
-  "totalCirculating": {
-   "peggedUSD": 120242344735
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 119682255894
-  }
- },
- {
-  "date": "1729900800",
-  "totalCirculating": {
-   "peggedUSD": 120284592333
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 120083115641
-  }
- },
- {
-  "date": "1729987200",
-  "totalCirculating": {
-   "peggedUSD": 120318443412
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 120157096379
-  }
- },
- {
-  "date": "1730073600",
-  "totalCirculating": {
-   "peggedUSD": 120319443409
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 120439762853
-  }
- },
- {
-  "date": "1730160000",
-  "totalCirculating": {
-   "peggedUSD": 120180277118
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 119942921071
-  }
- },
- {
-  "date": "1730246400",
-  "totalCirculating": {
-   "peggedUSD": 120464260834
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 120436072197
-  }
- },
- {
-  "date": "1730332800",
-  "totalCirculating": {
-   "peggedUSD": 120533635657
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 120421539375
-  }
- },
- {
-  "date": "1730419200",
-  "totalCirculating": {
-   "peggedUSD": 120482951828
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 120343914501
-  }
- },
- {
-  "date": "1730505600",
-  "totalCirculating": {
-   "peggedUSD": 120536423457
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 120512798318
-  }
- },
- {
-  "date": "1730592000",
-  "totalCirculating": {
-   "peggedUSD": 120585101455
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 120349357582
-  }
- },
- {
-  "date": "1730678400",
-  "totalCirculating": {
-   "peggedUSD": 120585101455
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 120534696883
-  }
- },
- {
-  "date": "1730764800",
-  "totalCirculating": {
-   "peggedUSD": 121509925391
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 121631435316
-  }
- },
- {
-  "date": "1730851200",
-  "totalCirculating": {
-   "peggedUSD": 121508090966
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 121629599057
-  }
- },
- {
-  "date": "1730937600",
-  "totalCirculating": {
-   "peggedUSD": 121996707673
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 122240701088
-  }
- },
- {
-  "date": "1731024000",
-  "totalCirculating": {
-   "peggedUSD": 122481730696
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 122604212427
-  }
- },
- {
-  "date": "1731110400",
-  "totalCirculating": {
-   "peggedUSD": 123428055689
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 123428055689
-  }
- },
- {
-  "date": "1731196800",
-  "totalCirculating": {
-   "peggedUSD": 123695285992
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 123818981278
-  }
- },
- {
-  "date": "1731283200",
-  "totalCirculating": {
-   "peggedUSD": 123966113535
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 124585944103
-  }
- },
- {
-  "date": "1731369600",
-  "totalCirculating": {
-   "peggedUSD": 125803947511
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 125803947511
-  }
- },
- {
-  "date": "1731456000",
-  "totalCirculating": {
-   "peggedUSD": 126606120653
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 126732726773
-  }
- },
- {
-  "date": "1731542400",
-  "totalCirculating": {
-   "peggedUSD": 127600317350
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 127544683612
-  }
- },
- {
-  "date": "1731628800",
-  "totalCirculating": {
-   "peggedUSD": 129191525913
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 129320717439
-  }
- },
- {
-  "date": "1731715200",
-  "totalCirculating": {
-   "peggedUSD": 129191516826
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 129191516826
-  }
- },
- {
-  "date": "1731801600",
-  "totalCirculating": {
-   "peggedUSD": 129417831726
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 129262789163
-  }
- },
- {
-  "date": "1731888000",
-  "totalCirculating": {
-   "peggedUSD": 129567822731
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 129567822731
-  }
- },
- {
-  "date": "1731974400",
-  "totalCirculating": {
-   "peggedUSD": 129458065433
-  },
-  "totalCirculatingUSD": {
-   "peggedUSD": 129587523499
-  }
- },
- {
   "date": "1732060800",
   "totalCirculating": {
-   "peggedUSD": 129942382199
+   "peggedUSD": 91036400000
   },
   "totalCirculatingUSD": {
-   "peggedUSD": 130072324581
+   "peggedUSD": 91018192720
   }
  },
  {
   "date": "1732147200",
   "totalCirculating": {
-   "peggedUSD": 131244196679
+   "peggedUSD": 91072814560
   },
   "totalCirculatingUSD": {
-   "peggedUSD": 131375440876
+   "peggedUSD": 91054599997
   }
  },
  {
   "date": "1732233600",
   "totalCirculating": {
-   "peggedUSD": 131559452114
+   "peggedUSD": 91109243686
   },
   "totalCirculatingUSD": {
-   "peggedUSD": 131822571018
+   "peggedUSD": 91091021837
   }
  },
  {
   "date": "1732320000",
   "totalCirculating": {
-   "peggedUSD": 132873420057
+   "peggedUSD": 91145687383
   },
   "totalCirculatingUSD": {
-   "peggedUSD": 133006293477
+   "peggedUSD": 91127458246
   }
  },
  {
   "date": "1732406400",
   "totalCirculating": {
-   "peggedUSD": 134013442053
+   "peggedUSD": 91182145658
   },
   "totalCirculatingUSD": {
-   "peggedUSD": 134281468937
+   "peggedUSD": 91163909229
   }
  },
  {
   "date": "1732492800",
   "totalCirculating": {
-   "peggedUSD": 134424635741
+   "peggedUSD": 91218618517
   },
   "totalCirculatingUSD": {
-   "peggedUSD": 134559060377
+   "peggedUSD": 91200374793
   }
  },
  {
   "date": "1732579200",
   "totalCirculating": {
-   "peggedUSD": 134693131223
+   "peggedUSD": 91255105964
   },
   "totalCirculatingUSD": {
-   "peggedUSD": 134332692404
+   "peggedUSD": 91236854943
   }
  },
  {
   "date": "1732665600",
   "totalCirculating": {
-   "peggedUSD": 134722943242
+   "peggedUSD": 91291608006
   },
   "totalCirculatingUSD": {
-   "peggedUSD": 134722943242
+   "peggedUSD": 91273349684
   }
  },
  {
   "date": "1732752000",
   "totalCirculating": {
-   "peggedUSD": 135137486676
+   "peggedUSD": 91328124650
   },
   "totalCirculatingUSD": {
-   "peggedUSD": 135137486676
+   "peggedUSD": 91309859025
   }
  },
  {
   "date": "1732838400",
   "totalCirculating": {
-   "peggedUSD": 135965852342
+   "peggedUSD": 91364655899
   },
   "totalCirculatingUSD": {
-   "peggedUSD": 136101818194
+   "peggedUSD": 91346382968
   }
  },
  {
   "date": "1732924800",
   "totalCirculating": {
-   "peggedUSD": 136271708422
+   "peggedUSD": 91401201762
   },
   "totalCirculatingUSD": {
-   "peggedUSD": 136407980130
+   "peggedUSD": 91382921522
   }
  },
  {
   "date": "1733011200",
   "totalCirculating": {
-   "peggedUSD": 134392441049
+   "peggedUSD": 90140725187
   },
   "totalCirculatingUSD": {
-   "peggedUSD": 134526833490
+   "peggedUSD": 90122697042
   }
  },
  {
   "date": "1733097600",
   "totalCirculating": {
-   "peggedUSD": 134476541006
+   "peggedUSD": 91366639049
   },
   "totalCirculatingUSD": {
-   "peggedUSD": 134611017547
+   "peggedUSD": 91348365721
   }
  },
  {
   "date": "1733184000",
   "totalCirculating": {
-   "peggedUSD": 135012360931
+   "peggedUSD": 91403185705
   },
   "totalCirculatingUSD": {
-   "peggedUSD": 135282385653
+   "peggedUSD": 91384905068
   }
  },
  {
   "date": "1733270400",
   "totalCirculating": {
-   "peggedUSD": 135338236018
+   "peggedUSD": 91439746979
   },
   "totalCirculatingUSD": {
-   "peggedUSD": 135473574254
+   "peggedUSD": 91421459030
   }
  },
  {
   "date": "1733356800",
   "totalCirculating": {
-   "peggedUSD": 136045432502
+   "peggedUSD": 91476322878
   },
   "totalCirculatingUSD": {
-   "peggedUSD": 136317523367
+   "peggedUSD": 91458027613
   }
  },
  {
   "date": "1733443200",
   "totalCirculating": {
-   "peggedUSD": 136975278080
+   "peggedUSD": 91512913407
   },
   "totalCirculatingUSD": {
-   "peggedUSD": 137112253358
+   "peggedUSD": 91494610824
   }
  },
  {
   "date": "1733529600",
   "totalCirculating": {
-   "peggedUSD": 138038817923
+   "peggedUSD": 91549518572
   },
   "totalCirculatingUSD": {
-   "peggedUSD": 138176856741
+   "peggedUSD": 91531208668
   }
  },
  {
   "date": "1733616000",
   "totalCirculating": {
-   "peggedUSD": 138262817923
+   "peggedUSD": 91586138380
   },
   "totalCirculatingUSD": {
-   "peggedUSD": 138401080741
+   "peggedUSD": 91567821152
   }
  },
  {
   "date": "1733702400",
   "totalCirculating": {
-   "peggedUSD": 138399087923
+   "peggedUSD": 91622772835
   },
   "totalCirculatingUSD": {
-   "peggedUSD": 138337361929
+   "peggedUSD": 91604448280
   }
  },
  {
   "date": "1733788800",
   "totalCirculating": {
-   "peggedUSD": 138643216096
+   "peggedUSD": 91659421944
   },
   "totalCirculatingUSD": {
-   "peggedUSD": 138781859312
+   "peggedUSD": 91641090060
   }
  },
  {
   "date": "1733875200",
   "totalCirculating": {
-   "peggedUSD": 138953308451
+   "peggedUSD": 91696085713
   },
   "totalCirculatingUSD": {
-   "peggedUSD": 138915791058
+   "peggedUSD": 91677746496
   }
  },
  {
   "date": "1733961600",
   "totalCirculating": {
-   "peggedUSD": 140005800450
+   "peggedUSD": 91732764147
   },
   "totalCirculatingUSD": {
-   "peggedUSD": 140005800450
+   "peggedUSD": 91714417594
   }
  },
  {
   "date": "1734048000",
   "totalCirculating": {
-   "peggedUSD": 140404910980
+   "peggedUSD": 91769457253
   },
   "totalCirculatingUSD": {
-   "peggedUSD": 140404910980
+   "peggedUSD": 91751103362
   }
  },
  {
   "date": "1734134400",
   "totalCirculating": {
-   "peggedUSD": 140448004125
+   "peggedUSD": 91806165036
   },
   "totalCirculatingUSD": {
-   "peggedUSD": 140448004125
+   "peggedUSD": 91787803803
   }
  },
  {
   "date": "1734220800",
   "totalCirculating": {
-   "peggedUSD": 140568004125
+   "peggedUSD": 91842887502
   },
   "totalCirculatingUSD": {
-   "peggedUSD": 140537641436
+   "peggedUSD": 91824518924
   }
  },
  {
   "date": "1734307200",
   "totalCirculating": {
-   "peggedUSD": 140568004125
+   "peggedUSD": 91879624657
   },
   "totalCirculatingUSD": {
-   "peggedUSD": 140568004125
+   "peggedUSD": 91861248732
   }
  },
  {
   "date": "1734393600",
   "totalCirculating": {
-   "peggedUSD": 140758577764
+   "peggedUSD": 91916376507
   },
   "totalCirculatingUSD": {
-   "peggedUSD": 140758577764
+   "peggedUSD": 91897993232
   }
  },
  {
   "date": "1734480000",
   "totalCirculating": {
-   "peggedUSD": 140912347295
+   "peggedUSD": 91953143057
   },
   "totalCirculatingUSD": {
-   "peggedUSD": 140880782929
+   "peggedUSD": 91934752428
   }
  },
  {
   "date": "1734566400",
   "totalCirculating": {
-   "peggedUSD": 140933906305
+   "peggedUSD": 91989924315
   },
   "totalCirculatingUSD": {
-   "peggedUSD": 140922490659
+   "peggedUSD": 91971526330
   }
  },
  {
   "date": "1734652800",
   "totalCirculating": {
-   "peggedUSD": 140886878527
+   "peggedUSD": 92026720284
   },
   "totalCirculatingUSD": {
-   "peggedUSD": 140886878527
+   "peggedUSD": 92008314940
   }
  },
  {
   "date": "1734739200",
   "totalCirculating": {
-   "peggedUSD": 140468513507
+   "peggedUSD": 92063530972
   },
   "totalCirculatingUSD": {
-   "peggedUSD": 140385777553
+   "peggedUSD": 92045118266
   }
  },
  {
   "date": "1734825600",
   "totalCirculating": {
-   "peggedUSD": 140177246923
+   "peggedUSD": 92100356385
   },
   "totalCirculatingUSD": {
-   "peggedUSD": 140061740871
+   "peggedUSD": 92081936314
   }
  },
  {
   "date": "1734912000",
   "totalCirculating": {
-   "peggedUSD": 140152701207
+   "peggedUSD": 92137196527
   },
   "totalCirculatingUSD": {
-   "peggedUSD": 140292853908
+   "peggedUSD": 92118769088
   }
  },
  {
   "date": "1734998400",
   "totalCirculating": {
-   "peggedUSD": 139800592088
+   "peggedUSD": 92174051406
   },
   "totalCirculatingUSD": {
-   "peggedUSD": 139688611814
+   "peggedUSD": 92155616596
   }
  },
  {
   "date": "1735084800",
   "totalCirculating": {
-   "peggedUSD": 139728411369
+   "peggedUSD": 92013944726
   },
   "totalCirculatingUSD": {
-   "peggedUSD": 139664974670
+   "peggedUSD": 91995541937
   }
  },
  {
   "date": "1735171200",
   "totalCirculating": {
-   "peggedUSD": 139732311008
+   "peggedUSD": 91854116153
   },
   "totalCirculatingUSD": {
-   "peggedUSD": 139675859154
+   "peggedUSD": 91835745330
   }
  },
  {
   "date": "1735257600",
   "totalCirculating": {
-   "peggedUSD": 139746088403
+   "peggedUSD": 91694565202
   },
   "totalCirculatingUSD": {
-   "peggedUSD": 139531857650
+   "peggedUSD": 91676226289
   }
  },
  {
   "date": "1735344000",
   "totalCirculating": {
-   "peggedUSD": 139593778477
+   "peggedUSD": 91535291392
   },
   "totalCirculatingUSD": {
-   "peggedUSD": 139272991974
+   "peggedUSD": 91516984334
   }
  },
  {
   "date": "1735430400",
   "totalCirculating": {
-   "peggedUSD": 139309508042
+   "peggedUSD": 91376294241
   },
   "totalCirculatingUSD": {
-   "peggedUSD": 139205722458
+   "peggedUSD": 91358018982
   }
  },
  {
   "date": "1735516800",
   "totalCirculating": {
-   "peggedUSD": 139257508041
+   "peggedUSD": 91217573269
   },
   "totalCirculatingUSD": {
-   "peggedUSD": 138851015375
+   "peggedUSD": 91199329754
   }
  },
  {
   "date": "1735603200",
   "totalCirculating": {
-   "peggedUSD": 138109585231
+   "peggedUSD": 91059127995
   },
   "totalCirculatingUSD": {
-   "peggedUSD": 137825770033
+   "peggedUSD": 91040916169
   }
  }
 ]

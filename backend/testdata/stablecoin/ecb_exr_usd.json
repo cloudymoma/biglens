@@ -1,8 +1,8 @@
 {
  "header": {
-  "id": "167aea24-89a9-47ae-b57f-049a1938a8c4",
+  "id": "00000000-0000-4000-8000-000000000000",
   "test": false,
-  "prepared": "2026-10-19T15:20:55.337+02:00",
+  "prepared": "2026-10-19T13:00:00.000+02:00",
   "sender": {
    "id": "ECB"
   }
@@ -10,7 +10,7 @@
  "dataSets": [
   {
    "action": "Replace",
-   "validFrom": "2026-10-19T15:20:55.337+02:00",
+   "validFrom": "2026-10-19T13:00:00.000+02:00",
    "series": {
     "0:0:0:0:0": {
      "attributes": [
@@ -37,21 +37,21 @@
      ],
      "observations": {
       "0": [
-       1.1195,
+       1.08451,
        0,
        0,
        null,
        null
       ],
       "1": [
-       1.1208,
+       1.08612,
        0,
        0,
        null,
        null
       ],
       "2": [
-       1.1253,
+       1.08773,
        0,
        0,
        null,
@@ -75,11 +75,11 @@
    "series": [
     {
      "id": "FREQ",
-     "name": "Frequency",
+     "name": "Freq",
      "values": [
       {
        "id": "D",
-       "name": "Daily"
+       "name": "synthetic D"
       }
      ]
     },
@@ -89,37 +89,37 @@
      "values": [
       {
        "id": "USD",
-       "name": "US dollar"
+       "name": "synthetic USD"
       }
      ]
     },
     {
      "id": "CURRENCY_DENOM",
-     "name": "Currency denominator",
+     "name": "Currency Denom",
      "values": [
       {
        "id": "EUR",
-       "name": "Euro"
+       "name": "synthetic EUR"
       }
      ]
     },
     {
      "id": "EXR_TYPE",
-     "name": "Exchange rate type",
+     "name": "Exr Type",
      "values": [
       {
        "id": "SP00",
-       "name": "Spot"
+       "name": "synthetic SP00"
       }
      ]
     },
     {
      "id": "EXR_SUFFIX",
-     "name": "Series variation - EXR context",
+     "name": "Exr Suffix",
      "values": [
       {
        "id": "A",
-       "name": "Average"
+       "name": "synthetic A"
       }
      ]
     }
@@ -156,10 +156,10 @@
    "series": [
     {
      "id": "TIME_FORMAT",
-     "name": "Time format code",
+     "name": "Time Format",
      "values": [
       {
-       "name": "P1D"
+       "name": "synthetic"
       }
      ]
     },
@@ -170,50 +170,50 @@
     },
     {
      "id": "COLLECTION",
-     "name": "Collection indicator",
+     "name": "Collection",
      "values": [
       {
        "id": "A",
-       "name": "Average of observations through period"
+       "name": "synthetic A"
       }
      ]
     },
     {
      "id": "COMPILING_ORG",
-     "name": "Compiling organisation",
+     "name": "Compiling Org",
      "values": []
     },
     {
      "id": "DISS_ORG",
-     "name": "Data dissemination organisation",
+     "name": "Diss Org",
      "values": []
     },
     {
      "id": "DOM_SER_IDS",
-     "name": "Domestic series ids",
+     "name": "Dom Ser Ids",
      "values": []
     },
     {
      "id": "PUBL_ECB",
-     "name": "Source publication (ECB only)",
+     "name": "Publ Ecb",
      "values": []
     },
     {
      "id": "PUBL_MU",
-     "name": "Source publication (Euro area only)",
+     "name": "Publ Mu",
      "values": []
     },
     {
      "id": "PUBL_PUBLIC",
-     "name": "Source publication (public)",
+     "name": "Publ Public",
      "values": []
     },
     {
      "id": "UNIT_INDEX_BASE",
-     "name": "Unit index base",
+     "name": "Unit Index Base",
      "values": [
       {
-       "name": "99Q1=100"
+       "name": "synthetic"
       }
      ]
     },
@@ -233,28 +233,28 @@
      "values": [
       {
        "id": "4",
-       "name": "Four"
+       "name": "synthetic 4"
       }
      ]
     },
     {
      "id": "NAT_TITLE",
-     "name": "National language title",
+     "name": "Nat Title",
      "values": []
     },
     {
      "id": "SOURCE_AGENCY",
-     "name": "Source agency",
+     "name": "Source Agency",
      "values": [
       {
        "id": "4F0",
-       "name": "European Central Bank (ECB)"
+       "name": "synthetic 4F0"
       }
      ]
     },
     {
      "id": "SOURCE_PUB",
-     "name": "Publication source",
+     "name": "Source Pub",
      "values": []
     },
     {
@@ -262,16 +262,16 @@
      "name": "Title",
      "values": [
       {
-       "name": "US dollar/Euro ECB reference exchange rate"
+       "name": "synthetic"
       }
      ]
     },
     {
      "id": "TITLE_COMPL",
-     "name": "Title complement",
+     "name": "Title Compl",
      "values": [
       {
-       "name": "ECB reference exchange rate, US dollar/Euro, 2.15 pm (C.E.T.)"
+       "name": "synthetic"
       }
      ]
     },
@@ -281,17 +281,17 @@
      "values": [
       {
        "id": "USD",
-       "name": "US dollar"
+       "name": "synthetic USD"
       }
      ]
     },
     {
      "id": "UNIT_MULT",
-     "name": "Unit multiplier",
+     "name": "Unit Mult",
      "values": [
       {
        "id": "0",
-       "name": "Units"
+       "name": "synthetic 0"
       }
      ]
     }
@@ -299,32 +299,32 @@
    "observation": [
     {
      "id": "OBS_STATUS",
-     "name": "Observation status",
+     "name": "Obs Status",
      "values": [
       {
        "id": "A",
-       "name": "Normal value"
+       "name": "synthetic A"
       }
      ]
     },
     {
      "id": "OBS_CONF",
-     "name": "Observation confidentiality",
+     "name": "Obs Conf",
      "values": [
       {
        "id": "F",
-       "name": "Free"
+       "name": "synthetic F"
       }
      ]
     },
     {
      "id": "OBS_PRE_BREAK",
-     "name": "Pre-break observation value",
+     "name": "Obs Pre Break",
      "values": []
     },
     {
      "id": "OBS_COM",
-     "name": "Observation comment",
+     "name": "Obs Com",
      "values": []
     }
    ]

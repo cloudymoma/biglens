@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -13,7 +14,7 @@ func TestParseECBFixtures(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EXR: %v", err)
 	}
-	want := []stableRateObs{{"2026-10-14", 1.1195}, {"2026-10-15", 1.1208}, {"2026-10-16", 1.1253}}
+	want := []stableRateObs{{"2026-10-14", fxECBEURUSD0}, {"2026-10-15", fxECBEURUSD1}, {"2026-10-16", fxECBEURUSD2}}
 	if len(fx) != len(want) {
 		t.Fatalf("EXR obs = %+v", fx)
 	}
@@ -26,7 +27,7 @@ func TestParseECBFixtures(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ESTR: %v", err)
 	}
-	if len(estr) != 3 || estr[2] != (stableRateObs{"2026-10-16", 2.441}) {
+	if len(estr) != 3 || estr[2] != (stableRateObs{"2026-10-16", fxECBESTR2}) {
 		t.Errorf("ESTR obs = %+v", estr)
 	}
 	// Response-shape validation: the €STR document is not an EUR/USD series.
@@ -36,7 +37,7 @@ func TestParseECBFixtures(t *testing.T) {
 	for name, body := range map[string]string{
 		"not json":      `<html>`,
 		"no datasets":   `{"dataSets": [], "structure": {}}`,
-		"null obs only": strings.Replace(string(readStableFixture(t, "ecb_exr_usd.json")), `1.1195,`, `null,`, 1),
+		"null obs only": strings.Replace(string(readStableFixture(t, "ecb_exr_usd.json")), strconv.FormatFloat(fxECBEURUSD0, 'f', -1, 64)+",", `null,`, 1),
 	} {
 		if name == "null obs only" && !strings.Contains(body, `null,`) {
 			t.Fatal("fixture edit did not apply (test bug)")
@@ -60,7 +61,7 @@ func TestParseTreasuryBillCSV(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []stableRateObs{{"2026-10-09", 4.16}, {"2026-10-13", 4.19}, {"2026-10-14", 4.20}, {"2026-10-15", 4.20}, {"2026-10-16", 4.18}}
+	want := []stableRateObs{{"2026-10-09", fxBill13W0}, {"2026-10-13", fxBill13W1}, {"2026-10-14", fxBill13W2}, {"2026-10-15", fxBill13W3}, {"2026-10-16", fxBill13W4}}
 	if len(obs) != len(want) {
 		t.Fatalf("obs = %+v", obs)
 	}

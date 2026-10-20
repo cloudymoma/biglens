@@ -145,7 +145,7 @@ func TestStablecoinLive(t *testing.T) {
 			usdt = a
 		}
 	}
-	approxPtr(t, "usdc circulating", usdc.CirculatingNative, 72428691938.569237593, 1e-3)
+	approxPtr(t, "usdc circulating", usdc.CirculatingNative, fxCircleUSDCTotal, 1e-3)
 	if usdc.CirculatingSource != "issuer" || usdc.CirculatingAsOf == "" {
 		t.Errorf("usdc live = %+v", usdc)
 	}
@@ -197,7 +197,7 @@ func TestStablecoinSupplyParams(t *testing.T) {
 		t.Fatalf("range=all: %q, %d history rows (want the 5 chart days)", r.Range, len(r.Assets[0].History))
 	}
 	last := r.Assets[0].History[4]
-	approxPtr(t, "eurc history native", last.AggregatorCirculatingNative, 443105486.18, 1e-6)
+	approxPtr(t, "eurc history native", last.AggregatorCirculatingNative, fxChartEURCLastNative, 1e-6)
 	if last.AggregatorChangeNative == nil {
 		t.Error("daily change missing between consecutive days")
 	}

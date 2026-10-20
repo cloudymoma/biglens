@@ -17,9 +17,9 @@
      "6",
      "0"
     ],
-    "virtualPrice": "1039823717428684594",
+    "virtualPrice": "1040000000000000000",
     "amplificationCoefficient": "4000",
-    "totalSupply": "153881994786254509218209707",
+    "totalSupply": "150000000000000000000000000",
     "name": "Curve.fi DAI/USDC/USDT",
     "assetType": "0",
     "lpTokenAddress": "0x6c3F90f043a72FA612cbac8115EE7e52BDe6E490",
@@ -31,12 +31,12 @@
     "coins": [
      {
       "address": "0x6B175474E89094C44Da98b954EedeAC495271d0F",
-      "usdPrice": 0.9999596164775284,
+      "usdPrice": 0.99996,
       "decimals": "18",
       "isBasePoolLpToken": false,
       "symbol": "DAI",
       "name": "Dai Stablecoin",
-      "poolBalance": "24074140537851234691164066"
+      "poolBalance": "22000000000000000000000000"
      },
      {
       "address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
@@ -45,7 +45,7 @@
       "isBasePoolLpToken": false,
       "symbol": "USDC",
       "name": "USD Coin",
-      "poolBalance": "24199420497991"
+      "poolBalance": "23000000000000"
      },
      {
       "address": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
@@ -54,35 +54,35 @@
       "isBasePoolLpToken": false,
       "symbol": "USDT",
       "name": "Tether USD",
-      "poolBalance": "111754328639975"
+      "poolBalance": "105000000000000"
      }
     ],
     "poolUrls": {
      "swap": [
-      "https://www.curve.finance/dex/ethereum/pools/0xbEbc44782C7dB0a1A60Cb6fe97d0b483032FF1C7",
-      "https://classic.curve.finance/3pool"
+      "https://example.invalid/curve/3pool",
+      "https://example.invalid/curve/3pool/swap"
      ],
      "deposit": [
-      "https://www.curve.finance/dex/ethereum/pools/0xbEbc44782C7dB0a1A60Cb6fe97d0b483032FF1C7",
-      "https://classic.curve.finance/3pool/deposit"
+      "https://example.invalid/curve/3pool",
+      "https://example.invalid/curve/3pool/deposit"
      ],
      "withdraw": [
-      "https://www.curve.finance/dex/ethereum/pools/0xbEbc44782C7dB0a1A60Cb6fe97d0b483032FF1C7",
-      "https://classic.curve.finance/3pool/withdraw"
+      "https://example.invalid/curve/3pool",
+      "https://example.invalid/curve/3pool/withdraw"
      ]
     },
-    "usdTotal": 160026917.47722185,
+    "usdTotal": 150000000.0,
     "isMetaPool": false,
-    "usdTotalExcludingBasePool": 160026917.47722185,
-    "gaugeAddress": "0xbfcf63294ad7105dea65aa58f8ae5be2d9d0952a",
+    "usdTotalExcludingBasePool": 150000000.0,
+    "gaugeAddress": "",
     "gaugeRewards": [],
     "gaugeCrvApy": [
-     1.7465347478095417e-05,
-     4.366336869523854e-05
+     1.5e-05,
+     3.75e-05
     ],
     "gaugeFutureCrvApy": [
-     1.6988913261869863e-05,
-     4.247228315467466e-05
+     1.4e-05,
+     3.5e-05
     ],
     "usesRateOracle": false,
     "isBroken": false,
@@ -90,12 +90,12 @@
      "exchange_received": false,
      "exchange_extended": false
     },
-    "creationTs": 1599422178,
-    "creationBlockNumber": 10809473
+    "creationTs": 1599400000,
+    "creationBlockNumber": 10800000
    }
   ],
-  "tvlAll": 267048664.8787848,
-  "tvl": 267048664.8787848
+  "tvlAll": 150000000.0,
+  "tvl": 150000000.0
  },
- "generatedTimeMs": 1792415713400
+ "generatedTimeMs": 1792416051000
 }

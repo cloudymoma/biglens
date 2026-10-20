@@ -20,17 +20,17 @@ func TestParseCircleFixture(t *testing.T) {
 		t.Errorf("Missing = %v", snap.Missing)
 	}
 	usdc, ok := snap.Coins["USDC"]
-	if !ok || len(usdc.Chains) != 39 {
+	if !ok || len(usdc.Chains) != fxCircleUSDCChains {
 		t.Fatalf("USDC = %+v", usdc)
 	}
-	approxPtr(t, "usdc total", usdc.TotalNative, 72428691938.569237593, 1e-3)
+	approxPtr(t, "usdc total", usdc.TotalNative, fxCircleUSDCTotal, 1e-3)
 	var eth *circleChain
 	for i := range usdc.Chains {
 		if usdc.Chains[i].Chain == "ETH" {
 			eth = &usdc.Chains[i]
 		}
 	}
-	if eth == nil || eth.AmountNative != 48110376596.928461 {
+	if eth == nil || eth.AmountNative != fxCircleUSDCEth {
 		t.Fatalf("USDC ETH = %+v", eth)
 	}
 	if want := time.Date(2026, 10, 19, 13, 19, 0, 821_000_000, time.UTC); !eth.UpdatedAt.Equal(want) {
@@ -40,10 +40,10 @@ func TestParseCircleFixture(t *testing.T) {
 		t.Errorf("USDC UpdatedAt (newest chain) = %v, want %v", usdc.UpdatedAt, want)
 	}
 	eurc := snap.Coins["EURC"]
-	if len(eurc.Chains) != 9 {
-		t.Fatalf("EURC chains = %d, want 9", len(eurc.Chains))
+	if len(eurc.Chains) != fxCircleEURCChains {
+		t.Fatalf("EURC chains = %d, want %d", len(eurc.Chains), fxCircleEURCChains)
 	}
-	approxPtr(t, "eurc total", eurc.TotalNative, 439832365.3957852, 1e-6)
+	approxPtr(t, "eurc total", eurc.TotalNative, fxCircleEURCTotal, 1e-6)
 }
 
 func TestParseCircleShape(t *testing.T) {
@@ -79,14 +79,14 @@ func TestParseTetherFixture(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if snap.UpdateID != 1792193400 || !snap.UpdatedAt.Equal(time.Date(2026, 10, 16, 23, 30, 0, 0, time.UTC)) {
+	if snap.UpdateID != fxTetherUpdateID || !snap.UpdatedAt.Equal(time.Date(2026, 10, 16, 23, 30, 0, 0, time.UTC)) {
 		t.Errorf("update = %d %v", snap.UpdateID, snap.UpdatedAt)
 	}
-	approxPtr(t, "total_assets_usd", snap.TotalAssetsUSD, 189131984703.7462, 1e-3)
-	approxPtr(t, "total_liabilities_usd", snap.TotalLiabilitiesUSD, 183581202498.248736, 1e-3)
-	approxPtr(t, "shareholder_equity_usd", snap.ShareholderEquityUSD, 5466948450.76413535, 1e-3)
-	if len(snap.Chains) != 14 {
-		t.Fatalf("chains = %d, want 14", len(snap.Chains))
+	approxPtr(t, "total_assets_usd", snap.TotalAssetsUSD, fxTetherAssetsUSD, 1e-3)
+	approxPtr(t, "total_liabilities_usd", snap.TotalLiabilitiesUSD, fxTetherLiabilitiesUSD, 1e-3)
+	approxPtr(t, "shareholder_equity_usd", snap.ShareholderEquityUSD, fxTetherEquityUSD, 1e-3)
+	if len(snap.Chains) != fxTetherChains {
+		t.Fatalf("chains = %d, want %d", len(snap.Chains), fxTetherChains)
 	}
 	byName := map[string]tetherChain{}
 	for _, c := range snap.Chains {
@@ -94,23 +94,23 @@ func TestParseTetherFixture(t *testing.T) {
 	}
 	// Mixed JSON types: strings (Ethereum), numbers (Tron), int zeros (BNB), a string quarantine (Solana).
 	eth := byName["Ethereum"]
-	if eth.TotalAuthorizedNative != 88302633055.702652 || eth.NotIssuedNative != 2132161384.804943 {
+	if eth.TotalAuthorizedNative != fxTetherEthAuthorized || eth.NotIssuedNative != fxTetherEthNotIssued {
 		t.Errorf("Ethereum = %+v", eth)
 	}
 	approx := func(label string, got, want float64) {
 		t.Helper()
 		approxPtr(t, label, &got, want, 1e-4)
 	}
-	approx("Ethereum circulating", eth.CirculatingNative, 88302633055.702652-2132161384.804943)
-	approx("Tron circulating", byName["Tron"].CirculatingNative, 94248192941.36375-1280400024.737835)
+	approx("Ethereum circulating", eth.CirculatingNative, fxTetherEthCirculating)
+	approx("Tron circulating", byName["Tron"].CirculatingNative, fxTetherTronCirculating)
 	sol := byName["Solana"]
-	approx("Solana quarantined", sol.QuarantinedNative, 3698541.306464)
-	approx("Solana circulating", sol.CirculatingNative, 3839918975.376892-1175812773.013183-3698541.306464)
+	approx("Solana quarantined", sol.QuarantinedNative, fxTetherSolQuarantined)
+	approx("Solana circulating", sol.CirculatingNative, fxTetherSolCirculating)
 	if bnb := byName["BNB Smart Chain"]; bnb.TotalAuthorizedNative != 0 || bnb.CirculatingNative != 0 {
 		t.Errorf("BNB = %+v", bnb)
 	}
 	// §5.1 worked check: Σ (totalAuthorized − notIssued − quarantined) = total_liabilities.
-	approx("Σ circulating", snap.CirculatingSumNative, 183581202498.248736)
+	approx("Σ circulating", snap.CirculatingSumNative, fxTetherLiabilitiesUSD)
 }
 
 func TestParseTetherShape(t *testing.T) {
@@ -152,7 +152,7 @@ func TestParseTetherShape(t *testing.T) {
 func TestFetchIssuersFromStub(t *testing.T) {
 	circle := readStableFixture(t, "circle_stablecoins.json")
 	tether := readStableFixture(t, "tether_transparency.json")
-	drift := strings.Replace(string(tether), `"total_liabilities": "183581202498.248736"`, `"total_liabilities": "193581202498.248736"`, 1)
+	drift := strings.Replace(string(tether), `"total_liabilities": "`+fxTetherLiabilitiesStr+`"`, `"total_liabilities": "1`+fxTetherLiabilitiesStr+`"`, 1)
 	if drift == string(tether) {
 		t.Fatal("fixture edit did not apply (test bug)")
 	}
@@ -174,7 +174,7 @@ func TestFetchIssuersFromStub(t *testing.T) {
 	if snap, code := fetchCircleStablecoins(ctx, ep, time.Now()); code != "" || len(snap.Coins) != 2 {
 		t.Errorf("circle: code %q, coins %d", code, len(snap.Coins))
 	}
-	if snap, code := fetchTetherTransparency(ctx, ep, time.Now()); code != "" || snap.UpdateID != 1792193400 {
+	if snap, code := fetchTetherTransparency(ctx, ep, time.Now()); code != "" || snap.UpdateID != fxTetherUpdateID {
 		t.Errorf("tether: code %q, update %d", code, snap.UpdateID)
 	}
 	ep.TetherURL = srv.URL + "/tether-drift"

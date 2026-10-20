@@ -88,23 +88,23 @@ func rowByChain(t *testing.T, a StableSupplyAsset, chain string) StableSupplyRow
 
 func TestBuildStableSupplyEURC(t *testing.T) {
 	in, fetched := stableFixtureInputs(t)
-	in.Onchain = stableTestReadings("EURC", fetched, map[string]float64{"eth": 321883495.462394, "base": 50542524.481019, "sol": 105020000})
+	in.Onchain = stableTestReadings("EURC", fetched, map[string]float64{"eth": fxCircleEURCEth, "base": fxCircleEURCBase, "sol": 105020000})
 	def, _ := stableAssetByID("eurc")
 	a := buildStableSupplyAsset(def, in)
 	if a.Numeraire != "EUR" || a.Symbol != "EURC" {
 		t.Fatalf("asset header = %+v", a)
 	}
 	eth := rowByChain(t, a, "eth")
-	approxPtr(t, "eth issuer", eth.IssuerCirculatingNative, 321883495.462394, 1e-6)
-	approxPtr(t, "eth on-chain", eth.OnchainTotalNative, 321883495.462394, 1e-6)
+	approxPtr(t, "eth issuer", eth.IssuerCirculatingNative, fxCircleEURCEth, 1e-6)
+	approxPtr(t, "eth on-chain", eth.OnchainTotalNative, fxCircleEURCEth, 1e-6)
 	approxPtr(t, "eth inventory", eth.InventoryNative, 0, 1e-6)
-	approxPtr(t, "eth aggregator (normalized)", eth.AggregatorCirculatingNative, 358693015.41294384/1.1219700408031166, 1e-3)
+	approxPtr(t, "eth aggregator (normalized)", eth.AggregatorCirculatingNative, fxLlamaEURCEthereumNative, 1e-3)
 	if !eth.Verified || eth.Tier != "native" || eth.ChainLabel != "Ethereum" || eth.IssuerAsOf == "" || eth.OnchainAsOf == "" {
 		t.Errorf("eth row = %+v", eth)
 	}
-	approxPtr(t, "eth share", eth.IssuerSharePct, 321883495.462394/439832365.3957852*100, 1e-9)
+	approxPtr(t, "eth share", eth.IssuerSharePct, fxCircleEURCEth/fxCircleEURCTotal*100, 1e-9)
 	sol := rowByChain(t, a, "sol")
-	approxPtr(t, "sol inventory", sol.InventoryNative, 105020000-50053662.075142, 1e-6)
+	approxPtr(t, "sol inventory", sol.InventoryNative, 105020000-fxCircleEURCSol, 1e-6)
 	// Issuer-only chain: no on-chain read, so no inventory and not verified.
 	arc := rowByChain(t, a, "arc")
 	if arc.Verified || arc.OnchainTotalNative != nil || arc.InventoryNative != nil || arc.IssuerCirculatingNative == nil {
@@ -115,15 +115,15 @@ func TestBuildStableSupplyEURC(t *testing.T) {
 	if poly.IssuerCirculatingNative != nil || poly.AggregatorCirculatingNative == nil {
 		t.Errorf("polygon row = %+v", poly)
 	}
-	approxPtr(t, "issuer total", a.Totals.IssuerCirculatingNative, 439832365.3957852, 1e-6)
-	approxPtr(t, "aggregator total", a.Totals.AggregatorCirculatingNative, 440810838.17, 0.01)
-	approxPtr(t, "aggregator usd", a.Totals.AggregatorCirculatingUSD, 494576554.0852549, 1e-6)
-	approxPtr(t, "inventory total", a.Totals.InventoryNative, 105020000-50053662.075142, 1e-6)
+	approxPtr(t, "issuer total", a.Totals.IssuerCirculatingNative, fxCircleEURCTotal, 1e-6)
+	approxPtr(t, "aggregator total", a.Totals.AggregatorCirculatingNative, fxLlamaEURCCirculatingNative, 0.01)
+	approxPtr(t, "aggregator usd", a.Totals.AggregatorCirculatingUSD, fxLlamaEURCCirculatingUSD, 1e-6)
+	approxPtr(t, "inventory total", a.Totals.InventoryNative, 105020000-fxCircleEURCSol, 1e-6)
 	if a.Totals.InventoryChains != 3 {
 		t.Errorf("inventory chains = %d, want 3", a.Totals.InventoryChains)
 	}
 	r := a.Reconcile.Aggregator
-	approxPtr(t, "aggregator diff pct", r.DiffPct, (440810838.17-439832365.3957852)/439832365.3957852*100, 1e-6)
+	approxPtr(t, "aggregator diff pct", r.DiffPct, (fxLlamaEURCCirculatingNative-fxCircleEURCTotal)/fxCircleEURCTotal*100, 1e-6)
 	if r.AboveWatch || r.AboveWarning || r.WatchPct != 0.5 || r.WarningPct != 2 || r.SkewSeconds == nil {
 		t.Errorf("aggregator recon = %+v", r)
 	}
@@ -132,18 +132,18 @@ func TestBuildStableSupplyEURC(t *testing.T) {
 func TestBuildStableSupplyUSDT(t *testing.T) {
 	in, fetched := stableFixtureInputs(t)
 	in.Onchain = stableTestReadings("USDT", fetched, map[string]float64{
-		"eth": 88302633055.702652, "tron": 94248192941.36375, "sol": 3839918975.376892,
+		"eth": fxTetherEthAuthorized, "tron": fxTetherTronAuthorized, "sol": fxTetherSolAuthorized,
 		"arb": 1500000000, "op": 30000000, "op.bridged": 20000000, "base.bridged": 10000000,
 	})
 	def, _ := stableAssetByID("usdt")
 	a := buildStableSupplyAsset(def, in)
 	eth := rowByChain(t, a, "eth")
-	approxPtr(t, "eth issuer", eth.IssuerCirculatingNative, 88302633055.702652-2132161384.804943, 1e-3)
-	approxPtr(t, "eth unissued", eth.IssuerUnissuedNative, 2132161384.804943, 1e-6)
-	approxPtr(t, "eth inventory (= notIssued)", eth.InventoryNative, 2132161384.804943, 1e-3)
+	approxPtr(t, "eth issuer", eth.IssuerCirculatingNative, fxTetherEthCirculating, 1e-3)
+	approxPtr(t, "eth unissued", eth.IssuerUnissuedNative, fxTetherEthNotIssued, 1e-6)
+	approxPtr(t, "eth inventory (= notIssued)", eth.InventoryNative, fxTetherEthNotIssued, 1e-3)
 	sol := rowByChain(t, a, "sol")
-	approxPtr(t, "sol quarantined", sol.IssuerQuarantinedNative, 3698541.306464, 1e-6)
-	approxPtr(t, "sol inventory", sol.InventoryNative, 1175812773.013183+3698541.306464, 1e-3)
+	approxPtr(t, "sol quarantined", sol.IssuerQuarantinedNative, fxTetherSolQuarantined, 1e-6)
+	approxPtr(t, "sol inventory", sol.InventoryNative, fxTetherSolNotIssued+fxTetherSolQuarantined, 1e-3)
 	// USD₮0 on Arbitrum is native-tier on-chain but Tether reports no Arbitrum row.
 	arb := rowByChain(t, a, "arb")
 	if arb.IssuerCirculatingNative != nil || arb.InventoryNative != nil || arb.OnchainTotalNative == nil || arb.TokenLabel != "USD₮0" {
@@ -152,7 +152,7 @@ func TestBuildStableSupplyUSDT(t *testing.T) {
 	if b := rowByChain(t, a, "base.bridged"); b.Tier != "bridged" || b.ChainLabel != "Base (Bridged USDT)" || b.InventoryNative != nil {
 		t.Errorf("base.bridged row = %+v", b)
 	}
-	approxPtr(t, "issuer total", a.Totals.IssuerCirculatingNative, 183581202498.248736, 1e-3)
+	approxPtr(t, "issuer total", a.Totals.IssuerCirculatingNative, fxTetherLiabilitiesUSD, 1e-3)
 	if a.Totals.IssuerAsOf != "2026-10-16T23:30:00Z" {
 		t.Errorf("issuer as_of = %q, want the Tether update time", a.Totals.IssuerAsOf)
 	}
@@ -218,7 +218,7 @@ func TestStableOnchainRecon(t *testing.T) {
 
 	// Tether's per-chain data is hours old, so USDT pairs are skipped as not aligned.
 	in, fetched := stableFixtureInputs(t)
-	in.Onchain = stableTestReadings("USDT", fetched, map[string]float64{"eth": 88302633055.702652})
+	in.Onchain = stableTestReadings("USDT", fetched, map[string]float64{"eth": fxTetherEthAuthorized})
 	usdt, _ := stableAssetByID("usdt")
 	if r := find(stableOnchainRecon(usdt, in, map[string]int{}), "eth"); r.SkipReason != "not_aligned" || r.SkewSeconds == nil {
 		t.Errorf("usdt eth recon = %+v", r)
@@ -355,10 +355,10 @@ func (s *stableStub) endpoints() stableEndpoints {
 func stableRPCStub(t *testing.T) (rpcs func(string) []string, evmHits *int, mu *sync.Mutex) {
 	t.Helper()
 	supplies := map[string]float64{
-		"0x1abaea1f7c830bd89acc67ec4af516284b1bc33c": 321883495.462394, // EURC eth (= Circle ETH)
-		"0x60a3e35cc302bfa44cb288bc5a4f316fdb1adb42": 50542524.481019,  // EURC base (= Circle BASE)
-		"0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48": 48110376596.928461,
-		"0xdac17f958d2ee523a2206206994597c13d831ec7": 88302633055.702652,
+		"0x1abaea1f7c830bd89acc67ec4af516284b1bc33c": fxCircleEURCEth,  // EURC eth (= Circle ETH)
+		"0x60a3e35cc302bfa44cb288bc5a4f316fdb1adb42": fxCircleEURCBase, // EURC base (= Circle BASE)
+		"0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48": fxCircleUSDCEth,
+		"0xdac17f958d2ee523a2206206994597c13d831ec7": fxTetherEthAuthorized,
 	}
 	hex := func(v float64) string {
 		raw, _ := new(big.Float).Mul(big.NewFloat(v), big.NewFloat(1e6)).Int(nil)
@@ -388,7 +388,7 @@ func stableRPCStub(t *testing.T) (rpcs func(string) []string, evmHits *int, mu *
 	}))
 	t.Cleanup(sol.Close)
 	tron := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, `{"result":{"result":true},"constant_result":["%s"]}`, strings.TrimPrefix(hex(94248192941.36375), "0x"))
+		fmt.Fprintf(w, `{"result":{"result":true},"constant_result":["%s"]}`, strings.TrimPrefix(hex(fxTetherTronAuthorized), "0x"))
 	}))
 	t.Cleanup(tron.Close)
 	orig := tronGridBaseURL
@@ -449,7 +449,7 @@ func TestStableSupplySamplerTick(t *testing.T) {
 	}
 	st := s.snapshot()
 	usdc := st.Assets["usdc"]
-	approxPtr(t, "usdc issuer total", usdc.Totals.IssuerCirculatingNative, 72428691938.569237593, 1e-3)
+	approxPtr(t, "usdc issuer total", usdc.Totals.IssuerCirculatingNative, fxCircleUSDCTotal, 1e-3)
 	for _, src := range usdc.Sources {
 		if src.Status != "ok" {
 			t.Errorf("usdc source %s = %+v, want ok", src.ID, src)
@@ -490,7 +490,7 @@ func TestStableSupplySamplerTick(t *testing.T) {
 	clock = clock.Add(10 * time.Minute)
 	s.tick(ctx)
 	usdc = s.snapshot().Assets["usdc"]
-	approxPtr(t, "usdc issuer (stale)", usdc.Totals.IssuerCirculatingNative, 72428691938.569237593, 1e-3)
+	approxPtr(t, "usdc issuer (stale)", usdc.Totals.IssuerCirculatingNative, fxCircleUSDCTotal, 1e-3)
 	var circleSrc *BtcSourceStatus
 	for i := range usdc.Sources {
 		if usdc.Sources[i].ID == "circle" {
@@ -560,8 +560,8 @@ func TestStableSyncHistoryAndRates(t *testing.T) {
 	if err != nil || len(rows) != 5 {
 		t.Fatalf("eurc aggregator daily = %+v, %v", rows, err)
 	}
-	approxPtr(t, "eurc 2026-10-19 native", rows[4].CirculatingNative, 443105486.18, 1e-6)
-	approxPtr(t, "eurc 2026-10-19 usd", rows[4].CirculatingUSD, 497151080.41, 1e-6)
+	approxPtr(t, "eurc 2026-10-19 native", rows[4].CirculatingNative, fxChartEURCLastNative, 1e-6)
+	approxPtr(t, "eurc 2026-10-19 usd", rows[4].CirculatingUSD, fxChartEURCLastUSD, 1e-6)
 	// Not due again within 6 hours.
 	clock = clock.Add(time.Hour)
 	s.syncHistory(ctx)

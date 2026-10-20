@@ -44,10 +44,10 @@ func TestStableSupplySnapshotsRoundTrip(t *testing.T) {
 	obs := time.Date(2026, 10, 19, 13, 19, 1, 0, time.UTC)
 	fetched := obs.Add(40 * time.Second)
 	rows := []stableSupplySnapshot{
-		{TS: obs, Asset: "eurc", Chain: "eth", Source: "issuer", CirculatingNative: btcFloatPtr(321883495.462394), FetchedAt: fetched},
-		{TS: obs, Asset: "eurc", Chain: "all", Source: "issuer", CirculatingNative: btcFloatPtr(439832365.3957852), FetchedAt: fetched},
+		{TS: obs, Asset: "eurc", Chain: "eth", Source: "issuer", CirculatingNative: btcFloatPtr(fxCircleEURCEth), FetchedAt: fetched},
+		{TS: obs, Asset: "eurc", Chain: "all", Source: "issuer", CirculatingNative: btcFloatPtr(fxCircleEURCTotal), FetchedAt: fetched},
 		// Unknown values stay NULL, never 0.
-		{TS: obs, Asset: "usdt", Chain: "eth", Source: "issuer", CirculatingNative: nil, UnissuedNative: btcFloatPtr(2132161384.804943), QuarantinedNative: btcFloatPtr(0), FetchedAt: fetched},
+		{TS: obs, Asset: "usdt", Chain: "eth", Source: "issuer", CirculatingNative: nil, UnissuedNative: btcFloatPtr(fxTetherEthNotIssued), QuarantinedNative: btcFloatPtr(0), FetchedAt: fetched},
 	}
 	if err := s.insertStableSupplySnapshots(ctx, rows); err != nil {
 		t.Fatalf("insert: %v", err)
@@ -69,7 +69,7 @@ func TestStableSupplySnapshotsRoundTrip(t *testing.T) {
 	if !got[1].TS.Equal(obs) || !got[1].FetchedAt.Equal(fetched) {
 		t.Errorf("times = %v / %v, want %v / %v", got[1].TS, got[1].FetchedAt, obs, fetched)
 	}
-	if got[1].CirculatingNative == nil || *got[1].CirculatingNative != 321883495.462394 {
+	if got[1].CirculatingNative == nil || *got[1].CirculatingNative != fxCircleEURCEth {
 		t.Errorf("circulating = %v", got[1].CirculatingNative)
 	}
 	if got[1].OnchainTotalNative != nil {
@@ -123,8 +123,8 @@ func TestStableTetherSnapshotsAndRates(t *testing.T) {
 	s := newTestRiskStore(t)
 	ctx := context.Background()
 	fetched := time.Date(2026, 10, 19, 13, 30, 0, 0, time.UTC)
-	snap := stableTetherSnapshot{UpdateID: 1792193400, TotalAssetsUSD: btcFloatPtr(189131984703.7462),
-		TotalLiabilitiesUSD: btcFloatPtr(183581202498.248736), ShareholderEquityUSD: btcFloatPtr(5466948450.76413535),
+	snap := stableTetherSnapshot{UpdateID: fxTetherUpdateID, TotalAssetsUSD: btcFloatPtr(fxTetherAssetsUSD),
+		TotalLiabilitiesUSD: btcFloatPtr(fxTetherLiabilitiesUSD), ShareholderEquityUSD: btcFloatPtr(fxTetherEquityUSD),
 		ChainsJSON: `[{"chain":"Ethereum"}]`, FetchedAt: fetched}
 	for i := 0; i < 2; i++ { // one row per Tether update id
 		if err := s.insertStableTetherSnapshot(ctx, snap); err != nil {
@@ -135,22 +135,22 @@ func TestStableTetherSnapshotsAndRates(t *testing.T) {
 	if err != nil || len(snaps) != 1 {
 		t.Fatalf("tether snapshots = %+v, %v", snaps, err)
 	}
-	if snaps[0].UpdateID != 1792193400 || *snaps[0].TotalLiabilitiesUSD != 183581202498.248736 || snaps[0].ChainsJSON != snap.ChainsJSON {
+	if snaps[0].UpdateID != fxTetherUpdateID || *snaps[0].TotalLiabilitiesUSD != fxTetherLiabilitiesUSD || snaps[0].ChainsJSON != snap.ChainsJSON {
 		t.Errorf("tether snapshot = %+v", snaps[0])
 	}
 
 	if err := s.upsertStableRatesDaily(ctx, []stableRateDaily{
-		{Day: "2026-10-16", Series: stableSeriesECBEURUSD, Value: 1.1253, FetchedAt: fetched},
-		{Day: "2026-10-16", Series: stableSeriesECBESTRPct, Value: 2.441, FetchedAt: fetched},
+		{Day: "2026-10-16", Series: stableSeriesECBEURUSD, Value: fxECBEURUSD2, FetchedAt: fetched},
+		{Day: "2026-10-16", Series: stableSeriesECBESTRPct, Value: fxECBESTR2, FetchedAt: fetched},
 	}); err != nil {
 		t.Fatal(err)
 	}
 	// A revised value for the same day replaces the old one.
-	if err := s.upsertStableRatesDaily(ctx, []stableRateDaily{{Day: "2026-10-16", Series: stableSeriesECBEURUSD, Value: 1.1254, FetchedAt: fetched.Add(time.Hour)}}); err != nil {
+	if err := s.upsertStableRatesDaily(ctx, []stableRateDaily{{Day: "2026-10-16", Series: stableSeriesECBEURUSD, Value: fxECBEURUSD2 + 0.0001, FetchedAt: fetched.Add(time.Hour)}}); err != nil {
 		t.Fatal(err)
 	}
 	fx, err := s.stableRatesSeries(ctx, stableSeriesECBEURUSD, "2026-10-01")
-	if err != nil || len(fx) != 1 || fx[0].Value != 1.1254 {
+	if err != nil || len(fx) != 1 || fx[0].Value != fxECBEURUSD2+0.0001 {
 		t.Fatalf("eurusd series = %+v, %v", fx, err)
 	}
 }

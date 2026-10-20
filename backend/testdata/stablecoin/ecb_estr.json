@@ -1,8 +1,8 @@
 {
  "header": {
-  "id": "590d76d1-43aa-4e8a-a055-e6b8ea1cde58",
+  "id": "00000000-0000-4000-8000-000000000000",
   "test": false,
-  "prepared": "2026-10-19T15:20:56.101+02:00",
+  "prepared": "2026-10-19T13:00:00.000+02:00",
   "sender": {
    "id": "ECB"
   }
@@ -10,7 +10,7 @@
  "dataSets": [
   {
    "action": "Replace",
-   "validFrom": "2026-10-19T15:20:56.101+02:00",
+   "validFrom": "2026-10-19T13:00:00.000+02:00",
    "series": {
     "0:0:0": {
      "attributes": [
@@ -34,7 +34,7 @@
      ],
      "observations": {
       "0": [
-       2.44,
+       2.15,
        0,
        0,
        null,
@@ -43,7 +43,7 @@
        null
       ],
       "1": [
-       2.44,
+       2.15,
        0,
        0,
        null,
@@ -52,7 +52,7 @@
        null
       ],
       "2": [
-       2.441,
+       2.151,
        0,
        0,
        null,
@@ -78,31 +78,31 @@
    "series": [
     {
      "id": "FREQ",
-     "name": "Frequency",
+     "name": "Freq",
      "values": [
       {
        "id": "B",
-       "name": "Daily - businessweek"
+       "name": "synthetic B"
       }
      ]
     },
     {
      "id": "BENCHMARK_ITEM",
-     "name": "Benchmark item",
+     "name": "Benchmark Item",
      "values": [
       {
        "id": "EU000A2X2A25",
-       "name": "Euro short-term rate"
+       "name": "synthetic EU000A2X2A25"
       }
      ]
     },
     {
      "id": "DATA_TYPE_EST",
-     "name": "Data type in the Euro short-term rate context",
+     "name": "Data Type Est",
      "values": [
       {
        "id": "WT",
-       "name": "Volume-weighted trimmed mean rate"
+       "name": "synthetic WT"
       }
      ]
     }
@@ -139,10 +139,10 @@
    "series": [
     {
      "id": "TIME_FORMAT",
-     "name": "Time format code",
+     "name": "Time Format",
      "values": [
       {
-       "name": "P1D"
+       "name": "synthetic"
       }
      ]
     },
@@ -153,12 +153,12 @@
     },
     {
      "id": "COMMENT_TS",
-     "name": "Series comment including brief description of the underlying statistic",
+     "name": "Comment Ts",
      "values": []
     },
     {
      "id": "COMPILING_ORG",
-     "name": "Compiling organisation",
+     "name": "Compiling Org",
      "values": []
     },
     {
@@ -166,13 +166,13 @@
      "name": "Coverage",
      "values": [
       {
-       "name": "ESA 2010 Sectors: S.121, S.122, S.123, S.124, S.125, S.126, S.127, S.128, S.129"
+       "name": "synthetic"
       }
      ]
     },
     {
      "id": "DATA_COMP",
-     "name": "Underlying compilation",
+     "name": "Data Comp",
      "values": []
     },
     {
@@ -181,37 +181,37 @@
      "values": [
       {
        "id": "3",
-       "name": "Three"
+       "name": "synthetic 3"
       }
      ]
     },
     {
      "id": "DISS_ORG",
-     "name": "Data dissemination organisation",
+     "name": "Diss Org",
      "values": []
     },
     {
      "id": "PUBL_ECB",
-     "name": "Source publication (ECB only)",
+     "name": "Publ Ecb",
      "values": []
     },
     {
      "id": "PUBL_MU",
-     "name": "Source publication (Euro area only)",
+     "name": "Publ Mu",
      "values": []
     },
     {
      "id": "PUBL_PUBLIC",
-     "name": "Source publication (public)",
+     "name": "Publ Public",
      "values": []
     },
     {
      "id": "TIME_PER_COLLECT",
-     "name": "Time period collection",
+     "name": "Time Per Collect",
      "values": [
       {
        "id": "A",
-       "name": "Average of observations through period"
+       "name": "synthetic A"
       }
      ]
     },
@@ -220,41 +220,41 @@
      "name": "Title",
      "values": [
       {
-       "name": "Euro short-term rate"
+       "name": "synthetic"
       }
      ]
     },
     {
      "id": "TITLE_COMPL",
-     "name": "Title complement",
+     "name": "Title Compl",
      "values": [
       {
-       "name": "Euro short-term rate, Volume-weighted trimmed mean rate - Unsecured - Overnight - Borrowing - Financial corporations"
+       "name": "synthetic"
       }
      ]
     },
     {
      "id": "UNIT_INDEX_BASE",
-     "name": "Unit index base",
+     "name": "Unit Index Base",
      "values": []
     },
     {
      "id": "UNIT_MEASURE",
-     "name": "Unit of measure",
+     "name": "Unit Measure",
      "values": [
       {
        "id": "PC",
-       "name": "Percent"
+       "name": "synthetic PC"
       }
      ]
     },
     {
      "id": "UNIT_MULT",
-     "name": "Unit multiplier",
+     "name": "Unit Mult",
      "values": [
       {
        "id": "0",
-       "name": "Units"
+       "name": "synthetic 0"
       }
      ]
     }
@@ -262,42 +262,42 @@
    "observation": [
     {
      "id": "OBS_STATUS",
-     "name": "Observation status",
+     "name": "Obs Status",
      "values": [
       {
        "id": "A",
-       "name": "Normal value"
+       "name": "synthetic A"
       }
      ]
     },
     {
      "id": "CONF_STATUS",
-     "name": "Confidentiality status",
+     "name": "Conf Status",
      "values": [
       {
        "id": "F",
-       "name": "Free (free for publication)"
+       "name": "synthetic F"
       }
      ]
     },
     {
      "id": "PRE_BREAK_VALUE",
-     "name": "Pre-break value",
+     "name": "Pre Break Value",
      "values": []
     },
     {
      "id": "COMMENT_OBS",
-     "name": "Comments to the observation value",
+     "name": "Comment Obs",
      "values": []
     },
     {
      "id": "CALCUL_START_DATE",
-     "name": "Calculation start date",
+     "name": "Calcul Start Date",
      "values": []
     },
     {
      "id": "CALCUL_END_DATE",
-     "name": "Calculation end date",
+     "name": "Calcul End Date",
      "values": []
     }
    ]

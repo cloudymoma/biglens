@@ -2,61 +2,61 @@
  {
   "date": "1792022400",
   "totalCirculating": {
-   "peggedEUR": 439362539
+   "peggedEUR": 378400000
   },
   "totalUnreleased": {
-   "peggedEUR": 53831537
+   "peggedEUR": 46000000
   },
   "totalCirculatingUSD": {
-   "peggedEUR": 492373079
+   "peggedEUR": 410109920
   }
  },
  {
   "date": "1792108800",
   "totalCirculating": {
-   "peggedEUR": 444246579
+   "peggedEUR": 381900000
   },
   "totalUnreleased": {
-   "peggedEUR": 53141038
+   "peggedEUR": 45600000
   },
   "totalCirculatingUSD": {
-   "peggedEUR": 498865951
+   "peggedEUR": 414208740
   }
  },
  {
   "date": "1792195200",
   "totalCirculating": {
-   "peggedEUR": 445758882
+   "peggedEUR": 384200000
   },
   "totalUnreleased": {
-   "peggedEUR": 51181465
+   "peggedEUR": 44900000
   },
   "totalCirculatingUSD": {
-   "peggedEUR": 500436731
+   "peggedEUR": 416895420
   }
  },
  {
   "date": "1792281600",
   "totalCirculating": {
-   "peggedEUR": 444612901
+   "peggedEUR": 383000000
   },
   "totalUnreleased": {
-   "peggedEUR": 52459935
+   "peggedEUR": 45200000
   },
   "totalCirculatingUSD": {
-   "peggedEUR": 498252626
+   "peggedEUR": 415516700
   }
  },
  {
   "date": "1792368000",
   "totalCirculating": {
-   "peggedEUR": 443105486.18
+   "peggedEUR": 384250000.75
   },
   "totalUnreleased": {
-   "peggedEUR": 52263350.34
+   "peggedEUR": 45150000.5
   },
   "totalCirculatingUSD": {
-   "peggedEUR": 497151080.41
+   "peggedEUR": 416988100.81
   },
   "totalMintedUSD": {
    "peggedEUR": 0

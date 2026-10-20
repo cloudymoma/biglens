@@ -1,436 +1,345 @@
 [
  {
-  "date": 1649980800,
-  "prices": {
-   "usd-coin": 0.9994327863325057,
-   "tether": 1.0012285369494556
-  }
- },
- {
-  "date": 1650067200,
-  "prices": {
-   "usd-coin": 0.9999587068447569,
-   "tether": 1.0005182605276972
-  }
- },
- {
-  "date": 1650153600,
-  "prices": {
-   "usd-coin": 0.9978280022294266,
-   "tether": 1.0009584476884474
-  }
- },
- {
-  "date": 1650240000,
-  "prices": {
-   "usd-coin": 0.9998454945463386,
-   "tether": 1.0008919375805128
-  }
- },
- {
-  "date": 1650326400,
-  "prices": {
-   "usd-coin": 0.9991704090642644,
-   "tether": 1.0007810191354598
-  }
- },
- {
-  "date": 1650412800,
-  "prices": {
-   "usd-coin": 0.9994108244555707,
-   "tether": 0.9996658533214738
-  }
- },
- {
-  "date": 1650499200,
-  "prices": {
-   "usd-coin": 0.9988019643947051,
-   "tether": 0.9999946212135405
-  }
- },
- {
-  "date": 1650585600,
-  "prices": {
-   "usd-coin": 0.999342968899157,
-   "tether": 1.0006163242434516
-  }
- },
- {
-  "date": 1650672000,
-  "prices": {
-   "usd-coin": 0.9994630211970946,
-   "tether": 1.0001412686631954
-  }
- },
- {
-  "date": 1650758400,
-  "prices": {
-   "usd-coin": 1.0010521060422581,
-   "tether": 1.0010142684354009
-  }
- },
- {
-  "date": 1650844800,
-  "prices": {
-   "usd-coin": 0.9992038359791782,
-   "tether": 1.0002185929503484
-  }
- },
- {
-  "date": 1650931200,
-  "prices": {
-   "usd-coin": 0.9994745287105754,
-   "tether": 1.0001622568202189
-  }
- },
- {
-  "date": 1651017600,
-  "prices": {
-   "usd-coin": 0.9979337196990294,
-   "tether": 1.0005013171014638
-  }
- },
- {
   "date": 1651104000,
   "prices": {
-   "usd-coin": 0.9975890703528679,
-   "tether": 0.9998493401497465
+   "tether": 0.9998,
+   "usd-coin": 0.9998
   }
  },
  {
   "date": 1651190400,
   "prices": {
-   "usd-coin": 0.9985310295727029,
-   "tether": 0.9996537859861441
+   "tether": 0.9999,
+   "usd-coin": 1
   }
  },
  {
   "date": 1651276800,
   "prices": {
-   "usd-coin": 0.9973827291640682,
-   "tether": 1.0012216168901436
+   "tether": 1,
+   "usd-coin": 1.0002
   }
  },
  {
   "date": 1651363200,
   "prices": {
-   "usd-coin": 0.997960362064765,
-   "tether": 1.0032689168029283
+   "tether": 1.00326891680293,
+   "usd-coin": 0.9998
   }
  },
  {
   "date": 1651449600,
   "prices": {
-   "usd-coin": 0.9982434800797964,
-   "tether": 1.0013790619870837
+   "tether": 1.0002,
+   "usd-coin": 1
   }
  },
  {
   "date": 1651536000,
   "prices": {
-   "usd-coin": 0.9983558256459453,
-   "tether": 1.0005221894277254
+   "tether": 0.9998,
+   "usd-coin": 1.0002
   }
  },
  {
   "date": 1651622400,
   "prices": {
-   "usd-coin": 0.9984317940780595,
-   "tether": 1.001090151178248
+   "tether": 0.9999,
+   "usd-coin": 0.9998
   }
  },
  {
   "date": 1651708800,
   "prices": {
-   "usd-coin": 0.9999476710243103,
-   "tether": 0.9996788744004061
+   "tether": 1,
+   "usd-coin": 1
   }
  },
  {
   "date": 1651795200,
   "prices": {
-   "usd-coin": 0.9992701838558246,
-   "tether": 1.0003777855190839
+   "tether": 1.0001,
+   "usd-coin": 1.0002
   }
  },
  {
   "date": 1651881600,
   "prices": {
-   "usd-coin": 0.9970394902574796,
-   "tether": 1.0007634262592542
+   "tether": 1.0002,
+   "usd-coin": 0.99703949025748
   }
  },
  {
   "date": 1651968000,
   "prices": {
-   "usd-coin": 0.9972543032355181,
-   "tether": 1.001630847500449
+   "tether": 0.9998,
+   "usd-coin": 1
   }
  },
  {
   "date": 1652054400,
   "prices": {
-   "usd-coin": 0.9992029244053588,
-   "tether": 1
+   "tether": 1,
+   "usd-coin": 1.0002
   }
  },
  {
   "date": 1652140800,
   "prices": {
-   "usd-coin": 0.9992029244053588,
-   "tether": 1
+   "tether": 1,
+   "usd-coin": 0.9998
   }
  },
  {
   "date": 1652227200,
   "prices": {
-   "usd-coin": 1,
-   "tether": 1
+   "tether": 1,
+   "usd-coin": 1
   }
  },
  {
   "date": 1652313600,
   "prices": {
-   "usd-coin": 1,
-   "tether": 1
+   "tether": 1,
+   "usd-coin": 1.0002
   }
  },
  {
   "date": 1652400000,
   "prices": {
-   "usd-coin": 1,
-   "tether": 1
+   "tether": 1,
+   "usd-coin": 0.9998
   }
  },
  {
   "date": 1652486400,
   "prices": {
-   "usd-coin": 1,
-   "tether": 1
+   "tether": 1,
+   "usd-coin": 1
   }
  },
  {
   "date": 1652572800,
   "prices": {
-   "usd-coin": 1.0002,
-   "tether": 0.99894576
+   "tether": 0.998946,
+   "usd-coin": 1.0002
   }
  },
  {
   "date": 1652659200,
   "prices": {
-   "usd-coin": 1.00027657,
-   "tether": 0.99911841
+   "tether": 0.999118,
+   "usd-coin": 0.9998
   }
  },
  {
   "date": 1652745600,
   "prices": {
-   "usd-coin": 1.00027657,
-   "tether": 0.99911841
+   "tether": 1.0002,
+   "usd-coin": 1
   }
  },
  {
   "date": 1652832000,
   "prices": {
-   "usd-coin": 1.0001988,
-   "tether": 0.99895836
+   "tether": 0.9998,
+   "usd-coin": 1.0002
   }
  },
  {
   "date": 1652918400,
   "prices": {
-   "usd-coin": 1.00044593,
-   "tether": 0.99902432
+   "tether": 0.9999,
+   "usd-coin": 0.9998
   }
  },
  {
   "date": 1653004800,
   "prices": {
-   "usd-coin": 1.0005012,
-   "tether": 0.99937819
+   "tether": 1,
+   "usd-coin": 1
   }
  },
  {
   "date": 1653091200,
   "prices": {
-   "usd-coin": 1.0005012,
-   "tether": 0.99937819
+   "tether": 1.0001,
+   "usd-coin": 1.0002
   }
  },
  {
   "date": 1653177600,
   "prices": {
-   "usd-coin": 1.00009383,
-   "tether": 0.99890158
+   "tether": 1.0002,
+   "usd-coin": 0.9998
   }
  },
  {
   "date": 1653264000,
   "prices": {
-   "usd-coin": 1.00043695,
-   "tether": 0.9991
+   "tether": 0.9998,
+   "usd-coin": 1
   }
  },
  {
   "date": 1653350400,
   "prices": {
-   "usd-coin": 1.00015237,
-   "tether": 0.999
+   "tether": 0.9999,
+   "usd-coin": 1.0002
   }
  },
  {
   "date": 1653436800,
   "prices": {
-   "usd-coin": 1.00015237,
-   "tether": 0.999
+   "tether": 1,
+   "usd-coin": 0.9998
   }
  },
  {
   "date": 1653523200,
   "prices": {
-   "usd-coin": 1.00012672,
-   "tether": 0.99898647
+   "tether": 1.0001,
+   "usd-coin": 1
   }
  },
  {
   "date": 1653609600,
   "prices": {
-   "usd-coin": 1.00007517,
-   "tether": 0.99905673
+   "tether": 1.0002,
+   "usd-coin": 1.0002
   }
  },
  {
   "date": 1653696000,
   "prices": {
-   "usd-coin": 1.00031002,
-   "tether": 0.99911867
+   "tether": 0.9998,
+   "usd-coin": 0.9998
   }
  },
  {
   "date": 1653782400,
   "prices": {
-   "usd-coin": 1.00013216,
-   "tether": 0.99917859
+   "tether": 0.9999,
+   "usd-coin": 1
   }
  },
  {
   "date": 1653868800,
   "prices": {
-   "usd-coin": 1.0003994,
-   "tether": 0.99961613
+   "tether": 1,
+   "usd-coin": 1.0002
   }
  },
  {
   "date": 1653955200,
   "prices": {
-   "usd-coin": 1.00035516,
-   "tether": 0.99946588
+   "tether": 1.0001,
+   "usd-coin": 0.9998
   }
  },
  {
   "date": 1654041600,
   "prices": {
-   "usd-coin": 1.00035516,
-   "tether": 0.99946588
+   "tether": 1.0002,
+   "usd-coin": 1
   }
  },
  {
   "date": 1654128000,
   "prices": {
-   "usd-coin": 1.00023883,
-   "tether": 0.9994
+   "tether": 0.9998,
+   "usd-coin": 1.0002
   }
  },
  {
   "date": 1654214400,
   "prices": {
-   "usd-coin": 1.00068168,
-   "tether": 0.9995
+   "tether": 0.9999,
+   "usd-coin": 0.9998
   }
  },
  {
   "date": 1654300800,
   "prices": {
-   "usd-coin": 1.0002993,
-   "tether": 0.99945134
+   "tether": 1,
+   "usd-coin": 1
   }
  },
  {
   "date": 1654387200,
   "prices": {
-   "usd-coin": 1.00021656,
-   "tether": 0.9993
+   "tether": 1.0001,
+   "usd-coin": 1.0002
   }
  },
  {
   "date": 1654473600,
   "prices": {
-   "usd-coin": 1.0003994,
-   "tether": 0.99934692
+   "tether": 1.0002,
+   "usd-coin": 0.9998
   }
  },
  {
   "date": 1654560000,
   "prices": {
-   "usd-coin": 1.0003278,
-   "tether": 0.99950262
+   "tether": 0.9998,
+   "usd-coin": 1
   }
  },
  {
   "date": 1654646400,
   "prices": {
-   "usd-coin": 1.0003278,
-   "tether": 0.99950262
+   "tether": 0.9999,
+   "usd-coin": 1.0002
   }
  },
  {
   "date": 1654732800,
   "prices": {
-   "usd-coin": 1.00059837,
-   "tether": 0.99956119
+   "tether": 1,
+   "usd-coin": 0.9998
   }
  },
  {
   "date": 1654819200,
   "prices": {
-   "usd-coin": 1.00095606,
-   "tether": 0.99956489
+   "tether": 1.0001,
+   "usd-coin": 1
   }
  },
  {
   "date": 1654905600,
   "prices": {
-   "usd-coin": 1.0005,
-   "tether": 0.9996957
+   "tether": 1.0002,
+   "usd-coin": 1.0002
   }
  },
  {
   "date": 1654992000,
   "prices": {
-   "usd-coin": 1.00042396,
-   "tether": 0.99924808
+   "tether": 0.9998,
+   "usd-coin": 0.9998
   }
  },
  {
   "date": 1655078400,
   "prices": {
-   "usd-coin": 1.00071648,
-   "tether": 0.9996
+   "tether": 0.9999,
+   "usd-coin": 1
   }
  },
  {
   "date": 1655164800,
   "prices": {
-   "usd-coin": 1.000352,
-   "tether": 0.9983
+   "tether": 0.9983,
+   "usd-coin": 1.0002
   }
  },
  {
   "date": 1655251200,
   "prices": {
-   "usd-coin": 1.00038787,
-   "tether": 0.99894341
+   "tether": 1.0001,
+   "usd-coin": 0.9998
   }
  }
 ]

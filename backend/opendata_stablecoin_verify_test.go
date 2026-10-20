@@ -135,7 +135,7 @@ func TestStableVerifyFailures(t *testing.T) {
 		}, "defillama"},
 		{"tether sum mismatch", func(s *stableStub) stableEndpoints {
 			body := strings.Replace(string(readStableFixture(t, "tether_transparency.json")),
-				`"total_liabilities": "183581202498.248736"`, `"total_liabilities": "193581202498.248736"`, 1)
+				`"total_liabilities": "`+fxTetherLiabilitiesStr+`"`, `"total_liabilities": "1`+fxTetherLiabilitiesStr+`"`, 1)
 			bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(body)) }))
 			t.Cleanup(bad.Close)
 			ep := s.endpoints()

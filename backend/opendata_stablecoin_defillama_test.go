@@ -63,9 +63,9 @@ func TestParseLlamaStablecoinsFixture(t *testing.T) {
 	if !ok || usdt.Symbol != "USDT" || usdt.PegType != "peggedUSD" {
 		t.Fatalf("usdt = %+v, %v", usdt, ok)
 	}
-	approxPtr(t, "usdt price", usdt.PriceUSD, 0.9993759167177442, 1e-12)
-	approxPtr(t, "usdt circulating_usd", usdt.CirculatingUSD, 183460303656.65677, 0.01)
-	approxPtr(t, "usdt circulating_native", usdt.CirculatingNative, 183574869663.86, 0.5)
+	approxPtr(t, "usdt price", usdt.PriceUSD, fxLlamaUSDTPrice, 1e-12)
+	approxPtr(t, "usdt circulating_usd", usdt.CirculatingUSD, fxLlamaUSDTCirculatingUSD, 0.01)
+	approxPtr(t, "usdt circulating_native", usdt.CirculatingNative, fxLlamaUSDTCirculatingNative, 0.5)
 	// List values are native × the same-response price for USD pegs too: the
 	// normalized prevDay equals the charts' native total for 2026-10-18.
 	chart, err := parseLlamaChart(readStableFixture(t, "defillama_charts_usdt.json"), "peggedUSD")
@@ -82,16 +82,16 @@ func TestParseLlamaStablecoinsFixture(t *testing.T) {
 		t.Fatal("charts fixture lacks 2026-10-18")
 	}
 	approxPtr(t, "usdt prev_day_native vs chart native 2026-10-18", usdt.PrevDayNative, *chart1018, 1)
-	approxPtr(t, "usdt prev_week_native", usdt.PrevWeekNative, 184220289209.96, 0.5)
-	approxPtr(t, "usdt prev_month_native", usdt.PrevMonthNative, 183353983074.65, 0.5)
+	approxPtr(t, "usdt prev_week_native", usdt.PrevWeekNative, fxLlamaUSDTPrevWeekNative, 0.5)
+	approxPtr(t, "usdt prev_month_native", usdt.PrevMonthNative, fxLlamaUSDTPrevMonthNative, 0.5)
 
 	eurc, ok := snap.core("eurc")
 	if !ok || eurc.Symbol != "EURC" || eurc.PegType != "peggedEUR" || eurc.LlamaID != "50" {
 		t.Fatalf("eurc = %+v, %v", eurc, ok)
 	}
-	approxPtr(t, "eurc circulating_usd", eurc.CirculatingUSD, 494576554.0852549, 0.01)
-	approxPtr(t, "eurc circulating_native", eurc.CirculatingNative, 440810838.17, 0.5)
-	approxPtr(t, "eurc prev_day_native", eurc.PrevDayNative, 444612901.23, 0.5)
+	approxPtr(t, "eurc circulating_usd", eurc.CirculatingUSD, fxLlamaEURCCirculatingUSD, 0.01)
+	approxPtr(t, "eurc circulating_native", eurc.CirculatingNative, fxLlamaEURCCirculatingNative, 0.5)
+	approxPtr(t, "eurc prev_day_native", eurc.PrevDayNative, fxLlamaEURCPrevDayNative, 0.5)
 	var eth *llamaChain
 	for i := range eurc.Chains {
 		if eurc.Chains[i].Chain == "Ethereum" {
@@ -101,8 +101,8 @@ func TestParseLlamaStablecoinsFixture(t *testing.T) {
 	if eth == nil {
 		t.Fatal("eurc has no Ethereum chain row")
 	}
-	approxPtr(t, "eurc Ethereum current_usd", eth.CurrentUSD, 358693015.41294384, 0.01)
-	approxPtr(t, "eurc Ethereum current_native", eth.CurrentNative, 358693015.41294384/1.1219700408031166, 0.01)
+	approxPtr(t, "eurc Ethereum current_usd", eth.CurrentUSD, fxLlamaEURCEthereumUSD, 0.01)
+	approxPtr(t, "eurc Ethereum current_native", eth.CurrentNative, fxLlamaEURCEthereumNative, 0.01)
 	if eurc.Chains[0].Chain != "Ethereum" {
 		t.Errorf("chains not sorted by current supply: first = %s", eurc.Chains[0].Chain)
 	}
@@ -148,9 +148,9 @@ func TestParseLlamaChartFixtures(t *testing.T) {
 		t.Fatalf("rows = %+v", rows)
 	}
 	// Chart totalCirculating is native already; totalCirculatingUSD is USD.
-	approxPtr(t, "eurc 2026-10-19 native", rows[4].CirculatingNative, 443105486.18, 1e-6)
-	approxPtr(t, "eurc 2026-10-19 usd", rows[4].CirculatingUSD, 497151080.41, 1e-6)
-	approxPtr(t, "eurc 2026-10-19 unreleased", rows[4].UnreleasedNative, 52263350.34, 1e-6)
+	approxPtr(t, "eurc 2026-10-19 native", rows[4].CirculatingNative, fxChartEURCLastNative, 1e-6)
+	approxPtr(t, "eurc 2026-10-19 usd", rows[4].CirculatingUSD, fxChartEURCLastUSD, 1e-6)
+	approxPtr(t, "eurc 2026-10-19 unreleased", rows[4].UnreleasedNative, fxChartEURCLastUnreleased, 1e-6)
 
 	// Numeric dates are accepted as well as strings.
 	num := `[{"date": 1792368000, "totalCirculating": {"peggedUSD": 5}, "totalCirculatingUSD": {"peggedUSD": 4.9}}]`
