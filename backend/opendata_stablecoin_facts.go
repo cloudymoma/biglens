@@ -42,6 +42,23 @@ var (
 type stableFactsFile struct {
 	Version string                       `json:"version"`
 	Assets  map[string]*stableAssetFacts `json:"assets"`
+	// Annotations are historical depeg events for the peg history (Appendix
+	// C). They are top-level because several concern coins outside the core
+	// set (UST, BUSD, DAI, FDUSD, USDe), shown as context.
+	Annotations []stableAnnotation `json:"annotations,omitempty"`
+}
+
+// stableAnnotation is one historical depeg event. Until it has been checked
+// against a source (M4) it carries "status": "unknown" and no source_url.
+type stableAnnotation struct {
+	Date      string   `json:"date"`               // YYYY-MM-DD, or YYYY-MM when only the month is known
+	EndDate   string   `json:"end_date,omitempty"` // YYYY-MM-DD, for multi-day events
+	Asset     string   `json:"asset"`              // ticker, e.g. USDC, UST, USDe
+	Title     string   `json:"title"`
+	Extreme   string   `json:"extreme,omitempty"`   // approximate extreme, as text
+	LowPrice  *float64 `json:"low_price,omitempty"` // in the coin's own currency
+	Status    string   `json:"status,omitempty"`    // "unknown": not checked yet
+	SourceURL string   `json:"source_url,omitempty"`
 }
 
 type stableAssetFacts struct {
@@ -123,6 +140,9 @@ type stableFacts struct {
 	OverrideStatus  string // none | applied | invalid | unreadable
 	Assets          map[string]stableAssetFacts
 	Overridden      map[string][]string // asset → sections set by the operator override (UI badge)
+	Annotations     []stableAnnotation
+	// AnnotationsOverridden: the operator override replaced the annotations.
+	AnnotationsOverridden bool
 }
 
 func (f stableFacts) isOverridden(asset, section string) bool {
@@ -180,7 +200,7 @@ func parseStableFacts(data []byte) (*stableFactsFile, map[string]map[string]bool
 }
 
 // parseStableFactsAndValidate parses a complete facts file and validates
-// every asset in it.
+// every asset and annotation in it.
 func parseStableFactsAndValidate(data []byte) (*stableFactsFile, map[string]map[string]bool, error) {
 	f, present, err := parseStableFacts(data)
 	if err != nil {
@@ -191,7 +211,56 @@ func parseStableFactsAndValidate(data []byte) (*stableFactsFile, map[string]map[
 			return nil, nil, err
 		}
 	}
+	if err := validateStableAnnotations(f.Annotations); err != nil {
+		return nil, nil, err
+	}
 	return f, present, nil
+}
+
+// validateStableAnnotations: every field the UI shows is required, and a
+// checked annotation (no "status": "unknown") needs an https source.
+func validateStableAnnotations(list []stableAnnotation) error {
+	for i, a := range list {
+		wrap := func(err error) error { return fmt.Errorf("annotations[%d]: %w", i, err) }
+		if _, err := time.Parse(time.DateOnly, a.Date); err != nil {
+			if _, err := time.Parse("2006-01", a.Date); err != nil {
+				return wrap(fmt.Errorf("date %q (want YYYY-MM-DD or YYYY-MM)", a.Date))
+			}
+		}
+		if a.EndDate != "" {
+			if err := stableFactDate("end_date", a.EndDate); err != nil {
+				return wrap(err)
+			}
+			start := a.Date
+			if len(start) == len("2006-01") {
+				start += "-01"
+			}
+			if a.EndDate < start {
+				return wrap(errors.New("end_date before date"))
+			}
+		}
+		if err := firstStableErr(stableFactRequired("asset", a.Asset), stableFactRequired("title", a.Title)); err != nil {
+			return wrap(err)
+		}
+		if a.LowPrice != nil && !(*a.LowPrice > 0) {
+			return wrap(errors.New("low_price must be positive"))
+		}
+		switch a.Status {
+		case stableFactsUnknown:
+			if a.SourceURL != "" {
+				if err := stableFactURL("source_url", a.SourceURL); err != nil {
+					return wrap(err)
+				}
+			}
+		case "":
+			if err := stableFactURL("source_url", a.SourceURL); err != nil {
+				return wrap(err)
+			}
+		default:
+			return wrap(fmt.Errorf("status %q (allowed: unknown)", a.Status))
+		}
+	}
+	return nil
 }
 
 func stableFactDate(field, v string) error {
@@ -384,7 +453,7 @@ func loadStableFactsFrom(base []byte, overridePath string, read func(string) ([]
 		// Unreachable for shipped builds: tests validate the embedded file.
 		slog.Error("stablecoin facts: embedded file invalid", "error", err)
 	} else {
-		out.Version = f.Version
+		out.Version, out.Annotations = f.Version, f.Annotations
 		for asset, a := range f.Assets {
 			out.Assets[asset] = *a
 		}
@@ -399,14 +468,46 @@ func loadStableFactsFrom(base []byte, overridePath string, read func(string) ([]
 		return out
 	}
 	merged, badges, version, err := mergeStableFacts(out.Assets, data)
+	var annotations []stableAnnotation
+	var hasAnnotations bool
+	if err == nil {
+		annotations, hasAnnotations, err = parseStableOverrideAnnotations(data)
+	}
 	if err != nil {
 		slog.Warn("stablecoin facts override rejected; using embedded facts", "path", overridePath, "error", err)
 		out.OverrideStatus = "invalid"
 		return out
 	}
 	out.Assets, out.Overridden, out.OverrideVersion, out.OverrideStatus = merged, badges, version, "applied"
-	slog.Info("stablecoin facts override applied", "path", overridePath, "version", version, "sections", badges)
+	if hasAnnotations {
+		out.Annotations, out.AnnotationsOverridden = annotations, true
+	}
+	slog.Info("stablecoin facts override applied", "path", overridePath, "version", version, "sections", badges,
+		"annotations", hasAnnotations)
 	return out
+}
+
+// parseStableOverrideAnnotations returns an override's annotations and
+// whether it sets the key at all (an override replaces the list as a whole).
+func parseStableOverrideAnnotations(data []byte) ([]stableAnnotation, bool, error) {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(data, &top); err != nil {
+		return nil, false, err
+	}
+	if _, ok := top["annotations"]; !ok {
+		return nil, false, nil
+	}
+	f, _, err := parseStableFacts(data)
+	if err != nil {
+		return nil, false, err
+	}
+	if err := validateStableAnnotations(f.Annotations); err != nil {
+		return nil, false, err
+	}
+	if f.Annotations == nil {
+		f.Annotations = []stableAnnotation{}
+	}
+	return f.Annotations, true, nil
 }
 
 func mergeStableFacts(base map[string]stableAssetFacts, data []byte) (map[string]stableAssetFacts, map[string][]string, string, error) {

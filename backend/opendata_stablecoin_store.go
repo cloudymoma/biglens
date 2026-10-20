@@ -101,6 +101,14 @@ CREATE TABLE IF NOT EXISTS stable_peg_daily (
   updated_at TEXT NOT NULL,
   PRIMARY KEY (day, asset, source)
 );
+CREATE TABLE IF NOT EXISTS stable_price_daily (
+  day TEXT NOT NULL,
+  gecko_id TEXT NOT NULL,
+  price_usd REAL NOT NULL,
+  source TEXT NOT NULL,
+  fetched_at TEXT NOT NULL,
+  PRIMARY KEY (day, gecko_id)
+);
 CREATE TABLE IF NOT EXISTS stable_dex_10m (
   bucket TEXT NOT NULL,
   pool TEXT NOT NULL,

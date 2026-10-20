@@ -1,8 +1,24 @@
 {
-  "version": "2026-10-19.0",
+  "version": "2026-10-20.0",
   "assets": {
     "usdt": {"status": "unknown"},
     "usdc": {"status": "unknown"},
     "eurc": {"status": "unknown"}
-  }
+  },
+  "annotations": [
+    {"date": "2022-05-12", "asset": "USDT", "title": "UST/Luna collapse contagion; heavy redemptions",
+     "extreme": "Bitstamp daily low 0.91011 (close 0.99675); DefiLlama daily shows no deviation", "low_price": 0.91011, "status": "unknown"},
+    {"date": "2022-05", "asset": "UST", "title": "Algorithmic stablecoin collapse (context for the watchlist)",
+     "extreme": "to about $0", "status": "unknown"},
+    {"date": "2023-02-13", "asset": "BUSD", "title": "Issuer ordered to stop minting; wind-down (context)",
+     "extreme": "Near par; supply decline", "status": "unknown"},
+    {"date": "2023-03-11", "asset": "USDC", "title": "Reserve exposure to a failed bank (SVB)",
+     "extreme": "Bitstamp daily low 0.80526 (close 0.96853); DefiLlama daily 0.96107 on the 03-12 row", "low_price": 0.80526, "status": "unknown"},
+    {"date": "2023-03-11", "asset": "DAI", "title": "Followed USDC (PSM exposure)",
+     "extreme": "about $0.89-0.90", "status": "unknown"},
+    {"date": "2025-04-02", "asset": "FDUSD", "title": "Issuer solvency allegations",
+     "extreme": "about $0.87", "status": "unknown"},
+    {"date": "2025-10-10", "end_date": "2025-10-11", "asset": "USDe", "title": "Venue-specific dislocation during a market-wide liquidation cascade",
+     "extreme": "about $0.65 on one venue", "status": "unknown"}
+  ]
 }

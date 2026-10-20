@@ -27,8 +27,8 @@ func TestEnsureStableSchemaTables(t *testing.T) {
 		}
 		got = append(got, n)
 	}
-	want := []string{"stable_chain_daily", "stable_dex_10m", "stable_peg_5m", "stable_peg_daily", "stable_quotes_5m", "stable_rates_daily",
-		"stable_supply_daily", "stable_supply_snapshots", "stable_tether_snapshots"}
+	want := []string{"stable_chain_daily", "stable_dex_10m", "stable_peg_5m", "stable_peg_daily", "stable_price_daily", "stable_quotes_5m",
+		"stable_rates_daily", "stable_supply_daily", "stable_supply_snapshots", "stable_tether_snapshots"}
 	if len(got) != len(want) {
 		t.Fatalf("stable_ tables = %v, want exactly %v (M1 and M2 peg tables)", got, want)
 	}

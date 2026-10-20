@@ -22,19 +22,24 @@ const stablePegECBWindow = 10 * 24 * time.Hour
 type stablePegSampler struct {
 	settings stableSettings
 	store    *riskStore
+	ep       stableEndpoints
 	venues   *stableVenueFetcher
 	rpcs     func(network string) []string
 	now      func() time.Time
 	// onFetch reports every upstream call (provider health); may be nil.
 	onFetch func(provider string, took time.Duration, code string)
+	// ohlcLimit overrides Bitstamp's page size (tests); 0 = stableOHLCPage.
+	ohlcLimit int
 
 	mu         sync.Mutex
 	poolOK     bool // the pool identity check passed once
 	lastResult *stablePegResult
+	depegDue   time.Time
+	ecbLoaded  bool // the ECB EUR/USD history was loaded in this process
 }
 
 func newStablePegSampler(settings stableSettings, store *riskStore, ep stableEndpoints, rpcs func(string) []string, now func() time.Time) *stablePegSampler {
-	p := &stablePegSampler{settings: settings, store: store, rpcs: rpcs, now: now}
+	p := &stablePegSampler{settings: settings, store: store, ep: ep, rpcs: rpcs, now: now}
 	p.venues = newStableVenueFetcher(ep, now)
 	p.venues.onFetch = func(provider string, took time.Duration, code string) {
 		if p.onFetch != nil {
@@ -185,7 +190,8 @@ func (p *stablePegSampler) persist(ctx context.Context, now time.Time, quotes []
 	}
 }
 
-// runStablePegOnce runs one peg tick and records the sampler's health.
+// runStablePegOnce runs one peg tick, then the daily depeg-history job when
+// due, and records both samplers' health.
 func runStablePegOnce(ctx context.Context, p *stablePegSampler, h *stableHealth) {
 	if p.onFetch == nil && h != nil {
 		p.onFetch = h.recordFetch
@@ -194,6 +200,9 @@ func runStablePegOnce(ctx context.Context, p *stablePegSampler, h *stableHealth)
 	ok := p.tick(ctx)
 	if h != nil {
 		h.recordRun("peg", stablePegTick, start, start.Add(stablePegTick), ok)
+	}
+	if ran, ok := p.syncDepegHistory(ctx); ran && h != nil {
+		h.recordRun("peg_history", stableDepegEvery, start, p.depegNextDue(), ok)
 	}
 }
 

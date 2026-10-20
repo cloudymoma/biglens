@@ -35,7 +35,8 @@ var stableProviderInterval = map[string]time.Duration{
 var stableSamplerDefs = []struct {
 	Name     string
 	Interval time.Duration
-}{{"peg", stablePegTick}, {"supply", stableSupplyTick}, {"supply_history", stableChartsEvery}, {"rates", stableRatesEvery}}
+}{{"peg", stablePegTick}, {"peg_history", stableDepegEvery}, {"supply", stableSupplyTick}, {"supply_history", stableChartsEvery},
+	{"rates", stableRatesEvery}}
 
 // stableStallIntervals: a sampler that missed this many intervals in a row
 // is stalled (logged once; S13 watch in M4).
