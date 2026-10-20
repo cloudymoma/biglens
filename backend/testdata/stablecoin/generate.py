@@ -698,8 +698,8 @@ assert w1[0] == "2023-03-12" and abs(w1[1] + 3.647279921263) < 1e-6, w1
 assert w7[0] == "2023-03-17" and abs(w7[1] + 15.17215183678) < 1e-6, w7
 write("replay/charts_usdc_2023-03.json", chart_rows(usdc23, unreleased=4_400_000_000))
 facts["usdc_2023"] = (w1, w7)
-# 2024 supply windows around the aggregator's one-day glitches (measured: USDT
-# −1.379% on 2024-12-01 then a rebound; USDC −6.483% on 2024-04-18, +8.591% the next day).
+# 2024 supply windows around the aggregator's glitches (measured: USDT
+# −1.379% on 2024-12-01 then a rebound; USDC −6.483% on 2024-04-18, +8.591% the next day, and more, below).
 usdt24 = path("2024-11-20", "2024-12-31", 91_000_000_000, {"2024-12-01": 1 - 0.013790590833, "2024-12-02": 1.0136,
                                                             **{d: (1 - 0.01209584903571) ** (1 / 7) for d in days("2024-12-25", "2024-12-31")}})
 w1, w7, _ = flows(usdt24)
@@ -707,12 +707,30 @@ assert w1[0] == "2024-12-01" and abs(w1[1] + 1.3790590833) < 1e-6, w1
 assert w7[0] == "2024-12-31" and abs(w7[1] + 1.209584903571) < 1e-6, w7
 write("replay/charts_usdt_2024.json", chart_rows(usdt24))
 h18, h19 = 1 - 0.0648292120695, 1.08591249303842
-pre = ((1 - 0.05350319282570) / h18) ** (1 / 6)
-usdc24 = path("2024-04-08", "2024-04-26", 28_000_000_000, {**{d: pre for d in days("2024-04-12", "2024-04-17")}, "2024-04-18": h18, "2024-04-19": h19})
+# USDC 2024-04: the aggregator chart dips and rebounds over five days, after a
+# real outflow of about 3% a week. Measured 24h changes (%, 0.001% precision,
+# 04-18 and 04-19 exact) on a made-up level; S4's quiet case (stablecoin.md §13)
+# depends on this shape: 04-20's −4.450% is followed by a 7d change of −2.045%.
+usdc24_pct = {
+    "2024-04-02": 0.629, "2024-04-03": 0.545, "2024-04-04": 0.093, "2024-04-05": 0.439, "2024-04-06": -0.329,
+    "2024-04-07": 0.077, "2024-04-08": -0.062, "2024-04-09": -0.959, "2024-04-10": -0.969, "2024-04-11": -0.312,
+    "2024-04-12": 0.100, "2024-04-13": -0.904, "2024-04-14": 1.242, "2024-04-15": -0.183, "2024-04-16": 0.350,
+    "2024-04-17": 0.614, "2024-04-20": -4.450, "2024-04-21": 0.169, "2024-04-22": 7.284, "2024-04-23": -0.451,
+    "2024-04-24": -1.020, "2024-04-25": 0.0, "2024-04-26": 0.0,
+}
+usdc24 = path("2024-04-01", "2024-04-26", 28_000_000_000,
+              {**{d: 1 + p / 100 for d, p in usdc24_pct.items()}, "2024-04-18": h18, "2024-04-19": h19})
 w1, w7, b1 = flows(usdc24)
 assert w1[0] == "2024-04-18" and abs(w1[1] + 6.48292120695) < 1e-6, w1
-assert w7[0] == "2024-04-18" and abs(w7[1] + 5.35031928257) < 1e-6, w7
+assert w7[0] == "2024-04-18" and abs(w7[1] + 5.35031928257) < 5e-3, w7
 assert b1[0] == "2024-04-19" and abs(b1[1] - 8.591249303842) < 1e-6, b1
+one = {usdc24[i][0]: (usdc24[i][1] - usdc24[i - 1][1]) / usdc24[i - 1][1] * 100 for i in range(1, len(usdc24))}
+seven = {usdc24[i][0]: (usdc24[i][1] - usdc24[i - 7][1]) / usdc24[i - 7][1] * 100 for i in range(7, len(usdc24))}
+for d, (want1, want7) in {"2024-04-11": (-0.312, -2.104), "2024-04-12": (0.100, -2.435), "2024-04-13": (-0.904, -2.998),
+                          "2024-04-14": (1.242, -1.868), "2024-04-17": (0.614, 0.895), "2024-04-18": (-6.483, -5.350),
+                          "2024-04-19": (8.591, 2.679), "2024-04-20": (-4.450, -0.996), "2024-04-21": (0.169, -2.045),
+                          "2024-04-22": (7.284, 5.284)}.items():
+    assert abs(one[d] - want1) < 5e-3 and abs(seven[d] - want7) < 5e-3, (d, one[d], seven[d])
 write("replay/charts_usdc_2024.json", chart_rows(usdc24))
 
 
