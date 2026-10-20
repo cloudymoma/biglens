@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -86,6 +87,8 @@ func newStableVenueStub(t *testing.T) *stableVenueStub {
 				return
 			}
 			w.WriteHeader(http.StatusNotFound)
+		case strings.HasPrefix(p, "/bitstamp/api/v2/ohlc/"):
+			serveStableOHLC(t, w, r, strings.Trim(strings.TrimPrefix(p, "/bitstamp/api/v2/ohlc/"), "/"))
 		case p == "/kraken/0/public/Ticker":
 			if r.URL.Query().Get("pair") != "USDTUSD,USDCUSD,EURCEUR,EURCUSD,EURUSD" {
 				w.Write([]byte(`{"error":["EQuery:Unknown asset pair"]}`))
@@ -112,6 +115,40 @@ func newStableVenueStub(t *testing.T) *stableVenueStub {
 	}))
 	t.Cleanup(st.srv.Close)
 	return st
+}
+
+// serveStableOHLC answers Bitstamp's daily candles from the replay fixtures
+// (usdtusd 2022-05, usdcusd 2023-03; eurceur has none), paged by start/limit.
+func serveStableOHLC(t *testing.T, w http.ResponseWriter, r *http.Request, pair string) {
+	files := map[string]string{"usdtusd": "replay/bitstamp_ohlc_usdtusd_2022-05.json", "usdcusd": "replay/bitstamp_ohlc_usdcusd_2023-03.json"}
+	labels := map[string]string{"usdtusd": "USDT/USD", "usdcusd": "USDC/USD", "eurceur": "EURC/EUR"}
+	q := r.URL.Query()
+	if q.Get("step") != "86400" || labels[pair] == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	start, _ := strconv.ParseInt(q.Get("start"), 10, 64)
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	var doc struct {
+		Data struct {
+			OHLC []json.RawMessage `json:"ohlc"`
+		} `json:"data"`
+	}
+	if f, ok := files[pair]; ok {
+		_ = json.Unmarshal(readStableFixture(t, f), &doc)
+	}
+	out := []json.RawMessage{}
+	for _, c := range doc.Data.OHLC {
+		var ts struct {
+			Timestamp string `json:"timestamp"`
+		}
+		_ = json.Unmarshal(c, &ts)
+		if v, _ := strconv.ParseInt(ts.Timestamp, 10, 64); v >= start && len(out) < limit {
+			out = append(out, c)
+		}
+	}
+	b, _ := json.Marshal(map[string]any{"data": map[string]any{"pair": labels[pair], "ohlc": out}})
+	w.Write(b)
 }
 
 func fixtureBody(t *testing.T, file, key string) []byte {

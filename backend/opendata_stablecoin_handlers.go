@@ -7,10 +7,10 @@ import (
 	"time"
 )
 
-// Stablecoins dashboard HTTP API, M1 part (stablecoin.md §9): /meta, /live
-// (supply fields; peg fields stay null until M2) and /supply. Handlers read
-// memory and SQLite only and never call upstreams. Upstream failures show as
-// source badges and nulls with HTTP 200; a disabled dashboard answers 404.
+// Stablecoins dashboard HTTP API (stablecoin.md §9): /meta, /live, /supply
+// and /peg. Handlers read memory and SQLite only and never call upstreams.
+// Upstream failures show as source badges and nulls with HTTP 200; a disabled
+// dashboard answers 404.
 
 const (
 	stableMetaTTL   = 60 * time.Second
@@ -33,6 +33,7 @@ func stablecoinRoutes(h *APIHandler) []stablecoinRoute {
 		{Pattern: "/api/opendata/stablecoin/meta", Handler: h.StablecoinMeta},
 		{Pattern: "/api/opendata/stablecoin/live", Handler: h.StablecoinLive},
 		{Pattern: "/api/opendata/stablecoin/supply", Handler: h.StablecoinSupply},
+		{Pattern: "/api/opendata/stablecoin/peg", Handler: h.StablecoinPeg},
 	}
 }
 
@@ -142,13 +143,15 @@ type StableLiveAsset struct {
 	Asset     string `json:"asset"`
 	Symbol    string `json:"symbol"`
 	Numeraire string `json:"numeraire"`
-	// Peg fields (consensus price in the asset's numéraire): M2.
+	// Peg fields: the latest 5-minute consensus in the asset's numéraire.
 	Consensus    *float64 `json:"consensus"`
 	DevBps       *float64 `json:"dev_bps"`
 	VenuesUsed   *int     `json:"venues_used"`
-	DevMin24hBps *float64 `json:"dev_min_24h_bps"`
+	PegState     string   `json:"peg_state,omitempty"` // ok | single_venue | unknown
+	DevMin24hBps *float64 `json:"dev_min_24h_bps"`     // over the stored samples of the last 24 h
 	DevMax24hBps *float64 `json:"dev_max_24h_bps"`
 	PriceAsOf    string   `json:"price_as_of,omitempty"`
+	PriceStale   bool     `json:"price_stale,omitempty"` // the sample is older than 3 intervals
 	// Supply.
 	CirculatingNative    *float64 `json:"circulating_native"`
 	CirculatingSource    string   `json:"circulating_source,omitempty"` // issuer | aggregator
@@ -164,7 +167,8 @@ type StableLiveAsset struct {
 
 type StableLive struct {
 	AsOf           string            `json:"as_of,omitempty"`
-	WarmingUp      bool              `json:"warming_up"` // no supply sample yet
+	WarmingUp      bool              `json:"warming_up"`     // no supply sample yet
+	PegWarmingUp   bool              `json:"peg_warming_up"` // no peg sample yet
 	Assets         []StableLiveAsset `json:"assets"`
 	MarketTotalUSD *float64          `json:"market_total_usd"`
 	MarketAsOf     string            `json:"market_as_of,omitempty"`
@@ -178,13 +182,24 @@ func (s *stablecoinService) snapshot() *stableSupplyState {
 }
 
 func (s *stablecoinService) buildLive() StableLive {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	state := s.snapshot()
-	out := StableLive{WarmingUp: state == nil, Assets: []StableLiveAsset{}}
+	peg := s.pegLatest()
+	now := s.now().UTC()
+	out := StableLive{WarmingUp: state == nil, PegWarmingUp: peg == nil, Assets: []StableLiveAsset{}}
 	if state != nil {
 		out.AsOf, out.MarketTotalUSD, out.MarketAsOf = stableFmt(state.AsOf), state.MarketTotalUSD, stableFmt(state.MarketAsOf)
 	}
 	for _, def := range stableCoreAssets {
 		la := StableLiveAsset{Asset: def.ID, Symbol: def.Symbol, Numeraire: def.Numeraire}
+		if peg != nil {
+			p := peg.Assets[def.ID]
+			vu := p.VenuesUsed
+			la.Consensus, la.DevBps, la.VenuesUsed, la.PegState = p.Consensus, p.DevBps, &vu, p.State
+			la.PriceAsOf, la.PriceStale = stableFmt(peg.AsOf), now.Sub(peg.AsOf) > stablePegStaleAfter
+			la.DevMin24hBps, la.DevMax24hBps = s.devRange24h(ctx, def.ID, now)
+		}
 		if state != nil {
 			a := state.Assets[def.ID]
 			issuerStale, issuerDegraded := false, false
@@ -209,6 +224,31 @@ func (s *stablecoinService) buildLive() StableLive {
 		out.Assets = append(out.Assets, la)
 	}
 	return out
+}
+
+// devRange24h is the range of the stored consensus deviations over 24 h.
+func (s *stablecoinService) devRange24h(ctx context.Context, asset string, now time.Time) (*float64, *float64) {
+	if s.store == nil {
+		return nil, nil
+	}
+	rows, err := s.store.stablePeg5mSeries(ctx, asset, now.Add(-24*time.Hour))
+	if err != nil {
+		slog.Warn("stablecoin 24h peg range read", "asset", asset, "error", err)
+		return nil, nil
+	}
+	var lo, hi *float64
+	for _, r := range rows {
+		if r.DevBps == nil {
+			continue
+		}
+		if lo == nil || *r.DevBps < *lo {
+			lo = stableF(*r.DevBps)
+		}
+		if hi == nil || *r.DevBps > *hi {
+			hi = stableF(*r.DevBps)
+		}
+	}
+	return lo, hi
 }
 
 func (h *APIHandler) StablecoinLive(w http.ResponseWriter, r *http.Request) {

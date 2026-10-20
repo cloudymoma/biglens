@@ -48,8 +48,8 @@ func TestStablecoinRoutesDisabled404(t *testing.T) {
 	off := false
 	h := &APIHandler{cache: NewCache(time.Minute), stable: newStablecoinService(&Config{Stablecoin: StablecoinConfig{Enabled: &off}})}
 	routes := stablecoinRoutes(h)
-	if len(routes) != 3 {
-		t.Fatalf("routes = %d, want meta, live and supply", len(routes))
+	if len(routes) != 4 {
+		t.Fatalf("routes = %d, want meta, live, supply and peg", len(routes))
 	}
 	mux := http.NewServeMux()
 	registerStablecoinRoutes(mux, h, func(f http.HandlerFunc) http.Handler { return f })
@@ -159,7 +159,7 @@ func TestStablecoinLive(t *testing.T) {
 	if stub.count("/circle") != 0 || stub.count("/llama/stablecoins") != 0 {
 		t.Fatal("/live called an upstream")
 	}
-	// Peg fields exist and stay null until M2.
+	// Peg fields exist and stay null before the first peg sample.
 	raw := rec.Body.String()
 	for _, key := range []string{`"consensus":null`, `"dev_bps":null`, `"venues_used":null`, `"worst_signal":null`} {
 		if !strings.Contains(raw, key) {

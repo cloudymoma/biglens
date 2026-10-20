@@ -18,7 +18,7 @@ import (
 // --stablecoin-verify (stablecoin.md §8.7): re-runs the M0 source checks
 // against the live endpoints, prints a pass/fail table and exits non-zero on
 // any failure. It makes network calls, so tests only run it against stubs.
-// Venue, DEX and control checks join with their adapters (M2, M3).
+// Control checks join with their adapters (M3).
 
 type stableVerifyResult struct {
 	Status   string // PASS | FAIL | SKIP
@@ -155,6 +155,8 @@ func stableVerifyChecks(ctx context.Context, settings stableSettings, ep stableE
 		skip("us_treasury")
 	}
 
+	res = append(res, stableVerifyPegChecks(ctx, settings, ep, rpcs, now)...)
+
 	if settings.Providers["rpc_supply"] && rpcs != nil {
 		for _, def := range stableCoreAssets {
 			for _, tok := range registryTokens {
@@ -178,6 +180,120 @@ func stableVerifyChecks(ctx context.Context, settings stableSettings, ep stableE
 		}
 	} else {
 		skip("rpc_supply")
+	}
+	return res
+}
+
+// stableVerifyPegChecks covers the M2 sources: every venue pair through its
+// adapter (including the Kraken renamed keys and the Bitstamp unknown-pair
+// list), the Coinbase product known to be missing, Bitstamp daily candles,
+// DefiLlama daily prices and the Uniswap pool.
+func stableVerifyPegChecks(ctx context.Context, settings stableSettings, ep stableEndpoints, rpcs func(string) []string, now time.Time) []stableVerifyResult {
+	var res []stableVerifyResult
+	add := func(provider, check, err, ok string) {
+		if err != "" {
+			res = append(res, stableVerifyResult{"FAIL", provider, check, err})
+			return
+		}
+		res = append(res, stableVerifyResult{"PASS", provider, check, ok})
+	}
+	skip := func(provider string) {
+		res = append(res, stableVerifyResult{"SKIP", provider, "all checks", "disabled in conf.yaml"})
+	}
+	quote := func(q stableVenueQuote) string {
+		if q.Code != "" {
+			return ""
+		}
+		return fmt.Sprintf("bid %g ask %g", q.Bid, q.Ask)
+	}
+	vf := newStableVenueFetcher(ep, func() time.Time { return now })
+	if settings.Providers["coinbase"] {
+		for _, p := range stableVenuePairs {
+			if p.Venue == "coinbase" {
+				q := vf.fetchCoinbase(ctx, p.Pair)
+				add("coinbase", "ticker "+p.Pair, q.Code, quote(q))
+			}
+		}
+		// Known to be missing: a 404 (disabled) is expected.
+		switch q := vf.fetchCoinbase(ctx, "USDC-USD"); q.Code {
+		case "disabled":
+			add("coinbase", "USDC-USD has no book (HTTP 404 expected)", "", "404, as expected")
+		case "", "bad_response":
+			add("coinbase", "USDC-USD has no book (HTTP 404 expected)", "", "answered: the product may now be listed")
+		default:
+			add("coinbase", "USDC-USD has no book (HTTP 404 expected)", q.Code, "")
+		}
+	} else {
+		skip("coinbase")
+	}
+	if settings.Providers["kraken"] {
+		for _, q := range vf.fetchKraken(ctx) {
+			add("kraken", "batched ticker "+q.Pair+" (mapped by the returned key)", q.Code, quote(q))
+		}
+	} else {
+		skip("kraken")
+	}
+	if settings.Providers["bitstamp"] {
+		for _, p := range stableVenuePairs {
+			if p.Venue == "bitstamp" {
+				q := vf.fetchBitstamp(ctx, p.Pair)
+				add("bitstamp", "ticker "+p.Pair, q.Code, quote(q))
+			}
+		}
+		// An unknown pair answers HTTP 200 with the full ticker list, which the
+		// adapter must reject.
+		body, code := stableFetch(ctx, ep.BitstampBase+"/api/v2/ticker/eurcusd/", stableTimeoutSmall, stableMaxBodySmall)
+		switch {
+		case code != "":
+			add("bitstamp", "unknown pair eurcusd answers with the ticker list", code, "")
+		case decodeStableObject(body, &map[string]any{}) != nil:
+			add("bitstamp", "unknown pair eurcusd answers with the ticker list", "", "list, rejected as bad_response")
+		default:
+			add("bitstamp", "unknown pair eurcusd answers with the ticker list", "", "answered with an object: eurcusd may now be listed")
+		}
+		for _, p := range stableOHLCPairs {
+			rows, code := vf.fetchBitstampOHLC(ctx, p.Pair, p.Label, now.AddDate(0, 0, -5), 3)
+			add("bitstamp", "daily OHLC "+p.Pair, code, fmt.Sprintf("%d candles", len(rows)))
+		}
+	} else {
+		skip("bitstamp")
+	}
+	if settings.Providers["okx"] {
+		q := vf.fetchOKX(ctx, "USDC-USDT")
+		add("okx", "ticker USDC-USDT", q.Code, quote(q))
+	} else {
+		skip("okx")
+	}
+	if settings.Providers["binance"] {
+		q := vf.fetchBinance(ctx, "USDCUSDT")
+		code := q.Code
+		if code == "geo_blocked" || code == "blocked" {
+			code += " (the sampler pauses Binance for 24 h; set providers.binance: false here)"
+		}
+		add("binance", "ticker USDCUSDT", code, quote(q))
+	} else {
+		skip("binance")
+	}
+	if settings.Providers["defillama"] {
+		rows, code := fetchStablecoinPrices(ctx, ep, now)
+		counts := map[string]int{}
+		for _, r := range rows {
+			counts[r.GeckoID]++
+		}
+		for _, g := range []string{"tether", "usd-coin", "euro-coin"} {
+			if code == "" && counts[g] == 0 {
+				code = "no prices for " + g
+			}
+		}
+		add("defillama", "/stablecoinprices daily prices for tether, usd-coin, euro-coin", code,
+			fmt.Sprintf("%d / %d / %d days", counts["tether"], counts["usd-coin"], counts["euro-coin"]))
+	}
+	if settings.Providers["uniswap_rpc"] && rpcs != nil {
+		add("uniswap_rpc", "pool "+stableUniswapPool+" is USDC/USDT at fee 100", checkStableUniswapPool(ctx, rpcs), "token0 USDC, token1 USDT, fee 100")
+		r := readStableUniswap(ctx, rpcs, now)
+		add("uniswap_rpc", "slot0 price (USDT per USDC)", r.Code, fmt.Sprintf("%.6f (tick %d)", r.Price, r.Tick))
+	} else {
+		skip("uniswap_rpc")
 	}
 	return res
 }

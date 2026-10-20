@@ -565,6 +565,7 @@ func newStableStub(t *testing.T) *stableStub {
 	st := &stableStub{hits: map[string]int{}, fail: map[string]int{}}
 	files := map[string][]byte{
 		"/llama/stablecoins":          readStableFixture(t, "defillama_stablecoins.json"),
+		"/llama/stablecoinprices":     readStableFixture(t, "replay/prices_2023-03.json"),
 		"/circle":                     readStableFixture(t, "circle_stablecoins.json"),
 		"/tether":                     readStableFixture(t, "tether_transparency.json"),
 		"/llama/stablecoincharts/all": nil, // per id below
