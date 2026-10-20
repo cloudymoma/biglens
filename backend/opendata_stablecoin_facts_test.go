@@ -9,10 +9,12 @@ import (
 	"testing"
 )
 
-// The embedded file must load, cover the core set, and (until the M4
-// curation) hold nothing but "status": "unknown" placeholders.
+// The embedded file must load and cover the core set. Since the M4 curation
+// every core asset carries facts checked against their sources: the
+// attestation history with the maintainer check, the cadence, and the EU
+// MiCA and US GENIUS rows; the regimes block holds the GENIUS key dates.
 func TestStableFactsEmbeddedValid(t *testing.T) {
-	f, _, err := parseStableFacts(stableFactsEmbedded)
+	f, _, err := parseStableFactsAndValidate(stableFactsEmbedded)
 	if err != nil {
 		t.Fatalf("embedded stablecoin_facts.json is invalid: %v", err)
 	}
@@ -24,13 +26,78 @@ func TestStableFactsEmbeddedValid(t *testing.T) {
 		if err := validateStableAsset(asset, a); err != nil {
 			t.Errorf("%s: %v", asset, err)
 		}
-		if a.Status != stableFactsUnknown {
-			t.Errorf("%s: status = %q; embedded facts stay unknown until curated with sources (M4)", asset, a.Status)
+		if a.Status != "" || len(a.Attestations) == 0 || a.CadenceDays == 0 || a.AttestationsChecked == "" || a.Issuer == nil {
+			t.Errorf("%s: want curated facts (attestations, cadence, attestations_checked, issuer): %+v", asset, a)
+		}
+		regimes := map[string]bool{}
+		for _, r := range a.Regulatory {
+			regimes[r.Regime] = true
+		}
+		if !regimes["EU-MiCA"] || !regimes["US-GENIUS"] {
+			t.Errorf("%s: regulatory rows %+v, want EU-MiCA and US-GENIUS", asset, a.Regulatory)
 		}
 	}
+	if len(f.Regimes) == 0 || f.Regimes[0].Regime != "US-GENIUS" || len(f.Regimes[0].KeyDates) == 0 {
+		t.Errorf("regimes = %+v, want the US-GENIUS key dates", f.Regimes)
+	}
 	got := loadStableFacts("", os.ReadFile)
-	if got.Version == "" || got.OverrideStatus != "none" || len(got.Overridden) != 0 {
+	if got.Version == "" || got.OverrideStatus != "none" || len(got.Overridden) != 0 || len(got.Regimes) == 0 {
 		t.Errorf("loadStableFacts without override = %+v", got)
+	}
+}
+
+// Attestations and reserve mixes may carry a note, and a reserve mix says
+// whether it was attested (§4.5 schema, extended in M4).
+func TestStableFactsNotesAndAttested(t *testing.T) {
+	src := strings.Replace(stableFactsTestBase, `"url": "https://tether.to/r"}]`,
+		`"url": "https://tether.to/r", "note": "covers every fiat-denominated Tether token"}]`, 1)
+	src = strings.Replace(src, `"source_url": "https://tether.to/r", "buckets"`, `"source_url": "https://tether.to/r", "attested": true, "note": "T-bills mapped to ≤ 93 days", "buckets"`, 1)
+	if src == stableFactsTestBase {
+		t.Fatal("edit did not change the input (test bug)")
+	}
+	f, _, err := parseStableFactsAndValidate([]byte(src))
+	if err != nil {
+		t.Fatalf("notes rejected: %v", err)
+	}
+	a := f.Assets["usdt"]
+	if a.Attestations[0].Note == "" || a.ReserveMix[0].Attested == nil || !*a.ReserveMix[0].Attested || a.ReserveMix[0].Note == "" {
+		t.Errorf("notes not decoded: %+v %+v", a.Attestations[0], a.ReserveMix[0])
+	}
+}
+
+func TestStableFactsRegimes(t *testing.T) {
+	base := `{"version": "t", "assets": {"usdt": {"status": "unknown"}}, "regimes": [%s]}`
+	good := `{"regime": "US-GENIUS", "key_dates": [{"date": "2025-07-18", "label": "Enacted"}, {"date": "2027-01-18", "label": "Takes effect at the latest"}], "note": "proposed rules only", "as_of": "2026-10-20", "source_url": "https://www.govinfo.gov/x"}`
+	if _, _, err := parseStableFactsAndValidate([]byte(strings.Replace(base, "%s", good, 1))); err != nil {
+		t.Fatalf("valid regimes rejected: %v", err)
+	}
+	bad := map[string]string{
+		"regime enum":       strings.Replace(good, `"US-GENIUS"`, `"UK-FCA"`, 1),
+		"no key dates":      `{"regime": "US-GENIUS", "key_dates": [], "as_of": "2026-10-20", "source_url": "https://www.govinfo.gov/x"}`,
+		"bad key date":      strings.Replace(good, `"2027-01-18"`, `"2027/01/18"`, 1),
+		"no label":          strings.Replace(good, `"label": "Enacted"`, `"label": ""`, 1),
+		"no source":         strings.Replace(good, `, "source_url": "https://www.govinfo.gov/x"`, ``, 1),
+		"http source":       strings.Replace(good, `https://www.govinfo.gov/x`, `http://www.govinfo.gov/x`, 1),
+		"no as_of":          strings.Replace(good, `"as_of": "2026-10-20", `, ``, 1),
+		"duplicate regime":  good + ", " + good,
+		"unknown field":     strings.Replace(good, `"note"`, `"rating": "A", "note"`, 1),
+		"key date bad link": strings.Replace(good, `"label": "Enacted"}`, `"label": "Enacted", "source_url": "javascript:x"}`, 1),
+	}
+	for name, r := range bad {
+		if _, _, err := parseStableFactsAndValidate([]byte(strings.Replace(base, "%s", r, 1))); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	// An operator override replaces the list as a whole and is badged.
+	override := `{"version": "op-1", "regimes": [{"regime": "US-GENIUS", "key_dates": [{"date": "2026-12-01", "label": "Final rules"}], "as_of": "2026-11-01", "source_url": "https://www.federalregister.gov/x"}]}`
+	got := loadStableFactsFrom(stableFactsEmbedded, writeStableOverride(t, override), os.ReadFile)
+	if got.OverrideStatus != "applied" || !got.RegimesOverridden || len(got.Regimes) != 1 || got.Regimes[0].KeyDates[0].Date != "2026-12-01" {
+		t.Errorf("override = status %s, overridden %v, %+v", got.OverrideStatus, got.RegimesOverridden, got.Regimes)
+	}
+	invalid := `{"version": "op-2", "regimes": [{"regime": "US-GENIUS", "key_dates": [], "as_of": "2026-11-01", "source_url": "https://www.federalregister.gov/x"}]}`
+	got = loadStableFactsFrom(stableFactsEmbedded, writeStableOverride(t, invalid), os.ReadFile)
+	if got.OverrideStatus != "invalid" || got.RegimesOverridden || len(got.Regimes) == 0 || got.Regimes[0].KeyDates[0].Date == "2026-12-01" {
+		t.Errorf("invalid override = status %s, %+v", got.OverrideStatus, got.Regimes)
 	}
 }
 

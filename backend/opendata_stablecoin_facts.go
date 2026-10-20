@@ -46,10 +46,28 @@ type stableFactsFile struct {
 	// C). They are top-level because several concern coins outside the core
 	// set (UST, BUSD, DAI, FDUSD, USDe), shown as context.
 	Annotations []stableAnnotation `json:"annotations,omitempty"`
+	// Regimes holds facts about a regulatory regime itself rather than an
+	// asset: its key dates (the regulatory matrix's key-dates strip, §7.2).
+	Regimes []stableRegimeFacts `json:"regimes,omitempty"`
 }
 
-// stableAnnotation is one historical depeg event. Until it has been checked
-// against a source (M4) it carries "status": "unknown" and no source_url.
+// stableRegimeFacts is one regime's key dates, with their source.
+type stableRegimeFacts struct {
+	Regime    string          `json:"regime"`
+	KeyDates  []stableKeyDate `json:"key_dates"`
+	Note      string          `json:"note,omitempty"`
+	AsOf      string          `json:"as_of"`
+	SourceURL string          `json:"source_url"`
+}
+
+type stableKeyDate struct {
+	Date      string `json:"date"` // YYYY-MM-DD
+	Label     string `json:"label"`
+	SourceURL string `json:"source_url,omitempty"` // when it differs from the regime's source
+}
+
+// stableAnnotation is one historical depeg event. It is "verified" once
+// checked against a source (M4); "unknown" entries carry no source claim.
 type stableAnnotation struct {
 	Date      string   `json:"date"`               // YYYY-MM-DD, or YYYY-MM when only the month is known
 	EndDate   string   `json:"end_date,omitempty"` // YYYY-MM-DD, for multi-day events
@@ -57,7 +75,7 @@ type stableAnnotation struct {
 	Title     string   `json:"title"`
 	Extreme   string   `json:"extreme,omitempty"`   // approximate extreme, as text
 	LowPrice  *float64 `json:"low_price,omitempty"` // in the coin's own currency
-	Status    string   `json:"status,omitempty"`    // "unknown": not checked yet
+	Status    string   `json:"status,omitempty"`    // verified | unknown ("" = verified, legacy)
 	SourceURL string   `json:"source_url,omitempty"`
 }
 
@@ -94,12 +112,17 @@ type stableAttestation struct {
 	ReservesNative    string `json:"reserves_native,omitempty"`
 	LiabilitiesNative string `json:"liabilities_native,omitempty"`
 	URL               string `json:"url"`
+	Note              string `json:"note,omitempty"` // scope or reading caveats
 }
 
 type stableReserveMix struct {
 	AsOf      string                `json:"as_of"`
 	Buckets   []stableReserveBucket `json:"buckets"`
 	SourceURL string                `json:"source_url"`
+	// Attested: the breakdown comes from an attested report (false: the
+	// issuer's own unattested disclosure; omitted: not stated).
+	Attested *bool  `json:"attested,omitempty"`
+	Note     string `json:"note,omitempty"` // bucket mapping and caveats
 }
 
 type stableReserveBucket struct {
@@ -143,6 +166,9 @@ type stableFacts struct {
 	Annotations     []stableAnnotation
 	// AnnotationsOverridden: the operator override replaced the annotations.
 	AnnotationsOverridden bool
+	Regimes               []stableRegimeFacts
+	// RegimesOverridden: the operator override replaced the regimes.
+	RegimesOverridden bool
 }
 
 func (f stableFacts) isOverridden(asset, section string) bool {
@@ -214,11 +240,47 @@ func parseStableFactsAndValidate(data []byte) (*stableFactsFile, map[string]map[
 	if err := validateStableAnnotations(f.Annotations); err != nil {
 		return nil, nil, err
 	}
+	if err := validateStableRegimes(f.Regimes); err != nil {
+		return nil, nil, err
+	}
 	return f, present, nil
 }
 
+// validateStableRegimes: a known regime at most once, each with dated,
+// labeled key dates, an as_of and an https source.
+func validateStableRegimes(list []stableRegimeFacts) error {
+	seen := map[string]bool{}
+	for i, r := range list {
+		wrap := func(err error) error { return fmt.Errorf("regimes[%d]: %w", i, err) }
+		if !stableRegimes[r.Regime] {
+			return wrap(fmt.Errorf("regime %q is not allowed", r.Regime))
+		}
+		if seen[r.Regime] {
+			return wrap(fmt.Errorf("duplicate regime %q", r.Regime))
+		}
+		seen[r.Regime] = true
+		if err := firstStableErr(stableFactDate("as_of", r.AsOf), stableFactURL("source_url", r.SourceURL)); err != nil {
+			return wrap(err)
+		}
+		if len(r.KeyDates) == 0 {
+			return wrap(errors.New("key_dates are required"))
+		}
+		for j, k := range r.KeyDates {
+			if err := firstStableErr(stableFactDate("date", k.Date), stableFactRequired("label", k.Label)); err != nil {
+				return wrap(fmt.Errorf("key_dates[%d]: %w", j, err))
+			}
+			if k.SourceURL != "" {
+				if err := stableFactURL("source_url", k.SourceURL); err != nil {
+					return wrap(fmt.Errorf("key_dates[%d]: %w", j, err))
+				}
+			}
+		}
+	}
+	return nil
+}
+
 // validateStableAnnotations: every field the UI shows is required, and a
-// checked annotation (no "status": "unknown") needs an https source.
+// verified annotation ("verified", or no status) needs an https source.
 func validateStableAnnotations(list []stableAnnotation) error {
 	for i, a := range list {
 		wrap := func(err error) error { return fmt.Errorf("annotations[%d]: %w", i, err) }
@@ -252,12 +314,12 @@ func validateStableAnnotations(list []stableAnnotation) error {
 					return wrap(err)
 				}
 			}
-		case "":
+		case "", "verified":
 			if err := stableFactURL("source_url", a.SourceURL); err != nil {
 				return wrap(err)
 			}
 		default:
-			return wrap(fmt.Errorf("status %q (allowed: unknown)", a.Status))
+			return wrap(fmt.Errorf("status %q (allowed: verified, unknown)", a.Status))
 		}
 	}
 	return nil
@@ -453,7 +515,7 @@ func loadStableFactsFrom(base []byte, overridePath string, read func(string) ([]
 		// Unreachable for shipped builds: tests validate the embedded file.
 		slog.Error("stablecoin facts: embedded file invalid", "error", err)
 	} else {
-		out.Version, out.Annotations = f.Version, f.Annotations
+		out.Version, out.Annotations, out.Regimes = f.Version, f.Annotations, f.Regimes
 		for asset, a := range f.Assets {
 			out.Assets[asset] = *a
 		}
@@ -469,9 +531,13 @@ func loadStableFactsFrom(base []byte, overridePath string, read func(string) ([]
 	}
 	merged, badges, version, err := mergeStableFacts(out.Assets, data)
 	var annotations []stableAnnotation
-	var hasAnnotations bool
+	var regimes []stableRegimeFacts
+	var hasAnnotations, hasRegimes bool
 	if err == nil {
 		annotations, hasAnnotations, err = parseStableOverrideAnnotations(data)
+	}
+	if err == nil {
+		regimes, hasRegimes, err = parseStableOverrideRegimes(data)
 	}
 	if err != nil {
 		slog.Warn("stablecoin facts override rejected; using embedded facts", "path", overridePath, "error", err)
@@ -482,9 +548,35 @@ func loadStableFactsFrom(base []byte, overridePath string, read func(string) ([]
 	if hasAnnotations {
 		out.Annotations, out.AnnotationsOverridden = annotations, true
 	}
+	if hasRegimes {
+		out.Regimes, out.RegimesOverridden = regimes, true
+	}
 	slog.Info("stablecoin facts override applied", "path", overridePath, "version", version, "sections", badges,
-		"annotations", hasAnnotations)
+		"annotations", hasAnnotations, "regimes", hasRegimes)
 	return out
+}
+
+// parseStableOverrideRegimes returns an override's regimes and whether it
+// sets the key at all (an override replaces the list as a whole).
+func parseStableOverrideRegimes(data []byte) ([]stableRegimeFacts, bool, error) {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(data, &top); err != nil {
+		return nil, false, err
+	}
+	if _, ok := top["regimes"]; !ok {
+		return nil, false, nil
+	}
+	f, _, err := parseStableFacts(data)
+	if err != nil {
+		return nil, false, err
+	}
+	if err := validateStableRegimes(f.Regimes); err != nil {
+		return nil, false, err
+	}
+	if f.Regimes == nil {
+		f.Regimes = []stableRegimeFacts{}
+	}
+	return f.Regimes, true, nil
 }
 
 // parseStableOverrideAnnotations returns an override's annotations and

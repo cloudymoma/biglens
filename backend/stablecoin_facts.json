@@ -1,24 +1,605 @@
 {
-  "version": "2026-10-20.0",
+  "version": "2026-10-20.1",
   "assets": {
-    "usdt": {"status": "unknown"},
-    "usdc": {"status": "unknown"},
-    "eurc": {"status": "unknown"}
+    "usdt": {
+      "issuer": {
+        "name": "Tether",
+        "entities": [
+          {
+            "name": "Tether International, S.A. de C.V.",
+            "jurisdiction": "El Salvador (S.A. de C.V.); redomiciled from the British Virgin Islands in January 2025",
+            "role": "issuer and redeemer of USDT and the other fiat-denominated Tether tokens; holds the reserves",
+            "source_url": "https://tether.to/en/legal/",
+            "as_of": "2026-10-20"
+          },
+          {
+            "name": "Tether Global Investment Fund, SICAF, S.A. and Tether Operations, S.A. de C.V.",
+            "jurisdiction": "El Salvador",
+            "role": "owners: Tether International is wholly owned by these two entities",
+            "source_url": "https://tether.to/public/Relevant_Information_Document_-_Tether_International,_S.A._de_C.V..pdf",
+            "as_of": "2026-02-20"
+          },
+          {
+            "name": "Tether Limited",
+            "jurisdiction": "Hong Kong (per the 2025-09-30 reserves report)",
+            "role": "former co-issuer; its user contracts were assigned to Tether International with effect from 2025-01-27",
+            "source_url": "https://tether.to/en/legal/",
+            "as_of": "2025-01-27"
+          }
+        ]
+      },
+      "attestations": [
+        {
+          "period_end": "2026-06-30",
+          "published": "2026-07-31",
+          "firm": "BDO Advisory Services S.r.l.",
+          "type": "attestation",
+          "reserves_native": "187751426411",
+          "liabilities_native": "183641897215",
+          "url": "https://assets.ctfassets.net/vyse88cgwfbl/2kYf7r64h3tzwiu6F0CbUB/2997abd2f11ecea74a21528048b50707/Opinion___Report_-_Tether_International_Financial_Figure_30-06-2026.pdf",
+          "note": "ISAE 3000 (Revised) assurance report on the Financial Figures and Reserves Report of Tether International, S.A. de C.V. Reserves and total liabilities cover every fiat-denominated Tether token, not USDT alone."
+        },
+        {
+          "period_end": "2026-03-31",
+          "published": "2026-04-30",
+          "firm": "BDO Advisory Services S.r.l.",
+          "type": "attestation",
+          "reserves_native": "191767741495",
+          "liabilities_native": "183535531717",
+          "url": "https://assets.ctfassets.net/vyse88cgwfbl/6crn1tXbl6AtWZBWucZnfg/c4ff472d70c1b48c2f689f27b54c84f5/ISAE_3000R_-_Opinion_Tether_International_Financial_Figure_31-03-2026.pdf",
+          "note": "ISAE 3000 (Revised) assurance report on the Financial Figures and Reserves Report of Tether International, S.A. de C.V. Reserves and total liabilities cover every fiat-denominated Tether token, not USDT alone."
+        },
+        {
+          "period_end": "2025-12-31",
+          "published": "2026-01-30",
+          "firm": "BDO Advisory Services S.r.l.",
+          "type": "attestation",
+          "reserves_native": "192877729144",
+          "liabilities_native": "186539895593",
+          "url": "https://assets.ctfassets.net/vyse88cgwfbl/20d2BoOAd28ZfkiQPYPjGN/4ed12f5939e1e06ee5aceccad4effbe4/ISAE_3000R_-_Opinion_Tether_International_Financial_Figure_31-12-2025.pdf",
+          "note": "ISAE 3000 (Revised) assurance report on the Financial Figures and Reserves Report of Tether International, S.A. de C.V. Reserves and total liabilities cover every fiat-denominated Tether token, not USDT alone."
+        },
+        {
+          "period_end": "2025-09-30",
+          "published": "2025-10-31",
+          "firm": "BDO Italia S.p.A.",
+          "type": "attestation",
+          "reserves_native": "181223149214",
+          "liabilities_native": "174445364503",
+          "url": "https://assets.ctfassets.net/vyse88cgwfbl/6GbUTVK4tTYAytefu5daIi/6cac18eb4b526c9c52640a3d2bed9642/ISAE_3000R_-_Opinion_Tether_International_Financial_Figure_31-10-2025.pdf",
+          "note": "ISAE 3000 (Revised) assurance report on the Financial Figures and Reserves Report of Tether International, S.A. de C.V. Reserves and total liabilities cover every fiat-denominated Tether token, not USDT alone."
+        }
+      ],
+      "cadence_days": 90,
+      "attestations_checked": "2026-10-20",
+      "reserve_mix": [
+        {
+          "as_of": "2026-06-30",
+          "buckets": [
+            {
+              "id": "tbills_le93d",
+              "share_pct": 61.23
+            },
+            {
+              "id": "repo",
+              "share_pct": 13.65
+            },
+            {
+              "id": "gold",
+              "share_pct": 10.03
+            },
+            {
+              "id": "secured_loans",
+              "share_pct": 7.17
+            },
+            {
+              "id": "other",
+              "share_pct": 4.8
+            },
+            {
+              "id": "btc",
+              "share_pct": 3.09
+            },
+            {
+              "id": "cash_deposits",
+              "share_pct": 0.02
+            },
+            {
+              "id": "other_tbills",
+              "share_pct": 0.01
+            }
+          ],
+          "source_url": "https://assets.ctfassets.net/vyse88cgwfbl/2kYf7r64h3tzwiu6F0CbUB/2997abd2f11ecea74a21528048b50707/Opinion___Report_-_Tether_International_Financial_Figure_30-06-2026.pdf",
+          "attested": true,
+          "note": "From the attested 2026-06-30 reserves report (all fiat-denominated Tether tokens). U.S. Treasury bills are shown as ≤ 93 days, but Tether states only a weighted-average maturity under 90 days. Overnight and term reverse repo are repo; non-US Treasury bills are other_tbills; corporate bonds, public equities and other investments are other."
+        }
+      ],
+      "regulatory": [
+        {
+          "regime": "EU-MiCA",
+          "status": "not_authorized",
+          "entity": "Tether International, S.A. de C.V.",
+          "as_of": "2026-10-16",
+          "source_url": "https://www.esma.europa.eu/sites/default/files/2024-12/EMTWP.csv",
+          "note": "No Tether entity or USDT white paper appears in ESMA's interim MiCA register (e-money token issuers file, last modified 2026-10-16; the other register files were also searched). This is an absence in the register, not a regulator statement."
+        },
+        {
+          "regime": "US-GENIUS",
+          "status": "pending_regime",
+          "entity": "Tether International, S.A. de C.V.",
+          "as_of": "2026-10-20",
+          "source_url": "https://www.govinfo.gov/content/pkg/PLAW-119publ27/html/PLAW-119publ27.htm",
+          "note": "The Act is not in force yet: it takes effect on the earlier of 2027-01-18 (18 months after enactment) or 120 days after final implementing regulations, and only proposed rules from the federal regulators were found as of 2026-10-20. The issuer is organised in El Salvador; the Act defines a foreign payment stablecoin issuer as one organised or domiciled in a foreign country. No source was found on a USDT application to become a permitted issuer."
+        }
+      ],
+      "redemption": [
+        {
+          "channel": "direct redemption with Tether International through the Tether website (app.tether.to), paid to a bank account in the customer's name",
+          "eligibility": "KYC-verified customers only; U.S. persons are excluded except eligible contract participants agreed by Tether; a 150 USDT verification fee applies",
+          "min_native": "100000",
+          "fee": "the greater of US$1,000 or 0.1% of the tokens redeemed",
+          "as_of": "2026-10-20",
+          "source_url": "https://tether.to/en/fees/"
+        }
+      ],
+      "events": [
+        {
+          "date": "2025-01-27",
+          "kind": "regulatory",
+          "title": "Tether Limited assigns its user contracts to Tether International, which redomiciled from the British Virgin Islands to El Salvador",
+          "source_url": "https://tether.to/en/legal/"
+        }
+      ]
+    },
+    "usdc": {
+      "issuer": {
+        "name": "Circle",
+        "entities": [
+          {
+            "name": "Circle Internet Financial, LLC",
+            "jurisdiction": "United States (Delaware LLC)",
+            "role": "issuer of USDC outside the EEA; licensed money transmitter",
+            "source_url": "https://www.circle.com/legal/usdc-terms",
+            "as_of": "2026-10-20"
+          },
+          {
+            "name": "Circle Internet Financial Europe SAS",
+            "jurisdiction": "France (SAS, Paris)",
+            "role": "EU e-money issuer: second issuer of USDC in the EEA since 2024-07-01; ACPR electronic money institution no. 17788",
+            "source_url": "https://www.circle.com/legal/mica-usdc-whitepaper",
+            "as_of": "2026-10-20"
+          },
+          {
+            "name": "Circle Internet Group, Inc.",
+            "jurisdiction": "United States (NYSE-listed)",
+            "role": "parent holding company; signs the management assertion in the monthly reserve reports",
+            "source_url": "https://www.circle.com/legal/mica-usdc-whitepaper",
+            "as_of": "2026-10-20"
+          },
+          {
+            "name": "BlackRock (Circle Reserve Fund, USDXX)",
+            "jurisdiction": "not stated in the cited source",
+            "role": "manager of the Circle Reserve Fund, a 2a-7 money market fund in which USDC reserves may be held",
+            "source_url": "https://www.circle.com/transparency",
+            "as_of": "2026-10-20"
+          }
+        ]
+      },
+      "attestations": [
+        {
+          "period_end": "2026-08-31",
+          "published": "2026-09-29",
+          "firm": "Deloitte & Touche LLP",
+          "type": "attestation",
+          "reserves_native": "73398532613",
+          "liabilities_native": "73320757305",
+          "url": "https://6778953.fs1.hubspotusercontent-na1.net/hubfs/6778953/USDCAttestationReports/2026/2026%20USDC_Examination%20Report%20August%2026.pdf"
+        },
+        {
+          "period_end": "2026-07-31",
+          "published": "2026-08-27",
+          "firm": "Deloitte & Touche LLP",
+          "type": "attestation",
+          "reserves_native": "71904101332",
+          "liabilities_native": "71826453410",
+          "url": "https://6778953.fs1.hubspotusercontent-na1.net/hubfs/6778953/USDCAttestationReports/2026/2026%20USDC_Examination%20Report%20July%2026%20(1).pdf"
+        },
+        {
+          "period_end": "2026-06-30",
+          "published": "2026-07-29",
+          "firm": "Deloitte & Touche LLP",
+          "type": "attestation",
+          "reserves_native": "73344909176",
+          "liabilities_native": "73268560097",
+          "url": "https://6778953.fs1.hubspotusercontent-na1.net/hubfs/6778953/USDCAttestationReports/2026/2026%20USDC_Examination%20Report%20June%2026.pdf"
+        },
+        {
+          "period_end": "2026-05-29",
+          "published": "2026-06-29",
+          "firm": "Deloitte & Touche LLP",
+          "type": "attestation",
+          "reserves_native": "75961621872",
+          "liabilities_native": "75885403148",
+          "url": "https://6778953.fs1.hubspotusercontent-na1.net/hubfs/6778953/USDCAttestationReports/2026/2026%20USDC_Examination%20Report%20May%2026.pdf"
+        },
+        {
+          "period_end": "2026-04-30",
+          "published": "2026-05-28",
+          "firm": "Deloitte & Touche LLP",
+          "type": "attestation",
+          "reserves_native": "77123668726",
+          "liabilities_native": "77047590794",
+          "url": "https://6778953.fs1.hubspotusercontent-na1.net/hubfs/6778953/USDCAttestationReports/2026/2026%20USDC_Examination%20Report%20April%2026.pdf"
+        },
+        {
+          "period_end": "2026-03-31",
+          "published": "2026-04-29",
+          "firm": "Deloitte & Touche LLP",
+          "type": "attestation",
+          "reserves_native": "77125330954",
+          "liabilities_native": "77049290538",
+          "url": "https://6778953.fs1.hubspotusercontent-na1.net/hubfs/6778953/USDCAttestationReports/2026/2026%20USDC_Examination%20Report%20March%2026.pdf"
+        },
+        {
+          "period_end": "2026-02-27",
+          "published": "2026-03-27",
+          "firm": "Deloitte & Touche LLP",
+          "type": "attestation",
+          "reserves_native": "75176561300",
+          "liabilities_native": "75109039300",
+          "url": "https://6778953.fs1.hubspotusercontent-na1.net/hubfs/6778953/USDCAttestationReports/2026/2026%20USDC_Examination%20Report%20February%2026.pdf"
+        },
+        {
+          "period_end": "2026-01-30",
+          "published": "2026-02-26",
+          "firm": "Deloitte & Touche LLP",
+          "type": "attestation",
+          "reserves_native": "70022091915",
+          "liabilities_native": "69954717486",
+          "url": "https://6778953.fs1.hubspotusercontent-na1.net/hubfs/6778953/USDCAttestationReports/2026/2026%20USDC_Examination%20Report%20January%2026.pdf"
+        }
+      ],
+      "cadence_days": 30,
+      "attestations_checked": "2026-10-20",
+      "reserve_mix": [
+        {
+          "as_of": "2026-10-15",
+          "buckets": [
+            {
+              "id": "repo",
+              "share_pct": 49.06
+            },
+            {
+              "id": "tbills_le93d",
+              "share_pct": 35.5
+            },
+            {
+              "id": "cash_deposits",
+              "share_pct": 15.44
+            }
+          ],
+          "source_url": "https://www.circle.com/transparency",
+          "attested": false,
+          "note": "Circle's weekly transparency page (not attested), by asset type: overnight reverse Treasury repo, Treasuries under 3 months, and deposits at banks (systemically important and other)."
+        },
+        {
+          "as_of": "2026-08-31",
+          "buckets": [
+            {
+              "id": "gov_mmf",
+              "share_pct": 84.9
+            },
+            {
+              "id": "cash_deposits",
+              "share_pct": 13.32
+            },
+            {
+              "id": "tbills_le93d",
+              "share_pct": 1.77
+            }
+          ],
+          "source_url": "https://6778953.fs1.hubspotusercontent-na1.net/hubfs/6778953/USDCAttestationReports/2026/2026%20USDC_Examination%20Report%20August%2026.pdf",
+          "attested": true,
+          "note": "From the Deloitte-examined report as of 2026-08-31, with the Circle Reserve Fund (USDXX) as one government money market fund holding. Looking through the fund, the same reserves are about 67.6% Treasury repo, 18.0% Treasury bills and 14.4% cash."
+        }
+      ],
+      "regulatory": [
+        {
+          "regime": "EU-MiCA",
+          "status": "authorized",
+          "entity": "Circle Internet Financial Europe SAS",
+          "as_of": "2026-10-16",
+          "source_url": "https://www.esma.europa.eu/sites/default/files/2024-12/EMTWP.csv",
+          "note": "Listed in ESMA's interim MiCA register of e-money token issuers (ACPR, France; authorisation notified 2024-07-01). The ACPR register shows Circle Internet Financial Europe SAS as an electronic money institution (no. 17788) since 2024-07-01. It covers USDC issued in the EEA; Circle Internet Financial, LLC issues outside the EEA."
+        },
+        {
+          "regime": "US-GENIUS",
+          "status": "pending_regime",
+          "entity": "Circle Internet Financial, LLC",
+          "as_of": "2026-10-20",
+          "source_url": "https://www.govinfo.gov/content/pkg/PLAW-119publ27/html/PLAW-119publ27.htm",
+          "note": "The Act is not in force yet: it takes effect on the earlier of 2027-01-18 (18 months after enactment) or 120 days after final implementing regulations; only proposed rules from the federal regulators were found as of 2026-10-20. Circle states that USDC is regulated as stored value or prepaid access under U.S. state money transmission laws."
+        }
+      ],
+      "redemption": [
+        {
+          "channel": "Circle Mint account (Standard or Express redemption)",
+          "eligibility": "Circle Mint account holders in good standing in supported jurisdictions; holders without an account must open one; KYC is required",
+          "fee": "Per the USDC/EURC Redemption Structure page, part of the fee schedule the Terms reference: Standard redemption: no fee charged by Circle (processed within two business days, plus bank settlement time). Express redemption: 5 bps on the gross amount, reducible by Net Mint Redemption Credits of 25%, 75% or 100%. This structure applies on or after 2026-10-19.",
+          "as_of": "2026-10-20",
+          "source_url": "https://www.circle.com/legal/usdc-terms"
+        },
+        {
+          "channel": "MiCA Redemption Policy, outside Circle Mint (EEA holders, with Circle Internet Financial Europe SAS)",
+          "eligibility": "all holders have a right of redemption at par value at any time, subject to the policy conditions (KYC/KYT, a bank account)",
+          "fee": "at par value under the policy; third-party fees may occur on the USD payment to the bank account",
+          "as_of": "2026-10-20",
+          "source_url": "https://www.circle.com/legal/mica-redemption-policy"
+        }
+      ],
+      "events": [
+        {
+          "date": "2024-07-01",
+          "kind": "regulatory",
+          "title": "Circle Internet Financial Europe SAS becomes a second (dual) issuer of USDC",
+          "source_url": "https://www.circle.com/legal/mica-usdc-whitepaper"
+        }
+      ]
+    },
+    "eurc": {
+      "issuer": {
+        "name": "Circle",
+        "entities": [
+          {
+            "name": "Circle Internet Financial Europe SAS",
+            "jurisdiction": "France (SAS, Paris)",
+            "role": "sole issuer of EURC; EU e-money issuer, ACPR electronic money institution no. 17788",
+            "source_url": "https://www.circle.com/legal/eurc-terms",
+            "as_of": "2026-10-20"
+          },
+          {
+            "name": "Circle Internet Financial, LLC",
+            "jurisdiction": "United States (Delaware LLC)",
+            "role": "affiliate that resells EURC to Circle Mint account holders (not the issuer)",
+            "source_url": "https://www.circle.com/legal/eurc-terms",
+            "as_of": "2026-10-20"
+          },
+          {
+            "name": "Circle Internet Group, Inc.",
+            "jurisdiction": "United States (NYSE-listed)",
+            "role": "parent holding company; signs the management assertion in the monthly reserve reports",
+            "source_url": "https://www.circle.com/legal/mica-eurc-whitepaper",
+            "as_of": "2026-10-20"
+          }
+        ]
+      },
+      "attestations": [
+        {
+          "period_end": "2026-08-31",
+          "published": "2026-09-29",
+          "firm": "Deloitte & Touche LLP",
+          "type": "attestation",
+          "reserves_native": "393284908",
+          "liabilities_native": "390534293",
+          "url": "https://6778953.fs1.hubspotusercontent-na1.net/hubfs/6778953/EURC%20Attestations/2026%20EURC_Examination%20Report%20August%2026.pdf"
+        },
+        {
+          "period_end": "2026-07-31",
+          "published": "2026-08-27",
+          "firm": "Deloitte & Touche LLP",
+          "type": "attestation",
+          "reserves_native": "400113753",
+          "liabilities_native": "397363133",
+          "url": "https://6778953.fs1.hubspotusercontent-na1.net/hubfs/6778953/EURC%20Attestations/2026%20EURC_Examination%20Report%20July%2026%20(1).pdf"
+        },
+        {
+          "period_end": "2026-06-30",
+          "published": "2026-07-29",
+          "firm": "Deloitte & Touche LLP",
+          "type": "attestation",
+          "reserves_native": "384737359",
+          "liabilities_native": "381986779",
+          "url": "https://6778953.fs1.hubspotusercontent-na1.net/hubfs/6778953/EURC%20Attestations/2026%20EURC_Examination%20Report%20June%2026.pdf"
+        },
+        {
+          "period_end": "2026-05-29",
+          "published": "2026-06-29",
+          "firm": "Deloitte & Touche LLP",
+          "type": "attestation",
+          "reserves_native": "375406036",
+          "liabilities_native": "372655505",
+          "url": "https://6778953.fs1.hubspotusercontent-na1.net/hubfs/6778953/EURC%20Attestations/2026%20EURC_Examination%20Report%20May%2026.pdf"
+        },
+        {
+          "period_end": "2026-04-30",
+          "published": "2026-05-28",
+          "firm": "Deloitte & Touche LLP",
+          "type": "attestation",
+          "reserves_native": "374194276",
+          "liabilities_native": "371443746",
+          "url": "https://6778953.fs1.hubspotusercontent-na1.net/hubfs/6778953/EURC%20Attestations/2026%20EURC_Examination%20Report%20April%2026.pdf"
+        },
+        {
+          "period_end": "2026-03-31",
+          "published": "2026-04-29",
+          "firm": "Deloitte & Touche LLP",
+          "type": "attestation",
+          "reserves_native": "360646610",
+          "liabilities_native": "357896076",
+          "url": "https://6778953.fs1.hubspotusercontent-na1.net/hubfs/6778953/EURC%20Attestations/2026%20EURC_Examination%20Report%20March%2026.pdf"
+        },
+        {
+          "period_end": "2026-02-27",
+          "published": "2026-03-27",
+          "firm": "Deloitte & Touche LLP",
+          "type": "attestation",
+          "reserves_native": "396413298",
+          "liabilities_native": "393662772",
+          "url": "https://6778953.fs1.hubspotusercontent-na1.net/hubfs/6778953/EURC%20Attestations/2026%20EURC_Examination%20Report%20February%2026.pdf"
+        },
+        {
+          "period_end": "2026-01-30",
+          "published": "2026-02-26",
+          "firm": "Deloitte & Touche LLP",
+          "type": "attestation",
+          "reserves_native": "350555067",
+          "liabilities_native": "347804540",
+          "url": "https://6778953.fs1.hubspotusercontent-na1.net/hubfs/6778953/EURC%20Attestations/2026%20EURC_Examination%20Report%20January%2026.pdf"
+        }
+      ],
+      "cadence_days": 30,
+      "attestations_checked": "2026-10-20",
+      "reserve_mix": [
+        {
+          "as_of": "2026-10-15",
+          "buckets": [
+            {
+              "id": "cash_deposits",
+              "share_pct": 100.0
+            }
+          ],
+          "source_url": "https://www.circle.com/transparency",
+          "attested": false,
+          "note": "Circle's weekly transparency page (not attested): deposits at systemically important institutions and other bank deposits."
+        },
+        {
+          "as_of": "2026-08-31",
+          "buckets": [
+            {
+              "id": "cash_deposits",
+              "share_pct": 100.0
+            }
+          ],
+          "source_url": "https://6778953.fs1.hubspotusercontent-na1.net/hubfs/6778953/EURC%20Attestations/2026%20EURC_Examination%20Report%20August%2026.pdf",
+          "attested": true,
+          "note": "From the Deloitte-examined report as of 2026-08-31: cash held at regulated financial institutions, net of a timing and settlement adjustment."
+        }
+      ],
+      "regulatory": [
+        {
+          "regime": "EU-MiCA",
+          "status": "authorized",
+          "entity": "Circle Internet Financial Europe SAS",
+          "as_of": "2026-10-16",
+          "source_url": "https://www.esma.europa.eu/sites/default/files/2024-12/EMTWP.csv",
+          "note": "Listed in ESMA's interim MiCA register of e-money token issuers (ACPR, France; authorisation notified 2024-07-01). The ACPR register shows Circle Internet Financial Europe SAS as an electronic money institution (no. 17788) since 2024-07-01."
+        },
+        {
+          "regime": "US-GENIUS",
+          "status": "unknown",
+          "entity": "Circle Internet Financial Europe SAS",
+          "as_of": "2026-10-20",
+          "source_url": "https://www.govinfo.gov/content/pkg/PLAW-119publ27/html/PLAW-119publ27.htm",
+          "note": "EURC is a euro token issued by a French electronic money institution. The Act's monetary value includes money issued by a foreign central bank, but no source addresses EURC's status under the Act."
+        }
+      ],
+      "redemption": [
+        {
+          "channel": "Circle Mint account (Standard or Express redemption; Circle Internet Financial, LLC resells EURC to Mint account holders)",
+          "eligibility": "Circle Mint account holders in good standing; holders without an account must open one",
+          "fee": "Per the USDC/EURC Redemption Structure page, part of the fee schedule the Terms reference: Standard redemption: no fee charged by Circle (processed within two business days, plus bank settlement time). Express redemption: 5 bps on the gross amount, reducible by Net Mint Redemption Credits of 25%, 75% or 100%. This structure applies on or after 2026-10-19.",
+          "as_of": "2026-10-20",
+          "source_url": "https://www.circle.com/legal/eurc-terms"
+        },
+        {
+          "channel": "MiCA Redemption Policy, with Circle Internet Financial Europe SAS",
+          "eligibility": "all holders have a right of redemption at par value at any time, subject to the policy conditions (KYC/KYT, a bank account that accepts SEPA payments)",
+          "fee": "at par value under the policy",
+          "as_of": "2026-10-20",
+          "source_url": "https://www.circle.com/legal/mica-redemption-policy"
+        }
+      ],
+      "events": [
+        {
+          "date": "2024-07-01",
+          "kind": "regulatory",
+          "title": "Circle Internet Financial Europe SAS, the EURC issuer, authorized as an electronic money institution by the ACPR",
+          "source_url": "https://www.regafi.fr/api/explore/v2.1/catalog/datasets/prd-banque-autorisations/records?where=id_referentiel%3D%22737158%22&limit=50"
+        }
+      ]
+    }
   },
   "annotations": [
-    {"date": "2022-05-12", "asset": "USDT", "title": "UST/Luna collapse contagion; heavy redemptions",
-     "extreme": "Bitstamp daily low 0.91011 (close 0.99675); DefiLlama daily shows no deviation", "low_price": 0.91011, "status": "unknown"},
-    {"date": "2022-05", "asset": "UST", "title": "Algorithmic stablecoin collapse (context for the watchlist)",
-     "extreme": "to about $0", "status": "unknown"},
-    {"date": "2023-02-13", "asset": "BUSD", "title": "Issuer ordered to stop minting; wind-down (context)",
-     "extreme": "Near par; supply decline", "status": "unknown"},
-    {"date": "2023-03-11", "asset": "USDC", "title": "Reserve exposure to a failed bank (SVB)",
-     "extreme": "Bitstamp daily low 0.80526 (close 0.96853); DefiLlama daily 0.96107 on the 03-12 row", "low_price": 0.80526, "status": "unknown"},
-    {"date": "2023-03-11", "asset": "DAI", "title": "Followed USDC (PSM exposure)",
-     "extreme": "about $0.89-0.90", "status": "unknown"},
-    {"date": "2025-04-02", "asset": "FDUSD", "title": "Issuer solvency allegations",
-     "extreme": "about $0.87", "status": "unknown"},
-    {"date": "2025-10-10", "end_date": "2025-10-11", "asset": "USDe", "title": "Venue-specific dislocation during a market-wide liquidation cascade",
-     "extreme": "about $0.65 on one venue", "status": "unknown"}
+    {
+      "date": "2022-05-12",
+      "asset": "USDT",
+      "title": "UST/Luna contagion: USDT trades below peg",
+      "extreme": "USDT fell to ~$0.95 (as low as $0.9455 per Markets Insider; 'as low as $0.95' per Decrypt); venue lows: Bitstamp USDT/USD 0.91011, Coinbase USDT-USD 0.941",
+      "low_price": 0.9455,
+      "status": "verified",
+      "source_url": "https://markets.businessinsider.com/news/currencies/tether-depeg-dollar-fall-cryptocurrency-market-panic-terrausd-luna-2022-5"
+    },
+    {
+      "date": "2022-05-07",
+      "asset": "UST",
+      "title": "TerraUSD (UST) algorithmic stablecoin de-pegs and collapses",
+      "extreme": "UST (and LUNA) fell 'to practically nothing' within about a week (~$0); UST was ~$0.30 on May 11 per Markets Insider",
+      "status": "verified",
+      "source_url": "https://www.federalreserve.gov/econres/feds/files/2023044pap.pdf"
+    },
+    {
+      "date": "2023-02-13",
+      "asset": "BUSD",
+      "title": "NYDFS orders Paxos to stop minting BUSD",
+      "extreme": "Regulatory halt of new issuance (Paxos ceased new BUSD issuance effective Feb 21, 2023); existing BUSD remained redeemable 1:1 via Paxos — not a price de-peg",
+      "status": "verified",
+      "source_url": "https://www.dfs.ny.gov/consumers/alerts/Paxos_and_Binance"
+    },
+    {
+      "date": "2023-03-11",
+      "asset": "USDC",
+      "title": "SVB failure: $3.3B of USDC reserves stuck at Silicon Valley Bank",
+      "extreme": "Trough $0.86 (Fed FEDS Note); Bitstamp USDC/USD daily low 0.80526 on 2023-03-11; peg restored after the Mar 12 depositor backstop",
+      "low_price": 0.86,
+      "status": "verified",
+      "source_url": "https://www.federalreserve.gov/econres/notes/feds-notes/in-the-shadow-of-bank-run-lessons-from-the-silicon-valley-bank-failure-and-its-impact-on-stablecoins-20251217.html"
+    },
+    {
+      "date": "2023-03-11",
+      "asset": "DAI",
+      "title": "DAI follows USDC down via MakerDAO's USDC Peg Stability Module",
+      "extreme": "Fell to just under $0.90 on hourly open prices (Fed FEDS Note); Coinbase DAI-USD daily low 0.8582",
+      "status": "verified",
+      "source_url": "https://www.federalreserve.gov/econres/notes/feds-notes/in-the-shadow-of-bank-run-lessons-from-the-silicon-valley-bank-failure-and-its-impact-on-stablecoins-20251217.html"
+    },
+    {
+      "date": "2025-04-02",
+      "asset": "FDUSD",
+      "title": "FDUSD de-pegs after Justin Sun alleges First Digital Trust is insolvent",
+      "extreme": "Binance FDUSD/USDT daily low 0.8726 on 2025-04-02 (UTC); CoinGecko aggregate low ~$0.95 per Decrypt",
+      "status": "verified",
+      "source_url": "https://decrypt.co/312984/fdusd-stablecoin-loses-dollar-peg-justin-sun"
+    },
+    {
+      "date": "2025-10-10",
+      "end_date": "2025-10-11",
+      "asset": "USDe",
+      "title": "USDe de-pegs on Binance during the Oct 10 liquidation cascade",
+      "extreme": "Binance USDE/USDT daily low 0.65 on 2025-10-10 (UTC); Binance says severe de-pegging occurred after 21:36 UTC (window 21:36–22:16 UTC) and paid ~US$283M compensation",
+      "status": "verified",
+      "source_url": "https://www.binance.com/en/support/announcement/detail/0989d6c7f32545bfb019e3249eaabc3f"
+    }
+  ],
+  "regimes": [
+    {
+      "regime": "US-GENIUS",
+      "key_dates": [
+        {
+          "date": "2025-07-18",
+          "label": "GENIUS Act enacted (Public Law 119-27, S. 1582)"
+        },
+        {
+          "date": "2027-01-18",
+          "label": "Latest effective date: 18 months after enactment (earlier if final regulations come first: 120 days after them)"
+        },
+        {
+          "date": "2028-07-18",
+          "label": "Digital asset service providers may no longer offer or sell payment stablecoins not issued by a permitted issuer (sec. 3(b)(1))"
+        }
+      ],
+      "note": "As of 2026-10-20 the Federal Register shows only proposed rules from the OCC, FDIC, NCUA and the Federal Reserve, Treasury proposals, and a Treasury interim final rule (2026-09-30) on certification review forms; no final rule from the federal bank regulators. Treasury expects the Act to take effect on 2027-01-18.",
+      "as_of": "2026-10-20",
+      "source_url": "https://www.govinfo.gov/content/pkg/PLAW-119publ27/html/PLAW-119publ27.htm"
+    }
   ]
 }

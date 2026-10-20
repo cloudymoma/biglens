@@ -92,8 +92,9 @@ func TestParseBitstampOHLC(t *testing.T) {
 	}
 }
 
-// Appendix C seeds: a top-level annotations list (UST, BUSD, DAI, FDUSD and
-// USDe are not core assets), every entry "status": "unknown" until M4.
+// Appendix C: a top-level annotations list (UST, BUSD, DAI, FDUSD and USDe
+// are not core assets). Since the M4 curation every entry is "verified"
+// with an https source; "unknown" entries carry no checked claim.
 func TestStableAnnotations(t *testing.T) {
 	f := loadStableFacts("", nil)
 	if len(f.Annotations) != 7 {
@@ -102,8 +103,8 @@ func TestStableAnnotations(t *testing.T) {
 	assets := map[string]bool{}
 	for _, a := range f.Annotations {
 		assets[a.Asset] = true
-		if a.Status != "unknown" || a.SourceURL != "" {
-			t.Errorf("seed %+v must be status unknown without a source", a)
+		if a.Status != "verified" || !strings.HasPrefix(a.SourceURL, "https://") {
+			t.Errorf("annotation %+v must be verified with an https source", a)
 		}
 	}
 	for _, want := range []string{"USDT", "USDC", "UST", "BUSD", "DAI", "FDUSD", "USDe"} {
@@ -117,6 +118,7 @@ func TestStableAnnotations(t *testing.T) {
 		`{"date": "2022-05", "asset": "UST", "title": "collapse", "status": "unknown"}`,
 		`{"date": "2025-10-10", "end_date": "2025-10-11", "asset": "USDe", "title": "dislocation", "low_price": 0.65, "status": "unknown"}`,
 		`{"date": "2023-03-11", "asset": "USDC", "title": "SVB", "low_price": 0.80526, "source_url": "https://example.com/svb"}`,
+		`{"date": "2023-03-11", "asset": "USDC", "title": "SVB", "low_price": 0.86, "status": "verified", "source_url": "https://example.com/svb"}`,
 	}
 	for _, a := range ok {
 		if _, _, err := parseStableFactsAndValidate([]byte(strings.Replace(base, "%s", a, 1))); err != nil {
@@ -124,15 +126,16 @@ func TestStableAnnotations(t *testing.T) {
 		}
 	}
 	bad := map[string]string{
-		"no title":          `{"date": "2023-03-11", "asset": "USDC", "status": "unknown"}`,
-		"no asset":          `{"date": "2023-03-11", "title": "x", "status": "unknown"}`,
-		"bad date":          `{"date": "March 2023", "asset": "USDC", "title": "x", "status": "unknown"}`,
-		"end before start":  `{"date": "2023-03-11", "end_date": "2023-03-10", "asset": "USDC", "title": "x", "status": "unknown"}`,
-		"checked no source": `{"date": "2023-03-11", "asset": "USDC", "title": "x"}`,
-		"http source":       `{"date": "2023-03-11", "asset": "USDC", "title": "x", "source_url": "http://example.com"}`,
-		"other status":      `{"date": "2023-03-11", "asset": "USDC", "title": "x", "status": "verified"}`,
-		"zero low":          `{"date": "2023-03-11", "asset": "USDC", "title": "x", "low_price": 0, "status": "unknown"}`,
-		"unknown field":     `{"date": "2023-03-11", "asset": "USDC", "title": "x", "status": "unknown", "color": "red"}`,
+		"no title":           `{"date": "2023-03-11", "asset": "USDC", "status": "unknown"}`,
+		"no asset":           `{"date": "2023-03-11", "title": "x", "status": "unknown"}`,
+		"bad date":           `{"date": "March 2023", "asset": "USDC", "title": "x", "status": "unknown"}`,
+		"end before start":   `{"date": "2023-03-11", "end_date": "2023-03-10", "asset": "USDC", "title": "x", "status": "unknown"}`,
+		"checked no source":  `{"date": "2023-03-11", "asset": "USDC", "title": "x"}`,
+		"verified no source": `{"date": "2023-03-11", "asset": "USDC", "title": "x", "status": "verified"}`,
+		"http source":        `{"date": "2023-03-11", "asset": "USDC", "title": "x", "source_url": "http://example.com"}`,
+		"other status":       `{"date": "2023-03-11", "asset": "USDC", "title": "x", "status": "likely", "source_url": "https://example.com"}`,
+		"zero low":           `{"date": "2023-03-11", "asset": "USDC", "title": "x", "low_price": 0, "status": "unknown"}`,
+		"unknown field":      `{"date": "2023-03-11", "asset": "USDC", "title": "x", "status": "unknown", "color": "red"}`,
 	}
 	for name, a := range bad {
 		if _, _, err := parseStableFactsAndValidate([]byte(strings.Replace(base, "%s", a, 1))); err == nil {
