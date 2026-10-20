@@ -87,8 +87,11 @@ type StableRelativePeg struct {
 
 // StableFX is the EUR/USD consensus used for EURC (§5.3).
 type StableFX struct {
-	EURUSD *float64      `json:"eur_usd"` // median of the included Kraken and Bitstamp mids
-	Quotes []StableQuote `json:"quotes"`
+	EURUSD *float64 `json:"eur_usd"` // median of the included Kraken and Bitstamp mids
+	// VenuesUsed counts the venues behind EURUSD; with one, /peg sets
+	// fx_single_venue (§5.2).
+	VenuesUsed int           `json:"venues_used"`
+	Quotes     []StableQuote `json:"quotes"`
 	// VolumeRate converts EUR volumes to USD for the volume filter: the
 	// consensus, else the latest ECB reference rate.
 	VolumeRate   *float64 `json:"volume_rate"`
@@ -403,6 +406,7 @@ func stableComputePeg(in stablePegInputs) stablePegResult {
 	}
 	if len(fxMids) > 0 {
 		res.FX.EURUSD = stableF(stableMedian(fxMids))
+		res.FX.VenuesUsed = len(fxMids) // one pair per venue
 		res.FX.VolumeRate, res.FX.VolumeSource = res.FX.EURUSD, "consensus"
 	} else if in.ECBEURUSD != nil {
 		res.FX.VolumeRate, res.FX.VolumeSource = stableF(*in.ECBEURUSD), "ecb"

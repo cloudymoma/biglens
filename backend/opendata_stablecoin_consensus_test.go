@@ -130,6 +130,9 @@ func TestStableComputePegFixtures(t *testing.T) {
 	// EUR/USD: median (here the mean) of Kraken and Bitstamp.
 	fx := (mid(fxKrakenZEURZUSDBid, fxKrakenZEURZUSDAsk) + mid(fxBitstampEURUSDBid, fxBitstampEURUSDAsk)) / 2
 	approxPtr(t, "fx eur_usd", res.FX.EURUSD, fx, 1e-12)
+	if res.FX.VenuesUsed != 2 {
+		t.Errorf("fx venues used = %d, want 2", res.FX.VenuesUsed)
+	}
 
 	// EURC in EUR: Kraken direct + Kraken derived (one venue group) and
 	// Coinbase cross-derived; Bitstamp eurceur fails the volume filter after
@@ -289,6 +292,9 @@ func TestStablePegFilters(t *testing.T) {
 		t.Errorf("eurc without kraken = %+v", eurc)
 	}
 	approxPtr(t, "fx from bitstamp only", res.FX.EURUSD, (fxBitstampEURUSDBid+fxBitstampEURUSDAsk)/2, 1e-12)
+	if res.FX.VenuesUsed != 1 {
+		t.Errorf("fx venues used without kraken = %d, want 1", res.FX.VenuesUsed)
+	}
 	// No FX at all: the cross input is excluded, and EUR volumes convert with
 	// the ECB reference rate when one is known.
 	noFX := mutate(func(q *stableVenueQuote) {
@@ -310,7 +316,7 @@ func TestStablePegFilters(t *testing.T) {
 		math.Abs(*q.VolUSD-fxKrakenEURCEURVol*(fxKrakenEURCEURBid+fxKrakenEURCEURAsk)/2*ecb) > 1e-3 {
 		t.Errorf("kraken eurceur with the ECB rate = %+v", q)
 	}
-	if res.FX.EURUSD != nil || res.FX.VolumeSource != "ecb" {
+	if res.FX.EURUSD != nil || res.FX.VolumeSource != "ecb" || res.FX.VenuesUsed != 0 {
 		t.Errorf("fx = %+v, want no consensus and the ECB volume rate", res.FX)
 	}
 	// Nothing included anywhere: unknown, never a substitute value.

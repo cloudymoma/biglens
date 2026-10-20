@@ -84,7 +84,10 @@ type StablePegResponse struct {
 	Assets    []StablePegAssetView  `json:"assets"`
 	Relative  StableRelativePegView `json:"relative"`
 	FX        *StableFX             `json:"fx"`
-	Markets   []StableQuote         `json:"markets"` // every venue market of the latest sample
+	// FXSingleVenue: the EUR/USD consensus behind EURC's derived inputs
+	// comes from one venue (Kraken or Bitstamp) in the latest sample.
+	FXSingleVenue bool          `json:"fx_single_venue"`
+	Markets       []StableQuote `json:"markets"` // every venue market of the latest sample
 	// Annotations covers every curated event, including coins outside the
 	// core set (context).
 	Annotations           []stableAnnotation `json:"annotations"`
@@ -115,7 +118,7 @@ func (s *stablecoinService) buildPeg(r *http.Request, assets []string, rangeLabe
 	if res != nil {
 		out.AsOf, out.Stale, out.Markets = stableFmt(res.AsOf), now.Sub(res.AsOf) > stablePegStaleAfter, res.Markets
 		fx := res.FX
-		out.FX = &fx
+		out.FX, out.FXSingleVenue = &fx, fx.VenuesUsed == 1
 		out.Relative.StableRelativePeg = res.Relative
 	} else {
 		out.Relative.StableRelativePeg = StableRelativePeg{Pair: "USDC/USDT", Quotes: []StableQuote{}}

@@ -100,6 +100,9 @@ func TestStablecoinPegEndpoint(t *testing.T) {
 		resp.Relative.Uniswap == nil || len(resp.Relative.Series) != 1 || resp.FX == nil || resp.FX.EURUSD == nil {
 		t.Errorf("peg venue table %d, relative %+v, fx %+v", len(resp.Markets), resp.Relative, resp.FX)
 	}
+	if resp.FXSingleVenue || resp.FX.VenuesUsed != 2 {
+		t.Errorf("fx from Kraken and Bitstamp: single venue %v, venues used %d", resp.FXSingleVenue, resp.FX.VenuesUsed)
+	}
 	if len(resp.Annotations) != 7 || resp.AnnotationsOverridden || resp.DepegThresholdBps != 30 {
 		t.Errorf("annotations %d (overridden %v), threshold %v", len(resp.Annotations), resp.AnnotationsOverridden, resp.DepegThresholdBps)
 	}
@@ -148,6 +151,17 @@ func TestStablecoinPegEndpoint(t *testing.T) {
 	if r := decodeStable[StablePegResponse](t, stableGet(t, h.StablecoinPeg, "/api/opendata/stablecoin/peg?asset=usdt&range=10y")); r.Range != "7d" {
 		t.Errorf("range=10y -> %q, want 7d", r.Range)
 	}
+
+	// Kraken down: the EUR/USD consensus comes from Bitstamp alone and /peg
+	// says so (§5.2).
+	venues.setStatus("/kraken/0/public/Ticker", http.StatusServiceUnavailable)
+	clock = clock.Add(5 * time.Minute)
+	runStablePegOnce(context.Background(), h.stable.peg, h.stable.health)
+	h.cache = NewCache(time.Minute)
+	if r := decodeStable[StablePegResponse](t, stableGet(t, h.StablecoinPeg, "/api/opendata/stablecoin/peg?asset=eurc")); !r.FXSingleVenue || r.FX == nil || r.FX.VenuesUsed != 1 || r.FX.EURUSD == nil {
+		t.Errorf("fx with Kraken down: single venue %v, fx %+v", r.FXSingleVenue, r.FX)
+	}
+	venues.setStatus("/kraken/0/public/Ticker", 0)
 
 	// A sample older than 3 intervals is served marked stale, never refreshed.
 	clock = clock.Add(16 * time.Minute)
