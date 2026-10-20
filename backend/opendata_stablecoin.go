@@ -85,6 +85,12 @@ type stableEndpoints struct {
 	TetherURL    string
 	ECBBase      string
 	TreasuryBase string
+	// Peg venues (§4.2).
+	CoinbaseBase string
+	KrakenBase   string
+	BitstampBase string
+	OKXBase      string
+	BinanceBase  string
 }
 
 func defaultStableEndpoints() stableEndpoints {
@@ -94,6 +100,11 @@ func defaultStableEndpoints() stableEndpoints {
 		TetherURL:    "https://app.tether.to/transparency.json",
 		ECBBase:      "https://data-api.ecb.europa.eu/service/data",
 		TreasuryBase: "https://home.treasury.gov/resource-center/data-chart-center/interest-rates/daily-treasury-rates.csv",
+		CoinbaseBase: "https://api.exchange.coinbase.com",
+		KrakenBase:   "https://api.kraken.com",
+		BitstampBase: "https://www.bitstamp.net",
+		OKXBase:      "https://www.okx.com",
+		BinanceBase:  "https://api.binance.com",
 	}
 }
 
