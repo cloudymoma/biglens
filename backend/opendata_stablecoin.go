@@ -25,6 +25,8 @@ type stablecoinService struct {
 	// gas is the last-good copy of the gas-live transfer costs, refreshed by
 	// every controls run (§8.3).
 	gas *stableGasLastGood
+	// signals runs the §6 signal policies after every sample (wireSignals).
+	signals *stableSignalEngine
 }
 
 func newStablecoinService(cfg *Config) *stablecoinService {

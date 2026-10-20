@@ -28,6 +28,8 @@ type stablePegSampler struct {
 	now      func() time.Time
 	// onFetch reports every upstream call (provider health); may be nil.
 	onFetch func(provider string, took time.Duration, code string)
+	// onResult runs after every sample (the signal engine); may be nil.
+	onResult func(ctx context.Context)
 	// ohlcLimit and ohlcFrom override Bitstamp's window size and the
 	// bootstrap start (tests); zero values mean stableOHLCPage and
 	// stableOHLCFrom.
@@ -93,6 +95,9 @@ func (p *stablePegSampler) tick(ctx context.Context) bool {
 	p.mu.Lock()
 	p.lastResult = &res
 	p.mu.Unlock()
+	if p.onResult != nil {
+		p.onResult(ctx)
+	}
 	return ok
 }
 

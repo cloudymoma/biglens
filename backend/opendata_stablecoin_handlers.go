@@ -163,7 +163,8 @@ type StableLiveAsset struct {
 	NetIssuance24hNative *float64 `json:"net_issuance_24h_native"`
 	NetIssuance24hPct    *float64 `json:"net_issuance_24h_pct"`
 	NetIssuance24hSource string   `json:"net_issuance_24h_source,omitempty"`
-	// Worst signal state: M4.
+	// WorstSignal is the asset's summary state (§6.1): the worst state across
+	// its signals; null when the signal engine is not running.
 	WorstSignal *string `json:"worst_signal"`
 }
 
@@ -174,6 +175,9 @@ type StableLive struct {
 	Assets         []StableLiveAsset `json:"assets"`
 	MarketTotalUSD *float64          `json:"market_total_usd"`
 	MarketAsOf     string            `json:"market_as_of,omitempty"`
+	// Alerts counts signals at critical, warning and watch across the core
+	// assets (§7.1); null when the signal engine is not running.
+	Alerts map[string]int `json:"alerts"`
 }
 
 func (s *stablecoinService) snapshot() *stableSupplyState {
@@ -223,7 +227,14 @@ func (s *stablecoinService) buildLive() StableLive {
 				}
 			}
 		}
+		if s.signals != nil {
+			w := s.signals.worst(def.ID)
+			la.WorstSignal = &w
+		}
 		out.Assets = append(out.Assets, la)
+	}
+	if s.signals != nil {
+		out.Alerts = stableAlertCounts(s.signalStates())
 	}
 	return out
 }

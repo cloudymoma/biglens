@@ -916,6 +916,8 @@ type stableSupplySampler struct {
 	now      func() time.Time
 	// onFetch reports every upstream call (provider health, §8.7); may be nil.
 	onFetch func(provider string, took time.Duration, code string)
+	// onState runs after every sample (the signal engine); may be nil.
+	onState func(ctx context.Context)
 
 	llama  stableLastGood[llamaStableSnapshot]
 	circle stableLastGood[circleSnapshot]
@@ -965,6 +967,9 @@ func (s *stableSupplySampler) tick(ctx context.Context) bool {
 	in, rpcFresh, ok := s.collect(ctx, now)
 	s.persist(ctx, in)
 	s.compute(ctx, in, rpcFresh, now)
+	if s.onState != nil {
+		s.onState(ctx)
+	}
 	return ok
 }
 

@@ -431,6 +431,8 @@ type stableControlsSampler struct {
 	// gas reads the gas-live cache into the transfer-cost copy (§8.3); it
 	// runs on every controls run, also with rpc_controls off.
 	gas func(now time.Time)
+	// onSaved runs after every stored sample (the signal engine); may be nil.
+	onSaved func(ctx context.Context)
 
 	mu  sync.Mutex
 	seq int // samples taken; rotates the primary endpoint
@@ -526,6 +528,9 @@ func (c *stableControlsSampler) tick(ctx context.Context) bool {
 	if err := c.store.saveStableControls(ctx, states, events); err != nil {
 		slog.Warn("stablecoin controls: store", "error", err)
 		return false
+	}
+	if c.onSaved != nil {
+		c.onSaved(ctx)
 	}
 	return ok
 }

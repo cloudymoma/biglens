@@ -151,6 +151,31 @@ CREATE TABLE IF NOT EXISTS stable_control_events (
   confirmed_by TEXT NOT NULL DEFAULT '',
   tx_hash TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (detected_at, asset, chain, field)
+);
+CREATE TABLE IF NOT EXISTS stable_signal_state (
+  asset TEXT NOT NULL,
+  signal TEXT NOT NULL,
+  state TEXT NOT NULL,
+  reason TEXT NOT NULL DEFAULT '',
+  rule TEXT NOT NULL DEFAULT '',
+  summary TEXT NOT NULL DEFAULT '',
+  since TEXT NOT NULL,
+  as_of TEXT,
+  inputs_json TEXT NOT NULL DEFAULT '{}',
+  hyst_json TEXT NOT NULL DEFAULT '{}',
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (asset, signal)
+);
+CREATE TABLE IF NOT EXISTS stable_signal_events (
+  ts TEXT NOT NULL,
+  asset TEXT NOT NULL,
+  signal TEXT NOT NULL,
+  from_state TEXT NOT NULL,
+  to_state TEXT NOT NULL,
+  reason TEXT NOT NULL DEFAULT '',
+  summary TEXT NOT NULL DEFAULT '',
+  inputs_json TEXT NOT NULL DEFAULT '{}',
+  PRIMARY KEY (ts, asset, signal)
 );`
 
 // stableSnapshotRetention: supply snapshots are kept 180 days; the daily

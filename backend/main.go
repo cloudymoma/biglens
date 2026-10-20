@@ -168,9 +168,11 @@ func main() {
 		api.stable.controls = newStableControlsSampler(api.stable.settings, rstore, api.payRPCs, time.Now)
 		api.stable.controls.onFetch = api.stable.health.recordFetch
 		api.stable.controls.gas = func(time.Time) { api.stable.refreshGasCosts(api.stableGasCosts()) }
+		api.stable.wireSignals()
 		go runStableSamplers(ctx, api.stable.supply, api.stable.health)
 		go runStablePegSampler(ctx, api.stable.peg, api.stable.health)
 		go runStableControlsSampler(ctx, api.stable.controls, api.stable.health)
+		go runStableSignalWatchdog(ctx, api.stable)
 	}
 
 	mux := http.NewServeMux()

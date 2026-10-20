@@ -195,6 +195,36 @@ func (h *stableHealth) providers() []StableProviderHealth {
 	return out
 }
 
+// stale3x reports whether an enabled provider in use has had no success for
+// more than 3 call intervals (S13 watch): since its last success, or since
+// its oldest recorded call when it never succeeded. A provider not called
+// yet is not stale.
+func (h *stableHealth) stale3x(key string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	interval, inUse := stableProviderInterval[key]
+	if !inUse || !h.settings.Providers[key] {
+		return false
+	}
+	p := h.providerS[key]
+	if p == nil || p.lastAt.IsZero() {
+		return false
+	}
+	ref := p.lastOK
+	if ref.IsZero() {
+		if len(p.calls) == 0 {
+			return false
+		}
+		ref = p.calls[0].at
+		for _, c := range p.calls {
+			if c.at.Before(ref) {
+				ref = c.at
+			}
+		}
+	}
+	return h.now().Sub(ref) > stableStallIntervals*interval
+}
+
 // recordRun records one sampler run that started at start.
 func (h *stableHealth) recordRun(name string, interval time.Duration, start, nextDue time.Time, ok bool) {
 	h.mu.Lock()
