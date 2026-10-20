@@ -22,6 +22,9 @@ type stablecoinService struct {
 	peg      *stablePegSampler
 	controls *stableControlsSampler
 	health   *stableHealth
+	// gas is the last-good copy of the gas-live transfer costs, refreshed by
+	// every controls run (§8.3).
+	gas *stableGasLastGood
 }
 
 func newStablecoinService(cfg *Config) *stablecoinService {
@@ -33,7 +36,7 @@ func newStablecoinService(cfg *Config) *stablecoinService {
 	if !s.Enabled {
 		return nil
 	}
-	return &stablecoinService{settings: s, facts: loadStableFacts(s.FactsFile, os.ReadFile), now: time.Now}
+	return &stablecoinService{settings: s, facts: loadStableFacts(s.FactsFile, os.ReadFile), now: time.Now, gas: newStableGasLastGood()}
 }
 
 // providerEnabled reports whether a provider key may be called; false means

@@ -428,6 +428,9 @@ type stableControlsSampler struct {
 	onFetch  func(provider string, took time.Duration, code string)
 
 	firstDelay time.Duration // before the first sample after boot
+	// gas reads the gas-live cache into the transfer-cost copy (§8.3); it
+	// runs on every controls run, also with rpc_controls off.
+	gas func(now time.Time)
 
 	mu  sync.Mutex
 	seq int // samples taken; rotates the primary endpoint
@@ -567,6 +570,9 @@ func (c *stableControlsSampler) secondSPL(ctx context.Context, d stableControlDe
 }
 
 func runStableControlsOnce(ctx context.Context, c *stableControlsSampler, h *stableHealth) {
+	if c.gas != nil {
+		c.gas(c.now().UTC())
+	}
 	if !c.settings.Providers["rpc_controls"] {
 		return // provider off: no reads, and no run to report
 	}

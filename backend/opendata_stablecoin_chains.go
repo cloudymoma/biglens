@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"sync"
 	"time"
 )
 
@@ -16,9 +17,9 @@ import (
 
 const stableChainsTTL = 10 * time.Minute
 
-const stableChainsCostNote = "Transfer costs come from the Gas page's live cache: BigLens prices USDT transfers on TRON and USDC " +
-	"transfers on Ethereum, Arbitrum, Optimism and Base. /chains never fetches them, so a cost is null (not_cached) until the Gas " +
-	"page has refreshed that cache recently; other assets and chains are not priced."
+const stableChainsCostNote = "Transfer costs come from the Gas page's live cache, read on every controls run (15 min) and kept up to " +
+	"24 h (stale after 1 h): BigLens prices USDT transfers on TRON and USDC transfers on Ethereum, Arbitrum, Optimism and Base. " +
+	"Nothing is fetched for /chains; a cost the Gas page has not cached is not_cached. Other assets and chains are not priced."
 
 type StableChainsResponse struct {
 	AsOf      string             `json:"as_of,omitempty"` // the supply sample behind the issuer amounts
@@ -71,7 +72,9 @@ type StableVerifyLink struct {
 }
 
 type StableTransferCost struct {
-	Status     string   `json:"status"` // ok | not_cached
+	// Status: ok (read from the gas-live cache within the hour) | stale (the
+	// last good value, 1-24 h old) | not_cached (never filled, or older).
+	Status     string   `json:"status"`
 	Label      string   `json:"label"`
 	Source     string   `json:"source"`
 	NativeUnit string   `json:"native_unit"` // TRX | ETH
@@ -80,6 +83,7 @@ type StableTransferCost struct {
 	// USDNewAddress: TRON, a first transfer to an address without USDT.
 	USDNewAddress *float64 `json:"usd_new_address,omitempty"`
 	MeasuredAt    string   `json:"measured_at,omitempty"` // the calibration behind the transfer profile
+	AsOf          string   `json:"as_of,omitempty"`       // when BigLens read the value from the gas-live cache
 }
 
 // stableFreezeKinds describes the registry freeze selectors.
@@ -94,6 +98,93 @@ var stableFreezeKinds = map[string]StableFreezeMechanism{
 type stableGasCosts struct {
 	tronUSDT *StableTransferCost
 	evmUSDC  map[string]*StableTransferCost
+}
+
+// The not_cached shapes of the two priced transfers.
+func stableTronCostTemplate() *StableTransferCost {
+	return &StableTransferCost{Status: "not_cached", Label: "USDT transfer to an existing holder", NativeUnit: "TRX",
+		Source: "gas-live: TronGrid energy and bandwidth prices × today's USDT transfer profile, TRX at the Coinbase spot"}
+}
+
+func stableEVMCostTemplate() *StableTransferCost {
+	return &StableTransferCost{Status: "not_cached", Label: "USDC transfer", NativeUnit: "ETH",
+		Source: "gas-live: gas price × today's measured USDC transfer gas, plus the L1 data fee on L2s, ETH at the Coinbase spot"}
+}
+
+// Transfer costs are read from the gas-live cache on every controls run and
+// kept as a last-good copy (§8.3): ok for an hour after the read, stale up to
+// 24 h, then not_cached, as when the cache was never filled.
+const (
+	stableGasStaleAfter = time.Hour
+	stableGasKeepFor    = 24 * time.Hour
+)
+
+type stableGasLastGood struct {
+	mu   sync.Mutex
+	tron *stableGasValue
+	evm  map[string]*stableGasValue
+}
+
+type stableGasValue struct {
+	cost StableTransferCost
+	at   time.Time
+}
+
+func newStableGasLastGood() *stableGasLastGood {
+	return &stableGasLastGood{evm: map[string]*stableGasValue{}}
+}
+
+// update keeps every cost the cache had (status ok) as the new copy; a cost
+// the cache lacks leaves the previous copy alone.
+func (g *stableGasLastGood) update(c stableGasCosts, now time.Time) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if c.tronUSDT != nil && c.tronUSDT.Status == "ok" {
+		g.tron = &stableGasValue{cost: *c.tronUSDT, at: now}
+	}
+	for chain, cost := range c.evmUSDC {
+		if cost != nil && cost.Status == "ok" {
+			g.evm[chain] = &stableGasValue{cost: *cost, at: now}
+		}
+	}
+}
+
+// view returns the copy as /chains serves it.
+func (g *stableGasLastGood) view(now time.Time) stableGasCosts {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	at := func(v *stableGasValue, tmpl *StableTransferCost) *StableTransferCost {
+		if v == nil || now.Sub(v.at) > stableGasKeepFor {
+			return tmpl
+		}
+		c := v.cost
+		c.Status, c.AsOf = "ok", stableFmt(v.at)
+		if now.Sub(v.at) > stableGasStaleAfter {
+			c.Status = "stale"
+		}
+		return &c
+	}
+	out := stableGasCosts{tronUSDT: at(g.tron, stableTronCostTemplate()), evmUSDC: map[string]*StableTransferCost{}}
+	for _, chain := range l2Chains {
+		out.evmUSDC[chain.ID] = at(g.evm[chain.ID], stableEVMCostTemplate())
+	}
+	return out
+}
+
+// refreshGasCosts stores what the gas-live cache holds now (controls run).
+func (s *stablecoinService) refreshGasCosts(c stableGasCosts) {
+	if s.gas != nil {
+		s.gas.update(c, s.now().UTC())
+	}
+}
+
+// gasView is the transfer-cost copy /chains serves.
+func (s *stablecoinService) gasView() stableGasCosts {
+	g := s.gas
+	if g == nil {
+		g = newStableGasLastGood()
+	}
+	return g.view(s.now().UTC())
 }
 
 // stableGasCosts reads what the Gas page cached; nothing is fetched.
@@ -114,8 +205,7 @@ func (h *APIHandler) stableGasCosts() stableGasCosts {
 	}
 	cal, _ := get(gasLiveCalibrationKey).(*GasCalibration)
 	out := stableGasCosts{evmUSDC: map[string]*StableTransferCost{}}
-	out.tronUSDT = &StableTransferCost{Status: "not_cached", Label: "USDT transfer to an existing holder", NativeUnit: "TRX",
-		Source: "gas-live: TronGrid energy and bandwidth prices × today's USDT transfer profile, TRX at the Coinbase spot"}
+	out.tronUSDT = stableTronCostTemplate()
 	if raw, ok := get(gasLiveTronKey).(*tronLiveRaw); ok && raw != nil && cal != nil {
 		live := tronLiveFrom(*raw, *cal, spot("TRX"))
 		if len(live.Costs) >= 2 {
@@ -125,8 +215,7 @@ func (h *APIHandler) stableGasCosts() stableGasCosts {
 		}
 	}
 	for _, chain := range l2Chains {
-		c := &StableTransferCost{Status: "not_cached", Label: "USDC transfer", NativeUnit: "ETH",
-			Source: "gas-live: gas price × today's measured USDC transfer gas, plus the L1 data fee on L2s, ETH at the Coinbase spot"}
+		c := stableEVMCostTemplate()
 		out.evmUSDC[chain.ID] = c
 		if cal == nil {
 			continue
@@ -266,7 +355,7 @@ func (h *APIHandler) StablecoinChains(w http.ResponseWriter, r *http.Request) {
 		assets = []string{asset}
 	}
 	v, _ := h.cachedFetch("stablecoin:chains:"+asset, stableChainsTTL, func() (any, error) {
-		return h.stable.buildChains(assets, h.stableGasCosts()), nil
+		return h.stable.buildChains(assets, h.stable.gasView()), nil
 	})
 	writeJSON(w, v)
 }

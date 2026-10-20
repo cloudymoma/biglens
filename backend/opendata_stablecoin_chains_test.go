@@ -86,6 +86,8 @@ func TestStablecoinChainsEndpoint(t *testing.T) {
 	// cache filled by the Gas page.
 	runStableOnce(context.Background(), h.stable.supply, h.stable.health)
 	cal := warmGasLive(h)
+	// /chains serves the copy the controls run takes from the gas cache (§8.3).
+	h.stable.refreshGasCosts(h.stableGasCosts())
 	h.cache.Delete("stablecoin:chains:all")
 	before := stub.total()
 	resp := decodeStable[StableChainsResponse](t, stableGet(t, h.StablecoinChains, "/api/opendata/stablecoin/chains"))
@@ -163,6 +165,68 @@ func TestStablecoinChainsEndpoint(t *testing.T) {
 	// Whitelist.
 	if rec := stableGet(t, h.StablecoinChains, "/api/opendata/stablecoin/chains?asset=dai"); rec.Code != http.StatusBadRequest {
 		t.Errorf("asset=dai = %d", rec.Code)
+	}
+
+	// The gas cache expires; /chains keeps the last good copy, stale after
+	// an hour, with the time it was read.
+	readAt := clock
+	h.cache = NewCache(time.Minute)
+	clock = clock.Add(2 * time.Hour)
+	h.stable.refreshGasCosts(h.stableGasCosts()) // the cache is empty: nothing replaces the copy
+	late := decodeStable[StableChainsResponse](t, stableGet(t, h.StablecoinChains, "/api/opendata/stablecoin/chains?asset=usdt"))
+	if c := chainRow(t, late.Assets, "usdt", "tron").TransferCost; c == nil || c.Status != "stale" || c.USD == nil ||
+		math.Abs(*c.USD-holderTRX*0.25) > 1e-9 || c.AsOf != stableFmt(readAt) {
+		t.Errorf("tron cost 2 h after the last read = %+v, want the stale copy read at %s", c, stableFmt(readAt))
+	}
+}
+
+// The last-good copy of the gas-live transfer costs (§8.3): ok for an hour
+// after the read, stale up to 24 h, then not_cached, as when never filled.
+func TestStableGasLastGood(t *testing.T) {
+	t0 := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	g := newStableGasLastGood()
+	never := g.view(t0)
+	if never.tronUSDT == nil || never.tronUSDT.Status != "not_cached" || never.evmUSDC["eth"] == nil || never.evmUSDC["eth"].Status != "not_cached" {
+		t.Fatalf("never filled = %+v %+v", never.tronUSDT, never.evmUSDC["eth"])
+	}
+	usd := 1.5
+	g.update(stableGasCosts{tronUSDT: &StableTransferCost{Status: "ok", USD: &usd, NativeUnit: "TRX"},
+		evmUSDC: map[string]*StableTransferCost{"eth": {Status: "ok", USD: &usd}, "arb": {Status: "not_cached"}}}, t0)
+	for _, c := range []struct {
+		after time.Duration
+		want  string
+	}{{30 * time.Minute, "ok"}, {time.Hour, "ok"}, {time.Hour + time.Second, "stale"}, {24 * time.Hour, "stale"}, {24*time.Hour + time.Second, "not_cached"}} {
+		v := g.view(t0.Add(c.after))
+		if v.tronUSDT.Status != c.want || v.evmUSDC["eth"].Status != c.want {
+			t.Errorf("after %v: tron %s, eth %s; want %s", c.after, v.tronUSDT.Status, v.evmUSDC["eth"].Status, c.want)
+		}
+		if c.want != "not_cached" && (v.tronUSDT.USD == nil || *v.tronUSDT.USD != 1.5 || v.tronUSDT.AsOf != stableFmt(t0)) {
+			t.Errorf("after %v: tron = %+v", c.after, v.tronUSDT)
+		}
+		if c.want == "not_cached" && v.tronUSDT.USD != nil {
+			t.Errorf("after %v: an expired value is still served: %+v", c.after, v.tronUSDT)
+		}
+	}
+	if v := g.view(t0); v.evmUSDC["arb"].Status != "not_cached" || v.evmUSDC["arb"].Label == "" {
+		t.Errorf("arb, never cached = %+v", v.evmUSDC["arb"])
+	}
+	// A later read without a value keeps the previous copy and its time.
+	g.update(stableGasCosts{tronUSDT: &StableTransferCost{Status: "not_cached"}, evmUSDC: map[string]*StableTransferCost{}}, t0.Add(30*time.Minute))
+	if v := g.view(t0.Add(90 * time.Minute)); v.tronUSDT.Status != "stale" || v.tronUSDT.AsOf != stableFmt(t0) {
+		t.Errorf("after an empty read = %+v", v.tronUSDT)
+	}
+}
+
+// Every controls run reads the gas cache, even with rpc_controls off.
+func TestStableControlsRunReadsGas(t *testing.T) {
+	clock := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	settings := StablecoinConfig{Providers: map[string]bool{"rpc_controls": false}}.settings()
+	c := newStableControlsSampler(settings, newTestRiskStore(t), nil, func() time.Time { return clock })
+	var reads []time.Time
+	c.gas = func(now time.Time) { reads = append(reads, now) }
+	runStableControlsOnce(context.Background(), c, newStableHealth(settings, func() time.Time { return clock }))
+	if len(reads) != 1 || !reads[0].Equal(clock) {
+		t.Errorf("gas reads = %v, want one at %v", reads, clock)
 	}
 }
 
