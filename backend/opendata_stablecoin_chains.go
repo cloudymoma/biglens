@@ -39,18 +39,22 @@ type StableChainTable struct {
 type StableChainRow struct {
 	Chain      string `json:"chain"`
 	ChainLabel string `json:"chain_label"`
-	// Tier: native | bridged (registry deployments) | issuer (an
-	// issuer-reported chain outside the registry).
-	Tier                    string                 `json:"tier"`
-	TokenLabel              string                 `json:"token_label,omitempty"`
-	Verified                bool                   `json:"verified"` // BigLens reads this deployment on-chain
-	Contract                string                 `json:"contract,omitempty"`
-	IssuerCirculatingNative *float64               `json:"issuer_circulating_native"`
-	IssuerSharePct          *float64               `json:"issuer_share_pct"`
-	FreezeMechanism         *StableFreezeMechanism `json:"freeze_mechanism"` // null when BigLens does not know it
-	ExplorerURL             string                 `json:"explorer_url,omitempty"`
-	VerifyPayment           *StableVerifyLink      `json:"verify_payment"` // USDT and USDC on Payment Check networks
-	TransferCost            *StableTransferCost    `json:"transfer_cost"`  // null where BigLens does not price transfers
+	// Tier: native | bridged (registry deployments) | issuer (a chain the
+	// issuer reports, outside the registry) | aggregator (only DefiLlama
+	// reports it; native or bridged is not known).
+	Tier                    string   `json:"tier"`
+	TokenLabel              string   `json:"token_label,omitempty"`
+	Verified                bool     `json:"verified"` // BigLens reads this deployment on-chain
+	Contract                string   `json:"contract,omitempty"`
+	IssuerCirculatingNative *float64 `json:"issuer_circulating_native"`
+	IssuerSharePct          *float64 `json:"issuer_share_pct"`
+	// AggregatorCirculatingNative is DefiLlama's amount, normalized to native
+	// units (§5.1); the only amount on aggregator rows.
+	AggregatorCirculatingNative *float64               `json:"aggregator_circulating_native"`
+	FreezeMechanism             *StableFreezeMechanism `json:"freeze_mechanism"` // null when BigLens does not know it
+	ExplorerURL                 string                 `json:"explorer_url,omitempty"`
+	VerifyPayment               *StableVerifyLink      `json:"verify_payment"` // USDT and USDC on Payment Check networks
+	TransferCost                *StableTransferCost    `json:"transfer_cost"`  // null where BigLens does not price transfers
 }
 
 type StableFreezeMechanism struct {
@@ -167,9 +171,13 @@ func (s *stablecoinService) buildChains(assets []string, costs stableGasCosts) S
 			IssuerAsOf: a.Totals.IssuerAsOf, Rows: []StableChainRow{}}
 		for _, r := range a.Chains {
 			row := StableChainRow{Chain: r.Chain, ChainLabel: r.ChainLabel, Tier: r.Tier, TokenLabel: r.TokenLabel, Verified: r.Verified,
-				IssuerCirculatingNative: r.IssuerCirculatingNative, IssuerSharePct: r.IssuerSharePct}
-			if row.Tier == "" {
+				IssuerCirculatingNative: r.IssuerCirculatingNative, IssuerSharePct: r.IssuerSharePct, AggregatorCirculatingNative: r.AggregatorCirculatingNative}
+			switch {
+			case row.Tier != "":
+			case r.IssuerCirculatingNative != nil:
 				row.Tier = "issuer"
+			default:
+				row.Tier = "aggregator" // only DefiLlama reports this chain
 			}
 			if tok, ok := stableRegistryTokenFor(def.Symbol, r.Chain); ok && r.Verified {
 				row.Contract = tok.Contract
@@ -203,15 +211,24 @@ func (s *stablecoinService) buildChains(assets []string, costs stableGasCosts) S
 			}
 			tb.Rows = append(tb.Rows, row)
 		}
-		sort.SliceStable(tb.Rows, func(i, j int) bool {
-			a, b := tb.Rows[i].IssuerCirculatingNative, tb.Rows[j].IssuerCirculatingNative
+		// Rows with an issuer amount first (largest first), then the rest by
+		// DefiLlama's amount.
+		amount := func(r StableChainRow) (bool, float64) {
 			switch {
-			case a == nil:
-				return false
-			case b == nil:
-				return true
+			case r.IssuerCirculatingNative != nil:
+				return true, *r.IssuerCirculatingNative
+			case r.AggregatorCirculatingNative != nil:
+				return false, *r.AggregatorCirculatingNative
 			}
-			return *a > *b
+			return false, -1
+		}
+		sort.SliceStable(tb.Rows, func(i, j int) bool {
+			ii, a := amount(tb.Rows[i])
+			ij, b := amount(tb.Rows[j])
+			if ii != ij {
+				return ii
+			}
+			return a > b
 		})
 		out.Assets = append(out.Assets, tb)
 	}

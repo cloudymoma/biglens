@@ -133,6 +133,33 @@ func TestStablecoinChainsEndpoint(t *testing.T) {
 			}
 		}
 	}
+	// Chains that only DefiLlama reports (EURC: Tempo, Sonic, Polygon,
+	// Cardano, ICP) are "aggregator" rows with the aggregator amount, listed
+	// after every row with an issuer amount.
+	for _, tb := range resp.Assets {
+		if tb.Asset != "eurc" {
+			continue
+		}
+		var agg []string
+		seenAgg := false
+		for _, r := range tb.Rows {
+			switch {
+			case r.Tier == "aggregator":
+				seenAgg = true
+				agg = append(agg, r.ChainLabel)
+				if r.IssuerCirculatingNative != nil || r.AggregatorCirculatingNative == nil || r.Verified {
+					t.Errorf("eurc aggregator row = %+v", r)
+				}
+			case r.Tier == "issuer" && r.IssuerCirculatingNative == nil:
+				t.Errorf("eurc row %s labelled issuer without an issuer amount", r.Chain)
+			case seenAgg && r.IssuerCirculatingNative != nil:
+				t.Errorf("eurc issuer row %s listed after aggregator rows", r.Chain)
+			}
+		}
+		if len(agg) != 5 {
+			t.Errorf("eurc aggregator rows = %v, want Tempo, Sonic, Polygon, Cardano, ICP", agg)
+		}
+	}
 	// Whitelist.
 	if rec := stableGet(t, h.StablecoinChains, "/api/opendata/stablecoin/chains?asset=dai"); rec.Code != http.StatusBadRequest {
 		t.Errorf("asset=dai = %d", rec.Code)
