@@ -38,6 +38,21 @@ const (
 	stableReconAggWarningPct        = 2.0
 	stableReconOnchainRelTolerance  = 0.001     // 0.1% of issuer circulating
 	stableReconOnchainAbsToleranceN = 1_000_000 // native units
+	// stableReconConfirmations: a condition confirms after this many samples
+	// (aligned pairs: hourly samples; USDT: Tether updates).
+	stableReconConfirmations = 2
+	// S12 USDT exception (§6.2): Tether data is 1–3 days old, so USDT skips
+	// the 15-min pairing, compares the latest snapshot with the latest RPC
+	// total and skips snapshots older than stableTetherMaxAge.
+	stableTetherMaxAge = 7 * 24 * time.Hour
+	// stableUpdateHistory: Tether updates remembered per chain for the
+	// consecutive-update count.
+	stableUpdateHistory = 8
+	// Tether totalAuthorized info check: a stored reading within
+	// stableAuthorizedNear of the snapshot, and no supply change since then
+	// beyond stableAuthorizedTolNative.
+	stableAuthorizedNear      = time.Hour
+	stableAuthorizedTolNative = 1.0
 
 	// stableNetIssuanceTol: C(t−Δ) must be observed within ±4 h of t−Δ, so
 	// the 24h metric pairs snapshots 20–28 h apart (§5.4).
@@ -190,24 +205,53 @@ type StableReconAggregator struct {
 }
 
 type StableReconOnchain struct {
-	Chain              string   `json:"chain"`
+	Chain string `json:"chain"`
+	// Method: aligned_15m (Circle: readings ≤ 15 min apart, confirmed by 2
+	// hourly samples) | latest_update (USDT: the latest Tether update vs the
+	// latest RPC total, confirmed by 2 consecutive Tether updates).
+	Method             string   `json:"method"`
 	IssuerNative       *float64 `json:"issuer_native"`
 	OnchainNative      *float64 `json:"onchain_native"`
 	ExcessNative       *float64 `json:"excess_native"` // issuer − on-chain; > 0: the issuer reports more than exists
 	ToleranceNative    *float64 `json:"tolerance_native"`
 	IssuerAsOf         string   `json:"issuer_as_of,omitempty"`
+	IssuerUpdateID     int64    `json:"issuer_update_id,omitempty"` // Tether update id (latest_update)
 	OnchainAsOf        string   `json:"onchain_as_of,omitempty"`
 	SkewSeconds        *int64   `json:"skew_seconds"`
-	Aligned            bool     `json:"aligned"`
+	Aligned            bool     `json:"aligned"` // aligned_15m only: the readings were ≤ 15 min apart
 	ExceedsTolerance   bool     `json:"exceeds_tolerance"`
-	ConsecutiveSamples int      `json:"consecutive_samples"`   // hourly samples in a row over the tolerance
-	SkipReason         string   `json:"skip_reason,omitempty"` // not_aligned | missing_onchain
+	ConsecutiveSamples int      `json:"consecutive_samples"` // aligned_15m: hourly samples in a row over the tolerance
+	ConsecutiveUpdates int      `json:"consecutive_updates"` // latest_update: Tether updates in a row over the tolerance
+	Confirmed          bool     `json:"confirmed"`           // the condition held for 2 samples / updates
+	// SkipReason: not_aligned | missing_onchain | onchain_stale | issuer_stale.
+	// Empty means the pair was compared.
+	SkipReason string `json:"skip_reason,omitempty"`
+}
+
+// StableAuthorizedCheck is the S12 info check for USDT: Tether's
+// totalAuthorized for a chain against that chain's on-chain totalSupply. It
+// is only made when the stored hourly readings show no supply change since
+// the snapshot (no Issue/Redeem), and never raises a signal by itself.
+type StableAuthorizedCheck struct {
+	Chain                 string   `json:"chain"`
+	Level                 string   `json:"level"` // info
+	IssuerUpdateID        int64    `json:"issuer_update_id"`
+	IssuerAsOf            string   `json:"issuer_as_of"`
+	TotalAuthorizedNative *float64 `json:"total_authorized_native"`
+	OnchainNative         *float64 `json:"onchain_native"`
+	OnchainAsOf           string   `json:"onchain_as_of,omitempty"`
+	DiffNative            *float64 `json:"diff_native"` // on-chain − totalAuthorized
+	Result                string   `json:"result"`      // match | mismatch | skipped
+	// SkipReason: missing_onchain | onchain_stale | onchain_older_than_snapshot
+	// | no_reading_near_snapshot | supply_changed_since_snapshot.
+	SkipReason string `json:"skip_reason,omitempty"`
 }
 
 type StableReconcile struct {
-	Aggregator  StableReconAggregator `json:"aggregator"`
-	Onchain     []StableReconOnchain  `json:"onchain"`
-	OnchainAsOf string                `json:"onchain_as_of,omitempty"`
+	Aggregator       StableReconAggregator   `json:"aggregator"`
+	Onchain          []StableReconOnchain    `json:"onchain"`
+	OnchainAsOf      string                  `json:"onchain_as_of,omitempty"`
+	TetherAuthorized []StableAuthorizedCheck `json:"tether_authorized,omitempty"` // USDT only
 }
 
 type StableSupplyDay struct {
@@ -468,16 +512,58 @@ func stableOnchainSourceStatus(def stableAssetDef, in stableSupplyInputs) BtcSou
 	return st
 }
 
+// stableReconState carries S12 confirmation state between hourly runs.
+type stableReconState struct {
+	// hourly counts consecutive hourly samples over the tolerance per
+	// asset|chain (aligned_15m); a skipped or clean sample resets it.
+	hourly map[string]int
+	// updates remembers recent Tether updates per asset|chain with the
+	// condition at their latest evaluation (latest_update).
+	updates map[string][]stableUpdateCond
+}
+
+type stableUpdateCond struct {
+	ID      int64
+	Exceeds bool
+}
+
+func newStableReconState() *stableReconState {
+	return &stableReconState{hourly: map[string]int{}, updates: map[string][]stableUpdateCond{}}
+}
+
+// recordUpdate stores the condition for update id (replacing an earlier
+// evaluation of the same id) and returns how many of the latest updates in
+// a row had it.
+func (st *stableReconState) recordUpdate(key string, id int64, exceeds bool) int {
+	h := st.updates[key]
+	if n := len(h); n > 0 && h[n-1].ID == id {
+		h[n-1].Exceeds = exceeds
+	} else {
+		h = append(h, stableUpdateCond{ID: id, Exceeds: exceeds})
+		if len(h) > stableUpdateHistory {
+			h = h[len(h)-stableUpdateHistory:]
+		}
+	}
+	st.updates[key] = h
+	run := 0
+	for i := len(h) - 1; i >= 0 && h[i].Exceeds; i-- {
+		run++
+	}
+	return run
+}
+
 // stableOnchainRecon compares issuer circulating with the on-chain total on
 // every issuer-reported chain that maps to a native registry deployment
-// (S12). streak counts consecutive hourly samples over the tolerance per
-// asset|chain; a skipped or clean sample resets it.
-func stableOnchainRecon(def stableAssetDef, in stableSupplyInputs, streak map[string]int) []StableReconOnchain {
+// (S12). Circle pairs need readings ≤ 15 min apart and confirm after 2
+// consecutive hourly samples; USDT compares the latest Tether update with
+// the latest RPC total and confirms across 2 consecutive Tether updates.
+func stableOnchainRecon(def stableAssetDef, in stableSupplyInputs, st *stableReconState) []StableReconOnchain {
 	type issuerObs struct {
 		amount float64
 		at     time.Time
 	}
 	issuer := map[string]issuerObs{}
+	var updateID int64
 	switch def.Issuer {
 	case "circle":
 		if in.Circle.Has {
@@ -487,11 +573,13 @@ func stableOnchainRecon(def stableAssetDef, in stableSupplyInputs, streak map[st
 		}
 	case "tether":
 		if in.Tether.Has {
+			updateID = in.Tether.Value.UpdateID
 			for _, c := range in.Tether.Value.Chains {
 				issuer[stableChainKey("tether", c.Name)] = issuerObs{c.CirculatingNative, in.Tether.Value.UpdatedAt}
 			}
 		}
 	}
+	latestUpdate := def.Issuer == "tether"
 	out := []StableReconOnchain{}
 	for _, tok := range registryTokens {
 		if tok.Asset != def.Symbol || tok.Tier != tierNative {
@@ -502,12 +590,17 @@ func stableOnchainRecon(def stableAssetDef, in stableSupplyInputs, streak map[st
 			continue
 		}
 		key := def.ID + "|" + tok.Network
-		r := StableReconOnchain{Chain: tok.Network, IssuerNative: stableF(obs.amount), IssuerAsOf: stableFmt(obs.at),
+		r := StableReconOnchain{Chain: tok.Network, Method: "aligned_15m", IssuerNative: stableF(obs.amount), IssuerAsOf: stableFmt(obs.at),
 			ToleranceNative: stableF(stableToleranceNative(obs.amount))}
+		if latestUpdate {
+			r.Method, r.IssuerUpdateID = "latest_update", updateID
+		}
 		rd, has := in.Onchain[tok.Network+"|"+tok.Contract]
 		if !has {
 			r.SkipReason = "missing_onchain"
-			streak[key] = 0
+			if !latestUpdate {
+				st.hourly[key] = 0
+			}
 			out = append(out, r)
 			continue
 		}
@@ -519,21 +612,125 @@ func stableOnchainRecon(def stableAssetDef, in stableSupplyInputs, streak map[st
 		secs := int64(skew.Seconds())
 		r.SkewSeconds = &secs
 		r.ExcessNative = stableF(obs.amount - rd.SupplyNative)
+		exceeds := *r.ExcessNative > *r.ToleranceNative
+		if latestUpdate {
+			switch {
+			case rd.ReadAt.Sub(obs.at) > stableTetherMaxAge:
+				// Tether stopped updating: start over with the next update.
+				r.SkipReason = "issuer_stale"
+				delete(st.updates, key)
+			case rd.Stale:
+				// No fresh reading: this update stays unevaluated.
+				r.SkipReason = "onchain_stale"
+			default:
+				r.ExceedsTolerance = exceeds
+				r.ConsecutiveUpdates = st.recordUpdate(key, updateID, exceeds)
+				r.Confirmed = r.ConsecutiveUpdates >= stableReconConfirmations
+			}
+			out = append(out, r)
+			continue
+		}
 		if skew > stableAlignWindow || rd.Stale {
 			r.SkipReason = "not_aligned"
-			streak[key] = 0
+			st.hourly[key] = 0
 			out = append(out, r)
 			continue
 		}
 		r.Aligned = true
-		if *r.ExcessNative > *r.ToleranceNative {
+		if exceeds {
 			r.ExceedsTolerance = true
-			streak[key]++
+			st.hourly[key]++
 		} else {
-			streak[key] = 0
+			st.hourly[key] = 0
 		}
-		r.ConsecutiveSamples = streak[key]
+		r.ConsecutiveSamples = st.hourly[key]
+		r.Confirmed = r.ConsecutiveSamples >= stableReconConfirmations
 		out = append(out, r)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Chain < out[j].Chain })
+	return out
+}
+
+// stableTetherAuthorizedChecks runs the S12 info check for a Tether-issued
+// asset: totalAuthorized = on-chain totalSupply per chain, made only when no
+// Issue/Redeem happened since the snapshot. That is read from the stored
+// hourly on-chain readings: one must lie within ±1 h of the snapshot, and
+// every reading from there to the latest must be unchanged. (On Solana any
+// holder can burn, so supply can also fall without a Tether Redeem.)
+func stableTetherAuthorizedChecks(ctx context.Context, store *riskStore, def stableAssetDef, in stableSupplyInputs) []StableAuthorizedCheck {
+	if def.Issuer != "tether" || !in.Tether.Has {
+		return nil
+	}
+	tz := in.Tether.Value
+	authorized := map[string]float64{}
+	for _, c := range tz.Chains {
+		authorized[stableChainKey("tether", c.Name)] = c.TotalAuthorizedNative
+	}
+	var stored []stableSupplySnapshot
+	if store != nil {
+		var latest time.Time
+		for _, rd := range in.Onchain {
+			if rd.Token.Asset == def.Symbol && rd.ReadAt.After(latest) {
+				latest = rd.ReadAt
+			}
+		}
+		if !latest.IsZero() {
+			var err error
+			stored, err = store.stableSupplySnapshots(ctx, def.ID, "onchain", tz.UpdatedAt.Add(-stableAuthorizedNear), latest)
+			if err != nil {
+				slog.Warn("stablecoin tether authorized check", "error", err)
+			}
+		}
+	}
+	out := []StableAuthorizedCheck{}
+	for _, tok := range registryTokens {
+		if tok.Asset != def.Symbol || tok.Tier != tierNative {
+			continue
+		}
+		ta, ok := authorized[tok.Network]
+		if !ok {
+			continue
+		}
+		c := StableAuthorizedCheck{Chain: tok.Network, Level: "info", IssuerUpdateID: tz.UpdateID, IssuerAsOf: stableFmt(tz.UpdatedAt),
+			TotalAuthorizedNative: stableF(ta), Result: "skipped"}
+		rd, has := in.Onchain[tok.Network+"|"+tok.Contract]
+		if has {
+			c.OnchainNative, c.OnchainAsOf = stableF(rd.SupplyNative), stableFmt(rd.ReadAt)
+		}
+		switch {
+		case !has:
+			c.SkipReason = "missing_onchain"
+		case rd.Stale:
+			c.SkipReason = "onchain_stale"
+		case rd.ReadAt.Before(tz.UpdatedAt):
+			c.SkipReason = "onchain_older_than_snapshot"
+		default:
+			earliest, changed := rd.ReadAt, false
+			for _, s := range stored {
+				if s.Chain != stableOnchainKey(tok) || s.OnchainTotalNative == nil || s.TS.After(rd.ReadAt) {
+					continue
+				}
+				if s.TS.Before(earliest) {
+					earliest = s.TS
+				}
+				if math.Abs(*s.OnchainTotalNative-rd.SupplyNative) > stableAuthorizedTolNative {
+					changed = true
+				}
+			}
+			switch {
+			case earliest.Sub(tz.UpdatedAt) > stableAuthorizedNear:
+				c.SkipReason = "no_reading_near_snapshot"
+			case changed:
+				c.SkipReason = "supply_changed_since_snapshot"
+			default:
+				c.DiffNative = stableF(rd.SupplyNative - ta)
+				c.Result = "match"
+				if math.Abs(*c.DiffNative) > stableAuthorizedTolNative {
+					c.Result = "mismatch"
+				}
+			}
+		}
+		out = append(out, c)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Chain < out[j].Chain })
 	return out
@@ -604,8 +801,9 @@ type stableSupplySampler struct {
 	rpcAt       time.Time
 	chartsDue   time.Time
 	ratesDue    time.Time
-	streak      map[string]int
+	reconState  *stableReconState
 	recon       map[string][]StableReconOnchain
+	authorized  map[string][]StableAuthorizedCheck
 	reconAsOf   time.Time
 	state       *stableSupplyState
 	pruneDue    time.Time
@@ -613,7 +811,8 @@ type stableSupplySampler struct {
 
 func newStableSupplySampler(settings stableSettings, store *riskStore, ep stableEndpoints, rpcs func(string) []string, now func() time.Time) *stableSupplySampler {
 	return &stableSupplySampler{settings: settings, store: store, ep: ep, rpcs: rpcs, now: now,
-		onchain: map[string]stableOnchainReading{}, streak: map[string]int{}, recon: map[string][]StableReconOnchain{}}
+		onchain: map[string]stableOnchainReading{}, reconState: newStableReconState(), recon: map[string][]StableReconOnchain{},
+		authorized: map[string][]StableAuthorizedCheck{}}
 }
 
 func (s *stableSupplySampler) enabled(key string) bool { return s.settings.Providers[key] }
@@ -903,17 +1102,29 @@ func (s *stableSupplySampler) compute(ctx context.Context, in stableSupplyInputs
 		}
 		state.MarketTotalUSD, state.MarketAsOf = stableF(total), in.Llama.AsOf
 	}
+	// The Tether info check reads stored snapshots, so it runs before the
+	// lock; both S12 on-chain views refresh on RPC ticks only.
+	var authorized map[string][]StableAuthorizedCheck
+	if rpcFresh {
+		authorized = map[string][]StableAuthorizedCheck{}
+		for _, def := range stableCoreAssets {
+			if cs := stableTetherAuthorizedChecks(ctx, s.store, def, in); cs != nil {
+				authorized[def.ID] = cs
+			}
+		}
+	}
 	s.mu.Lock()
 	if rpcFresh {
 		for _, def := range stableCoreAssets {
-			s.recon[def.ID] = stableOnchainRecon(def, in, s.streak)
+			s.recon[def.ID] = stableOnchainRecon(def, in, s.reconState)
 		}
-		s.reconAsOf = now
+		s.authorized, s.reconAsOf = authorized, now
 	}
 	recon := make(map[string][]StableReconOnchain, len(s.recon))
 	for k, v := range s.recon {
 		recon[k] = v
 	}
+	authorized = s.authorized
 	reconAsOf := s.reconAsOf
 	s.mu.Unlock()
 	for _, def := range stableCoreAssets {
@@ -921,6 +1132,7 @@ func (s *stableSupplySampler) compute(ctx context.Context, in stableSupplyInputs
 		if r, ok := recon[def.ID]; ok {
 			a.Reconcile.Onchain, a.Reconcile.OnchainAsOf = r, stableFmt(reconAsOf)
 		}
+		a.Reconcile.TetherAuthorized = authorized[def.ID]
 		var llama *llamaAsset
 		if in.Llama.Has {
 			if la, ok := in.Llama.Value.core(def.ID); ok {

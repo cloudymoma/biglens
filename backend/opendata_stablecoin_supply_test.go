@@ -186,11 +186,11 @@ func TestStableOnchainRecon(t *testing.T) {
 		t.Fatalf("no recon row for %s in %+v", chain, rs)
 		return StableReconOnchain{}
 	}
-	streak := map[string]int{}
+	streak := newStableReconState()
 	// Excess exactly at the tolerance (1M) does not exceed it.
 	rs := stableOnchainRecon(def, mk(299e6, issuedAt.Add(15*time.Minute)), streak)
 	eth := find(rs, "eth")
-	if !eth.Aligned || eth.ExceedsTolerance || eth.ConsecutiveSamples != 0 || eth.SkipReason != "" {
+	if !eth.Aligned || eth.ExceedsTolerance || eth.ConsecutiveSamples != 0 || eth.SkipReason != "" || eth.Method != "aligned_15m" {
 		t.Errorf("at tolerance, 15 min skew: %+v", eth)
 	}
 	approxPtr(t, "excess", eth.ExcessNative, 1e6, 1e-6)
@@ -199,15 +199,15 @@ func TestStableOnchainRecon(t *testing.T) {
 	if b := find(rs, "base"); b.SkipReason != "missing_onchain" || b.ExceedsTolerance {
 		t.Errorf("base without reading: %+v", b)
 	}
-	// One unit over: exceeds; two hourly samples in a row count up.
+	// One unit over: exceeds; two hourly samples in a row count up and confirm.
 	for i := 1; i <= 2; i++ {
 		eth = find(stableOnchainRecon(def, mk(299e6-1, issuedAt.Add(time.Minute)), streak), "eth")
-		if !eth.ExceedsTolerance || eth.ConsecutiveSamples != i {
+		if !eth.ExceedsTolerance || eth.ConsecutiveSamples != i || eth.Confirmed != (i == 2) {
 			t.Errorf("sample %d over tolerance: %+v", i, eth)
 		}
 	}
 	// A clean sample resets the streak.
-	if eth = find(stableOnchainRecon(def, mk(300e6, issuedAt), streak), "eth"); eth.ExceedsTolerance || eth.ConsecutiveSamples != 0 {
+	if eth = find(stableOnchainRecon(def, mk(300e6, issuedAt), streak), "eth"); eth.ExceedsTolerance || eth.ConsecutiveSamples != 0 || eth.Confirmed {
 		t.Errorf("clean sample: %+v", eth)
 	}
 	// Readings more than 15 minutes apart are not compared.
@@ -216,12 +216,183 @@ func TestStableOnchainRecon(t *testing.T) {
 		t.Errorf("15m01s skew: %+v", eth)
 	}
 
-	// Tether's per-chain data is hours old, so USDT pairs are skipped as not aligned.
+	// USDT has no 15-minute pairing: the fixture's Tether data is ~62 h old
+	// and is still compared with the latest on-chain total.
 	in, fetched := stableFixtureInputs(t)
 	in.Onchain = stableTestReadings("USDT", fetched, map[string]float64{"eth": fxTetherEthAuthorized})
 	usdt, _ := stableAssetByID("usdt")
-	if r := find(stableOnchainRecon(usdt, in, map[string]int{}), "eth"); r.SkipReason != "not_aligned" || r.SkewSeconds == nil {
+	if r := find(stableOnchainRecon(usdt, in, newStableReconState()), "eth"); r.SkipReason != "" || r.Method != "latest_update" ||
+		r.ExceedsTolerance || r.IssuerUpdateID != fxTetherUpdateID || r.SkewSeconds == nil {
 		t.Errorf("usdt eth recon = %+v", r)
+	}
+}
+
+// S12 USDT exception: the latest Tether snapshot against the latest RPC
+// total, confirmed across 2 consecutive Tether updates (new id); snapshots
+// older than 7 days are skipped.
+func TestStableOnchainReconUSDT(t *testing.T) {
+	def, _ := stableAssetByID("usdt")
+	t0 := time.Date(2026, 10, 16, 23, 30, 0, 0, time.UTC)
+	// Circulating 900M on Ethereum (1,000M authorized − 100M not issued).
+	mk := func(id int64, at time.Time, onchain float64, readAt time.Time) stableSupplyInputs {
+		tz := tetherSnapshot{UpdateID: id, UpdatedAt: at, Chains: []tetherChain{
+			{Name: "Ethereum", TotalAuthorizedNative: 1000e6, NotIssuedNative: 100e6, CirculatingNative: 900e6}}}
+		return stableSupplyInputs{Tether: stableResult[tetherSnapshot]{Value: tz, Has: true},
+			Onchain: stableTestReadings("USDT", readAt, map[string]float64{"eth": onchain})}
+	}
+	st := newStableReconState()
+	eth := func(in stableSupplyInputs) StableReconOnchain {
+		t.Helper()
+		for _, r := range stableOnchainRecon(def, in, st) {
+			if r.Chain == "eth" {
+				return r
+			}
+		}
+		t.Fatal("no eth row")
+		return StableReconOnchain{}
+	}
+	h := time.Hour
+	// 30 h old data is compared; on-chain ≥ issuer circulating is clean.
+	r := eth(mk(1, t0, 1000e6, t0.Add(30*h)))
+	if r.Method != "latest_update" || r.SkipReason != "" || r.Aligned || r.ExceedsTolerance || r.IssuerUpdateID != 1 ||
+		r.SkewSeconds == nil || *r.SkewSeconds != 30*3600 || r.ConsecutiveUpdates != 0 || r.Confirmed {
+		t.Errorf("clean, 30 h old: %+v", r)
+	}
+	// Issuer circulating exceeds the on-chain total by 2M (> max(0.1%, 1M)):
+	// the first update with the condition is not confirmed.
+	if r = eth(mk(1, t0, 898e6, t0.Add(31*h))); !r.ExceedsTolerance || r.ConsecutiveUpdates != 1 || r.Confirmed {
+		t.Errorf("update 1 over tolerance: %+v", r)
+	}
+	approxPtr(t, "excess", r.ExcessNative, 2e6, 1e-6)
+	// More hourly samples of the same update do not count.
+	if r = eth(mk(1, t0, 898e6, t0.Add(32*h))); r.ConsecutiveUpdates != 1 || r.Confirmed {
+		t.Errorf("update 1 again: %+v", r)
+	}
+	// A new update with the condition confirms it.
+	if r = eth(mk(2, t0.Add(24*h), 898e6, t0.Add(33*h))); r.ConsecutiveUpdates != 2 || !r.Confirmed {
+		t.Errorf("update 2 over tolerance: %+v", r)
+	}
+	// A failed RPC read is skipped and keeps the state.
+	in := mk(3, t0.Add(48*h), 898e6, t0.Add(49*h))
+	for k, rd := range in.Onchain {
+		rd.Stale, rd.Code = true, "timeout"
+		in.Onchain[k] = rd
+	}
+	if r = eth(in); r.SkipReason != "onchain_stale" || r.ExceedsTolerance || r.ConsecutiveUpdates != 0 || r.Confirmed {
+		t.Errorf("stale on-chain reading: %+v", r)
+	}
+	if r = eth(mk(3, t0.Add(48*h), 898e6, t0.Add(50*h))); r.ConsecutiveUpdates != 3 || !r.Confirmed {
+		t.Errorf("update 3 over tolerance after a failed read: %+v", r)
+	}
+	// The condition clearing on the same update resets the count.
+	if r = eth(mk(3, t0.Add(48*h), 1000e6, t0.Add(51*h))); r.ExceedsTolerance || r.ConsecutiveUpdates != 0 || r.Confirmed {
+		t.Errorf("update 3 clean: %+v", r)
+	}
+	if r = eth(mk(4, t0.Add(72*h), 898e6, t0.Add(73*h))); r.ConsecutiveUpdates != 1 || r.Confirmed {
+		t.Errorf("update 4 after a clean update: %+v", r)
+	}
+	// No on-chain reading at all.
+	in = mk(4, t0.Add(72*h), 898e6, t0.Add(74*h))
+	in.Onchain = map[string]stableOnchainReading{}
+	if r = eth(in); r.SkipReason != "missing_onchain" || r.OnchainNative != nil {
+		t.Errorf("missing reading: %+v", r)
+	}
+	// A snapshot older than 7 days is skipped and clears the history.
+	if r = eth(mk(4, t0.Add(72*h), 898e6, t0.Add(72*h+7*24*h+time.Second))); r.SkipReason != "issuer_stale" || r.ExceedsTolerance || r.Confirmed {
+		t.Errorf("8 day old snapshot: %+v", r)
+	}
+	if r = eth(mk(5, t0.Add(300*h), 898e6, t0.Add(301*h))); r.ConsecutiveUpdates != 1 || r.Confirmed {
+		t.Errorf("first update after a stale snapshot: %+v", r)
+	}
+}
+
+// S12 info check: Tether totalAuthorized equals the on-chain totalSupply of
+// the chain when no Issue/Redeem happened since the snapshot, i.e. the
+// stored hourly readings from the one nearest the snapshot (±1 h) to the
+// latest are unchanged.
+func TestStableTetherAuthorizedChecks(t *testing.T) {
+	ctx := context.Background()
+	usdt, _ := stableAssetByID("usdt")
+	snapAt := time.Date(2026, 10, 16, 23, 30, 0, 0, time.UTC)
+	tz := tetherSnapshot{UpdateID: snapAt.Unix(), UpdatedAt: snapAt, Chains: []tetherChain{
+		{Name: "Ethereum", TotalAuthorizedNative: 1000e6, NotIssuedNative: 50e6, CirculatingNative: 950e6},
+		{Name: "Tron", TotalAuthorizedNative: 2000e6, NotIssuedNative: 10e6, CirculatingNative: 1990e6},
+		{Name: "Solana", TotalAuthorizedNative: 300e6, NotIssuedNative: 30e6, CirculatingNative: 270e6},
+	}}
+	store := newTestRiskStore(t)
+	reading := func(chain string, at time.Time, v float64) stableSupplySnapshot {
+		return stableSupplySnapshot{TS: at, Asset: "usdt", Chain: chain, Source: "onchain", OnchainTotalNative: btcFloatPtr(v), FetchedAt: at}
+	}
+	var rows []stableSupplySnapshot
+	for i := 0; i < 5; i++ {
+		at := snapAt.Add(-20*time.Minute + time.Duration(i)*time.Hour)
+		rows = append(rows, reading("eth", at, 1000e6))
+		tron := 2000e6
+		if i >= 2 {
+			tron = 2010e6 // an Issue after the snapshot
+		}
+		rows = append(rows, reading("tron", at, tron))
+	}
+	rows = append(rows, reading("sol", snapAt.Add(3*time.Hour), 300e6)) // first Solana reading 3 h after the snapshot
+	if err := store.insertStableSupplySnapshots(ctx, rows); err != nil {
+		t.Fatal(err)
+	}
+	readAt := snapAt.Add(5 * time.Hour)
+	mkIn := func(tz tetherSnapshot) stableSupplyInputs {
+		return stableSupplyInputs{Tether: stableResult[tetherSnapshot]{Value: tz, Has: true},
+			Onchain: stableTestReadings("USDT", readAt, map[string]float64{"eth": 1000e6, "tron": 2010e6, "sol": 300e6})}
+	}
+	by := func(cs []StableAuthorizedCheck) map[string]StableAuthorizedCheck {
+		out := map[string]StableAuthorizedCheck{}
+		for _, c := range cs {
+			out[c.Chain] = c
+		}
+		return out
+	}
+	got := by(stableTetherAuthorizedChecks(ctx, store, usdt, mkIn(tz)))
+	if len(got) != 3 {
+		t.Fatalf("checks = %+v, want eth, tron and sol", got)
+	}
+	if c := got["eth"]; c.Result != "match" || c.Level != "info" || c.IssuerUpdateID != snapAt.Unix() || c.DiffNative == nil || *c.DiffNative != 0 {
+		t.Errorf("eth = %+v", c)
+	}
+	if c := got["tron"]; c.Result != "skipped" || c.SkipReason != "supply_changed_since_snapshot" || c.DiffNative != nil {
+		t.Errorf("tron = %+v", c)
+	}
+	if c := got["sol"]; c.Result != "skipped" || c.SkipReason != "no_reading_near_snapshot" {
+		t.Errorf("sol = %+v", c)
+	}
+	// totalAuthorized differing from an unchanged supply is a mismatch (info only).
+	tz2 := tz
+	tz2.Chains = append([]tetherChain(nil), tz.Chains...)
+	tz2.Chains[0].TotalAuthorizedNative = 1000e6 + 5
+	if c := by(stableTetherAuthorizedChecks(ctx, store, usdt, mkIn(tz2)))["eth"]; c.Result != "mismatch" || c.Level != "info" || c.DiffNative == nil || *c.DiffNative != -5 {
+		t.Errorf("eth mismatch = %+v", c)
+	}
+	// A stale reading, or one older than the snapshot, is not checked.
+	in := mkIn(tz)
+	for k, rd := range in.Onchain {
+		rd.Stale = true
+		in.Onchain[k] = rd
+	}
+	if c := by(stableTetherAuthorizedChecks(ctx, store, usdt, in))["eth"]; c.Result != "skipped" || c.SkipReason != "onchain_stale" {
+		t.Errorf("stale = %+v", c)
+	}
+	in = mkIn(tz)
+	in.Onchain = stableTestReadings("USDT", snapAt.Add(-10*time.Minute), map[string]float64{"eth": 1000e6})
+	if c := by(stableTetherAuthorizedChecks(ctx, store, usdt, in))["eth"]; c.Result != "skipped" || c.SkipReason != "onchain_older_than_snapshot" {
+		t.Errorf("reading before the snapshot = %+v", c)
+	}
+	// Without a store only the latest reading counts: within 1 h after the snapshot it is enough.
+	in = mkIn(tz)
+	in.Onchain = stableTestReadings("USDT", snapAt.Add(30*time.Minute), map[string]float64{"eth": 1000e6})
+	if c := by(stableTetherAuthorizedChecks(ctx, nil, usdt, in))["eth"]; c.Result != "match" {
+		t.Errorf("no store, reading 30 min after = %+v", c)
+	}
+	// Circle-issued assets have no such check.
+	usdc, _ := stableAssetByID("usdc")
+	if cs := stableTetherAuthorizedChecks(ctx, store, usdc, mkIn(tz)); len(cs) != 0 {
+		t.Errorf("usdc checks = %+v", cs)
 	}
 }
 
@@ -460,6 +631,25 @@ func TestStableSupplySamplerTick(t *testing.T) {
 	}
 	if r := st.Assets["eurc"].Reconcile.Onchain; len(r) == 0 || st.Assets["eurc"].Reconcile.OnchainAsOf == "" {
 		t.Errorf("eurc on-chain recon = %+v", st.Assets["eurc"].Reconcile)
+	}
+	// USDT: compared against the ~62 h old Tether update; the info check
+	// needs a reading within an hour of the snapshot, which a fresh start lacks.
+	usdtRec := st.Assets["usdt"].Reconcile
+	for _, r := range usdtRec.Onchain {
+		if r.Chain == "eth" && (r.Method != "latest_update" || r.SkipReason != "" || r.ExceedsTolerance) {
+			t.Errorf("usdt eth recon = %+v", r)
+		}
+	}
+	if len(usdtRec.TetherAuthorized) != 3 {
+		t.Errorf("usdt authorized checks = %+v, want eth, tron and sol", usdtRec.TetherAuthorized)
+	}
+	for _, c := range usdtRec.TetherAuthorized {
+		if c.Result != "skipped" || c.SkipReason != "no_reading_near_snapshot" {
+			t.Errorf("usdt authorized check = %+v", c)
+		}
+	}
+	if st.Assets["usdc"].Reconcile.TetherAuthorized != nil {
+		t.Errorf("usdc has Tether checks: %+v", st.Assets["usdc"].Reconcile.TetherAuthorized)
 	}
 	if st.MarketTotalUSD == nil || *st.MarketTotalUSD <= 0 {
 		t.Errorf("market total = %v", st.MarketTotalUSD)
