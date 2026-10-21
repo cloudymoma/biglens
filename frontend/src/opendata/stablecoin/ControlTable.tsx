@@ -1,7 +1,7 @@
 import { fmtDateTime, fmtShortAddr } from './format';
 import { cx } from './styles';
 import type { StableControlDeployment, StableControlField } from './types';
-import { ExtLink } from './ui';
+import { CsvButton, ExtLink } from './ui';
 
 // ControlTable (stablecoin.md §7.2, tab 6): one deployment's control state.
 // Values are the confirmed ones (a change needs 2 consecutive samples or 2
@@ -61,9 +61,34 @@ export default function ControlTable({ d }: { d: StableControlDeployment }) {
             </ExtLink>
           </span>
         </div>
-        <div className={`text-[11px] ${cx.muted}`}>
-          {d.monitoring_since ? `Monitoring since ${fmtDateTime(d.monitoring_since)}` : 'Waiting for the first confirmed snapshot'}
-          {d.last_change && ` · last change ${fmtDateTime(d.last_change)}`}
+        <div className={`flex flex-wrap items-center gap-2 text-[11px] ${cx.muted}`}>
+          <span>
+            {d.monitoring_since ? `Monitoring since ${fmtDateTime(d.monitoring_since)}` : 'Waiting for the first confirmed snapshot'}
+            {d.last_change && ` · last change ${fmtDateTime(d.last_change)}`}
+          </span>
+          <CsvButton
+            filename={`stablecoin-controls-${d.asset}-${d.chain}.csv`}
+            label={`${d.asset.toUpperCase()} ${d.chain_label} control state`}
+            headers={['asset', 'chain', 'contract', 'field', 'value', 'unset', 'baseline', 'first_seen', 'confirmed_at', 'confirmed_by', 'last_read_at', 'read_error', 'pending_value', 'endpoint']}
+            rows={() =>
+              d.fields.map(f => [
+                d.asset,
+                d.chain,
+                d.contract,
+                f.field,
+                f.value,
+                f.unset ? 'yes' : 'no',
+                f.baseline ? 'yes' : 'no',
+                f.first_seen ?? '',
+                f.confirmed_at ?? '',
+                f.confirmed_by ?? '',
+                f.last_read_at ?? '',
+                f.read_error ?? '',
+                f.pending?.value ?? '',
+                f.endpoint ?? '',
+              ])
+            }
+          />
         </div>
       </div>
       <div className={`mt-1 text-[11px] ${cx.text}`}>

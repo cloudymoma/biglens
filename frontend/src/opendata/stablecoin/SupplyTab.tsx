@@ -251,10 +251,39 @@ function AssetSupply({ a, matrix, watchlist }: { a: StableSupplyAsset; matrix: S
         )}
       </Panel>
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        <Panel title="Per-chain distribution" help="Issuer circulating by chain (DefiLlama where the issuer gives no per-chain figure).">
+        <Panel
+          title="Per-chain distribution"
+          help="Issuer circulating by chain (DefiLlama where the issuer gives no per-chain figure)."
+          right={
+            <CsvButton
+              filename={`stablecoin-distribution-${a.asset}.csv`}
+              label={`${a.symbol} distribution by chain`}
+              headers={['chain', 'circulating_native', 'source', 'share_pct']}
+              rows={() =>
+                a.chains.map(r => [
+                  r.chain_label,
+                  r.issuer_circulating_native ?? r.aggregator_circulating_native,
+                  r.issuer_circulating_native !== null ? 'issuer' : 'defillama',
+                  r.issuer_share_pct,
+                ])
+              }
+            />
+          }
+        >
           {a.chains.length === 0 ? <ColdState>Waiting for the first supply sample.</ColdState> : <ReactECharts option={treemapOption(theme, a)} notMerge style={{ height: 300 }} />}
         </Panel>
-        <Panel title="Chain migration (7 days)" help="Each chain's 7-day change in native units: current supply × (1 − 1 ÷ (1 + 7d change)). Chains that gained supply are colored; chains that lost it are grey.">
+        <Panel
+          title="Chain migration (7 days)"
+          help="Each chain's 7-day change in native units: current supply × (1 − 1 ÷ (1 + 7d change)); the 12 largest moves. Chains that gained supply are colored; chains that lost it are grey."
+          right={
+            <CsvButton
+              filename={`stablecoin-migration-${a.asset}.csv`}
+              label={`${a.symbol} 7-day chain migration`}
+              headers={['chain', 'change_7d_native', 'change_7d_pct']}
+              rows={() => a.chains.filter(r => delta7d(r) !== null).map(r => [r.chain_label, delta7d(r), r.change_7d_pct])}
+            />
+          }
+        >
           {rowsWithMigration ? <ReactECharts option={migrationOption(theme, a)} notMerge style={{ height: 300 }} /> : <ColdState>7-day changes appear once DefiLlama or issuer history covers a week.</ColdState>}
         </Panel>
       </div>

@@ -3,6 +3,7 @@ import { fmtDateTime } from './format';
 import SignalChip from './SignalChip';
 import { cx } from './styles';
 import type { StableMatrixRow, StableSignal } from './types';
+import { CsvButton } from './ui';
 
 // Risk matrix (stablecoin.md §7.2): assets × signals, no composite score.
 // Each cell shows the state word and icon; selecting a cell shows the rule,
@@ -69,12 +70,29 @@ export default function SignalMatrix({ rows, only }: { rows: StableMatrixRow[]; 
   ids.sort((a, b) => sigNum(a) - sigNum(b));
   const selRow = sel ? rows.find(r => r.asset === sel.asset) : undefined;
   const selected = sel && selRow ? selRow.signals.find(s => s.id === sel.id) : undefined;
+  const csv = (
+    <div className="mb-2 flex justify-end">
+      <CsvButton
+        filename={`stablecoin-signals-${rows.map(r => r.asset).join('-')}.csv`}
+        label="signal states"
+        headers={['asset', 'signal', 'dimension', 'policy', 'state', 'summary', 'reason', 'rule', 'as_of', 'since']}
+        rows={() =>
+          rows.flatMap(r =>
+            r.signals
+              .filter(s => ids.includes(s.id))
+              .map(s => [r.asset, s.id, s.dimension, s.policy, s.state, s.summary, s.reason ?? '', s.rule, s.as_of ?? '', s.since ?? '']),
+          )
+        }
+      />
+    </div>
+  );
 
   // One asset: signals as rows, with their summaries (fits a narrow column).
   if (rows.length === 1) {
     const r = rows[0];
     return (
       <div>
+        {csv}
         <table className={cx.table}>
           <caption className="sr-only">{r.asset.toUpperCase()} signal states. Select a state for its rule, inputs and as-of time.</caption>
           <thead>
@@ -139,6 +157,7 @@ export default function SignalMatrix({ rows, only }: { rows: StableMatrixRow[]; 
 
   return (
     <div>
+      {csv}
       <div className="overflow-x-auto">
         <table className={cx.table}>
           <caption className="sr-only">Signal states per asset. Select a cell for its rule, inputs and as-of time.</caption>

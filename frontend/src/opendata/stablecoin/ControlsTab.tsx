@@ -219,7 +219,20 @@ export default function ControlsTab({
       </Panel>
       <Freezes data={data} />
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        <Panel title="Tether quarantined" help="Tether's `quarantined` amounts per chain from its transparency JSON (latest update).">
+        <Panel
+          title="Tether quarantined"
+          help="Tether's `quarantined` amounts per chain from its transparency JSON (latest update)."
+          right={
+            data.quarantined && (
+              <CsvButton
+                filename="stablecoin-tether-quarantined.csv"
+                label="Tether quarantined amounts"
+                headers={['update_id', 'as_of', 'chain', 'quarantined_native']}
+                rows={() => (data.quarantined?.chains ?? []).map(q => [data.quarantined?.update_id ?? null, data.quarantined?.as_of ?? '', q.chain_label, q.quarantined_native])}
+              />
+            )
+          }
+        >
           {!data.quarantined ? (
             <ColdState>No Tether update yet (or USDT not selected).</ColdState>
           ) : (

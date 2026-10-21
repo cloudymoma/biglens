@@ -485,6 +485,14 @@ function DepegHistory({ peg }: { peg: StablePeg }) {
       <Panel
         title="Historical depeg annotations"
         help="Curated events with sources (Appendix C), including coins outside the core set for context."
+        right={
+          <CsvButton
+            filename="stablecoin-depeg-annotations.csv"
+            label="depeg annotations"
+            headers={['date', 'end_date', 'asset', 'title', 'extreme', 'low_price', 'status', 'source_url']}
+            rows={() => peg.annotations.map(x => [x.date, x.end_date ?? '', x.asset, x.title, x.extreme ?? '', x.low_price ?? null, x.status ?? '', x.source_url ?? ''])}
+          />
+        }
       >
         {peg.annotations.length === 0 ? (
           <ColdState>No curated annotations.</ColdState>

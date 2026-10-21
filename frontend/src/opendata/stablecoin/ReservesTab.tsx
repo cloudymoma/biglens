@@ -270,7 +270,18 @@ function AssetReserves({ a }: { a: StableReservesAsset }) {
         </Panel>
       </div>
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        <Panel title="Issuer profile" help="Legal entities, jurisdictions and roles, each with its source and as-of date.">
+        <Panel
+          title="Issuer profile"
+          help="Legal entities, jurisdictions and roles, each with its source and as-of date."
+          right={
+            <CsvButton
+              filename={`stablecoin-issuer-${a.asset}.csv`}
+              label={`${a.symbol} issuer entities`}
+              headers={['issuer', 'entity', 'jurisdiction', 'role', 'as_of', 'source_url']}
+              rows={() => (a.issuer?.entities ?? []).map(e => [a.issuer?.name ?? '', e.name, e.jurisdiction, e.role, e.as_of, e.source_url])}
+            />
+          }
+        >
           {!a.issuer ? (
             <ColdState>Issuer: unknown (not curated).</ColdState>
           ) : (
@@ -292,7 +303,18 @@ function AssetReserves({ a }: { a: StableReservesAsset }) {
             </>
           )}
         </Panel>
-        <Panel title="Redemption terms" help="Who can redeem with the issuer, minimums and fees, as stated in the issuer's terms (curated, with as-of dates).">
+        <Panel
+          title="Redemption terms"
+          help="Who can redeem with the issuer, minimums and fees, as stated in the issuer's terms (curated, with as-of dates)."
+          right={
+            <CsvButton
+              filename={`stablecoin-redemption-${a.asset}.csv`}
+              label={`${a.symbol} redemption terms`}
+              headers={['channel', 'eligibility', 'min_native', 'fee', 'as_of', 'source_url']}
+              rows={() => a.redemption.map(r => [r.channel, r.eligibility, r.min_native ?? '', r.fee ?? '', r.as_of, r.source_url])}
+            />
+          }
+        >
           {a.redemption.length === 0 ? (
             <ColdState>Redemption terms: unknown (not curated).</ColdState>
           ) : (
@@ -384,7 +406,18 @@ function RegulatoryMatrix({ assets, regimes }: { assets: StableReservesAsset[]; 
 function KeyDates({ regimes }: { regimes: StableRegime[] }) {
   const dates = regimes.flatMap(r => r.key_dates.map(k => ({ ...k, regime: r.regime }))).sort((x, y) => x.date.localeCompare(y.date));
   return (
-    <Panel title="Key dates" help="Statutory and regulatory milestones from the curated regime facts (for example the GENIUS Act's effective-date rule).">
+    <Panel
+      title="Key dates"
+      help="Statutory and regulatory milestones from the curated regime facts (for example the GENIUS Act's effective-date rule)."
+      right={
+        <CsvButton
+          filename="stablecoin-key-dates.csv"
+          label="key dates"
+          headers={['regime', 'date', 'label', 'past', 'source_url']}
+          rows={() => dates.map(k => [k.regime, k.date, k.label, k.past ? 'yes' : 'no', k.source_url ?? ''])}
+        />
+      }
+    >
       {dates.length === 0 ? (
         <ColdState>No curated key dates.</ColdState>
       ) : (
