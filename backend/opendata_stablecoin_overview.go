@@ -18,7 +18,13 @@ const (
 	// Watchlist size (§2.1): the 15 largest USD coins by circulating
 	// supply; every EUR coin is listed.
 	stableWatchUSDRows = 15
-	stableDisclaimer   = "Informational only, not financial advice. Signals are rule outputs, not ratings."
+	// Watchlist coins with |dev| >= 1,000 bps (10%) have unreliable aggregator
+	// prices (for example EURR at $0.0758 -> -9,325 bps and a bogus 108M EURR
+	// native supply = value / price); hide their native supply and deviation
+	// behind nil ("—") and attach the unreliable-price note.
+	stableWatchMaxAbsDevBps   = 1000.0
+	stableWatchUnreliableNote = "price unreliable (aggregator)"
+	stableDisclaimer          = "Informational only, not financial advice. Signals are rule outputs, not ratings."
 )
 
 // stableV1Regimes are the regulatory matrix columns in v1 (HK, SG and JP are
@@ -43,9 +49,10 @@ type StableWatchRow struct {
 	PriceUSD          *float64 `json:"price_usd"`
 	// DevBps is in the coin's own currency (§2.1): peggedUSD (price − 1) ×
 	// 1e4; peggedEUR (price ÷ EUR/USD − 1) × 1e4 with the FX consensus, null
-	// when the rate or the price is unknown.
+	// when the rate or the price is unknown, or when |dev| ≥ 1,000 bps.
 	DevBps   *float64 `json:"dev_bps"`
 	SharePct *float64 `json:"share_pct"` // of its peg type's total
+	Note     string   `json:"note,omitempty"`
 }
 
 type StableWatchlist struct {
@@ -113,6 +120,11 @@ func stableWatchlist(snap *llamaStableSnapshot, asOf time.Time, stale bool, fx *
 				case fx != nil && *fx > 0:
 					r.DevBps = stableF((*a.PriceUSD / *fx - 1) * 1e4)
 				}
+			}
+			if r.DevBps != nil && stableBpsAtLeast(*r.DevBps, stableWatchMaxAbsDevBps) {
+				r.CirculatingNative = nil
+				r.DevBps = nil
+				r.Note = stableWatchUnreliableNote
 			}
 			w.Rows = append(w.Rows, r)
 		}

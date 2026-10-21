@@ -62,6 +62,62 @@ func TestStableWatchlist(t *testing.T) {
 	}
 }
 
+// Watchlist coins with |dev| >= 1,000 bps (such as EURR at $0.0758 -> -9,325 bps
+// and a bogus 108M EURR native supply = value / price) hide their native supply
+// and deviation behind nil ("—") and carry "price unreliable (aggregator)",
+// while keeping their USD supply and share. Core-asset signals are unaffected.
+func TestStableWatchlistUnreliablePrice(t *testing.T) {
+	fx := 1.123
+	// EURR at $0.0758 with $8.2M USD value -> ~108.18M native and -9,325.02 bps.
+	eurrUSD := 8_200_000.0
+	eurrPrice := 0.0758
+	// NEAR999 is just under 1,000 bps (-999.0 bps, price = 0.9001).
+	nearPrice := 0.9001
+	// AT1000 is at the exact 1,000 bps boundary (-1,000.0 bps, price = 0.9000).
+	at1000Price := 0.9000
+	snap := &llamaStableSnapshot{Assets: []llamaAsset{
+		{LlamaID: "1", Symbol: "USDT", Name: "Tether", PegType: "peggedUSD", PegMechanism: "fiat-backed",
+			PriceUSD: stableF(0.9999), CirculatingNative: stableF(183_000e6), CirculatingUSD: stableF(183_000e6 * 0.9999)},
+		{LlamaID: "50", Symbol: "EURC", Name: "EURC", PegType: "peggedEUR", PegMechanism: "fiat-backed",
+			PriceUSD: stableF(1.123), CirculatingNative: stableF(440e6), CirculatingUSD: stableF(440e6 * 1.123)},
+		{LlamaID: "80", Symbol: "EURR", Name: "StablR Euro", PegType: "peggedEUR", PegMechanism: "fiat-backed",
+			PriceUSD: stableF(eurrPrice), CirculatingNative: stableF(eurrUSD / eurrPrice), CirculatingUSD: stableF(eurrUSD)},
+		{LlamaID: "81", Symbol: "NEAR999", Name: "Just Under 1000", PegType: "peggedUSD", PegMechanism: "fiat-backed",
+			PriceUSD: stableF(nearPrice), CirculatingNative: stableF(50e6), CirculatingUSD: stableF(50e6 * nearPrice)},
+		{LlamaID: "82", Symbol: "AT1000", Name: "Exact 1000", PegType: "peggedUSD", PegMechanism: "fiat-backed",
+			PriceUSD: stableF(at1000Price), CirculatingNative: stableF(40e6), CirculatingUSD: stableF(40e6 * at1000Price)},
+	}}
+	at := time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC)
+	w := stableWatchlist(snap, at, false, stableF(fx), at)
+	by := map[string]StableWatchRow{}
+	for _, r := range w.Rows {
+		by[r.Symbol] = r
+	}
+
+	eurr := by["EURR"]
+	if eurr.DevBps != nil || eurr.CirculatingNative != nil {
+		t.Errorf("EURR ($0.0758, -9325 bps): dev=%v native=%v, want both nil (rendered as —)", eurr.DevBps, eurr.CirculatingNative)
+	}
+	if eurr.Note != "price unreliable (aggregator)" {
+		t.Errorf("EURR note = %q, want %q", eurr.Note, "price unreliable (aggregator)")
+	}
+	if eurr.CirculatingUSD == nil || *eurr.CirculatingUSD != eurrUSD || eurr.SharePct == nil || *eurr.SharePct <= 0 {
+		t.Errorf("EURR USD supply=%v share=%v, want both preserved", eurr.CirculatingUSD, eurr.SharePct)
+	}
+
+	near := by["NEAR999"]
+	if near.DevBps == nil || math.Abs(*near.DevBps - -999.0) > 1e-6 || near.CirculatingNative == nil || *near.CirculatingNative != 50e6 || near.Note != "" {
+		t.Errorf("NEAR999 (-999 bps, just under 1,000 bps): dev=%v native=%v note=%q, want -999 bps, 50M native and empty note",
+			near.DevBps, near.CirculatingNative, near.Note)
+	}
+
+	at1000 := by["AT1000"]
+	if at1000.DevBps != nil || at1000.CirculatingNative != nil || at1000.Note != "price unreliable (aggregator)" {
+		t.Errorf("AT1000 (-1000 bps boundary): dev=%v native=%v note=%q, want nil/nil and unreliable note",
+			at1000.DevBps, at1000.CirculatingNative, at1000.Note)
+	}
+}
+
 // §2.1: the 15 largest USD coins by circulating supply, plus every EUR coin.
 func TestStableWatchlistSize(t *testing.T) {
 	snap := &llamaStableSnapshot{}

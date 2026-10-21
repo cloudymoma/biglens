@@ -2,6 +2,9 @@
 // units are always visible (§7.3).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   fmtBps,
   fmtDateTime,
@@ -64,4 +67,13 @@ test('addresses are shortened, not altered', () => {
   assert.equal(fmtShortAddr('0xdac17f958d2ee523a2206206994597c13d831ec7'), '0xdac1…1ec7');
   assert.equal(fmtShortAddr('TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t'), 'TR7NHq…Lj6t');
   assert.equal(fmtShortAddr('short'), 'short');
+});
+
+test('watchlist MarketTable renders row notes alongside — for unreliable aggregator prices', () => {
+  const dir = dirname(fileURLToPath(import.meta.url));
+  const overviewSrc = readFileSync(join(dir, '../src/opendata/stablecoin/OverviewTab.tsx'), 'utf8');
+  assert.ok(
+    overviewSrc.includes('r.note') && overviewSrc.includes('fmtBps(r.dev_bps)'),
+    'MarketTable must render r.note when a watchlist row has an unreliable aggregator price',
+  );
 });

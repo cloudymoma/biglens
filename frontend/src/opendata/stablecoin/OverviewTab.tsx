@@ -251,9 +251,9 @@ function MarketTable({ w }: { w: StableWatchlist }) {
         <CsvButton
           filename="stablecoin-watchlist.csv"
           label="watchlist"
-          headers={['symbol', 'name', 'peg_type', 'peg_mechanism', 'circulating_native', 'circulating_usd', 'change_1d_pct', 'change_7d_pct', 'change_30d_pct', 'price_usd', 'dev_bps', 'share_pct']}
+          headers={['symbol', 'name', 'peg_type', 'peg_mechanism', 'circulating_native', 'circulating_usd', 'change_1d_pct', 'change_7d_pct', 'change_30d_pct', 'price_usd', 'dev_bps', 'share_pct', 'note']}
           rows={() =>
-            w.rows.map(r => [r.symbol, r.name, r.peg_type, r.peg_mechanism, r.circulating_native, r.circulating_usd, r.change_1d_pct, r.change_7d_pct, r.change_30d_pct, r.price_usd, r.dev_bps, r.share_pct])
+            w.rows.map(r => [r.symbol, r.name, r.peg_type, r.peg_mechanism, r.circulating_native, r.circulating_usd, r.change_1d_pct, r.change_7d_pct, r.change_30d_pct, r.price_usd, r.dev_bps, r.share_pct, r.note ?? ''])
           }
         />
       }
@@ -305,7 +305,10 @@ function MarketTable({ w }: { w: StableWatchlist }) {
                     <td className={`${cx.td} font-mono`}>{fmtPct(r.change_7d_pct, 2, true)}</td>
                     <td className={`${cx.td} font-mono`}>{fmtPct(r.change_30d_pct, 2, true)}</td>
                     <td className={`${cx.td} font-mono`}>{fmtPrice(r.price_usd, 'USD', 4)}</td>
-                    <td className={`${cx.td} font-mono`}>{fmtBps(r.dev_bps)}</td>
+                    <td className={`${cx.td} font-mono`}>
+                      {fmtBps(r.dev_bps)}
+                      {r.note && <span className={`ml-1.5 font-sans text-[11px] ${cx.muted}`}>{r.note}</span>}
+                    </td>
                     <td className={`${cx.td} font-mono`}>{fmtPct(r.share_pct, 2)}</td>
                   </tr>
                 ))}

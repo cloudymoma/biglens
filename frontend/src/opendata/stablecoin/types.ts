@@ -206,6 +206,7 @@ export interface StableWatchRow {
   price_usd: number | null;
   dev_bps: number | null;
   share_pct: number | null;
+  note?: string;
 }
 
 export interface StableWatchlist {
