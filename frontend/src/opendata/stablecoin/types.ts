@@ -273,6 +273,9 @@ export interface StableDepegDay {
   source: string;
   close: number;
   close_dev_bps: number;
+  vwap?: number | null;
+  vwap_dev_bps?: number | null;
+  dev_bps: number;
   threshold_bps: number;
   min_dev_bps?: number | null;
   max_dev_bps?: number | null;
@@ -293,6 +296,9 @@ export interface StableDepegClose {
   day: string;
   source: string;
   close: number;
+  vwap?: number | null;
+  close_dev_bps?: number | null;
+  vwap_dev_bps?: number | null;
   dev_bps: number;
   threshold_bps: number;
 }
@@ -300,6 +306,8 @@ export interface StableDepegClose {
 export interface StableLastDeviation {
   day: string;
   source: string;
+  source_label?: string;
+  threshold_bps: number;
   dev_bps: number;
   days_since: number;
 }

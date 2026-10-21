@@ -124,6 +124,7 @@ type stableOHLC struct {
 	Day                    string
 	TS                     int64
 	Open, High, Low, Close float64
+	VWAP                   float64
 }
 
 // parseBitstampOHLC reads /api/v2/ohlc/{pair}/: data.pair must match.
@@ -196,20 +197,20 @@ func parseKrakenOHLC(body []byte, wantPair string) ([]stableOHLC, error) {
 	}
 	out := make([]stableOHLC, 0, len(rows))
 	for _, r := range rows {
-		if len(r) < 5 {
+		if len(r) < 6 {
 			return nil, errors.New("short candle")
 		}
-		var ts, o, h, l, cl stableNum
+		var ts, o, h, l, cl, vw stableNum
 		if json.Unmarshal(r[0], &ts) != nil || json.Unmarshal(r[1], &o) != nil ||
 			json.Unmarshal(r[2], &h) != nil || json.Unmarshal(r[3], &l) != nil ||
-			json.Unmarshal(r[4], &cl) != nil ||
-			!ts.Set || !(ts.V > 0) || !o.Set || !(o.V > 0) || !h.Set || !l.Set || !cl.Set ||
-			!(l.V > 0) || !(cl.V > 0) || h.V < l.V {
+			json.Unmarshal(r[4], &cl) != nil || json.Unmarshal(r[5], &vw) != nil ||
+			!ts.Set || !(ts.V > 0) || !o.Set || !(o.V > 0) || !h.Set || !l.Set || !cl.Set || !vw.Set ||
+			!(l.V > 0) || !(cl.V > 0) || !(vw.V > 0) || h.V < l.V {
 			return nil, errors.New("malformed candle")
 		}
 		sec := int64(ts.V)
 		out = append(out, stableOHLC{Day: time.Unix(sec, 0).UTC().Format(time.DateOnly), TS: sec,
-			Open: o.V, High: h.V, Low: l.V, Close: cl.V})
+			Open: o.V, High: h.V, Low: l.V, Close: cl.V, VWAP: vw.V})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].TS < out[j].TS })
 	return out, nil
@@ -290,6 +291,17 @@ func (s *riskStore) stableLatestPegDay(ctx context.Context, asset, source string
 	}
 	var day sql.NullString
 	err := s.db.QueryRowContext(ctx, `SELECT MAX(day) FROM stable_peg_daily WHERE asset = ? AND source = ?`, asset, source).Scan(&day)
+	return day.String, err
+}
+
+// stableLatestKrakenDayWithVWAP is the newest stored Kraken OHLC day that has
+// a populated vwap column ("" if none, triggering a full backfill).
+func (s *riskStore) stableLatestKrakenDayWithVWAP(ctx context.Context, asset string) (string, error) {
+	if err := s.ensureStableSchema(ctx); err != nil {
+		return "", err
+	}
+	var day sql.NullString
+	err := s.db.QueryRowContext(ctx, `SELECT MAX(day) FROM stable_peg_daily WHERE asset = ? AND source = ? AND vwap IS NOT NULL`, asset, stablePegSourceKraken).Scan(&day)
 	return day.String, err
 }
 
@@ -423,10 +435,10 @@ func (p *stablePegSampler) syncOHLC(ctx context.Context, asset, pair, label stri
 
 // syncKrakenOHLC refreshes Kraken's daily EURCEUR candles (up to 720 days per
 // call; EURCEUR starts on 2025-09-18). On incremental runs it re-reads from 3
-// days before the newest stored day so the in-progress candle settles.
+// days before the newest stored day (with VWAP) so the in-progress candle settles.
 func (p *stablePegSampler) syncKrakenOHLC(ctx context.Context, asset, pair string, now time.Time) string {
 	var since time.Time
-	if last, err := p.store.stableLatestPegDay(ctx, asset, stablePegSourceKraken); err == nil && last != "" {
+	if last, err := p.store.stableLatestKrakenDayWithVWAP(ctx, asset); err == nil && last != "" {
 		if d, err := time.Parse(time.DateOnly, last); err == nil {
 			since = d.Add(-stableOHLCOverlap)
 		}
@@ -440,8 +452,8 @@ func (p *stablePegSampler) syncKrakenOHLC(ctx context.Context, asset, pair strin
 	}
 	daily := make([]stablePegDaily, 0, len(rows))
 	for _, c := range rows {
-		o, h, l, cl := c.Open, c.High, c.Low, c.Close
-		daily = append(daily, stablePegDaily{Day: c.Day, Asset: asset, Source: stablePegSourceKraken, Open: &o, High: &h, Low: &l, Close: &cl,
+		o, h, l, cl, vw := c.Open, c.High, c.Low, c.Close, c.VWAP
+		daily = append(daily, stablePegDaily{Day: c.Day, Asset: asset, Source: stablePegSourceKraken, Open: &o, High: &h, Low: &l, Close: &cl, VWAP: &vw,
 			MinDevBps: stableF((l - 1) * 1e4), MaxDevBps: stableF((h - 1) * 1e4), Samples: 1, UpdatedAt: now})
 	}
 	if err := p.store.upsertStablePegDaily(ctx, daily); err != nil {
@@ -463,41 +475,56 @@ func stableDevFromUSD(priceUSD float64, day string, fx map[string]float64) *floa
 
 // Depeg-day classification (stablecoin.md §7.2, "Depeg history").
 const (
-	// stableDepegEURLlamaBps is EURC's historical day threshold (180 bps),
-	// set from the measured 2024–2026 noise across the three candidate
-	// methods:
+	// stableDepegEURLlamaECBBps is the resolution floor (180 bps) for EURC's
+	// pre-Kraken DefiLlama ÷ same-day ECB segment (before 2025-09-18), caused
+	// by the 00:00 UTC vs 14:15 CET fix-timing gap plus DefiLlama's $0.01
+	// price rounding of euro-coin until 2025-10 (which alone adds up to
+	// ±45 bps), not a tuned value.
+	//
+	// Measured over 2024-01-01 .. 2026-10-21:
 	//   (a) DefiLlama USD ÷ same-day ECB rate: 714 days, stdev 41.03 bps,
-	//       p99 |dev| 138.10 bps, max |dev| 171.87 bps (2025-08-01; before
-	//       2025-10-02 DefiLlama also rounded euro-coin to $0.01);
+	//       p99 |dev| 138.10 bps, max |dev| 171.87 bps (2025-08-01), 277 days
+	//       ≥ 30 bps, 23 days ≥ 100 bps;
 	//   (b) DefiLlama USD ÷ previous ECB business day: 714 days, stdev
-	//       56.13 bps, p99 |dev| 162.61 bps, max |dev| 286.95 bps (2025-04-11);
-	//   (c) Kraken EURCEUR daily OHLC closes: 399 days (from 2025-09-18),
-	//       stdev 9.91 bps, p99 |dev| 32.30 bps, max |dev| 101.00 bps
-	//       (2026-02-03).
-	// EURC uses (c) where it has data and (a) before that; 180 bps keeps
-	// 2024–2026 quiet (0 depeg days) while retaining the > 200 bps 2022–2023
-	// dislocations. The BigLens consensus rollup and USD coins use
-	// stableDepegThresholdBps (30 bps).
-	stableDepegEURLlamaBps = 180.0
+	//       56.13 bps, p99 |dev| 162.61 bps, max |dev| 286.95 bps (2025-04-11),
+	//       375 days ≥ 30 bps, 56 days ≥ 100 bps;
+	//   (c) Kraken EURCEUR daily OHLC (399 days from 2025-09-18):
+	//       - close alone: stdev 9.91 bps, p99 |dev| 32.30 bps, max |dev|
+	//         101.00 bps (2026-02-03), 7 days ≥ 30 bps, 2 days ≥ 100 bps;
+	//       - VWAP alone: stdev 11.39 bps, p99 |dev| 37.44 bps, max |dev|
+	//         140.00 bps (2025-11-28), 7 days ≥ 30 bps, 2 days ≥ 100 bps;
+	//       - same-sign min(|close_dev|, |vwap_dev|) (0 when signs differ):
+	//         stdev 3.44 bps, p99 |dev| 18.06 bps, max |dev| 30.00 bps
+	//         (2026-01-25), 1 day ≥ 30 bps, 0 days ≥ 100 bps.
+	// From 2025-09-18 onward EURC uses Kraken's same-sign min(|close_dev|,
+	// |vwap_dev|) at stableDepegThresholdBps (30 bps); before 2025-09-18 it
+	// uses DefiLlama ÷ same-day ECB at stableDepegEURLlamaECBBps (180 bps).
+	stableDepegEURLlamaECBBps = 180.0
 	// stableLowMarkerBps: a Bitstamp low is a marker only this far off, and
 	// only on a day whose candle close, consensus close or DefiLlama price is
 	// at least stableDepegThresholdBps off.
 	stableLowMarkerBps = 100.0
 	// stableLastDevBps and stableIntradayMinutes define "the last ≥ 100 bps
-	// deviation": a close or a marker that far off, or a consensus day with
-	// at least 15 minutes (S1's window) of samples that far off.
+	// deviation" for USD coins: a close or a marker that far off, or a
+	// consensus day with at least 15 minutes (S1's window) of samples that
+	// far off.
 	stableLastDevBps      = 100.0
 	stableIntradayMinutes = 15
 )
 
-// StableDepegDay is a day off peg by its daily close: the BigLens consensus
-// rollup close, else DefiLlama's daily price (EURC: ÷ the same-day ECB rate).
+// StableDepegDay is a day off peg by its daily rule: the BigLens consensus
+// rollup close, else Kraken EURCEUR same-sign min(|close_dev|, |vwap_dev|)
+// for EURC from 2025-09-18 onward, else DefiLlama's daily price (EURC before
+// Kraken: ÷ the same-day ECB rate).
 type StableDepegDay struct {
-	Day          string  `json:"day"`
-	Source       string  `json:"source"` // consensus | defillama
-	Close        float64 `json:"close"`  // in the asset's numéraire
-	CloseDevBps  float64 `json:"close_dev_bps"`
-	ThresholdBps float64 `json:"threshold_bps"` // 30; EURC on DefiLlama ÷ ECB: 100
+	Day          string   `json:"day"`
+	Source       string   `json:"source"` // consensus | kraken_ohlc | defillama
+	Close        float64  `json:"close"`  // in the asset's numéraire
+	CloseDevBps  float64  `json:"close_dev_bps"`
+	VWAP         *float64 `json:"vwap,omitempty"`
+	VWAPDevBps   *float64 `json:"vwap_dev_bps,omitempty"`
+	DevBps       float64  `json:"dev_bps"`       // classified day deviation
+	ThresholdBps float64  `json:"threshold_bps"` // 30; EURC on DefiLlama ÷ ECB: 180
 	// Consensus days only.
 	MinDevBps    *float64 `json:"min_dev_bps,omitempty"`
 	MaxDevBps    *float64 `json:"max_dev_bps,omitempty"`
@@ -517,25 +544,49 @@ type StableDepegMarker struct {
 	ConfirmedBy []string `json:"confirmed_by"`
 }
 
-// StableDepegClose is one day of the depeg-history chart: the day's close by
-// the same rule (consensus rollup, else DefiLlama; EURC ÷ the same-day ECB
-// rate) and the threshold that applies to it. Values are rounded for the
-// chart payload (close to 1e-6, deviation to 0.01 bps).
+// StableDepegClose is one day of the depeg-history chart: the day's close and
+// classified deviation by the same rule and the threshold that applies to it.
+// Values are rounded for the chart payload (close to 1e-6, deviation to 0.01 bps).
 type StableDepegClose struct {
-	Day          string  `json:"day"`
-	Source       string  `json:"source"` // consensus | defillama
-	Close        float64 `json:"close"`  // in the asset's numéraire
-	DevBps       float64 `json:"dev_bps"`
-	ThresholdBps float64 `json:"threshold_bps"`
+	Day          string   `json:"day"`
+	Source       string   `json:"source"` // consensus | kraken_ohlc | defillama
+	Close        float64  `json:"close"`  // in the asset's numéraire
+	VWAP         *float64 `json:"vwap,omitempty"`
+	CloseDevBps  *float64 `json:"close_dev_bps,omitempty"`
+	VWAPDevBps   *float64 `json:"vwap_dev_bps,omitempty"`
+	DevBps       float64  `json:"dev_bps"`
+	ThresholdBps float64  `json:"threshold_bps"`
 }
 
-// StableLastDeviation is the newest day at ≥ 100 bps off peg in the stored
-// history.
+// StableLastDeviation is the newest qualifying deviation in the stored
+// history, carrying the threshold and source label of the day it cites.
 type StableLastDeviation struct {
-	Day       string  `json:"day"`
-	Source    string  `json:"source"` // consensus | consensus_intraday | defillama | bitstamp_ohlc
-	DevBps    float64 `json:"dev_bps"`
-	DaysSince int     `json:"days_since"`
+	Day          string  `json:"day"`
+	Source       string  `json:"source"` // consensus | consensus_intraday | kraken_ohlc | defillama | bitstamp_ohlc
+	SourceLabel  string  `json:"source_label,omitempty"`
+	ThresholdBps float64 `json:"threshold_bps"`
+	DevBps       float64 `json:"dev_bps"`
+	DaysSince    int     `json:"days_since"`
+}
+
+// stableKrakenDayDevBps computes the Kraken day deviation: if the close and
+// VWAP deviations have the same sign, the sign times the smaller of the two
+// magnitudes; otherwise 0.
+func stableKrakenDayDevBps(closePrice float64, vwapPrice *float64) (devBps, closeDevBps float64, vwapDevBps *float64) {
+	closeDevBps = (closePrice - 1) * 1e4
+	if vwapPrice == nil || !(*vwapPrice > 0) {
+		return closeDevBps, closeDevBps, nil
+	}
+	vd := (*vwapPrice - 1) * 1e4
+	vwapDevBps = &vd
+	if (closeDevBps > 0 && vd > 0) || (closeDevBps < 0 && vd < 0) {
+		mag := math.Min(math.Abs(closeDevBps), math.Abs(vd))
+		if closeDevBps < 0 {
+			return -mag, closeDevBps, vwapDevBps
+		}
+		return mag, closeDevBps, vwapDevBps
+	}
+	return 0, closeDevBps, vwapDevBps
 }
 
 type stableDepegInputs struct {
@@ -609,42 +660,53 @@ func stableClassifyDepeg(in stableDepegInputs) stableDepegHistory {
 	if len(keys) > 0 {
 		out.HistoryFrom = keys[len(keys)-1]
 	}
-	last := func(day, source string, dev float64) {
+	last := func(day, source, label string, thr, dev float64) {
 		if out.LastGE100 == nil {
-			out.LastGE100 = &StableLastDeviation{Day: day, Source: source, DevBps: dev, DaysSince: stableDaysBetween(day, in.Today)}
+			out.LastGE100 = &StableLastDeviation{Day: day, Source: source, SourceLabel: label, ThresholdBps: thr, DevBps: dev, DaysSince: stableDaysBetween(day, in.Today)}
 		}
 	}
 	for _, k := range keys {
 		d := days[k]
 		var closeDev *float64
-		var closeSrc string
+		var closeSrc, closeLabel string
 		closeThr := stableDepegThresholdBps
 		switch {
 		case d.roll != nil:
 			r := d.roll
 			dev := (*r.Close - 1) * 1e4
-			closeDev, closeSrc = &dev, stablePegSourceConsensus
+			closeDev, closeSrc, closeLabel = &dev, stablePegSourceConsensus, "consensus close"
 			out.Closes = append(out.Closes, stableRoundedClose(k, stablePegSourceConsensus, *r.Close, dev, stableDepegThresholdBps))
 			if stableBpsAtLeast(dev, stableDepegThresholdBps) {
-				out.Days = append(out.Days, StableDepegDay{Day: k, Source: stablePegSourceConsensus, Close: *r.Close, CloseDevBps: dev,
+				out.Days = append(out.Days, StableDepegDay{Day: k, Source: stablePegSourceConsensus, Close: *r.Close, CloseDevBps: dev, DevBps: dev,
 					ThresholdBps: stableDepegThresholdBps, MinDevBps: r.MinDevBps, MaxDevBps: r.MaxDevBps, MinutesGE30: r.MinutesGE30, MinutesGE100: r.MinutesGE100})
 			}
 		case d.kraken != nil:
 			c := d.kraken
-			dev := (*c.Close - 1) * 1e4
-			closeDev, closeSrc, closeThr = &dev, stablePegSourceKraken, stableDepegEURLlamaBps
-			out.Closes = append(out.Closes, stableRoundedClose(k, stablePegSourceKraken, *c.Close, dev, closeThr))
+			dev, cDev, vDev := stableKrakenDayDevBps(*c.Close, c.VWAP)
+			closeDev, closeSrc, closeLabel, closeThr = &dev, stablePegSourceKraken, "Kraken close & VWAP", stableDepegThresholdBps
+			rc := stableRoundedClose(k, stablePegSourceKraken, *c.Close, dev, closeThr)
+			rcCloseDev := math.Round(cDev*100) / 100
+			rc.CloseDevBps = &rcCloseDev
+			if c.VWAP != nil && vDev != nil {
+				rcVWAP := math.Round(*c.VWAP*1e6) / 1e6
+				rcVWAPDev := math.Round(*vDev*100) / 100
+				rc.VWAP, rc.VWAPDevBps = &rcVWAP, &rcVWAPDev
+			}
+			out.Closes = append(out.Closes, rc)
 			if stableBpsAtLeast(dev, closeThr) {
-				out.Days = append(out.Days, StableDepegDay{Day: k, Source: stablePegSourceKraken, Close: *c.Close, CloseDevBps: dev, ThresholdBps: closeThr})
+				out.Days = append(out.Days, StableDepegDay{Day: k, Source: stablePegSourceKraken, Close: *c.Close, CloseDevBps: cDev,
+					VWAP: c.VWAP, VWAPDevBps: vDev, DevBps: dev, ThresholdBps: closeThr})
 			}
 		case d.llamaDev != nil:
+			closeLabel = "DefiLlama"
 			if in.Numeraire == "EUR" {
-				closeThr = stableDepegEURLlamaBps
+				closeThr = stableDepegEURLlamaECBBps
+				closeLabel = "DefiLlama ÷ ECB"
 			}
 			closeDev, closeSrc = d.llamaDev, stablePriceSourceLlama
 			out.Closes = append(out.Closes, stableRoundedClose(k, stablePriceSourceLlama, *d.llama, *d.llamaDev, closeThr))
 			if stableBpsAtLeast(*d.llamaDev, closeThr) {
-				out.Days = append(out.Days, StableDepegDay{Day: k, Source: stablePriceSourceLlama, Close: *d.llama, CloseDevBps: *d.llamaDev, ThresholdBps: closeThr})
+				out.Days = append(out.Days, StableDepegDay{Day: k, Source: stablePriceSourceLlama, Close: *d.llama, CloseDevBps: *d.llamaDev, DevBps: *d.llamaDev, ThresholdBps: closeThr})
 			}
 		}
 		var marker *StableDepegMarker
@@ -665,15 +727,20 @@ func stableClassifyDepeg(in stableDepegInputs) stableDepegHistory {
 				out.Markers = append(out.Markers, *marker)
 			}
 		}
-		// The newest ≥ 100 bps deviation (and at least the day's own noise
-		// threshold): the close, then the consensus samples, then a shown marker.
+		// The newest qualifying deviation: for EURC each source uses its own
+		// day threshold (30 bps on Kraken close & VWAP or consensus, 180 bps on
+		// DefiLlama ÷ ECB); for USD coins it uses stableLastDevBps (100 bps).
+		lastThr := math.Max(closeThr, stableLastDevBps)
+		if in.Numeraire == "EUR" {
+			lastThr = closeThr
+		}
 		switch {
-		case closeDev != nil && stableBpsAtLeast(*closeDev, math.Max(closeThr, stableLastDevBps)):
-			last(k, closeSrc, *closeDev)
+		case closeDev != nil && stableBpsAtLeast(*closeDev, lastThr):
+			last(k, closeSrc, closeLabel, lastThr, *closeDev)
 		case d.roll != nil && d.roll.MinutesGE100 != nil && *d.roll.MinutesGE100 >= stableIntradayMinutes:
-			last(k, "consensus_intraday", stableWorstDev(d.roll.MinDevBps, d.roll.MaxDevBps))
+			last(k, "consensus_intraday", "consensus intraday", stableLastDevBps, stableWorstDev(d.roll.MinDevBps, d.roll.MaxDevBps))
 		case marker != nil:
-			last(k, stablePegSourceBitstamp, marker.LowDevBps)
+			last(k, stablePegSourceBitstamp, "Bitstamp low", stableLastDevBps, marker.LowDevBps)
 		}
 	}
 	out.Total = len(out.Days)

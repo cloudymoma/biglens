@@ -77,3 +77,12 @@ test('watchlist MarketTable renders row notes alongside — for unreliable aggre
     'MarketTable must render r.note when a watchlist row has an unreliable aggregator price',
   );
 });
+
+test('PegTab Depeg days table shows close deviation, VWAP deviation, and classified deviation, and last deviation names threshold and source', () => {
+  const dir = dirname(fileURLToPath(import.meta.url));
+  const pegSrc = readFileSync(join(dir, '../src/opendata/stablecoin/PegTab.tsx'), 'utf8');
+  assert.ok(
+    pegSrc.includes('vwap_dev_bps') && pegSrc.includes('VWAP deviation') && pegSrc.includes('source_label'),
+    'PegTab must render VWAP deviation and classified deviation in Depeg days and source_label/threshold_bps in the last deviation headline',
+  );
+});

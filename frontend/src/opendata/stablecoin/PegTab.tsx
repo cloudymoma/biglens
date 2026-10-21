@@ -326,29 +326,52 @@ function depegOption(theme: Theme, assets: StablePegAsset[]) {
     `Daily close deviation in bps since ${assets.map(a => a.history_from).filter(Boolean).sort()[0] ?? 'the first stored day'} for ${assets.map(a => SYM[a.asset]).join(', ')}, with Bitstamp intraday lows as markers and curated depeg annotations.`,
   );
   const ann: StableAnnotation[] = assets.flatMap(a => a.annotations);
-  const lines = assets.map((a, i) => ({
-    name: `${SYM[a.asset]} daily close`,
-    type: 'line',
-    showSymbol: false,
-    color: ASSET_COLOR[a.asset],
-    data: a.daily_closes.map(d => ({ value: [d.day, d.dev_bps], close: d.close, source: d.source, numeraire: a.numeraire })),
-    ...(i === 0
-      ? {
-          markLine: {
-            silent: true,
-            symbol: 'none',
-            label: { color: c.muted, fontSize: 10, formatter: (p: { name?: string }) => p.name ?? '' },
-            data: [
-              { yAxis: 30, name: '+30', lineStyle: { color: c.muted, type: 'dotted' } },
-              { yAxis: -30, name: '−30', lineStyle: { color: c.muted, type: 'dotted' } },
-              { yAxis: 100, name: '+100', lineStyle: { color: c.line100, type: 'dashed' } },
-              { yAxis: -100, name: '−100', lineStyle: { color: c.line100, type: 'dashed' } },
-              ...ann.map(x => ({ xAxis: x.date, name: `${x.asset}: ${x.title}`, lineStyle: { color: c.muted, type: 'solid', opacity: 0.6 } })),
+  const lines = assets.map((a, i) => {
+    const llama180 = a.asset === 'eurc' ? a.daily_closes.filter(d => d.source === 'defillama' && d.threshold_bps === 180) : [];
+    const llamaStart = llama180[0]?.day;
+    const llamaEnd = llama180[llama180.length - 1]?.day;
+    const baseMarks =
+      i === 0
+        ? [
+            { yAxis: 30, name: '+30', lineStyle: { color: c.muted, type: 'dotted' } },
+            { yAxis: -30, name: '−30', lineStyle: { color: c.muted, type: 'dotted' } },
+            { yAxis: 100, name: '+100', lineStyle: { color: c.line100, type: 'dashed' } },
+            { yAxis: -100, name: '−100', lineStyle: { color: c.line100, type: 'dashed' } },
+            ...ann.map(x => ({ xAxis: x.date, name: `${x.asset}: ${x.title}`, lineStyle: { color: c.muted, type: 'solid', opacity: 0.6 } })),
+          ]
+        : [];
+    const eurcBand =
+      llamaStart && llamaEnd
+        ? [
+            [
+              { coord: [llamaStart, 180], name: '+180 (DefiLlama ÷ ECB)', lineStyle: { color: ASSET_COLOR.eurc, type: 'dashed', opacity: 0.75 } },
+              { coord: [llamaEnd, 180] },
             ],
-          },
-        }
-      : {}),
-  }));
+            [
+              { coord: [llamaStart, -180], name: '−180 (DefiLlama ÷ ECB)', lineStyle: { color: ASSET_COLOR.eurc, type: 'dashed', opacity: 0.75 } },
+              { coord: [llamaEnd, -180] },
+            ],
+          ]
+        : [];
+    const markData = [...baseMarks, ...eurcBand];
+    return {
+      name: `${SYM[a.asset]} daily close`,
+      type: 'line',
+      showSymbol: false,
+      color: ASSET_COLOR[a.asset],
+      data: a.daily_closes.map(d => ({ value: [d.day, d.dev_bps], close: d.close, source: d.source, numeraire: a.numeraire })),
+      ...(markData.length > 0
+        ? {
+            markLine: {
+              silent: true,
+              symbol: 'none',
+              label: { color: c.muted, fontSize: 10, formatter: (p: { name?: string }) => p.name ?? '' },
+              data: markData,
+            },
+          }
+        : {}),
+    };
+  });
   const marks = assets
     .filter(a => a.low_markers.length > 0)
     .map(a => ({
@@ -391,53 +414,108 @@ function depegOption(theme: Theme, assets: StablePegAsset[]) {
 function DepegHistory({ peg }: { peg: StablePeg }) {
   const theme = useStableTheme();
   const assets = peg.assets.filter(a => a.daily_closes.length > 0 || a.low_markers.length > 0);
+  const hasEurc = peg.assets.some(a => a.asset === 'eurc');
   return (
     <div className="space-y-4">
       <Panel
         title="Depeg history"
-        help="A day counts by its daily close: the BigLens consensus rollup, else Kraken EURCEUR daily OHLC for EURC where available and DefiLlama's daily price otherwise (EURC before Kraken: DefiLlama ÷ the same-day ECB rate, with a 180 bps historical threshold for FX-timing and rounding noise). A Bitstamp intraday low is a marker only when it is at least 100 bps off and that day's candle close, BigLens close or DefiLlama price is at least 30 bps off."
+        help="A day counts by its daily rule: the BigLens consensus rollup close, else Kraken EURCEUR same-sign min(|close_dev|, |vwap_dev|) for EURC from 2025-09-18 onward (30 bps threshold), else DefiLlama's daily price (EURC before Kraken: DefiLlama ÷ the same-day ECB rate, with a 180 bps resolution floor for FX-timing and $0.01 rounding noise). A Bitstamp intraday low is a marker only when it is at least 100 bps off and that day's candle close, BigLens close or DefiLlama price is at least 30 bps off."
         right={
           <CsvButton
             filename="stablecoin-depeg-history.csv"
             label="daily closes"
-            headers={['day', 'asset', 'source', 'close', 'dev_bps', 'threshold_bps']}
-            rows={() => peg.assets.flatMap(a => a.daily_closes.map(d => [d.day, a.asset, d.source, d.close, d.dev_bps, d.threshold_bps]))}
+            headers={['day', 'asset', 'source', 'close', 'vwap', 'close_dev_bps', 'vwap_dev_bps', 'dev_bps', 'threshold_bps']}
+            rows={() =>
+              peg.assets.flatMap(a =>
+                a.daily_closes.map(d => [
+                  d.day,
+                  a.asset,
+                  d.source,
+                  d.close,
+                  d.vwap ?? null,
+                  d.close_dev_bps ?? null,
+                  d.vwap_dev_bps ?? null,
+                  d.dev_bps,
+                  d.threshold_bps,
+                ]),
+              )
+            }
           />
         }
       >
         <div className="mb-3 grid grid-cols-1 gap-2 md:grid-cols-3">
-          {peg.assets.map(a => (
-            <Stat
-              key={a.asset}
-              label={`${SYM[a.asset]}: last ≥ 100 bps deviation`}
-              value={a.last_ge_100 ? `${a.last_ge_100.days_since} days ago` : '—'}
-              sub={
-                a.last_ge_100
-                  ? `${a.last_ge_100.day} · ${fmtBps(a.last_ge_100.dev_bps, 0)} · ${a.last_ge_100.source}`
-                  : a.history_from
-                    ? `none since ${a.history_from}`
-                    : 'loading history'
-              }
-            />
-          ))}
+          {peg.assets.map(a => {
+            const l = a.last_ge_100;
+            const srcLabel = l?.source_label || l?.source || '';
+            const label = l
+              ? `${SYM[a.asset]}: last ≥${l.threshold_bps} bps (${srcLabel})`
+              : a.numeraire === 'EUR'
+                ? `${SYM[a.asset]}: last ≥30 bps (Kraken close & VWAP) / ≥180 bps (DefiLlama ÷ ECB)`
+                : `${SYM[a.asset]}: last ≥100 bps deviation`;
+            return (
+              <Stat
+                key={a.asset}
+                label={label}
+                value={l ? `${l.days_since} days ago` : '—'}
+                sub={l ? `${l.day} · ${fmtBps(l.dev_bps, 0)} · ${srcLabel}` : a.history_from ? `none since ${a.history_from}` : 'loading history'}
+              />
+            );
+          })}
         </div>
         {assets.length === 0 ? (
           <ColdState>Loading history: the daily DefiLlama and Bitstamp bootstrap runs at boot.</ColdState>
         ) : (
-          <ReactECharts option={depegOption(theme, assets)} notMerge style={{ height: 360 }} />
+          <>
+            <ReactECharts option={depegOption(theme, assets)} notMerge style={{ height: 360 }} />
+            {hasEurc && (
+              <p className={`mt-2 text-[11px] ${cx.muted}`}>
+                EURC uses per-source thresholds: before 2025-09-18 (DefiLlama ÷ same-day ECB), the dashed ±180 bps resolution floor applies (16:00 CET fix-timing gap plus $0.01
+                rounding until 2025-10); from 2025-09-18 onward (Kraken EURCEUR daily OHLC), the day deviation is the same-sign smaller magnitude of close and VWAP deviations (0
+                when signs differ) against ±30 bps.
+              </p>
+            )}
+          </>
         )}
       </Panel>
       <Panel
         title="Depeg days"
-        help="Stored days whose close is at or beyond the threshold (inclusive), newest first; consensus days also show the intraday range and minutes at ≥ 30 and ≥ 100 bps."
+        help="Stored days whose classified deviation is at or beyond the threshold (inclusive), newest first; Kraken EURCEUR rows show close deviation, VWAP deviation, and the classified deviation; consensus days also show the intraday range and minutes at ≥ 30 and ≥ 100 bps."
         right={
           <CsvButton
             filename="stablecoin-depeg-days.csv"
             label="depeg days"
-            headers={['day', 'asset', 'source', 'close', 'close_dev_bps', 'threshold_bps', 'min_dev_bps', 'max_dev_bps', 'minutes_ge_30', 'minutes_ge_100']}
+            headers={[
+              'day',
+              'asset',
+              'source',
+              'close',
+              'vwap',
+              'close_dev_bps',
+              'vwap_dev_bps',
+              'dev_bps',
+              'threshold_bps',
+              'min_dev_bps',
+              'max_dev_bps',
+              'minutes_ge_30',
+              'minutes_ge_100',
+            ]}
             rows={() =>
               peg.assets.flatMap(a =>
-                a.depeg_days.map(d => [d.day, a.asset, d.source, d.close, d.close_dev_bps, d.threshold_bps, d.min_dev_bps ?? null, d.max_dev_bps ?? null, d.minutes_ge_30 ?? null, d.minutes_ge_100 ?? null]),
+                a.depeg_days.map(d => [
+                  d.day,
+                  a.asset,
+                  d.source,
+                  d.close,
+                  d.vwap ?? null,
+                  d.close_dev_bps,
+                  d.vwap_dev_bps ?? null,
+                  d.dev_bps,
+                  d.threshold_bps,
+                  d.min_dev_bps ?? null,
+                  d.max_dev_bps ?? null,
+                  d.minutes_ge_30 ?? null,
+                  d.minutes_ge_100 ?? null,
+                ]),
               )
             }
           />
@@ -450,7 +528,7 @@ function DepegHistory({ peg }: { peg: StablePeg }) {
             <table className={cx.table}>
               <thead>
                 <tr>
-                  {['Day', 'Asset', 'Source', 'Close', 'Close deviation', 'Threshold', 'Intraday range', 'Minutes ≥ 30 / ≥ 100'].map(h => (
+                  {['Day', 'Asset', 'Source', 'Close', 'Close deviation', 'VWAP deviation', 'Classified deviation', 'Threshold', 'Intraday range', 'Minutes ≥ 30 / ≥ 100'].map(h => (
                     <th key={h} scope="col" className={cx.th}>
                       {h}
                     </th>
@@ -466,6 +544,8 @@ function DepegHistory({ peg }: { peg: StablePeg }) {
                       <td className={cx.td}>{d.source}</td>
                       <td className={`${cx.td} font-mono`}>{fmtPrice(d.close, a.numeraire)}</td>
                       <td className={`${cx.td} font-mono`}>{fmtBps(d.close_dev_bps)}</td>
+                      <td className={`${cx.td} font-mono`}>{fmtBps(d.vwap_dev_bps ?? null)}</td>
+                      <td className={`${cx.td} font-mono`}>{fmtBps(d.dev_bps)}</td>
                       <td className={`${cx.td} font-mono`}>{d.threshold_bps} bps</td>
                       <td className={`${cx.td} font-mono`}>
                         {d.min_dev_bps == null ? '—' : `${fmtBps(d.min_dev_bps)} … ${fmtBps(d.max_dev_bps ?? null)}`}
