@@ -449,6 +449,104 @@ All 14 public providers are keyless and can be toggled individually under
   $\min(\text{coinage\_cursor}, \text{rollup\_cursor})$, clears `baseline_pending`,
   and prunes older generations.
 
+### Stablecoins
+
+A stablecoin dashboard for **USDT, USDC and EURC**, built from keyless public
+APIs, RPC reads and BigLens' own samplers. It issues no BigQuery jobs. A live
+ticker (polled every 60 s, paused while the browser tab is hidden) sits above
+six tabs. Asset, tab and range live in the URL
+(`?dataset=stablecoin&asset=eurc&tab=peg&range=30d`) and are checked against the
+same whitelists as the API. A light/dark switch is kept in the browser.
+
+| Tab | What it shows |
+|---|---|
+| **Overview** | Asset cards (peg, circulating, 24h/7d flows, Tether coverage or attestation age, EU/US status, controls, 30-day freezes), the **risk matrix** (assets × signals, no composite score), the events feed, supply history (USD-equivalent or native) with daily net issuance, and the watchlist market table (the 15 largest USD stablecoins plus every EUR stablecoin on DefiLlama) |
+| **Peg & Liquidity** | Consensus per asset (volume-weighted median over at least 2 distinct venues, no venue above 50% of the weight; EURC in euros), venue inputs with each filter's outcome, consensus deviation with ±30/±100 bps bands, a per-venue deviation heatmap (5-minute or hourly cells, up to 30 days), the USDC/USDT relative peg and the Uniswap v3 pool, EURC in euro terms (FX consensus, ECB reference), and the depeg history since 2020 with Bitstamp intraday lows and sourced annotations |
+| **Supply & Flows** | Supply definitions (issuer, on-chain, inventory, DefiLlama) and their reconciliation, net issuance over 24h/7d/30d, daily supply, per-chain treemap and table, 7-day chain migration, and EURC's share of the EUR stablecoin market |
+| **Reserves & Regulation** | Tether's assets, liabilities, equity and coverage over time, the curated reserve mix and attestation timeline with ages, issuer entities and redemption terms, and the MiCA/GENIUS regulatory matrix with key dates |
+| **Chains** | Native vs bridged deployments, issuer circulating and share, transfer cost where BigLens prices the chain, freeze mechanism, explorer links and a "Verify a payment" hand-off to Payment Check (top holders arrive in v1.1) |
+| **Controls & Freezes** | Contract control state per deployment (owner, proxy admin, implementation, `masterMinter`, `pauser`, `blacklister`, `rescuer`, `paused`, USDT `deprecated`, SPL authorities), the change log, freeze activity from the Address Risk sync, Tether's quarantined amounts, and Scam Radar's counterfeit and poisoning counters |
+
+Every table and time series has a CSV export, for the operator's own use (see
+the terms below). Unknown values render "—", never 0. Curated facts
+(attestations, reserve mix, issuer entities, redemption terms, regulatory status,
+depeg annotations) live in `backend/stablecoin_facts.json`. Each fact has an
+as-of date and a source, and anything unconfirmed stays `unknown`. An operator
+override file (`stablecoin.facts_file`) is validated the same way and badged in
+the UI.
+
+#### Providers and terms (personal use only)
+
+BigLens is deployed for **personal use**: it is not publicly viewable, not
+commercial, and no data is redistributed. Most providers' public-data terms limit
+use to personal or internal purposes, which is what keeps this dashboard
+compliant. **If BigLens is ever made publicly viewable, review these terms
+again first.** All providers are keyless and can be switched off under
+`stablecoin.providers` in `conf.yaml` (`false` = never called). Terms reviewed
+2026-10-19 (a summary, not legal advice):
+
+| Provider key | Used for | Terms (summary) | Fits personal use? |
+|---|---|---|---|
+| `defillama` | Supply per chain with 1d/7d/30d changes, daily supply history, daily prices since 2020-12, the watchlist | Licence for personal, non-commercial use; no republishing of the data without permission | **Yes** (not republished) |
+| `circle` | USDC and EURC circulating per chain (`/v1/stablecoins`) | No terms found for this public endpoint | Likely yes |
+| `tether` | USDT per-chain authorized, not issued and quarantined; total assets, liabilities, equity | Transparency pages are outside the site terms; copying site content needs permission | Likely yes |
+| `coinbase` | `USDT-USD`, `USDT-USDC`, `EURC-USDC` | Market-data terms block automated fetches; described as personal or research use | Likely yes |
+| `kraken` | USDT, USDC, EURC (EUR and USD) and EUR/USD | Content for your own benefit; no redistribution | **Yes** |
+| `bitstamp` | USDT, USDC, EURC/EUR and EUR/USD; daily OHLC for intraday lows | Terms page could not be loaded | Unknown |
+| `okx` | `USDC-USDT` | Personal, non-commercial use; no display to third parties | **Yes** |
+| `binance` | `USDCUSDT` (paused for 24 h after HTTP 451/403) | No clause found against personal use | Likely yes |
+| `ecb` | EUR/USD reference rate and history, €STR | Reuse allowed with attribution | **Yes** (attributed) |
+| `us_treasury` | 13-week T-bill rate | Public domain | **Yes** |
+| `rpc_supply`, `rpc_controls`, `uniswap_rpc` | `totalSupply` / SPL supply, control getters and proxy slots, the Uniswap v3 USDC/USDT pool, over the RPC endpoints Payment Check already uses | Public chain state | **Yes** |
+| `curve`, `blockscout`, `chainlink_rpc` | Reserved for the v1.1 panels (Curve 3pool, top holders, oracle) | — | — |
+
+#### Signals
+
+Each signal is a rule with its own evaluation policy. There is no composite
+score: an asset's summary is its worst state (`info` counts as normal), and
+`unknown` (insufficient data, for example while warming up) is never shown as
+normal.
+
+| Signal | Rule (watch / warning / critical) | Policy |
+|---|---|---|
+| **S1 peg** | \|deviation\| ≥ 30 / 100 / 300 bps for 15 minutes; immediately critical if 2 or more venues are each ≥ 500 bps off; EURC stops at warning until a second exchange quotes EURC in euros | Sampled: 3 samples to enter a level, 12 samples below 80% of its threshold to step down one level |
+| **S2 dispersion** | Max − min of the included mids ≥ 25 / 100 bps (needs 3 or more inputs) | Sampled |
+| **S3 DEX** | Uniswap v3 \|deviation\| ≥ 30 / 100 bps | Sampled |
+| **S4 flows** | On a 3-reading median: 24h ≤ −0.5% or 7d ≤ −2% / 24h ≤ −1% or 7d ≤ −4% / 24h ≤ −3% or 7d ≤ −8% (mints are informational) | Level-triggered |
+| **S5 coverage** | USDT assets ÷ liabilities < 1.010 (watch), < 1.000 (critical); `n/a` for USDC and EURC | Level-triggered |
+| **S6 disclosure** | The latest attestation recorded by BigLens is older than cadence + the issuer's p90 publication lag + 7 days (fallbacks: 65 / 95 days monthly, 150 / 180 days quarterly); warning 30 days later or when reserves < liabilities. Without a recent maintainer check, an old report shows as "curated facts may be stale" (S13) | Level-triggered |
+| **S8 contract control** | Warning for 7 days after a confirmed change of owner, admin, implementation, minter, pauser, blacklister or SPL authority; critical when paused or deprecated. A change needs 2 consecutive samples or 2 RPC endpoints agreeing | Confirmed |
+| **S10 chain** | Bridged representations hold ≥ 10% of supply on monitored chains (watch) | Level-triggered |
+| **S11 regulatory** | Not authorized under EU MiCA = watch, for EU users | Level-triggered |
+| **S12 reconciliation** | Issuer vs DefiLlama > 0.5% / > 2%; issuer above the on-chain total on any chain by more than max(0.1%, 1M units), in 2 consecutive aligned samples (warning) | Confirmed |
+| **S13 data health** | A core source older than 3× its TTL or curated facts possibly stale (watch); every peg venue failing (warning) | Sampled |
+
+S7 (reserve mix) and S9 (freeze activity) arrive in v1.1.
+
+#### Costs
+
+**$0 by default.** Every source is a keyless public API or an RPC read over the
+endpoints already configured for Payment Check, and the dashboard runs no
+BigQuery jobs: `stablecoin.bigquery.jobs` stays `false`, and the opt-in activity
+jobs are planned for v1.1. The only BigQuery-side change is one extra contract
+(EURC) in the existing Address Risk freeze sync, which a dry-run measured at 0
+extra bytes. SQLite growth is bounded by the daily pruner: venue quotes and
+consensus inputs are kept 30 days, peg samples and Uniswap readings 180 days, and
+supply snapshots 180 days; daily tables are kept.
+
+#### Source verification
+
+```bash
+./biglens-server --stablecoin-verify
+```
+
+This re-checks every enabled source against its live endpoint: response shapes
+(including the Bitstamp unknown-pair list, Kraken's renamed keys and Tether's
+mixed number types), the DefiLlama IDs, the Tether per-chain sum against total
+liabilities, the registry contracts and every control getter. It prints a
+pass/fail table and exits non-zero on any failure. It makes network calls, so it
+never runs in `go test`; run it after upgrades and before releases.
+
 ### Crypto Pulse
 
 On-chain financial fundamentals and live payment/risk telemetry across Bitcoin,

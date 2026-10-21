@@ -87,3 +87,25 @@ catalog:
 # A job stopped by repeated billed failures (Job A: 4 within 24 h; Job B: 2 in a row) resumes with:
 #   ./biglens-server --bitcoin-bq-resume <btc_onchain|btc_coinage>
 
+# stablecoin:                           # Stablecoins dashboard (USDT, USDC, EURC); $0: keyless APIs and RPC reads, no BigQuery jobs
+#   enabled: true                       # false = every /api/opendata/stablecoin/* route returns 404
+#   providers:                          # keyless public APIs; false = never called (personal use only, see README)
+#     defillama: true                   # supply per chain, history, daily prices, watchlist
+#     circle: true                      # USDC/EURC circulating per chain
+#     tether: true                      # USDT per chain, assets/liabilities/equity
+#     coinbase: true                    # USDT-USD, USDT-USDC, EURC-USDC
+#     kraken: true                      # USDT, USDC, EURC, EUR/USD
+#     bitstamp: true                    # USDT, USDC, EURC/EUR, EUR/USD, daily OHLC (intraday lows)
+#     okx: true                         # USDC-USDT (relative peg)
+#     binance: true                     # USDCUSDT (relative peg); paused 24 h after HTTP 451/403
+#     ecb: true                         # EUR/USD reference (attribution), €STR
+#     us_treasury: true                 # 13-week T-bill rate
+#     rpc_supply: true                  # totalSupply / SPL supply over the Payment Check RPCs
+#     rpc_controls: true                # owner/admin/implementation/minter/pauser/blacklister/paused/deprecated, SPL authorities
+#     uniswap_rpc: true                 # Uniswap v3 USDC/USDT 0.01% pool
+#     curve: true                       # v1.1 (Curve 3pool panel)
+#     blockscout: true                  # v1.1 (top holders)
+#     chainlink_rpc: true               # v1.1 (oracle panel)
+#   facts_file: ""                      # optional operator override for curated facts (validated, badged in the UI)
+# Check every enabled source against its live endpoint (non-zero exit on failure):
+#   ./biglens-server --stablecoin-verify
