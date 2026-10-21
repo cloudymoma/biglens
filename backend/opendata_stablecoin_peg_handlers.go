@@ -243,6 +243,11 @@ func (s *stablecoinService) depegHistory(ctx context.Context, def stableAssetDef
 			slog.Warn("stablecoin depeg history read", "asset", def.ID, "source", stablePegSourceBitstamp, "error", err)
 		}
 	}
+	if def.Numeraire == "EUR" {
+		if in.Kraken, err = s.store.stablePegDailySeries(ctx, def.ID, stablePegSourceKraken, "0000-01-01"); err != nil {
+			slog.Warn("stablecoin depeg history read", "asset", def.ID, "source", stablePegSourceKraken, "error", err)
+		}
+	}
 	if gecko, ok := stableGeckoIDs[def.ID]; ok {
 		if in.Prices, err = s.store.stablePriceDailySeries(ctx, gecko, "0000-01-01"); err != nil {
 			slog.Warn("stablecoin price history read", "asset", def.ID, "error", err)

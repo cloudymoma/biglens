@@ -92,6 +92,30 @@ func TestParseBitstampOHLC(t *testing.T) {
 	}
 }
 
+func TestParseKrakenOHLC(t *testing.T) {
+	body := `{"error":[],"result":{"EURCEUR":[[1758153600,"1.0001","1.0005","0.9997","1.0002","1.0000","25000.0",40],[1758240000,"1.0002","1.0004","0.9998","0.9999","1.0000","30000.0",50]],"last":1758240000}}`
+	rows, err := parseKrakenOHLC([]byte(body), "EURCEUR")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 || rows[0].Day != "2025-09-18" || rows[0].Close != 1.0002 || rows[1].Day != "2025-09-19" || rows[1].Close != 0.9999 {
+		t.Fatalf("rows = %+v", rows)
+	}
+	for name, bad := range map[string]string{
+		"not json":   `<html>`,
+		"kraken err": `{"error":["EGeneral:Invalid arguments"],"result":{}}`,
+		"other pair": `{"error":[],"result":{"USDCUSD":[[1758153600,"1","1","1","1","1","1",1]]}}`,
+		"short row":  `{"error":[],"result":{"EURCEUR":[[1758153600,"1.0","1.0"]]}}`,
+		"low > high": `{"error":[],"result":{"EURCEUR":[[1758153600,"1.0","0.99","1.01","1.0","1.0","1",1]]}}`,
+		"zero close": `{"error":[],"result":{"EURCEUR":[[1758153600,"1.0","1.0","1.0","0","1.0","1",1]]}}`,
+		"bad number": `{"error":[],"result":{"EURCEUR":[[1758153600,"1.0","1.0","1.0","n/a","1.0","1",1]]}}`,
+	} {
+		if _, err := parseKrakenOHLC([]byte(bad), "EURCEUR"); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
 // Appendix C: a top-level annotations list (UST, BUSD, DAI, FDUSD and USDe
 // are not core assets). Since the M4 curation every entry is "verified"
 // with an https source; "unknown" entries carry no checked claim.
@@ -185,6 +209,8 @@ func newDepegStub(t *testing.T) *depegStub {
 			w.Write(exr)
 		case strings.HasPrefix(r.URL.Path, "/bitstamp/api/v2/ohlc/"):
 			serveStableOHLC(t, w, r, strings.Trim(strings.TrimPrefix(r.URL.Path, "/bitstamp/api/v2/ohlc/"), "/"))
+		case r.URL.Path == "/kraken/0/public/OHLC":
+			serveKrakenOHLC(w, r)
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -194,7 +220,7 @@ func newDepegStub(t *testing.T) *depegStub {
 }
 
 func (d *depegStub) endpoints() stableEndpoints {
-	return stableEndpoints{LlamaBase: d.srv.URL + "/llama", ECBBase: d.srv.URL + "/ecb", BitstampBase: d.srv.URL + "/bitstamp"}
+	return stableEndpoints{LlamaBase: d.srv.URL + "/llama", ECBBase: d.srv.URL + "/ecb", BitstampBase: d.srv.URL + "/bitstamp", KrakenBase: d.srv.URL + "/kraken"}
 }
 
 func TestSyncDepegHistory(t *testing.T) {
@@ -236,11 +262,18 @@ func TestSyncDepegHistory(t *testing.T) {
 		}
 	}
 	if eurc, _ := store.stablePegDailySeries(ctx, "eurc", stablePegSourceBitstamp, "2000-01-01"); len(eurc) != 0 {
-		t.Errorf("eurc candles = %d, want none (no fixture)", len(eurc))
+		t.Errorf("eurc bitstamp candles = %d, want none (no fixture)", len(eurc))
 	}
 	// Bitstamp's eurceur book is too thin for the history (§7.2): never read.
 	if q := stub.queries("/bitstamp/api/v2/ohlc/eurceur/"); len(q) != 0 {
 		t.Errorf("eurceur candles requested: %v", q)
+	}
+	// Kraken EURCEUR daily OHLC is synced for EURC's direct-EUR history.
+	if eurcK, _ := store.stablePegDailySeries(ctx, "eurc", stablePegSourceKraken, "2000-01-01"); len(eurcK) != 3 {
+		t.Errorf("eurc kraken candles = %d, want 3", len(eurcK))
+	}
+	if q := stub.queries("/kraken/0/public/OHLC"); len(q) != 1 || !strings.Contains(q[0], "pair=EURCEUR") || !strings.Contains(q[0], "interval=1440") {
+		t.Errorf("kraken ohlc requests = %v", q)
 	}
 	qs := stub.queries("/bitstamp/api/v2/ohlc/usdcusd/")
 	// 03-06 (2 candles), 03-10 (4), 03-14 (2), 03-18 (none; the next window starts after the clock).
@@ -282,10 +315,10 @@ func TestSyncDepegHistory(t *testing.T) {
 
 	// Disabled providers are never called.
 	stub2 := newDepegStub(t)
-	cfg := StablecoinConfig{Providers: map[string]bool{"defillama": false, "bitstamp": false, "ecb": false}}
+	cfg := StablecoinConfig{Providers: map[string]bool{"defillama": false, "bitstamp": false, "ecb": false, "kraken": false}}
 	p2 := newStablePegSampler(cfg.settings(), newTestRiskStore(t), stub2.endpoints(), nil, func() time.Time { return clock })
 	p2.syncDepegHistory(ctx)
-	for _, path := range []string{"/llama/stablecoinprices", "/ecb/EXR/D.USD.EUR.SP00.A", "/bitstamp/api/v2/ohlc/usdcusd/"} {
+	for _, path := range []string{"/llama/stablecoinprices", "/ecb/EXR/D.USD.EUR.SP00.A", "/bitstamp/api/v2/ohlc/usdcusd/", "/kraken/0/public/OHLC"} {
 		if q := stub2.queries(path); len(q) != 0 {
 			t.Errorf("disabled provider path %s called: %v", path, q)
 		}
@@ -399,22 +432,27 @@ func TestStableClassifyDepeg(t *testing.T) {
 		t.Errorf("10 minutes at ≥ 100 bps: last %+v, history from %q", h.LastGE100, h.HistoryFrom)
 	}
 
-	// EURC: euro terms. The consensus close counts at 30 bps; DefiLlama's
-	// USD price ÷ the same-day ECB rate at 100 bps; no same-day rate (a
-	// Saturday) leaves the day unclassified.
+	// EURC: euro terms. The consensus close counts at 30 bps; Kraken EURCEUR
+	// daily closes take precedence over DefiLlama ÷ same-day ECB where
+	// Kraken has data; historical closes use the 180 bps noise threshold,
+	// while a Saturday without Kraken or a same-day ECB rate is unclassified.
 	eur := stableDepegInputs{Numeraire: "EUR", Today: "2024-01-20",
 		Rollup: []stablePegDaily{roll("2024-01-18", 1.0035, 0, 0)},
+		Kraken: []stablePegDaily{
+			{Day: "2024-01-17", Source: stablePegSourceKraken, Close: f(1.0002), Low: f(0.9998), High: f(1.0004), Samples: 1},
+		},
 		Prices: []stablePriceDaily{
 			price("2024-01-13", 1.1500), // Saturday: Friday's rate would make it +267.9 bps
-			price("2024-01-15", 1.1350), // ÷ 1.12 = +133.9 bps
-			price("2024-01-16", 1.1260), // ÷ 1.12 = +53.6 bps: under 100
+			price("2024-01-15", 1.1424), // ÷ 1.12 = +200.0 bps: above 180 bps
+			price("2024-01-16", 1.1390), // ÷ 1.12 = +169.6 bps: under 180 bps
+			price("2024-01-17", 1.1450), // ÷ 1.12 = +223.2 bps, but Kraken (+2.0 bps) overrides DefiLlama
 		},
-		ECB: map[string]float64{"2024-01-12": 1.12, "2024-01-15": 1.12, "2024-01-16": 1.12},
+		ECB: map[string]float64{"2024-01-12": 1.12, "2024-01-15": 1.12, "2024-01-16": 1.12, "2024-01-17": 1.12},
 	}
 	h = stableClassifyDepeg(eur)
 	if len(h.Days) != 2 || h.Days[0].Day != "2024-01-18" || h.Days[0].Source != "consensus" || h.Days[0].ThresholdBps != 30 ||
-		h.Days[1].Day != "2024-01-15" || h.Days[1].Source != "defillama" || h.Days[1].ThresholdBps != 100 ||
-		math.Abs(h.Days[1].CloseDevBps-(1.1350/1.12-1)*1e4) > 1e-9 || math.Abs(h.Days[1].Close-1.1350/1.12) > 1e-12 {
+		h.Days[1].Day != "2024-01-15" || h.Days[1].Source != "defillama" || h.Days[1].ThresholdBps != 180 ||
+		math.Abs(h.Days[1].CloseDevBps-(1.1424/1.12-1)*1e4) > 1e-9 || math.Abs(h.Days[1].Close-1.1424/1.12) > 1e-12 {
 		t.Fatalf("eurc days = %+v", h.Days)
 	}
 	if len(h.Markers) != 0 || h.LastGE100 == nil || h.LastGE100.Day != "2024-01-15" || h.LastGE100.DaysSince != 5 || h.HistoryFrom != "2024-01-15" {
@@ -428,5 +466,69 @@ func TestStableClassifyDepeg(t *testing.T) {
 	if h := stableClassifyDepeg(stableDepegInputs{Numeraire: "USD", Today: "2024-01-20"}); len(h.Days) != 0 || h.Days == nil ||
 		len(h.Markers) != 0 || h.Markers == nil || h.LastGE100 != nil || h.HistoryFrom != "" {
 		t.Errorf("empty history = %+v", h)
+	}
+}
+
+// TestStableEURC2024To2026Quiet pins that EURC has 0 depeg days in 2024-2026
+// when Kraken EURCEUR daily closes are used from 2025-09-18 onwards and
+// DefiLlama ÷ same-day ECB before that, with the 180 bps threshold derived
+// from the measured 2024-2026 noise (pre-Kraken DefiLlama ÷ ECB max |dev| =
+// 171.87 bps on 2025-08-01; Kraken EURCEUR max |dev| = 101.00 bps on
+// 2026-02-03), while a real > 180 bps pre-2024 dislocation (2023-03-13 SVB)
+// still counts. Uses synthetic data only (no verbatim Kraken data in testdata/).
+func TestStableEURC2024To2026Quiet(t *testing.T) {
+	f := func(v float64) *float64 { return &v }
+	in := stableDepegInputs{
+		Numeraire: "EUR",
+		Today:     "2026-10-21",
+		ECB: map[string]float64{
+			"2023-03-13": 1.0706, // SVB aftermath: 1.098 / 1.0706 = +255.93 bps
+			"2024-01-02": 1.0956, // 1.11 / 1.0956 = +131.43 bps (2-decimal rounding + timing noise)
+			"2024-08-08": 1.0930, // 1.11 / 1.0930 = +155.54 bps
+			"2024-12-18": 1.0445, // 1.03 / 1.0445 = -138.82 bps
+			"2025-04-22": 1.1476, // 1.13 / 1.1476 = -153.36 bps
+			"2025-08-01": 1.1404, // 1.16 / 1.1404 = +171.87 bps (measured 2024-2026 max)
+			"2025-08-22": 1.1608, // 1.18 / 1.1608 = +165.40 bps
+			"2026-06-05": 1.1640, // 1.1510 / 1.1640 = -111.68 bps on DefiLlama ÷ ECB, overridden by Kraken
+		},
+		Prices: []stablePriceDaily{
+			{Day: "2023-03-13", GeckoID: "euro-coin", PriceUSD: 1.0980, Source: stablePriceSourceLlama},
+			{Day: "2024-01-02", GeckoID: "euro-coin", PriceUSD: 1.1100, Source: stablePriceSourceLlama},
+			{Day: "2024-08-08", GeckoID: "euro-coin", PriceUSD: 1.1100, Source: stablePriceSourceLlama},
+			{Day: "2024-12-18", GeckoID: "euro-coin", PriceUSD: 1.0300, Source: stablePriceSourceLlama},
+			{Day: "2025-04-22", GeckoID: "euro-coin", PriceUSD: 1.1300, Source: stablePriceSourceLlama},
+			{Day: "2025-08-01", GeckoID: "euro-coin", PriceUSD: 1.1600, Source: stablePriceSourceLlama},
+			{Day: "2025-08-22", GeckoID: "euro-coin", PriceUSD: 1.1800, Source: stablePriceSourceLlama},
+			{Day: "2026-06-05", GeckoID: "euro-coin", PriceUSD: 1.1510, Source: stablePriceSourceLlama},
+		},
+		Kraken: []stablePegDaily{
+			{Day: "2025-09-18", Source: stablePegSourceKraken, Close: f(1.0002), Low: f(0.9998), High: f(1.0002), Samples: 1},
+			{Day: "2025-10-04", Source: stablePegSourceKraken, Close: f(0.9953), Low: f(0.9946), High: f(1.0002), Samples: 1}, // -47 bps
+			{Day: "2026-01-25", Source: stablePegSourceKraken, Close: f(1.0086), Low: f(1.0000), High: f(1.0160), Samples: 1}, // +86 bps
+			{Day: "2026-02-03", Source: stablePegSourceKraken, Close: f(1.0101), Low: f(0.9996), High: f(1.0101), Samples: 1}, // +101 bps (measured Kraken max)
+			{Day: "2026-02-05", Source: stablePegSourceKraken, Close: f(1.0100), Low: f(0.9995), High: f(1.0280), Samples: 1}, // +100 bps
+			{Day: "2026-06-05", Source: stablePegSourceKraken, Close: f(1.0001), Low: f(0.9998), High: f(1.0003), Samples: 1}, // +1 bps (overrides DefiLlama -111.7 bps)
+		},
+	}
+	h := stableClassifyDepeg(in)
+	var days2024To2026 []StableDepegDay
+	for _, d := range h.Days {
+		if d.Day >= "2024-01-01" {
+			days2024To2026 = append(days2024To2026, d)
+		}
+	}
+	if len(days2024To2026) != 0 {
+		t.Fatalf("EURC 2024-2026 depeg days = %+v, want 0 (quiet)", days2024To2026)
+	}
+	if len(h.Days) != 1 || h.Days[0].Day != "2023-03-13" || h.Days[0].Source != stablePriceSourceLlama {
+		t.Errorf("EURC all depeg days = %+v, want only 2023-03-13", h.Days)
+	}
+	if h.LastGE100 == nil || h.LastGE100.Day != "2023-03-13" {
+		t.Errorf("EURC last_ge_100 = %+v, want 2023-03-13 (no noisy 2024-2026 day)", h.LastGE100)
+	}
+	for _, c := range h.Closes {
+		if c.Day == "2026-06-05" && (c.Source != stablePegSourceKraken || c.DevBps != 1) {
+			t.Errorf("2026-06-05 close = %+v, want kraken_ohlc +1 bps", c)
+		}
 	}
 }

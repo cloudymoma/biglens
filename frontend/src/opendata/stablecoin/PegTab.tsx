@@ -395,7 +395,7 @@ function DepegHistory({ peg }: { peg: StablePeg }) {
     <div className="space-y-4">
       <Panel
         title="Depeg history"
-        help="A day counts by its daily close: the BigLens consensus rollup, else DefiLlama's daily price; EURC uses DefiLlama ÷ the same-day ECB rate with a 100 bps threshold (the two are taken at different times). A Bitstamp intraday low is a marker only when it is at least 100 bps off and that day's candle close, BigLens close or DefiLlama price is at least 30 bps off."
+        help="A day counts by its daily close: the BigLens consensus rollup, else Kraken EURCEUR daily OHLC for EURC where available and DefiLlama's daily price otherwise (EURC before Kraken: DefiLlama ÷ the same-day ECB rate, with a 180 bps historical threshold for FX-timing and rounding noise). A Bitstamp intraday low is a marker only when it is at least 100 bps off and that day's candle close, BigLens close or DefiLlama price is at least 30 bps off."
         right={
           <CsvButton
             filename="stablecoin-depeg-history.csv"

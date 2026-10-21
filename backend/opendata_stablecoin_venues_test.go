@@ -89,6 +89,8 @@ func newStableVenueStub(t *testing.T) *stableVenueStub {
 			w.WriteHeader(http.StatusNotFound)
 		case strings.HasPrefix(p, "/bitstamp/api/v2/ohlc/"):
 			serveStableOHLC(t, w, r, strings.Trim(strings.TrimPrefix(p, "/bitstamp/api/v2/ohlc/"), "/"))
+		case p == "/kraken/0/public/OHLC":
+			serveKrakenOHLC(w, r)
 		case p == "/kraken/0/public/Ticker":
 			if r.URL.Query().Get("pair") != "USDTUSD,USDCUSD,EURCEUR,EURCUSD,EURUSD" {
 				w.Write([]byte(`{"error":["EQuery:Unknown asset pair"]}`))
@@ -150,6 +152,30 @@ func serveStableOHLC(t *testing.T, w http.ResponseWriter, r *http.Request, pair 
 		}
 	}
 	b, _ := json.Marshal(map[string]any{"data": map[string]any{"pair": labels[pair], "ohlc": out}})
+	w.Write(b)
+}
+
+// serveKrakenOHLC answers Kraken's daily EURCEUR candles from a synthetic
+// in-memory series (no verbatim Kraken data in testdata/).
+func serveKrakenOHLC(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	if q.Get("pair") != "EURCEUR" || q.Get("interval") != "1440" {
+		w.Write([]byte(`{"error":["EQuery:Invalid asset pair"]}`))
+		return
+	}
+	since, _ := strconv.ParseInt(q.Get("since"), 10, 64)
+	candles := [][]any{
+		{int64(1758153600), "1.0001", "1.0004", "0.9997", "1.0001", "1.0000", "25000.0", 40}, // 2025-09-18
+		{int64(1780617600), "1.0000", "1.0003", "0.9998", "1.0001", "1.0000", "30000.0", 55}, // 2026-06-05
+		{int64(1792281600), "0.9999", "1.0002", "0.9997", "0.9999", "0.9999", "28000.0", 48}, // 2026-10-18
+	}
+	var out [][]any
+	for _, c := range candles {
+		if c[0].(int64) >= since {
+			out = append(out, c)
+		}
+	}
+	b, _ := json.Marshal(map[string]any{"error": []string{}, "result": map[string]any{"EURCEUR": out, "last": int64(1792281600)}})
 	w.Write(b)
 }
 
