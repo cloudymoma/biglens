@@ -51,10 +51,20 @@ export default function WhalesTab({ onInspect }: { onInspect?: (address: string,
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
+  const selectDays = (d: number) => {
+    setDays(d);
+    setError('');
+    if (d !== days) setLoading(true);
+  };
+
+  const selectChain = (c: CryptoChain) => {
+    setChain(c);
+    setError('');
+    if (c !== chain) setLoading(true);
+  };
+
   useEffect(() => {
     let stale = false;
-    setLoading(true);
-    setError('');
     fetchCryptoWhales(days, chain)
       .then(d => { if (!stale) setData(d); })
       .catch(e => { if (!stale) setError(e.response?.data || e.message); })
@@ -69,7 +79,7 @@ export default function WhalesTab({ onInspect }: { onInspect?: (address: string,
           {(['btc', 'eth'] as const).map(c => (
             <button
               key={c}
-              onClick={() => setChain(c)}
+              onClick={() => selectChain(c)}
               className={`px-3 py-1.5 rounded-lg text-xs font-semibold uppercase transition-colors ${
                 chain === c ? 'text-white' : 'text-zinc-500 hover:text-zinc-300'
               }`}
@@ -79,7 +89,7 @@ export default function WhalesTab({ onInspect }: { onInspect?: (address: string,
             </button>
           ))}
         </div>
-        <DaysPicker options={DAY_OPTIONS} value={days} onChange={setDays} />
+        <DaysPicker options={DAY_OPTIONS} value={days} onChange={selectDays} />
       </div>
       <span className="text-[11px] text-zinc-600">native units — no USD rate exists on-chain</span>
     </div>

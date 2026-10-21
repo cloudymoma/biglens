@@ -31,6 +31,12 @@ function DailyFeesView() {
   const [error, setError] = useState('');
   const [prices, setPrices] = useState<CryptoPricesData | null>(null);
 
+  const selectDays = (d: number) => {
+    setDays(d);
+    setError('');
+    if (d !== days) setLoading(true);
+  };
+
   // Optional USD overlay; a failure (null) simply leaves native units only.
   useEffect(() => {
     let stale = false;
@@ -40,8 +46,6 @@ function DailyFeesView() {
 
   useEffect(() => {
     let stale = false;
-    setLoading(true);
-    setError('');
     fetchCryptoFees(days)
       .then(d => { if (!stale) setData(d); })
       .catch(e => { if (!stale) setError(e.response?.data || e.message); })
@@ -49,7 +53,7 @@ function DailyFeesView() {
     return () => { stale = true; };
   }, [days]);
 
-  if (error) return <div className="space-y-4"><DaysPicker options={DAY_OPTIONS} value={days} onChange={setDays} /><ErrorBanner message={error} /></div>;
+  if (error) return <div className="space-y-4"><DaysPicker options={DAY_OPTIONS} value={days} onChange={selectDays} /><ErrorBanner message={error} /></div>;
   if (loading || !data || data.days !== days) return <EmptyState text="Loading fee market…" />;
 
   const latestBtc = data.btc[data.btc.length - 1];
@@ -78,7 +82,7 @@ function DailyFeesView() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <DaysPicker options={DAY_OPTIONS} value={days} onChange={setDays} />
+        <DaysPicker options={DAY_OPTIONS} value={days} onChange={selectDays} />
         <span className="text-[11px] text-zinc-600">Complete UTC days · latest = {latestDate}</span>
       </div>
       <IngestingNote complete={data.last_day_complete} probeFailed={data.last_day_probe_failed} />

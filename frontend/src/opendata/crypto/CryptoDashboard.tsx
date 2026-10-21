@@ -29,7 +29,7 @@ function initialCryptoTab(): TabId {
 export default function CryptoDashboard() {
   const initTab = initialCryptoTab();
   const [active, setActive] = useState<TabId>(initTab);
-  const [visited, setVisited] = useState<ReadonlySet<TabId>>(new Set<TabId>(['pulse', initTab]));
+  const [visited, setVisited] = useState<ReadonlySet<TabId>>(new Set<TabId>([initTab]));
 
   // Whales / Payment Check → Address Risk hand-off. seq changes on every click,
   // so clicking the same address again re-runs the lookup in the already-mounted tab.
