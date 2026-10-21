@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"math"
 	"net/url"
+	"slices"
 	"sort"
 	"time"
 )
@@ -407,6 +408,18 @@ type StableDepegMarker struct {
 	ConfirmedBy []string `json:"confirmed_by"`
 }
 
+// StableDepegClose is one day of the depeg-history chart: the day's close by
+// the same rule (consensus rollup, else DefiLlama; EURC ÷ the same-day ECB
+// rate) and the threshold that applies to it. Values are rounded for the
+// chart payload (close to 1e-6, deviation to 0.01 bps).
+type StableDepegClose struct {
+	Day          string  `json:"day"`
+	Source       string  `json:"source"` // consensus | defillama
+	Close        float64 `json:"close"`  // in the asset's numéraire
+	DevBps       float64 `json:"dev_bps"`
+	ThresholdBps float64 `json:"threshold_bps"`
+}
+
 // StableLastDeviation is the newest day at ≥ 100 bps off peg in the stored
 // history.
 type StableLastDeviation struct {
@@ -426,7 +439,8 @@ type stableDepegInputs struct {
 }
 
 type stableDepegHistory struct {
-	Days        []StableDepegDay // newest first
+	Days        []StableDepegDay   // newest first
+	Closes      []StableDepegClose // every day with a close, oldest first
 	Total       int
 	Markers     []StableDepegMarker // newest first
 	LastGE100   *StableLastDeviation
@@ -475,7 +489,7 @@ func stableClassifyDepeg(in stableDepegInputs) stableDepegHistory {
 	}
 	sort.Sort(sort.Reverse(sort.StringSlice(keys)))
 
-	out := stableDepegHistory{Days: []StableDepegDay{}, Markers: []StableDepegMarker{}}
+	out := stableDepegHistory{Days: []StableDepegDay{}, Closes: []StableDepegClose{}, Markers: []StableDepegMarker{}}
 	if len(keys) > 0 {
 		out.HistoryFrom = keys[len(keys)-1]
 	}
@@ -492,6 +506,7 @@ func stableClassifyDepeg(in stableDepegInputs) stableDepegHistory {
 			r := d.roll
 			dev := (*r.Close - 1) * 1e4
 			closeDev = &dev
+			out.Closes = append(out.Closes, stableRoundedClose(k, stablePegSourceConsensus, *r.Close, dev, stableDepegThresholdBps))
 			if stableBpsAtLeast(dev, stableDepegThresholdBps) {
 				out.Days = append(out.Days, StableDepegDay{Day: k, Source: stablePegSourceConsensus, Close: *r.Close, CloseDevBps: dev,
 					ThresholdBps: stableDepegThresholdBps, MinDevBps: r.MinDevBps, MaxDevBps: r.MaxDevBps, MinutesGE30: r.MinutesGE30, MinutesGE100: r.MinutesGE100})
@@ -502,6 +517,7 @@ func stableClassifyDepeg(in stableDepegInputs) stableDepegHistory {
 			if in.Numeraire == "EUR" {
 				thr = stableDepegEURLlamaBps
 			}
+			out.Closes = append(out.Closes, stableRoundedClose(k, stablePriceSourceLlama, *d.llama, *d.llamaDev, thr))
 			if stableBpsAtLeast(*d.llamaDev, thr) {
 				out.Days = append(out.Days, StableDepegDay{Day: k, Source: stablePriceSourceLlama, Close: *d.llama, CloseDevBps: *d.llamaDev, ThresholdBps: thr})
 			}
@@ -540,7 +556,13 @@ func stableClassifyDepeg(in stableDepegInputs) stableDepegHistory {
 		}
 	}
 	out.Total = len(out.Days)
+	slices.Reverse(out.Closes)
 	return out
+}
+
+func stableRoundedClose(day, source string, close, dev, threshold float64) StableDepegClose {
+	return StableDepegClose{Day: day, Source: source, Close: math.Round(close*1e6) / 1e6, DevBps: math.Round(dev*100) / 100,
+		ThresholdBps: threshold}
 }
 
 // stableWorstDev is the deviation with the larger magnitude.

@@ -149,14 +149,21 @@ type StableLiveAsset struct {
 	Symbol    string `json:"symbol"`
 	Numeraire string `json:"numeraire"`
 	// Peg fields: the latest 5-minute consensus in the asset's numéraire.
-	Consensus    *float64 `json:"consensus"`
-	DevBps       *float64 `json:"dev_bps"`
-	VenuesUsed   *int     `json:"venues_used"`
-	PegState     string   `json:"peg_state,omitempty"` // ok | single_venue | unknown
-	DevMin24hBps *float64 `json:"dev_min_24h_bps"`     // over the stored samples of the last 24 h
+	Consensus  *float64 `json:"consensus"`
+	DevBps     *float64 `json:"dev_bps"`
+	VenuesUsed *int     `json:"venues_used"`
+	PegState   string   `json:"peg_state,omitempty"` // ok | single_venue | unknown
+	// PegSignal is S1's state, which colors the deviation chip (§7.1); null
+	// when the signal engine is not running.
+	PegSignal    *string  `json:"peg_signal"`
+	DevMin24hBps *float64 `json:"dev_min_24h_bps"` // over the stored samples of the last 24 h
 	DevMax24hBps *float64 `json:"dev_max_24h_bps"`
-	PriceAsOf    string   `json:"price_as_of,omitempty"`
-	PriceStale   bool     `json:"price_stale,omitempty"` // the sample is older than 3 intervals
+	// DevRangeFrom is the oldest sample in that range; DevRangePartial says
+	// the samples do not span 24 h yet (cold start: "since HH:MM", §7.4).
+	DevRangeFrom    string `json:"dev_range_from,omitempty"`
+	DevRangePartial bool   `json:"dev_range_partial"`
+	PriceAsOf       string `json:"price_as_of,omitempty"`
+	PriceStale      bool   `json:"price_stale,omitempty"` // the sample is older than 3 intervals
 	// Supply.
 	CirculatingNative    *float64 `json:"circulating_native"`
 	CirculatingSource    string   `json:"circulating_source,omitempty"` // issuer | aggregator
@@ -178,6 +185,9 @@ type StableLive struct {
 	Assets         []StableLiveAsset `json:"assets"`
 	MarketTotalUSD *float64          `json:"market_total_usd"`
 	MarketAsOf     string            `json:"market_as_of,omitempty"`
+	// MarketTotal30dChangePct is the total's change over 30 days in USD, over
+	// the coins DefiLlama reports both values for (§7.1).
+	MarketTotal30dChangePct *float64 `json:"market_total_30d_change_pct"`
 	// Alerts counts signals at critical, warning and watch across the core
 	// assets (§7.1); null when the signal engine is not running.
 	Alerts map[string]int `json:"alerts"`
@@ -199,6 +209,7 @@ func (s *stablecoinService) buildLive() StableLive {
 	out := StableLive{WarmingUp: state == nil, PegWarmingUp: peg == nil, Assets: []StableLiveAsset{}}
 	if state != nil {
 		out.AsOf, out.MarketTotalUSD, out.MarketAsOf = stableFmt(state.AsOf), state.MarketTotalUSD, stableFmt(state.MarketAsOf)
+		out.MarketTotal30dChangePct = stableMarket30dChange(state.Llama)
 	}
 	for _, def := range stableCoreAssets {
 		la := StableLiveAsset{Asset: def.ID, Symbol: def.Symbol, Numeraire: def.Numeraire}
@@ -207,7 +218,11 @@ func (s *stablecoinService) buildLive() StableLive {
 			vu := p.VenuesUsed
 			la.Consensus, la.DevBps, la.VenuesUsed, la.PegState = p.Consensus, p.DevBps, &vu, p.State
 			la.PriceAsOf, la.PriceStale = stableFmt(peg.AsOf), now.Sub(peg.AsOf) > stablePegStaleAfter
-			la.DevMin24hBps, la.DevMax24hBps = s.devRange24h(ctx, def.ID, now)
+			var from time.Time
+			la.DevMin24hBps, la.DevMax24hBps, from = s.devRange24h(ctx, def.ID, now)
+			if !from.IsZero() {
+				la.DevRangeFrom, la.DevRangePartial = stableFmt(from), from.After(now.Add(-24*time.Hour+stablePegTick))
+			}
 		}
 		if state != nil {
 			a := state.Assets[def.ID]
@@ -233,6 +248,12 @@ func (s *stablecoinService) buildLive() StableLive {
 		if s.signals != nil {
 			w := s.signals.worst(def.ID)
 			la.WorstSignal = &w
+			for _, sg := range s.signals.snapshot(def.ID) {
+				if sg.ID == "S1" {
+					st := sg.State
+					la.PegSignal = &st
+				}
+			}
 		}
 		out.Assets = append(out.Assets, la)
 	}
@@ -242,20 +263,25 @@ func (s *stablecoinService) buildLive() StableLive {
 	return out
 }
 
-// devRange24h is the range of the stored consensus deviations over 24 h.
-func (s *stablecoinService) devRange24h(ctx context.Context, asset string, now time.Time) (*float64, *float64) {
+// devRange24h is the range of the stored consensus deviations over 24 h and
+// the oldest sample with a deviation in it (zero without one).
+func (s *stablecoinService) devRange24h(ctx context.Context, asset string, now time.Time) (*float64, *float64, time.Time) {
 	if s.store == nil {
-		return nil, nil
+		return nil, nil, time.Time{}
 	}
 	rows, err := s.store.stablePeg5mSeries(ctx, asset, now.Add(-24*time.Hour))
 	if err != nil {
 		slog.Warn("stablecoin 24h peg range read", "asset", asset, "error", err)
-		return nil, nil
+		return nil, nil, time.Time{}
 	}
 	var lo, hi *float64
+	var from time.Time
 	for _, r := range rows {
 		if r.DevBps == nil {
 			continue
+		}
+		if from.IsZero() {
+			from = r.Bucket
 		}
 		if lo == nil || *r.DevBps < *lo {
 			lo = stableF(*r.DevBps)
@@ -264,7 +290,26 @@ func (s *stablecoinService) devRange24h(ctx context.Context, asset string, now t
 			hi = stableF(*r.DevBps)
 		}
 	}
-	return lo, hi
+	return lo, hi, from
+}
+
+// stableMarket30dChange is the DefiLlama total's 30-day change in percent,
+// over the coins with both a current and a month-ago USD value; nil without
+// any.
+func stableMarket30dChange(snap *llamaStableSnapshot) *float64 {
+	if snap == nil {
+		return nil
+	}
+	var cur, prev float64
+	for _, a := range snap.Assets {
+		if a.CirculatingUSD != nil && a.PrevMonthUSD != nil {
+			cur, prev = cur+*a.CirculatingUSD, prev+*a.PrevMonthUSD
+		}
+	}
+	if prev <= 0 {
+		return nil
+	}
+	return stableF((cur/prev - 1) * 100)
 }
 
 func (h *APIHandler) StablecoinLive(w http.ResponseWriter, r *http.Request) {

@@ -9,9 +9,10 @@ import (
 )
 
 // /peg (stablecoin.md §9): the venue table, the consensus and dispersion
-// series, the relative peg (exchange median and Uniswap), FX, and the depeg
-// history with annotations. Served from the peg sampler's memory and SQLite;
-// it never calls upstreams. Chainlink (oracle) and Curve are v1.1.
+// series, the per-venue deviation heatmap, the relative peg (exchange median
+// and Uniswap), FX and the ECB reference rate, and the depeg history with
+// annotations. Served from the peg sampler's memory and SQLite; it never
+// calls upstreams. Chainlink (oracle) and Curve are v1.1.
 
 const (
 	stablePegTTL = 30 * time.Second
@@ -68,12 +69,22 @@ type StablePegAssetView struct {
 	LastGE100   *StableLastDeviation `json:"last_ge_100"`
 	HistoryFrom string               `json:"history_from,omitempty"`
 	Annotations []stableAnnotation   `json:"annotations"`
+	// DailyCloses is the depeg-history chart: every stored day's close by
+	// the same rule, oldest first.
+	DailyCloses []StableDepegClose `json:"daily_closes"`
+	// Heatmap is the per-venue deviation heatmap; null for ranges longer
+	// than the 30 days of stored inputs.
+	Heatmap *StablePegHeatmap `json:"heatmap"`
 }
 
 type StableRelativePegView struct {
 	StableRelativePeg
-	SeriesResolution string           `json:"series_resolution"`
-	Series           []StablePegPoint `json:"series"`
+	SeriesResolution string            `json:"series_resolution"`
+	Series           []StablePegPoint  `json:"series"`
+	Heatmap          *StablePegHeatmap `json:"heatmap"`
+	// UniswapSeries is the DEX panel: the stored 10-minute readings up to
+	// 30 days, beyond that the last reading of each day.
+	UniswapSeries []StableDexPoint `json:"uniswap_series"`
 }
 
 type StablePegResponse struct {
@@ -94,6 +105,9 @@ type StablePegResponse struct {
 	AnnotationsOverridden bool               `json:"annotations_overridden"`
 	DepegThresholdBps     float64            `json:"depeg_threshold_bps"` // a day's close; EURC on DefiLlama ÷ ECB uses each day's threshold_bps
 	LowMarkerBps          float64            `json:"low_marker_bps"`
+	// ECB is the newest stored ECB reference rate, for EURC mode; null when
+	// no EUR asset is requested or none is stored.
+	ECB *StableECBRate `json:"ecb"`
 }
 
 func (s *stablecoinService) pegLatest() *stablePegResult {
@@ -124,21 +138,27 @@ func (s *stablecoinService) buildPeg(r *http.Request, assets []string, rangeLabe
 		out.Relative.StableRelativePeg = StableRelativePeg{Pair: "USDC/USDT", Quotes: []StableQuote{}}
 	}
 	out.Relative.SeriesResolution, out.Relative.Series = s.pegSeries(ctx, stableRelativeAsset, rg.Span, rg.Daily, now)
+	out.Relative.Heatmap = s.pegHeatmap(ctx, stableRelativeAsset, rg.Span, now)
+	out.Relative.UniswapSeries = s.pegDexSeries(ctx, rg.Span, rg.Daily, now)
 	var fxHistory map[string]float64
 	for _, id := range assets {
 		def, _ := stableAssetByID(id)
-		v := StablePegAssetView{Annotations: []stableAnnotation{}, DepegDays: []StableDepegDay{}, LowMarkers: []StableDepegMarker{}}
+		v := StablePegAssetView{Annotations: []stableAnnotation{}, DepegDays: []StableDepegDay{}, LowMarkers: []StableDepegMarker{},
+			DailyCloses: []StableDepegClose{}}
 		if res != nil {
 			v.StablePeg = res.Assets[id]
 		} else {
 			v.StablePeg = StablePeg{Asset: id, Numeraire: def.Numeraire, State: "unknown", Venues: []string{}, Quotes: []StableQuote{}}
 		}
 		v.SeriesResolution, v.Series = s.pegSeries(ctx, id, rg.Span, rg.Daily, now)
+		v.Heatmap = s.pegHeatmap(ctx, id, rg.Span, now)
 		if def.Numeraire == "EUR" && fxHistory == nil {
 			fxHistory = s.ecbHistory(ctx)
+			out.ECB = stableLatestECB(fxHistory)
 		}
 		if hist, ok := s.depegHistory(ctx, def, fxHistory, now); ok {
 			v.DepegDays, v.DepegDaysTotal, v.LowMarkers, v.LastGE100, v.HistoryFrom = hist.Days, hist.Total, hist.Markers, hist.LastGE100, hist.HistoryFrom
+			v.DailyCloses = hist.Closes
 		}
 		for _, a := range out.Annotations {
 			if strings.EqualFold(a.Asset, def.Symbol) {

@@ -119,6 +119,17 @@ CREATE TABLE IF NOT EXISTS stable_dex_10m (
   tvl_usd REAL,
   PRIMARY KEY (bucket, pool)
 );
+CREATE TABLE IF NOT EXISTS stable_inputs_5m (
+  bucket TEXT NOT NULL,
+  asset TEXT NOT NULL,
+  venue TEXT NOT NULL,
+  pair TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  mid REAL,
+  included INTEGER NOT NULL,
+  exclude_reason TEXT,
+  PRIMARY KEY (bucket, asset, venue, pair)
+);
 CREATE TABLE IF NOT EXISTS stable_control_state (
   asset TEXT NOT NULL,
   chain TEXT NOT NULL,
@@ -182,8 +193,9 @@ CREATE TABLE IF NOT EXISTS stable_signal_events (
 // tables keep one row per day forever (§8.5 "180 d, then daily").
 const stableSnapshotRetention = 180 * 24 * time.Hour
 
-// Peg retention (§8.5): venue quotes 30 days; 5-minute peg samples and DEX
-// readings 180 days, then stable_peg_daily keeps the day forever.
+// Peg retention (§8.5): venue quotes and each asset's consensus inputs (the
+// heatmap rows) 30 days; 5-minute peg samples and DEX readings 180 days, then
+// stable_peg_daily keeps the day forever.
 const (
 	stableQuotesRetention = 30 * 24 * time.Hour
 	stablePegRetention    = 180 * 24 * time.Hour
@@ -552,6 +564,7 @@ func (s *riskStore) pruneStable(ctx context.Context, now time.Time) (int64, erro
 	}{
 		{"stable_supply_snapshots", "ts", stableSnapshotRetention},
 		{"stable_quotes_5m", "bucket", stableQuotesRetention},
+		{"stable_inputs_5m", "bucket", stableQuotesRetention},
 		{"stable_peg_5m", "bucket", stablePegRetention},
 		{"stable_dex_10m", "bucket", stableDexRetention},
 	} {

@@ -102,10 +102,17 @@ func TestStablePegStoreRetention(t *testing.T) {
 	if err := s.rollupStablePegDaily(ctx, "usdc", now.Add(-stablePegRetention-time.Hour).Format(time.DateOnly), now); err != nil {
 		t.Fatal(err)
 	}
+	// The heatmap inputs follow the venue quotes' 30 days.
+	inputs := stablePegResult{Assets: map[string]StablePeg{"usdc": {Asset: "usdc", Quotes: []StableQuote{q(now)}}}}
+	for _, at := range []time.Time{now.Add(-stableQuotesRetention - time.Hour), now.Add(-time.Hour)} {
+		if err := s.insertStableInputs5m(ctx, at, inputs); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if _, err := s.pruneStable(ctx, now); err != nil {
 		t.Fatal(err)
 	}
-	for table, want := range map[string]int{"stable_quotes_5m": 1, "stable_peg_5m": 1, "stable_dex_10m": 1, "stable_peg_daily": 1} {
+	for table, want := range map[string]int{"stable_quotes_5m": 1, "stable_peg_5m": 1, "stable_dex_10m": 1, "stable_peg_daily": 1, "stable_inputs_5m": 1} {
 		if n := countRows(t, s, table, ``); n != want {
 			t.Errorf("%s rows after prune = %d, want %d", table, n, want)
 		}

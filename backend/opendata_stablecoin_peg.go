@@ -9,8 +9,9 @@ import (
 
 // Peg sampler (stablecoin.md §8.4): every 5 minutes it reads the venue
 // tickers and the Uniswap pool, computes the consensus (§5.2–5.3), stores the
-// quotes, the peg samples, the daily rollups and the DEX price, and keeps the
-// latest result in memory, so /live and /peg never call upstreams.
+// quotes, each asset's consensus inputs (the heatmap rows), the peg samples,
+// the daily rollups and the DEX price, and keeps the latest result in memory,
+// so /live and /peg never call upstreams.
 
 // stablePegVenueKeys are the provider keys of the exchange adapters.
 var stablePegVenueKeys = []string{"coinbase", "kraken", "bitstamp", "okx", "binance"}
@@ -149,6 +150,9 @@ func (p *stablePegSampler) persist(ctx context.Context, now time.Time, quotes []
 	}
 	if err := p.store.insertStableQuotes5m(ctx, now, res.Markets, last); err != nil {
 		slog.Warn("stablecoin peg quotes store", "error", err)
+	}
+	if err := p.store.insertStableInputs5m(ctx, now, res); err != nil {
+		slog.Warn("stablecoin peg inputs store", "error", err)
 	}
 	var rows []stablePeg5mRow
 	for _, def := range stableCoreAssets {
