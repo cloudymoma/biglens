@@ -2,10 +2,11 @@ import { useEffect, useState } from 'react';
 import { CircleDollarSign, Moon, RefreshCw, Sun } from 'lucide-react';
 import { usePolling } from '../common/usePolling';
 import type { SourceStatus } from '../common/types';
-import { fetchStableMeta, fetchStableOverview } from './api';
+import { fetchStableLive, fetchStableMeta, fetchStableOverview } from './api';
 import { effectiveRange, parseView, TAB_RANGES, viewSearch } from './deeplink';
 import type { StableAsset, StableRange, StableTab, StableView } from './deeplink';
 import type { Theme } from './signals';
+import StablecoinTicker from './StablecoinTicker';
 import { cx } from './styles';
 import { initialTheme, StableThemeContext, storeTheme } from './theme';
 import type { StableMeta } from './types';
@@ -73,6 +74,9 @@ export default function StablecoinDashboard() {
   }, [view]);
 
   const metaPoll = usePolling(fetchStableMeta, 60_000, `stable-meta-${refreshTick}`);
+  // The ticker polls /live every 60 s; usePolling skips runs while the
+  // browser tab is hidden (§7.1).
+  const livePoll = usePolling(fetchStableLive, 60_000, `stable-live-${refreshTick}`);
   const overviewRange = effectiveRange('overview', view.range) ?? '90d';
   const overviewPoll = usePolling(
     () => fetchStableOverview(overviewRange),
@@ -92,7 +96,7 @@ export default function StablecoinDashboard() {
 
   const tabRanges = TAB_RANGES[view.tab];
   const range = effectiveRange(view.tab, view.range);
-  const updated = overviewPoll.data?.as_of;
+  const updated = livePoll.data?.as_of || overviewPoll.data?.as_of;
   const sources = providerSources(metaPoll.data);
 
   return (
@@ -152,6 +156,8 @@ export default function StablecoinDashboard() {
           {metaPoll.error && !metaPoll.data && (
             <ErrorNote message={`${metaPoll.error}. If this persists, check that stablecoin.enabled is true in conf.yaml.`} />
           )}
+
+          <StablecoinTicker live={livePoll.data} loading={livePoll.loading} />
 
           <TabBar label="Stablecoin views" tabs={TAB_CHOICES} active={view.tab} onSelect={selectTab} idPrefix="stable" />
 

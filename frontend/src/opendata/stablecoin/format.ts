@@ -79,3 +79,8 @@ export const fmtShortAddr = (addr: string | null | undefined): string => {
   if (!addr) return DASH;
   return addr.length <= 14 ? addr : `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 };
+
+// fmtRangeWindow labels the ticker's 24h deviation range: "since HH:MM UTC"
+// while the stored samples span less than 24 h (cold start, §7.4).
+export const fmtRangeWindow = (from: string | null | undefined, partial: boolean): string =>
+  partial && from ? `since ${fmtTimeHM(from)}` : '24h';

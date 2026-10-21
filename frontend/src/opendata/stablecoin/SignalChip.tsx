@@ -8,14 +8,17 @@ const ICONS: Record<StateIcon, LucideIcon> = { CircleCheck, Info, Eye, TriangleA
 
 // SignalChip shows a signal state as icon + word (never color alone, §7.3).
 // The word keeps the theme's text color for contrast; the icon and border
-// carry the state color.
+// carry the state color. An optional value (e.g. a deviation) precedes the
+// word.
 export default function SignalChip({
   state,
   prefix,
+  value,
   title,
 }: {
   state: string | null | undefined;
   prefix?: string; // e.g. the signal id ("S1") or a short label
+  value?: string;
   title?: string;
 }) {
   const theme = useStableTheme();
@@ -30,6 +33,7 @@ export default function SignalChip({
     >
       <Icon aria-hidden="true" className="h-3.5 w-3.5 shrink-0" style={{ color }} strokeWidth={2.25} />
       {prefix && <span className="text-zinc-500 dark:text-zinc-400">{prefix}</span>}
+      {value && <span className="font-mono">{value} ·</span>}
       <span>{m.label}</span>
     </span>
   );
