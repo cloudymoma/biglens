@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -104,4 +105,62 @@ func TestStableControlsFirstDelay(t *testing.T) {
 	}
 	cancel()
 	<-done
+}
+
+// TRON control reads (Appendix A, M4 decision): one at a time, at least 1 s
+// apart; a field still rate-limited is re-read once at the end of the
+// sample, after every other chain.
+func TestStableTronControlPacing(t *testing.T) {
+	stub, rpcs := newStableControlsStub(t)
+	clock := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	c := newStableControlsSampler(StablecoinConfig{}.settings(), newTestRiskStore(t), rpcs, func() time.Time { return clock })
+	ctx := context.Background()
+	sample := func() {
+		t.Helper()
+		stub.mu.Lock()
+		// upgradedAddress() answers 429 twice: the first read and its one
+		// retry fail, the end-of-sample re-read succeeds.
+		stub.tronLimited["upgradedAddress()"] = 2
+		stub.order, stub.tronLog = nil, nil
+		stub.mu.Unlock()
+		c.tick(ctx)
+		clock = clock.Add(stableControlsTick)
+	}
+	sample()
+	stub.mu.Lock()
+	log, order := append([]stableTronCall(nil), stub.tronLog...), append([]string(nil), stub.order...)
+	stub.mu.Unlock()
+	var sels []string
+	for i, call := range log {
+		sels = append(sels, call.Selector)
+		if i > 0 && call.At.Sub(log[i-1].At) < stableTronPace {
+			t.Errorf("TRON reads %d and %d only %v apart, want at least %v (%+v)", i-1, i, call.At.Sub(log[i-1].At), stableTronPace, log)
+		}
+	}
+	want := []string{"owner()", "paused()", "deprecated()", "upgradedAddress()", "upgradedAddress()", "upgradedAddress()"}
+	if strings.Join(sels, ",") != strings.Join(want, ",") || log[len(log)-1].Status != http.StatusOK {
+		t.Fatalf("TRON reads = %v (last status %d), want %v ending with the re-read that succeeds", sels, log[len(log)-1].Status, want)
+	}
+	lastOther := -1
+	for i, ep := range order {
+		if ep != "tron" {
+			lastOther = i
+		}
+	}
+	if order[len(order)-1] != "tron" || lastOther > len(order)-2 {
+		t.Errorf("request order %v: the re-read must come after every other chain", order)
+	}
+	states, err := c.store.stableControlStates(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := states["usdt|tron|upgraded_address"]; st.LastCode != "" || st.PendingValue == nil {
+		t.Errorf("after the first sample upgraded_address = %+v, want a pending value with no read error", st)
+	}
+	// TRON has one endpoint, so the second sample confirms the baseline.
+	sample()
+	states, _ = c.store.stableControlStates(ctx)
+	if st := states["usdt|tron|upgraded_address"]; st.Value == nil || !st.Baseline || st.LastCode != "" {
+		t.Errorf("after two samples upgraded_address = %+v, want the baseline", st)
+	}
 }

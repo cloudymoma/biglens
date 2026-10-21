@@ -36,6 +36,36 @@ const (
 	stableControlTronTimeout = stableControlCallTimeout + stableTronRetryMax
 )
 
+// TRON control reads (Appendix A, M4 decision): one at a time and at least
+// stableTronPace apart, counted from the end of the previous read; TronGrid
+// rate-limits keyless bursts. stableTronNow is the pacing clock (a test hook,
+// like stableTronSleep).
+const stableTronPace = time.Second
+
+var (
+	stableTronNow   = time.Now
+	stableTronPacer struct {
+		mu   sync.Mutex
+		last time.Time
+	}
+)
+
+// stableTronPaced runs one TRON control read under the pacer.
+func stableTronPaced(ctx context.Context, read func() (string, string)) (string, string) {
+	stableTronPacer.mu.Lock()
+	defer stableTronPacer.mu.Unlock()
+	if !stableTronPacer.last.IsZero() {
+		if wait := stableTronPace - stableTronNow().Sub(stableTronPacer.last); wait > 0 {
+			if err := stableTronSleep(ctx, wait); err != nil {
+				return "", "timeout"
+			}
+		}
+	}
+	v, code := read()
+	stableTronPacer.last = stableTronNow()
+	return v, code
+}
+
 // stableControlDeployment is one monitored deployment (Appendix A, plus
 // native USDC on the L2s per its M3 note; bridged tiers are not monitored).
 type stableControlDeployment struct{ Asset, Chain, Kind string }
@@ -189,19 +219,19 @@ func stableEndpointLabel(u string) string {
 
 // stableReadControlAt reads one EVM or TRON field from one endpoint.
 func stableReadControlAt(ctx context.Context, d stableControlDeployment, tok registryToken, f stableControlField, endpoint string) (string, string) {
-	timeout := stableControlCallTimeout
 	if d.Chain == "tron" {
-		timeout = stableControlTronTimeout
+		return stableTronPaced(ctx, func() (string, string) {
+			ctx, cancel := context.WithTimeout(ctx, stableControlTronTimeout)
+			defer cancel()
+			word, code := stableTronConstant(ctx, tok.Contract, f.TronSig)
+			if code != "" {
+				return "", code
+			}
+			return stableDecodeControlWord(f, d.Chain, word)
+		})
 	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	ctx, cancel := context.WithTimeout(ctx, stableControlCallTimeout)
 	defer cancel()
-	if d.Chain == "tron" {
-		word, code := stableTronConstant(ctx, tok.Contract, f.TronSig)
-		if code != "" {
-			return "", code
-		}
-		return stableDecodeControlWord(f, d.Chain, word)
-	}
 	var res string
 	var err error
 	if f.Slot != "" {
@@ -420,6 +450,13 @@ func stableControlStep(st stableControlState, r stableControlRead, second *stabl
 	return st, ev
 }
 
+// stableControlRetry is a TRON field to re-read at the end of a sample.
+type stableControlRetry struct {
+	d  stableControlDeployment
+	f  stableControlField
+	st stableControlState
+}
+
 type stableControlsSampler struct {
 	settings stableSettings
 	store    *riskStore
@@ -464,6 +501,9 @@ func (c *stableControlsSampler) tick(ctx context.Context) bool {
 		states []stableControlState
 		events []stableControlEvent
 		ok     bool
+		// retry holds TRON fields still rate-limited after the inline
+		// retry; they are re-read once at the end of the sample.
+		retry []stableControlRetry
 	}
 	results := make([]result, len(stableControlDeployments))
 	var wg sync.WaitGroup
@@ -478,16 +518,20 @@ func (c *stableControlsSampler) tick(ctx context.Context) bool {
 			var splSecond map[string]stableControlRead
 			for _, f := range stableControlFields[d.Kind] {
 				r := reads[f.Name]
+				key := d.Asset + "|" + d.Chain + "|" + f.Name
+				st, ok := prev[key]
+				if !ok {
+					st = stableControlState{Asset: d.Asset, Chain: d.Chain, Field: f.Name}
+				}
+				if d.Chain == "tron" && r.Code == "rate_limited" {
+					res.retry = append(res.retry, stableControlRetry{d: d, f: f, st: st})
+					continue
+				}
 				if r.Code != "" {
 					res.ok = false
 					if code == "" {
 						code = r.Code
 					}
-				}
-				key := d.Asset + "|" + d.Chain + "|" + f.Name
-				st, ok := prev[key]
-				if !ok {
-					st = stableControlState{Asset: d.Asset, Chain: d.Chain, Field: f.Name}
 				}
 				var second *stableControlRead
 				if r.Code == "" && (st.Value == nil || *st.Value != r.Value) {
@@ -520,10 +564,39 @@ func (c *stableControlsSampler) tick(ctx context.Context) bool {
 	ok := true
 	var states []stableControlState
 	var events []stableControlEvent
+	var retry []stableControlRetry
 	for _, r := range results {
 		ok = ok && r.ok
 		states = append(states, r.states...)
 		events = append(events, r.events...)
+		retry = append(retry, r.retry...)
+	}
+	// End of the sample, after every other chain: one paced re-read of each
+	// field TronGrid still rate-limited (Appendix A).
+	for _, rt := range retry {
+		t0 := time.Now()
+		r := stableControlRead{Code: "unavailable"}
+		if tok, found := rt.d.token(); found {
+			for _, ep := range stableControlEndpoints(rt.d.Chain, c.rpcs) {
+				v, code := stableReadControlAt(ctx, rt.d, tok, rt.f, ep)
+				r = stableControlRead{Value: v, Endpoint: stableEndpointLabel(ep), Code: code}
+				break
+			}
+		}
+		if r.Code != "" {
+			ok = false
+			r.Value = ""
+		}
+		st, ev := stableControlStep(rt.st, r, nil, now)
+		states = append(states, st)
+		if ev != nil {
+			events = append(events, *ev)
+			slog.Warn("stablecoin control change", "asset", rt.d.Asset, "chain", rt.d.Chain, "field", rt.f.Name,
+				"old", ev.Old, "new", ev.New, "confirmed_by", ev.ConfirmedBy)
+		}
+		if c.onFetch != nil {
+			c.onFetch("rpc_controls", time.Since(t0), r.Code)
+		}
 	}
 	if err := c.store.saveStableControls(ctx, states, events); err != nil {
 		slog.Warn("stablecoin controls: store", "error", err)

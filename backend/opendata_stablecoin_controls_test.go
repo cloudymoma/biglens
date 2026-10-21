@@ -64,6 +64,32 @@ type stableControlsStub struct {
 	byKey     map[string]string            // "endpoint|method|selector-or-slot" → requests seen (count as string)
 	urls      map[string]string            // endpoint → URL
 	contracts map[string]string            // lowercase contract → "asset|chain"
+	// TRON pacing (Appendix A): selector → HTTP 429 answers still to give,
+	// and every request in order with its time on the fake pacing clock.
+	tronLimited map[string]int
+	order       []string // endpoint of every request, in arrival order
+	tronLog     []stableTronCall
+	clock       time.Time // fake clock behind stableTronNow / stableTronSleep
+}
+
+type stableTronCall struct {
+	Selector string
+	At       time.Time
+	Status   int
+}
+
+// now and sleep are the fake pacing clock installed for the TRON reads.
+func (s *stableControlsStub) now() time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.clock
+}
+
+func (s *stableControlsStub) sleep(_ context.Context, d time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.clock = s.clock.Add(d)
+	return nil
 }
 
 func (s *stableControlsStub) set(endpoint, asset, chain, field, value string) {
@@ -111,6 +137,7 @@ func (s *stableControlsStub) begin(endpoint string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls[endpoint]++
+	s.order = append(s.order, endpoint)
 	return s.fail[endpoint]
 }
 
@@ -140,7 +167,16 @@ func stableWord(t *testing.T, kind, v string) string {
 func newStableControlsStub(t *testing.T) (*stableControlsStub, func(string) []string) {
 	t.Helper()
 	s := &stableControlsStub{override: map[string]map[string]string{}, fail: map[string]int{}, calls: map[string]int{},
-		urls: map[string]string{}, contracts: map[string]string{}}
+		urls: map[string]string{}, contracts: map[string]string{}, tronLimited: map[string]int{},
+		clock: time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)}
+	// The TRON reads are paced on a fake clock, so tests never wait; the
+	// pacer forgets earlier tests' reads.
+	origNow, origSleep := stableTronNow, stableTronSleep
+	stableTronNow, stableTronSleep = s.now, s.sleep
+	stableTronPacer.mu.Lock()
+	stableTronPacer.last = time.Time{}
+	stableTronPacer.mu.Unlock()
+	t.Cleanup(func() { stableTronNow, stableTronSleep = origNow, origSleep })
 	for _, d := range stableControlDeployments {
 		tok, ok := d.token()
 		if !ok {
@@ -249,6 +285,18 @@ func newStableControlsStub(t *testing.T) (*stableControlsStub, func(string) []st
 		}
 		b, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(b, &req)
+		s.mu.Lock()
+		status := http.StatusOK
+		if s.tronLimited[req.Selector] > 0 {
+			s.tronLimited[req.Selector]--
+			status = http.StatusTooManyRequests
+		}
+		s.tronLog = append(s.tronLog, stableTronCall{Selector: req.Selector, At: s.clock, Status: status})
+		s.mu.Unlock()
+		if status != http.StatusOK {
+			w.WriteHeader(status)
+			return
+		}
 		dep := s.contracts[strings.ToLower(req.Contract)]
 		f, ok := fieldBy(stableKindTether, func(f stableControlField) bool { return f.TronSig == req.Selector })
 		if dep != "usdt|tron" || !ok {
