@@ -181,11 +181,7 @@ export function SegmentedControl<T extends string>({
             tabIndex={on ? 0 : -1}
             onClick={() => onChange(o.id)}
             onKeyDown={e => onKey(e, i)}
-            className={`rounded-md px-2.5 py-1 font-medium transition ${cx.focus} ${
-              on
-                ? 'bg-emerald-600 text-white dark:bg-emerald-500 dark:text-zinc-950'
-                : 'text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-200'
-            }`}
+            className={`rounded-md px-2.5 py-1 font-medium transition ${cx.focus} ${on ? cx.segOn : cx.segOff}`}
           >
             {o.label}
           </button>

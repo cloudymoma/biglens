@@ -17,7 +17,7 @@ export const cx = {
   strong: 'text-zinc-900 dark:text-zinc-100',
   text: 'text-zinc-700 dark:text-zinc-300',
   muted: 'text-zinc-500 dark:text-zinc-400',
-  faint: 'text-zinc-400 dark:text-zinc-500',
+  faint: 'text-zinc-500 dark:text-zinc-400', // notes; same contrast floor as muted (WCAG AA)
   border: 'border-zinc-200 dark:border-zinc-800',
   link: 'text-sky-700 underline-offset-2 hover:underline dark:text-sky-400',
   table: 'w-full border-collapse text-left',
@@ -28,5 +28,8 @@ export const cx = {
   mono: 'font-mono',
   focus: 'focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 dark:focus-visible:ring-sky-400',
   button: `${buttonBase} px-2.5 py-1.5 text-xs`,
+  // Selected / unselected option of a segmented control (radio group).
+  segOn: 'bg-emerald-700 text-white dark:bg-emerald-500 dark:text-zinc-950',
+  segOff: 'text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-200',
   buttonSmall: `${buttonBase} px-2 py-1 text-[11px]`,
 } as const;

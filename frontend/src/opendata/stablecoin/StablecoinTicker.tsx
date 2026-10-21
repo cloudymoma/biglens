@@ -67,7 +67,7 @@ export default function StablecoinTicker({ live, loading }: { live: StableLive |
     return (
       <div className="grid grid-cols-1 gap-3 md:grid-cols-3 xl:grid-cols-5" aria-busy={loading}>
         {Array.from({ length: 5 }).map((_, i) => (
-          <div key={i} className={`h-40 animate-pulse ${cx.card}`} />
+          <div key={i} className={`h-40 animate-pulse motion-reduce:animate-none ${cx.card}`} />
         ))}
       </div>
     );
