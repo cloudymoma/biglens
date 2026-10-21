@@ -334,11 +334,38 @@ func TestStableS5Raw(t *testing.T) {
 
 func TestStableS6Raw(t *testing.T) {
 	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
-	att := func(periodEnd string) stableAttestation {
-		return stableAttestation{PeriodEnd: periodEnd, Published: periodEnd, Firm: "Firm", Type: "attestation", URL: "https://example.com/a.pdf"}
+	day := func(n int) string { return now.AddDate(0, 0, -n).Format(time.DateOnly) }
+	// att is a report whose period ended n days ago and was published lag
+	// days after that.
+	att := func(n, lag int) stableAttestation {
+		pe := now.AddDate(0, 0, -n)
+		return stableAttestation{PeriodEnd: pe.Format(time.DateOnly), Published: pe.AddDate(0, 0, lag).Format(time.DateOnly), Firm: "Firm",
+			Type: "attestation", URL: "https://example.com/a.pdf"}
 	}
-	days := func(n int) string { return now.AddDate(0, 0, -n).Format(time.DateOnly) }
-	checked := now.AddDate(0, 0, -3).Format(time.DateOnly)
+	// history lists reports every cadence days before the latest one (age
+	// days old), published with the given lags (newest first).
+	history := func(age, cadence int, lags ...int) []stableAttestation {
+		var out []stableAttestation
+		for i, lag := range lags {
+			out = append(out, att(age+cadence*i, lag))
+		}
+		return out
+	}
+	usdcLags := []int{29, 27, 29, 31, 28, 29, 28, 27} // USDC Aug..Jan 2026: p90 (nearest rank) 31
+	usdtLags := []int{31, 30, 30, 31}                 // USDT Q2 2026..Q3 2025: p90 31
+	checked := day(3)
+	monthly := func(age int) stableAssetFacts {
+		return stableAssetFacts{CadenceDays: 30, Attestations: history(age, 30, usdcLags...), AttestationsChecked: checked}
+	}
+	quarterly := func(age int) stableAssetFacts {
+		return stableAssetFacts{CadenceDays: 90, Attestations: history(age, 91, usdtLags...), AttestationsChecked: checked}
+	}
+	fewMonthly := func(age int) stableAssetFacts {
+		return stableAssetFacts{CadenceDays: 30, Attestations: history(age, 30, 28, 29), AttestationsChecked: checked}
+	}
+	fewQuarterly := func(age int) stableAssetFacts {
+		return stableAssetFacts{CadenceDays: 90, Attestations: history(age, 91, 30), AttestationsChecked: checked}
+	}
 	for _, c := range []struct {
 		name    string
 		f       stableAssetFacts
@@ -346,30 +373,77 @@ func TestStableS6Raw(t *testing.T) {
 		stale   bool
 		reason  string
 		summary string
+		method  string
+		watchAt int
 	}{
-		{"monthly 50 d", stableAssetFacts{CadenceDays: 30, Attestations: []stableAttestation{att(days(50))}, AttestationsChecked: checked}, 0, false, "", "latest attestation recorded by biglens"},
-		{"monthly 51 d", stableAssetFacts{CadenceDays: 30, Attestations: []stableAttestation{att(days(51))}, AttestationsChecked: checked}, 1, false, "", ""},
-		{"monthly 75 d", stableAssetFacts{CadenceDays: 30, Attestations: []stableAttestation{att(days(75))}, AttestationsChecked: checked}, 1, false, "", ""},
-		{"monthly 76 d", stableAssetFacts{CadenceDays: 30, Attestations: []stableAttestation{att(days(76))}, AttestationsChecked: checked}, 2, false, "", ""},
-		{"quarterly 135 d", stableAssetFacts{CadenceDays: 90, Attestations: []stableAttestation{att(days(135))}, AttestationsChecked: checked}, 0, false, "", ""},
-		{"quarterly 136 d", stableAssetFacts{CadenceDays: 90, Attestations: []stableAttestation{att(days(136))}, AttestationsChecked: checked}, 1, false, "", ""},
-		{"quarterly 166 d", stableAssetFacts{CadenceDays: 90, Attestations: []stableAttestation{att(days(166))}, AttestationsChecked: checked}, 2, false, "", ""},
-		{"the latest counts", stableAssetFacts{CadenceDays: 30, Attestations: []stableAttestation{att(days(80)), att(days(20))}}, 0, false, "", ""},
+		// Data-driven: cadence 30 + p90 lag 31 + 7 = 68 days; warning after 98.
+		{"monthly 68 d", monthly(68), 0, false, "", "latest attestation recorded by biglens", "data-driven", 68},
+		{"monthly 69 d", monthly(69), 1, false, "", "", "data-driven", 68},
+		{"monthly 98 d", monthly(98), 1, false, "", "", "data-driven", 68},
+		{"monthly 99 d", monthly(99), 2, false, "", "", "data-driven", 68},
+		// Quarterly: 90 + 31 + 7 = 128 days; warning after 158.
+		{"quarterly 128 d", quarterly(128), 0, false, "", "", "data-driven", 128},
+		{"quarterly 129 d", quarterly(129), 1, false, "", "", "data-driven", 128},
+		{"quarterly 158 d", quarterly(158), 1, false, "", "", "data-driven", 128},
+		{"quarterly 159 d", quarterly(159), 2, false, "", "", "data-driven", 128},
+		// Fewer than 3 reports: the fixed fallbacks (monthly 65 / 95, quarterly 150 / 180).
+		{"fallback monthly 65 d", fewMonthly(65), 0, false, "", "", "fallback", 65},
+		{"fallback monthly 66 d", fewMonthly(66), 1, false, "", "", "fallback", 65},
+		{"fallback monthly 95 d", fewMonthly(95), 1, false, "", "", "fallback", 65},
+		{"fallback monthly 96 d", fewMonthly(96), 2, false, "", "", "fallback", 65},
+		{"fallback quarterly 150 d", fewQuarterly(150), 0, false, "", "", "fallback", 150},
+		{"fallback quarterly 151 d", fewQuarterly(151), 1, false, "", "", "fallback", 150},
+		{"fallback quarterly 180 d", fewQuarterly(180), 1, false, "", "", "fallback", 150},
+		{"fallback quarterly 181 d", fewQuarterly(181), 2, false, "", "", "fallback", 150},
+		{"the latest counts", stableAssetFacts{CadenceDays: 30, Attestations: []stableAttestation{att(80, 28), att(20, 28)}}, 0, false, "", "", "fallback", 65},
 		// Over the threshold and not checked within 14 days: S6 unknown, S13 reports stale facts.
-		{"stale facts", stableAssetFacts{CadenceDays: 30, Attestations: []stableAttestation{att(days(60))}, AttestationsChecked: days(15)}, stableLevelUnknown, true, "curated facts may be stale", ""},
-		{"never checked", stableAssetFacts{CadenceDays: 30, Attestations: []stableAttestation{att(days(60))}}, stableLevelUnknown, true, "curated facts may be stale", ""},
-		{"no attestation", stableAssetFacts{Status: stableFactsUnknown}, stableLevelUnknown, false, "no attestation recorded", ""},
+		{"stale facts", stableAssetFacts{CadenceDays: 30, Attestations: history(70, 30, usdcLags...), AttestationsChecked: day(15)},
+			stableLevelUnknown, true, "curated facts may be stale", "", "", 0},
+		{"never checked", stableAssetFacts{CadenceDays: 30, Attestations: history(70, 30, usdcLags...)}, stableLevelUnknown, true,
+			"curated facts may be stale", "", "", 0},
+		{"no attestation", stableAssetFacts{Status: stableFactsUnknown}, stableLevelUnknown, false, "no attestation recorded", "", "", 0},
+		{"annual cadence without history", stableAssetFacts{CadenceDays: 365, Attestations: []stableAttestation{att(10, 30)}}, stableLevelUnknown,
+			false, "no fallback", "", "", 0},
 	} {
 		r, stale := stableS6Raw(c.f, now)
 		if r.Level != c.want || stale != c.stale || (c.reason != "" && !strings.Contains(r.Reason, c.reason)) ||
 			(c.summary != "" && !strings.Contains(strings.ToLower(r.Summary), c.summary)) {
 			t.Errorf("S6 %s = level %d stale %v reason %q summary %q, want %d %v %q %q", c.name, r.Level, stale, r.Reason, r.Summary, c.want, c.stale, c.reason, c.summary)
 		}
+		if c.method != "" && (r.Inputs["threshold_method"] != c.method || r.Inputs["watch_after_days"] != c.watchAt ||
+			r.Inputs["warning_after_days"] != c.watchAt+30) {
+			t.Errorf("S6 %s inputs = %v, want method %s, watch after %d, warning after %d", c.name, r.Inputs, c.method, c.watchAt, c.watchAt+30)
+		}
 	}
-	short := att(days(10))
+	short := att(10, 20)
 	short.ReservesNative, short.LiabilitiesNative = "99.5", "100"
 	if r, _ := stableS6Raw(stableAssetFacts{CadenceDays: 30, Attestations: []stableAttestation{short}}, now); r.Level != stableLevelWarning {
 		t.Errorf("S6 reserves < liabilities = %d, want warning", r.Level)
+	}
+}
+
+// Circle publishes about 28 days after month-end. With the curated facts the
+// September reports are not out yet on 2026-10-20, and USDC and EURC must not
+// go to watch while Circle is on its usual schedule: the August reports
+// (period end 2026-08-31) stay inside the data-driven limit of 68 days
+// through 2026-11-07.
+func TestStableS6CircleBeforePublication(t *testing.T) {
+	facts := loadStableFacts("", nil)
+	for _, asset := range []string{"usdc", "eurc"} {
+		f := facts.Assets[asset]
+		for d := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC); !d.After(time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)); d = d.AddDate(0, 0, 1) {
+			r, stale := stableS6Raw(f, d)
+			if r.Level != stableLevelNormal || stale {
+				t.Fatalf("%s S6 on %s = level %d (%s), stale %v; want normal before the September report is due", asset, d.Format(time.DateOnly),
+					r.Level, r.Reason, stale)
+			}
+		}
+		// A report still missing on 2026-11-08 is over the limit; the last
+		// maintainer check (2026-10-20) is then older than 14 days, so S6 is
+		// unknown and S13 says the curated facts may be stale.
+		if r, stale := stableS6Raw(f, time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)); r.Level != stableLevelUnknown || !stale {
+			t.Errorf("%s S6 on 2026-11-08 = level %d stale %v, want unknown with stale facts", asset, r.Level, stale)
+		}
 	}
 }
 

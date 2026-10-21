@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -73,12 +74,21 @@ const (
 	// S5: 2026-10-19 coverage 1.0302 (normal).
 	stableS5WatchCoverage    = 1.010
 	stableS5CriticalCoverage = 1.000
-	// S6: disclosure age in days since the latest period_end.
-	stableS6MonthlyWatchDays     = 50
-	stableS6MonthlyWarningDays   = 75
-	stableS6QuarterlyWatchDays   = 135
-	stableS6QuarterlyWarningDays = 165
-	stableS6CheckedWithin        = 14 * 24 * time.Hour
+	// S6: disclosure age in days since the latest period_end, data-driven
+	// (§6.2, M4 decision): watch after cadence + p90 of the asset's own
+	// publication lag (published − period_end) + 7 days, warning 30 days
+	// later. Circle publishes about 28 days after month-end, so USDC's
+	// history gives 30 + 31 + 7 = 68 days. With fewer than 3 reports the
+	// fixed fallbacks apply.
+	stableS6LagPercentile                = 0.9
+	stableS6SlackDays                    = 7
+	stableS6WarningAfterWatchDays        = 30
+	stableS6MinHistory                   = 3
+	stableS6MonthlyFallbackWatchDays     = 65
+	stableS6MonthlyFallbackWarningDays   = 95
+	stableS6QuarterlyFallbackWatchDays   = 150
+	stableS6QuarterlyFallbackWarningDays = 180
+	stableS6CheckedWithin                = 14 * 24 * time.Hour
 	// S8: a confirmed change stays at warning for 7 days.
 	stableS8Window = 7 * 24 * time.Hour
 	// S10: example USDT on TRON ≈ 51% (largest chain, info).
@@ -114,7 +124,7 @@ var stableSignalDefs = []stableSignalDef{
 	{"S3", "dex", "Liquidity", "sampled", "Uniswap v3 USDC/USDT |deviation| ≥ 30 / 100 bps (watch / warning) in 3 consecutive samples, attributed to the weaker coin of the pair (the Curve half is v1.1)"},
 	{"S4", "flows", "Flows", "level", "on the rolling median of the last 3 daily supply readings: 24h ≤ −0.5% or 7d ≤ −2% (watch) / 24h ≤ −1% or 7d ≤ −4% (warning) / 24h ≤ −3% or 7d ≤ −8% (critical); mints are informational"},
 	{"S5", "coverage", "Reserves", "level", "Tether total assets ÷ total liabilities < 1.010 (watch), < 1.000 (critical); n/a for Circle coins, where S6 governs"},
-	{"S6", "disclosure", "Disclosure", "level", "age of the latest attestation recorded by BigLens: monthly cadence > 50 / > 75 days, quarterly > 135 / > 165 days (watch / warning); warning if the latest report shows reserves below liabilities; over the threshold without a maintainer check (attestations_checked) in the last 14 days, S6 is unknown and S13 reports curated facts that may be stale"},
+	{"S6", "disclosure", "Disclosure", "level", "age of the latest attestation recorded by BigLens: watch after cadence + p90 of the issuer's publication lag (published − period end) + 7 days, warning 30 days later; with fewer than 3 reports, monthly > 65 / > 95 days and quarterly > 150 / > 180 days; warning if the latest report shows reserves below liabilities; over the threshold without a maintainer check (attestations_checked) in the last 14 days, S6 is unknown and S13 reports curated facts that may be stale"},
 	{"S8", "control", "Contract control", "confirmed", "critical if paused (or USDT deprecated) on any monitored deployment; warning if owner, admin, implementation, master minter, pauser, blacklister or an SPL mint/freeze authority changed in the last 7 days; changes are confirmed by 2 samples or 2 RPC endpoints"},
 	{"S10", "chain", "Chain / bridge", "level", "bridged representations hold ≥ 10% of the supply on monitored chains (watch); otherwise info with the largest chain's share"},
 	{"S11", "regulatory", "Regulation", "level", "not authorized under EU MiCA = watch, for EU users; other statuses are informational; curated facts only, never inferred"},
@@ -509,6 +519,50 @@ func stableS5Raw(asset string, t *StableTetherPoint) stableRaw {
 	return r
 }
 
+// stableS6Threshold is the age (days since period_end) after which S6
+// goes to watch and to warning.
+type stableS6Threshold struct {
+	WatchAfterDays, WarningAfterDays int
+	Method                           string // data-driven | fallback
+	History                          int    // reports with both dates
+	LagP90Days                       *int   // data-driven only
+}
+
+// stableS6Thresholds derives an asset's S6 thresholds (§6.2): cadence + the
+// 90th percentile (nearest rank) of its publication lags + 7 days when at
+// least 3 reports are recorded, else the fixed monthly or quarterly
+// fallbacks. ok is false when neither applies.
+func stableS6Thresholds(f stableAssetFacts) (stableS6Threshold, bool) {
+	var lags []int
+	for _, a := range f.Attestations {
+		pe, err1 := time.Parse(time.DateOnly, a.PeriodEnd)
+		pub, err2 := time.Parse(time.DateOnly, a.Published)
+		if err1 != nil || err2 != nil || pub.Before(pe) {
+			continue
+		}
+		lags = append(lags, int(pub.Sub(pe).Hours()/24))
+	}
+	th := stableS6Threshold{History: len(lags)}
+	if len(lags) >= stableS6MinHistory && f.CadenceDays > 0 {
+		sort.Ints(lags)
+		p90 := lags[int(math.Ceil(stableS6LagPercentile*float64(len(lags))))-1]
+		th.Method, th.LagP90Days = "data-driven", &p90
+		th.WatchAfterDays = f.CadenceDays + p90 + stableS6SlackDays
+		th.WarningAfterDays = th.WatchAfterDays + stableS6WarningAfterWatchDays
+		return th, true
+	}
+	th.Method = "fallback"
+	switch {
+	case f.CadenceDays > 0 && f.CadenceDays <= 45:
+		th.WatchAfterDays, th.WarningAfterDays = stableS6MonthlyFallbackWatchDays, stableS6MonthlyFallbackWarningDays
+	case f.CadenceDays > 45 && f.CadenceDays <= 100:
+		th.WatchAfterDays, th.WarningAfterDays = stableS6QuarterlyFallbackWatchDays, stableS6QuarterlyFallbackWarningDays
+	default:
+		return th, false
+	}
+	return th, true
+}
+
 // stableS6Raw: disclosure age (§6.2 S6). It also reports whether the
 // curated facts may be stale, which S13 shows.
 func stableS6Raw(f stableAssetFacts, now time.Time) (stableRaw, bool) {
@@ -528,19 +582,16 @@ func stableS6Raw(f stableAssetFacts, now time.Time) (stableRaw, bool) {
 	}
 	r.AsOf = pe
 	age := int(math.Floor(now.Sub(pe).Hours() / 24))
-	var watchD, warnD int
-	var cadence string
-	switch {
-	case f.CadenceDays > 0 && f.CadenceDays <= 45:
-		watchD, warnD, cadence = stableS6MonthlyWatchDays, stableS6MonthlyWarningDays, "monthly"
-	case f.CadenceDays > 45 && f.CadenceDays <= 100:
-		watchD, warnD, cadence = stableS6QuarterlyWatchDays, stableS6QuarterlyWarningDays, "quarterly"
-	default:
-		return stableUnknownRaw(r, fmt.Sprintf("cadence of %d days has no thresholds", f.CadenceDays)), false
+	th, ok := stableS6Thresholds(f)
+	if !ok {
+		return stableUnknownRaw(r, fmt.Sprintf("cadence of %d days has no fallback thresholds and fewer than %d reports are recorded", f.CadenceDays,
+			stableS6MinHistory)), false
 	}
+	watchD, warnD := th.WatchAfterDays, th.WarningAfterDays
 	r.Inputs["period_end"], r.Inputs["published"], r.Inputs["firm"], r.Inputs["type"], r.Inputs["url"] = latest.PeriodEnd, latest.Published, latest.Firm, latest.Type, latest.URL
-	r.Inputs["age_days"], r.Inputs["cadence"], r.Inputs["cadence_days"] = age, cadence, f.CadenceDays
+	r.Inputs["age_days"], r.Inputs["cadence_days"] = age, f.CadenceDays
 	r.Inputs["watch_after_days"], r.Inputs["warning_after_days"], r.Inputs["attestations_checked"] = watchD, warnD, f.AttestationsChecked
+	r.Inputs["threshold_method"], r.Inputs["history_count"], r.Inputs["lag_p90_days"] = th.Method, th.History, th.LagP90Days
 	r.Summary = fmt.Sprintf("Latest attestation recorded by BigLens: period ending %s (%d days ago, %s, %s)", latest.PeriodEnd, age, latest.Firm, latest.Type)
 	shortfall := false
 	if res, err1 := strconv.ParseFloat(latest.ReservesNative, 64); err1 == nil {
