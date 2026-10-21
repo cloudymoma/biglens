@@ -177,10 +177,11 @@ func replayS4(t *testing.T, name string) ([]string, map[string]int) {
 }
 
 func TestStableReplayS4(t *testing.T) {
-	// Must fire: critical for USDT (24h −3.88% on 2022-05-12) and USDC (24h
-	// −3.65% on 2023-03-12). The 3-point median shows each drop one day
-	// later, when the median itself has moved.
-	for _, c := range []struct{ file, first string }{
+	// Must fire (§13): S4 critical for USDT (24h −3.88% on 2022-05-12) and
+	// USDC (24h −3.65% on 2023-03-12). With the 3-point median both reach
+	// critical one day later, on 2022-05-13 and 2023-03-13: the median lags
+	// by one reading.
+	for _, c := range []struct{ file, day string }{
 		{"charts_usdt_2022-05.json", "2022-05-13"},
 		{"charts_usdc_2023-03.json", "2023-03-13"},
 	} {
@@ -192,22 +193,25 @@ func TestStableReplayS4(t *testing.T) {
 				break
 			}
 		}
-		if first != c.first {
-			t.Errorf("%s: first critical %q, want %s", c.file, first, c.first)
+		if first != c.day || lvl[c.day] != stableLevelCritical {
+			t.Errorf("%s: first critical %q (level %d on %s), want critical first on %s", c.file, first, lvl[c.day], c.day, c.day)
 		}
 	}
 
-	// The measured outcome on the two 2024 windows, pinned day by day (every
-	// other day is normal). stablecoin.md §13 asks for April 2024 to stay
-	// below warning; with the §6.2 thresholds the data cannot satisfy that,
-	// and the thresholds are not tuned (m4_report.md, open questions):
-	//   - 04-18 (−6.48%) and 04-19 (+8.59%) are removed by the median, but
-	//     the glitch's third leg (04-20, −4.45%) leaves the 3-day median
-	//     2.97% below the day before: warning on 04-20;
-	//   - 04-24's −1.02% outflow (not reversed) shows on 04-25: warning;
-	//   - 04-10..14: watch, the real outflow of about 2% a week.
-	// USDT's −1.38% on 2024-12-01 did not reverse (+0.06% the next day), so
-	// it shows on 12-02 at warning (−1.10% on the median).
+	// Pinned outcomes accepted at M4 (§13), day by day; every other day is
+	// normal and the thresholds are unchanged:
+	//   - USDC 2024-04-20, warning: the residue of a DefiLlama chart glitch
+	//     (−6.48%, +8.59%, −4.45%). The median removes 04-18 and 04-19, but
+	//     the third leg leaves the 3-day median 2.97% below the day before.
+	//     A known false positive of the DefiLlama-only path; live S4 uses
+	//     Circle's hourly snapshots first.
+	//   - USDC 2024-04-25, warning: 04-24's real −1.02% outflow, which was
+	//     not reversed. Correct.
+	//   - USDC 2024-04-10..14, watch: a real outflow of about 2% a week.
+	//   - USDT 2024-12-02, warning: the −1.38% of 12-01 was a real drop that
+	//     was not reversed (−1.10% on the median). Correct.
+	// A threshold change that raises or drops one of these fails here and
+	// needs review.
 	for _, c := range []struct {
 		file string
 		want map[string]int
@@ -231,5 +235,9 @@ func TestStableReplayS4(t *testing.T) {
 				t.Errorf("%s %s: S4 level %d, want %d", c.file, d, got, want)
 			}
 		}
+	}
+	// S4 must not fire on the glitch's first two legs.
+	if _, lvl := replayS4(t, "charts_usdc_2024.json"); lvl["2024-04-18"] != stableLevelNormal || lvl["2024-04-19"] != stableLevelNormal {
+		t.Errorf("usdc 2024-04-18 / 04-19: S4 %d / %d, want normal on both", lvl["2024-04-18"], lvl["2024-04-19"])
 	}
 }
