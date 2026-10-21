@@ -9,8 +9,8 @@ import type {
 } from './types';
 import type { BitcoinBigQueryControl } from './useBitcoinBigQuery';
 import { fetchBitcoinMining } from './api';
-import { usePolling } from './usePolling';
-import SourceBadge from './SourceBadge';
+import { usePolling } from '../common/usePolling';
+import SourceBadge from '../common/SourceBadge';
 import BigQueryLocked from './BigQueryLocked';
 import NodeMap from './NodeMap';
 import {
@@ -30,7 +30,8 @@ import {
   fmtNum,
 } from '../crypto/shared';
 import HelpTip from '../crypto/HelpTip';
-import { downloadCsv, fmtBTCFromSats, fmtPct, fmtUSD } from './format';
+import { downloadCsv, fmtPct, fmtUSD } from '../common/format';
+import { fmtBTCFromSats } from './format';
 
 interface MiningTabProps {
   bqControl: BitcoinBigQueryControl;

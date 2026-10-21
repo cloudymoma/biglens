@@ -55,17 +55,6 @@ var btcHTTPClient = &http.Client{
 	},
 }
 
-// BtcSourceStatus reports the freshness, status and provenance of one data source.
-type BtcSourceStatus struct {
-	ID      string `json:"id"`
-	Label   string `json:"label"`
-	Status  string `json:"status"` // ok | stale | error | disabled | geo_blocked | rate_limited | degraded (stablecoin Tether sum check)
-	Via     string `json:"via,omitempty"`
-	AsOf    string `json:"as_of,omitempty"`
-	Error   string `json:"error,omitempty"`
-	License string `json:"license,omitempty"`
-}
-
 // BtcBQStatus describes the state of a Bitcoin BigQuery job.
 type BtcBQStatus struct {
 	Job           string `json:"job"`   // btc_onchain | btc_coinage | btc_utxo_baseline
@@ -127,7 +116,7 @@ type BtcLiveData struct {
 	Difficulty     *BtcDifficultyAdj `json:"difficulty"`
 	Halving        BtcHalving        `json:"halving"`
 	Hashrate7dEHs  *float64          `json:"hashrate_7d_ehs"`
-	Sources        []BtcSourceStatus `json:"sources"`
+	Sources        []SourceStatus    `json:"sources"`
 }
 
 type BtcDifficultyAdj struct {

@@ -3,7 +3,7 @@ import ReactECharts from 'echarts-for-react';
 import * as echarts from 'echarts';
 import type { BtcNodeCountry } from './types';
 import { CHART_TOOLTIP } from '../crypto/shared';
-import { escapeHtml, fmtPct } from './format';
+import { escapeHtml, fmtPct } from '../common/format';
 
 interface NodeMapProps {
   countries: BtcNodeCountry[];

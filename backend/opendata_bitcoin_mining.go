@@ -160,7 +160,7 @@ type BtcMiningData struct {
 	Halving           BtcHalving                  `json:"halving"`
 	Nodes             *BtcNodes                   `json:"nodes"`
 	Chain             []BtcMiningChainDay         `json:"chain,omitempty"`
-	Sources           []BtcSourceStatus           `json:"sources"`
+	Sources           []SourceStatus              `json:"sources"`
 }
 
 func computeBtcMiningPools(summary *btcMempoolPoolsSummary, period string) ([]BtcMiningPoolRow, BtcPoolConcentration) {
@@ -281,19 +281,19 @@ func (h *APIHandler) buildBtcMiningData(ctx context.Context, r *http.Request, pe
 	var (
 		wg            sync.WaitGroup
 		statsVal      any
-		statsStatus   BtcSourceStatus
+		statsStatus   SourceStatus
 		diffVal       any
-		diffStatus    BtcSourceStatus
+		diffStatus    SourceStatus
 		hrVal         any
-		hrStatus      BtcSourceStatus
+		hrStatus      SourceStatus
 		rewVal        any
-		rewStatus     BtcSourceStatus
+		rewStatus     SourceStatus
 		poolsVal      any
-		poolsStatus   BtcSourceStatus
+		poolsStatus   SourceStatus
 		rew144Val     any
-		rew144Status  BtcSourceStatus
+		rew144Status  SourceStatus
 		fallbackPrice *float64
-		fallbackSrc   BtcSourceStatus
+		fallbackSrc   SourceStatus
 	)
 
 	wg.Add(6)
@@ -607,7 +607,7 @@ func (h *APIHandler) buildBtcMiningData(ctx context.Context, r *http.Request, pe
 	}
 
 	var chainRows []BtcMiningChainDay
-	var bqSource *BtcSourceStatus
+	var bqSource *SourceStatus
 	if s.read != nil {
 		fromDay := now.AddDate(0, 0, -periodLookbackDays(period)).Format("2006-01-02")
 		toDay := now.Format("2006-01-02")
@@ -654,7 +654,7 @@ func (h *APIHandler) buildBtcMiningData(ctx context.Context, r *http.Request, pe
 				chainRows = append(chainRows, row)
 			}
 			meta := s.providerMeta("bigquery")
-			bqSource = &BtcSourceStatus{
+			bqSource = &SourceStatus{
 				ID:      meta.ID,
 				Label:   meta.Label,
 				Status:  "ok",
@@ -666,15 +666,15 @@ func (h *APIHandler) buildBtcMiningData(ctx context.Context, r *http.Request, pe
 
 	var (
 		nodesData   *BtcNodes
-		bitnodesSrc BtcSourceStatus
-		dbipSrc     BtcSourceStatus
+		bitnodesSrc SourceStatus
+		dbipSrc     SourceStatus
 	)
 	if s.nodes != nil {
 		nodesData, bitnodesSrc, dbipSrc = s.nodes.get(ctx, s)
 	}
 
 	mempoolStatus := mergeBtcSourceStatuses(s.providerMeta("mempool"), diffStatus, hrStatus, rewStatus, poolsStatus, rew144Status)
-	sources := []BtcSourceStatus{mempoolStatus}
+	sources := []SourceStatus{mempoolStatus}
 	if statsVal != nil || !s.providerEnabled("coinbase") {
 		sources = append(sources, statsStatus)
 	} else if fallbackSrc.ID != "" && fallbackSrc.ID != "mempool" {
@@ -716,8 +716,8 @@ func (h *APIHandler) buildBtcMiningData(ctx context.Context, r *http.Request, pe
 	}
 }
 
-func mergeBtcSourceStatuses(meta btcProviderDef, statuses ...BtcSourceStatus) BtcSourceStatus {
-	out := BtcSourceStatus{
+func mergeBtcSourceStatuses(meta btcProviderDef, statuses ...SourceStatus) SourceStatus {
+	out := SourceStatus{
 		ID:      meta.ID,
 		Label:   meta.Label,
 		Status:  "disabled",

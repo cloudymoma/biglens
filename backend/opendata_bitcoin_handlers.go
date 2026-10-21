@@ -35,7 +35,7 @@ type BtcHoldersData struct {
 	Days       int                    `json:"days"`
 	Flows      []BtcExchangeFlowPoint `json:"flows"`
 	Treasuries *BtcTreasuriesSummary  `json:"treasuries"`
-	Sources    []BtcSourceStatus      `json:"sources"`
+	Sources    []SourceStatus         `json:"sources"`
 }
 
 type BtcFeesData struct {
@@ -46,14 +46,14 @@ type BtcFeesData struct {
 	Consolidation  BtcConsolidationSignal `json:"consolidation"`
 	MempoolHistory []BtcMempoolStatPoint  `json:"mempool_history"`
 	BlockFeeRates  []BtcBlockFeeRatePoint `json:"block_fee_rates"`
-	Sources        []BtcSourceStatus      `json:"sources"`
+	Sources        []SourceStatus         `json:"sources"`
 }
 
 type BtcOnchainData struct {
-	Days    int               `json:"days"`
-	Rows    []BtcOnchainDay   `json:"rows"`
-	Status  BtcBQStatus       `json:"status"`
-	Sources []BtcSourceStatus `json:"sources"`
+	Days    int             `json:"days"`
+	Rows    []BtcOnchainDay `json:"rows"`
+	Status  BtcBQStatus     `json:"status"`
+	Sources []SourceStatus  `json:"sources"`
 }
 
 type BtcOnchainHoldersData struct {
@@ -66,7 +66,7 @@ type BtcOnchainHoldersData struct {
 	Baseline      BtcBaselineStatus     `json:"baseline"`
 	HolderEngine  BtcHolderEngineStatus `json:"holder_engine"`
 	PriceCoverage BtcPriceCoverage      `json:"price_coverage"`
-	Sources       []BtcSourceStatus     `json:"sources"`
+	Sources       []SourceStatus        `json:"sources"`
 }
 
 type BtcMetaProvider struct {
@@ -144,10 +144,10 @@ func registerBitcoinRoutes(mux *http.ServeMux, h *APIHandler, gzWrap func(http.H
 	}
 }
 
-func (h *APIHandler) btcCachedSource(ctx context.Context, cacheKey string, ttl time.Duration, providerID string, fetch func(context.Context) (any, string)) (any, BtcSourceStatus) {
+func (h *APIHandler) btcCachedSource(ctx context.Context, cacheKey string, ttl time.Duration, providerID string, fetch func(context.Context) (any, string)) (any, SourceStatus) {
 	s := h.btc
 	meta := s.providerMeta(providerID)
-	status := BtcSourceStatus{
+	status := SourceStatus{
 		ID:      meta.ID,
 		Label:   meta.Label,
 		License: meta.License,
@@ -286,11 +286,11 @@ func (h *APIHandler) BitcoinLive(w http.ResponseWriter, r *http.Request) {
 		memRaw   *btcLiveRaw
 		memErr   error
 		spotVal  any
-		spotSrc  BtcSourceStatus
+		spotSrc  SourceStatus
 		diffVal  any
-		diffSrc  BtcSourceStatus
+		diffSrc  SourceStatus
 		poolsVal any
-		poolsSrc BtcSourceStatus
+		poolsSrc SourceStatus
 	)
 
 	if s.providerEnabled("mempool") {
@@ -306,7 +306,7 @@ func (h *APIHandler) BitcoinLive(w http.ResponseWriter, r *http.Request) {
 			})
 		})
 	} else {
-		diffSrc = BtcSourceStatus{ID: "mempool", Label: "mempool.space", Status: "disabled", License: "fair use"}
+		diffSrc = SourceStatus{ID: "mempool", Label: "mempool.space", Status: "disabled", License: "fair use"}
 	}
 
 	wg.Go(func() {
@@ -368,7 +368,7 @@ func (h *APIHandler) BitcoinLive(w http.ResponseWriter, r *http.Request) {
 	}
 
 	out.Halving = btcHalvingAt(tipHeight, now, avgBlockSec)
-	out.Sources = []BtcSourceStatus{spotSrc, diffSrc}
+	out.Sources = []SourceStatus{spotSrc, diffSrc}
 	if poolsSrc.ID != "" && poolsSrc.Status != "ok" && diffSrc.Status == "ok" {
 		out.Sources = append(out.Sources, poolsSrc)
 	}
@@ -513,11 +513,11 @@ func (h *APIHandler) BitcoinFees(w http.ResponseWriter, r *http.Request) {
 		memRaw   *btcLiveRaw
 		memErr   error
 		spotVal  any
-		spotSrc  BtcSourceStatus
+		spotSrc  SourceStatus
 		statsVal any
-		statsSrc BtcSourceStatus
+		statsSrc SourceStatus
 		ratesVal any
-		ratesSrc BtcSourceStatus
+		ratesSrc SourceStatus
 	)
 
 	if s.providerEnabled("mempool") {
@@ -535,7 +535,7 @@ func (h *APIHandler) BitcoinFees(w http.ResponseWriter, r *http.Request) {
 			})
 		})
 	} else {
-		statsSrc = BtcSourceStatus{ID: "mempool", Label: "mempool.space", Status: "disabled", License: "fair use"}
+		statsSrc = SourceStatus{ID: "mempool", Label: "mempool.space", Status: "disabled", License: "fair use"}
 	}
 
 	wg.Go(func() {
@@ -591,7 +591,7 @@ func (h *APIHandler) BitcoinFees(w http.ResponseWriter, r *http.Request) {
 		Consolidation:  consolidationSignal(economy, blocksToClear),
 		MempoolHistory: memHistory,
 		BlockFeeRates:  blockRates,
-		Sources:        []BtcSourceStatus{memSrc, spotSrc},
+		Sources:        []SourceStatus{memSrc, spotSrc},
 	})
 }
 
@@ -612,7 +612,7 @@ func (h *APIHandler) BitcoinOnchain(w http.ResponseWriter, r *http.Request) {
 		State: "off",
 	}
 	rows := []BtcOnchainDay{}
-	bqSrc := BtcSourceStatus{
+	bqSrc := SourceStatus{
 		ID:      "bigquery",
 		Label:   "BigQuery crypto_bitcoin (SQLite)",
 		Status:  "disabled",
@@ -641,7 +641,7 @@ func (h *APIHandler) BitcoinOnchain(w http.ResponseWriter, r *http.Request) {
 		Days:    days,
 		Rows:    rows,
 		Status:  status,
-		Sources: []BtcSourceStatus{bqSrc},
+		Sources: []SourceStatus{bqSrc},
 	})
 }
 
@@ -671,9 +671,9 @@ func (h *APIHandler) BitcoinHolders(w http.ResponseWriter, r *http.Request) {
 	var (
 		wg            sync.WaitGroup
 		cmVal         any
-		cmSrc         BtcSourceStatus
+		cmSrc         SourceStatus
 		treasuriesVal any
-		treasuriesSrc BtcSourceStatus
+		treasuriesSrc SourceStatus
 	)
 
 	startDate := now.AddDate(0, 0, -400).Format("2006-01-02")
@@ -703,7 +703,7 @@ func (h *APIHandler) BitcoinHolders(w http.ResponseWriter, r *http.Request) {
 		Days:       days,
 		Flows:      flows,
 		Treasuries: treasuries,
-		Sources:    []BtcSourceStatus{cmSrc, treasuriesSrc},
+		Sources:    []SourceStatus{cmSrc, treasuriesSrc},
 	})
 }
 
@@ -759,7 +759,7 @@ func (h *APIHandler) BitcoinOnchainHolders(w http.ResponseWriter, r *http.Reques
 	coinage := []BtcCoinageDay{}
 	holders := []BtcHolderDay{}
 	whales := []BtcWhaleRevival{}
-	bqSrc := BtcSourceStatus{
+	bqSrc := SourceStatus{
 		ID:      "bigquery",
 		Label:   "BigQuery crypto_bitcoin (SQLite)",
 		Status:  "disabled",
@@ -820,6 +820,6 @@ func (h *APIHandler) BitcoinOnchainHolders(w http.ResponseWriter, r *http.Reques
 		Baseline:      baseline,
 		HolderEngine:  holderEngine,
 		PriceCoverage: s.prices.priceCoverage(),
-		Sources:       []BtcSourceStatus{bqSrc},
+		Sources:       []SourceStatus{bqSrc},
 	})
 }

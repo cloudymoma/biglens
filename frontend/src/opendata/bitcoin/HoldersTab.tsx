@@ -10,16 +10,9 @@ import {
   fetchBitcoinHolders,
   fetchBitcoinOnchainHolders,
 } from './api';
-import {
-  downloadCsv,
-  fmtBTC,
-  fmtBTCFromSats,
-  fmtPct,
-  fmtSats,
-  fmtUSD,
-  satsToBTC,
-} from './format';
-import { usePolling } from './usePolling';
+import { downloadCsv, fmtPct, fmtUSD } from '../common/format';
+import { fmtBTC, fmtBTCFromSats, fmtSats, satsToBTC } from './format';
+import { usePolling } from '../common/usePolling';
 import type { BitcoinBigQueryControl } from './useBitcoinBigQuery';
 import type {
   BtcBaselinePlan,
@@ -29,7 +22,7 @@ import type {
   BtcMetaBigQuery,
 } from './types';
 import BigQueryLocked from './BigQueryLocked';
-import SourceBadge from './SourceBadge';
+import SourceBadge from '../common/SourceBadge';
 
 const AGE_BANDS: { key: string; label: string; color: string }[] = [
   { key: '<1d', label: '< 1d', color: '#f43f5e' },

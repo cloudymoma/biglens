@@ -768,7 +768,7 @@ func TestStableSupplySamplerTick(t *testing.T) {
 	s.tick(ctx)
 	usdc = s.snapshot().Assets["usdc"]
 	approxPtr(t, "usdc issuer (stale)", usdc.Totals.IssuerCirculatingNative, fxCircleUSDCTotal, 1e-3)
-	var circleSrc *BtcSourceStatus
+	var circleSrc *SourceStatus
 	for i := range usdc.Sources {
 		if usdc.Sources[i].ID == "circle" {
 			circleSrc = &usdc.Sources[i]
@@ -807,7 +807,7 @@ func TestStableTetherDegradedServed(t *testing.T) {
 	s.tick(context.Background())
 	usdt := s.snapshot().Assets["usdt"]
 	approxPtr(t, "usdt issuer total (served)", usdt.Totals.IssuerCirculatingNative, fxTetherLiabilitiesUSD, 1e-3)
-	var tether *BtcSourceStatus
+	var tether *SourceStatus
 	for i := range usdt.Sources {
 		if usdt.Sources[i].ID == "tether" {
 			tether = &usdt.Sources[i]

@@ -32,19 +32,19 @@ const (
 
 // BtcVenueRow is one line of the Markets venue board. Amounts in USD notional unless noted.
 type BtcVenueRow struct {
-	Venue         string            `json:"venue"` // binance | okx | coinbase | kraken | hyperliquid | deribit | bybit | cme
-	Kind          string            `json:"kind"`  // cex_offshore | cex_us | dex | regulated_futures
-	Spot24hUSD    *float64          `json:"spot_24h_usd"`
-	Depth2pctUSD  *float64          `json:"depth_2pct_usd"` // (+2 % ask side + −2 % bid side) / 2
-	SpreadPct     *float64          `json:"spread_pct"`
-	Deriv24hUSD   *float64          `json:"deriv_24h_usd"`
-	OIUSD         *float64          `json:"oi_usd"`
-	OIBTC         *float64          `json:"oi_btc"`
-	Funding8hPct  *float64          `json:"funding_8h_pct"`
-	FundingAPRPct *float64          `json:"funding_apr_pct"`
-	PremiumPct    *float64          `json:"premium_pct"`
-	Weekly        bool              `json:"weekly,omitempty"` // CME (CFTC)
-	Sources       []BtcSourceStatus `json:"sources"`
+	Venue         string         `json:"venue"` // binance | okx | coinbase | kraken | hyperliquid | deribit | bybit | cme
+	Kind          string         `json:"kind"`  // cex_offshore | cex_us | dex | regulated_futures
+	Spot24hUSD    *float64       `json:"spot_24h_usd"`
+	Depth2pctUSD  *float64       `json:"depth_2pct_usd"` // (+2 % ask side + −2 % bid side) / 2
+	SpreadPct     *float64       `json:"spread_pct"`
+	Deriv24hUSD   *float64       `json:"deriv_24h_usd"`
+	OIUSD         *float64       `json:"oi_usd"`
+	OIBTC         *float64       `json:"oi_btc"`
+	Funding8hPct  *float64       `json:"funding_8h_pct"`
+	FundingAPRPct *float64       `json:"funding_apr_pct"`
+	PremiumPct    *float64       `json:"premium_pct"`
+	Weekly        bool           `json:"weekly,omitempty"` // CME (CFTC)
+	Sources       []SourceStatus `json:"sources"`
 }
 
 // BtcBasisPoint represents one dated futures contract on the annualized basis curve.
@@ -109,7 +109,7 @@ type btcVenueDeriv struct {
 	DVOLSeries  []BtcDVOLPoint
 }
 
-func (d btcVenueDeriv) toVenueRow(sources []BtcSourceStatus) BtcVenueRow {
+func (d btcVenueDeriv) toVenueRow(sources []SourceStatus) BtcVenueRow {
 	return BtcVenueRow{
 		Venue:         d.Venue,
 		Kind:          d.Kind,

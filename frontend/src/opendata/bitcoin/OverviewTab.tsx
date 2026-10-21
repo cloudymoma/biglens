@@ -22,8 +22,8 @@ import type {
 } from './types';
 import type { BitcoinBigQueryControl } from './useBitcoinBigQuery';
 import { fetchBitcoinOverview } from './api';
-import { usePolling } from './usePolling';
-import SourceBadge from './SourceBadge';
+import { usePolling } from '../common/usePolling';
+import SourceBadge from '../common/SourceBadge';
 import BigQueryLocked from './BigQueryLocked';
 import { EmptyState, ErrorBanner, MetricCard } from '../../dashboards/shared';
 import {
@@ -35,7 +35,7 @@ import {
   SPLIT_LINE,
 } from '../crypto/shared';
 import HelpTip from '../crypto/HelpTip';
-import { downloadCsv, fmtPct, fmtUSD } from './format';
+import { downloadCsv, fmtPct, fmtUSD } from '../common/format';
 
 interface Props {
   bqControl: BitcoinBigQueryControl;

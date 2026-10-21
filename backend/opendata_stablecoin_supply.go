@@ -320,7 +320,7 @@ type StableSupplyAsset struct {
 	NetIssuance []StableNetIssuance `json:"net_issuance"`
 	Reconcile   StableReconcile     `json:"reconcile"`
 	History     []StableSupplyDay   `json:"history"`
-	Sources     []BtcSourceStatus   `json:"sources"`
+	Sources     []SourceStatus      `json:"sources"`
 	// UnmappedChains lists source chain names outside the canonical map;
 	// their rows are kept (source-prefixed keys), never merged or dropped.
 	UnmappedChains []StableUnmappedChain `json:"unmapped_chains"`
@@ -403,9 +403,9 @@ func stableToleranceNative(issuer float64) float64 {
 	return math.Max(stableReconOnchainRelTolerance*issuer, stableReconOnchainAbsToleranceN)
 }
 
-func stableSourceStatus[T any](id string, r stableResult[T]) BtcSourceStatus {
+func stableSourceStatus[T any](id string, r stableResult[T]) SourceStatus {
 	meta := stableProviderMeta(id)
-	st := BtcSourceStatus{ID: id, Label: meta.Label, License: meta.License, AsOf: stableFmt(r.AsOf)}
+	st := SourceStatus{ID: id, Label: meta.Label, License: meta.License, AsOf: stableFmt(r.AsOf)}
 	switch {
 	case r.Code == "disabled":
 		st.Status, st.AsOf = "disabled", ""
@@ -570,7 +570,7 @@ func buildStableSupplyAsset(def stableAssetDef, in stableSupplyInputs) StableSup
 	}
 	a.Reconcile.Aggregator = ra
 	// Source badges.
-	a.Sources = append(a.Sources, func() BtcSourceStatus {
+	a.Sources = append(a.Sources, func() SourceStatus {
 		if def.Issuer == "tether" {
 			st := stableSourceStatus("tether", in.Tether)
 			if in.Tether.Has && in.Tether.Value.Degraded {
@@ -610,9 +610,9 @@ func stableAssetDataHealth(def stableAssetDef, in stableSupplyInputs) StableData
 	return h
 }
 
-func stableOnchainSourceStatus(def stableAssetDef, in stableSupplyInputs) BtcSourceStatus {
+func stableOnchainSourceStatus(def stableAssetDef, in stableSupplyInputs) SourceStatus {
 	meta := stableProviderMeta("rpc_supply")
-	st := BtcSourceStatus{ID: "rpc_supply", Label: meta.Label, License: meta.License}
+	st := SourceStatus{ID: "rpc_supply", Label: meta.Label, License: meta.License}
 	if in.OnchainCode == "disabled" {
 		st.Status = "disabled"
 		return st

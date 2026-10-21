@@ -1,11 +1,11 @@
-import type { BtcSourceStatus } from './types';
+import type { SourceStatus } from './types';
 import { fmtRelativeAgo } from './format';
 
 export default function SourceBadge({
   source,
   weekly,
 }: {
-  source: BtcSourceStatus;
+  source: SourceStatus;
   weekly?: boolean;
 }) {
   const statusStyles: Record<string, string> = {

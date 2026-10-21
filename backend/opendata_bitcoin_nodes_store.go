@@ -231,15 +231,15 @@ func (ns *btcNodesSyncer) touchAsync() {
 	}()
 }
 
-func (ns *btcNodesSyncer) get(ctx context.Context, s *bitcoinService) (*BtcNodes, BtcSourceStatus, BtcSourceStatus) {
+func (ns *btcNodesSyncer) get(ctx context.Context, s *bitcoinService) (*BtcNodes, SourceStatus, SourceStatus) {
 	bitMeta := s.providerMeta("bitnodes")
 	dbipMeta := s.providerMeta("dbip")
-	bitStatus := BtcSourceStatus{
+	bitStatus := SourceStatus{
 		ID:      bitMeta.ID,
 		Label:   bitMeta.Label,
 		License: bitMeta.License,
 	}
-	dbipStatus := BtcSourceStatus{
+	dbipStatus := SourceStatus{
 		ID:      dbipMeta.ID,
 		Label:   dbipMeta.Label,
 		License: dbipMeta.License,

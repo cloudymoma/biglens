@@ -1,6 +1,7 @@
 import { Activity, Blocks, Cpu, Flame, Gauge, Layers, TrendingDown, TrendingUp } from 'lucide-react';
 import type { BtcLiveData } from './types';
-import { fmtPct, fmtRelativeAgo, fmtSatVB, fmtUSD } from './format';
+import { fmtPct, fmtRelativeAgo, fmtUSD } from '../common/format';
+import { fmtSatVB } from './format';
 
 export default function BitcoinTicker({
   live,

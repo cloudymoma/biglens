@@ -130,7 +130,7 @@ type BtcOverviewData struct {
 	Supply       BtcOverviewSupply    `json:"supply"`
 	Sentiment    BtcOverviewSentiment `json:"sentiment"`
 	Verification []BtcVerificationRow `json:"verification"`
-	Sources      []BtcSourceStatus    `json:"sources"`
+	Sources      []SourceStatus       `json:"sources"`
 }
 
 type btcRegimeInputs struct {
@@ -595,9 +595,9 @@ func (h *APIHandler) BitcoinOverview(w http.ResponseWriter, r *http.Request) {
 		valuation     BtcValuationData
 		mining        BtcMiningData
 		globalVal     any
-		globalSrc     BtcSourceStatus
+		globalSrc     SourceStatus
 		treasuriesVal any
-		treasuriesSrc BtcSourceStatus
+		treasuriesSrc SourceStatus
 		memRaw        *btcLiveRaw
 		memErr        error
 	)
@@ -946,8 +946,8 @@ func (h *APIHandler) BitcoinOverview(w http.ResponseWriter, r *http.Request) {
 
 	// Deduplicate source badges in canonical order.
 	seenSrc := make(map[string]bool)
-	var sources []BtcSourceStatus
-	addSrc := func(list ...BtcSourceStatus) {
+	var sources []SourceStatus
+	addSrc := func(list ...SourceStatus) {
 		for _, st := range list {
 			if st.ID == "" {
 				continue

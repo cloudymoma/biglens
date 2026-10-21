@@ -6,20 +6,13 @@ import { AXIS_LABEL, CHART_TOOLTIP, Panel, SPLIT_LINE } from '../crypto/shared';
 import GasLiveBar from '../crypto/GasLiveBar';
 import HelpTip from '../crypto/HelpTip';
 import { fetchBitcoinFees, fetchBitcoinOnchain } from './api';
-import {
-  downloadCsv,
-  fmtBTCFromSats,
-  fmtPct,
-  fmtSats,
-  fmtSatVB,
-  fmtUSD,
-  satsToBTC,
-} from './format';
-import { usePolling } from './usePolling';
+import { downloadCsv, fmtPct, fmtUSD } from '../common/format';
+import { fmtBTCFromSats, fmtSats, fmtSatVB, satsToBTC } from './format';
+import { usePolling } from '../common/usePolling';
 import type { BitcoinBigQueryControl } from './useBitcoinBigQuery';
 import type { BtcMetaBigQuery, BtcOnchainDay } from './types';
 import BigQueryLocked from './BigQueryLocked';
-import SourceBadge from './SourceBadge';
+import SourceBadge from '../common/SourceBadge';
 
 const MEMPOOL_PERIODS: { id: '24h' | '1w' | '1m'; label: string }[] = [
   { id: '24h', label: '24H' },

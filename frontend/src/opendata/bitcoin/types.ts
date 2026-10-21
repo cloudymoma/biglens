@@ -1,12 +1,4 @@
-export interface BtcSourceStatus {
-  id: string;
-  label: string;
-  status: 'ok' | 'stale' | 'error' | 'disabled' | 'geo_blocked' | 'rate_limited' | string;
-  via?: string;
-  as_of?: string;
-  error?: string;
-  license?: string;
-}
+import type { SourceStatus } from '../common/types';
 
 export interface BtcBQStatus {
   job: string;
@@ -134,7 +126,7 @@ export interface BtcLiveData {
   difficulty: BtcDifficultyAdj | null;
   halving: BtcHalving;
   hashrate_7d_ehs: number | null;
-  sources: BtcSourceStatus[];
+  sources: SourceStatus[];
 }
 
 export interface BtcTxTemplateCost {
@@ -187,7 +179,7 @@ export interface BtcFeesData {
   consolidation: BtcConsolidationSignal;
   mempool_history: BtcMempoolStatPoint[];
   block_fee_rates: BtcBlockFeeRatePoint[];
-  sources: BtcSourceStatus[];
+  sources: SourceStatus[];
 }
 
 export interface BtcOnchainDay {
@@ -253,7 +245,7 @@ export interface BtcOnchainData {
   days: number;
   rows: BtcOnchainDay[];
   status: BtcBQStatus;
-  sources: BtcSourceStatus[];
+  sources: SourceStatus[];
 }
 
 export interface BtcExchangeFlowPoint {
@@ -289,7 +281,7 @@ export interface BtcHoldersData {
   days: number;
   flows: BtcExchangeFlowPoint[];
   treasuries: BtcTreasuriesSummary | null;
-  sources: BtcSourceStatus[];
+  sources: SourceStatus[];
 }
 
 export interface BtcCoinageDay {
@@ -356,7 +348,7 @@ export interface BtcOnchainHoldersData {
   baseline: BtcBaselineStatus;
   holder_engine: BtcHolderEngineStatus;
   price_coverage: BtcPriceCoverage;
-  sources: BtcSourceStatus[];
+  sources: SourceStatus[];
 }
 
 export interface BtcVenueRow {
@@ -372,7 +364,7 @@ export interface BtcVenueRow {
   funding_apr_pct: number | null;
   premium_pct: number | null;
   weekly?: boolean;
-  sources: BtcSourceStatus[];
+  sources: SourceStatus[];
 }
 
 export interface BtcVenueRatio {
@@ -488,7 +480,7 @@ export interface BtcMarketsData {
   history: BtcMarketDailyPoint[] | null;
   okx_rubik: BtcOKXRubikPoint[] | null;
   caveats: string[];
-  sources: BtcSourceStatus[];
+  sources: SourceStatus[];
 }
 
 export type BtcValuationRange = '1y' | '4y' | 'all';
@@ -567,7 +559,7 @@ export interface BtcValuationData {
   series: BtcValuationPoint[];
   cycles: BtcHalvingCycleSeries[];
   fear_greed: BtcFnGPoint[];
-  sources: BtcSourceStatus[];
+  sources: SourceStatus[];
 }
 
 export type BtcMiningPeriod = '3m' | '1y' | '3y';
@@ -731,7 +723,7 @@ export interface BtcMiningData {
   halving: BtcHalving;
   nodes: BtcNodes | null;
   chain?: BtcMiningChainDay[];
-  sources: BtcSourceStatus[];
+  sources: SourceStatus[];
 }
 
 export interface BtcOverviewConcentration {
@@ -828,7 +820,7 @@ export interface BtcOverviewData {
   supply: BtcOverviewSupply;
   sentiment: BtcOverviewSentiment;
   verification: BtcVerificationRow[];
-  sources: BtcSourceStatus[];
+  sources: SourceStatus[];
 }
 
 

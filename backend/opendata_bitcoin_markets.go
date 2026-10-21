@@ -103,7 +103,7 @@ type BtcMarketsData struct {
 	History              []BtcMarketDailyPoint `json:"history"`
 	OKXRubik             []BtcOKXRubikPoint    `json:"okx_rubik"`
 	Caveats              []string              `json:"caveats"`
-	Sources              []BtcSourceStatus     `json:"sources"`
+	Sources              []SourceStatus        `json:"sources"`
 }
 
 func computeMarketsRatios(
@@ -162,20 +162,20 @@ func (h *APIHandler) buildMarketsData(ctx context.Context) BtcMarketsData {
 	var (
 		wg          sync.WaitGroup
 		cgBtcVal    any
-		cgBtcSrc    BtcSourceStatus
+		cgBtcSrc    SourceStatus
 		cgSpotVal   any
-		cgSpotSrc   BtcSourceStatus
+		cgSpotSrc   SourceStatus
 		cgDerivVal  any
-		cgDerivSrc  BtcSourceStatus
+		cgDerivSrc  SourceStatus
 		cftcVal     any
-		cftcSrc     BtcSourceStatus
+		cftcSrc     SourceStatus
 		okxRubikVal any
-		okxRubikSrc BtcSourceStatus
+		okxRubikSrc SourceStatus
 	)
 
 	type directResult struct {
 		deriv *btcVenueDeriv
-		src   BtcSourceStatus
+		src   SourceStatus
 	}
 	directMap := make(map[string]directResult)
 	var directMu sync.Mutex
@@ -300,7 +300,7 @@ func (h *APIHandler) buildMarketsData(ctx context.Context) BtcMarketsData {
 		fundingWeightOI    float64
 		cdeOIUSD           float64
 		hasCDEOI           bool
-		venueSourceBadges  []BtcSourceStatus
+		venueSourceBadges  []SourceStatus
 	)
 
 	for _, item := range boardOrder {
@@ -334,12 +334,12 @@ func (h *APIHandler) buildMarketsData(ctx context.Context) BtcMarketsData {
 					row.OIUSD = btcFloatPtr(cot.TotalCMERegBTC * refPriceUSD)
 				}
 			}
-			row.Sources = []BtcSourceStatus{cmeSrc}
+			row.Sources = []SourceStatus{cmeSrc}
 			venueSourceBadges = append(venueSourceBadges, cmeSrc)
 
 		case "bybit":
 			// Bybit derivatives come from CoinGecko rows only (§5.3).
-			bybitSrc := BtcSourceStatus{
+			bybitSrc := SourceStatus{
 				ID:      "bybit",
 				Label:   "Bybit",
 				Via:     "coingecko",
@@ -360,9 +360,9 @@ func (h *APIHandler) buildMarketsData(ctx context.Context) BtcMarketsData {
 					row.FundingAPRPct = fb.FundingAPRPct
 				}
 			}
-			row.Sources = []BtcSourceStatus{bybitSrc}
+			row.Sources = []SourceStatus{bybitSrc}
 			if hasSpot && cgSpotSrc.Status != bybitSrc.Status {
-				row.Sources = append(row.Sources, BtcSourceStatus{
+				row.Sources = append(row.Sources, SourceStatus{
 					ID:     "coingecko",
 					Label:  "CoinGecko (Spot)",
 					Status: cgSpotSrc.Status,
@@ -412,7 +412,7 @@ func (h *APIHandler) buildMarketsData(ctx context.Context) BtcMarketsData {
 					row.Funding8hPct = fb.Funding8hPct
 					row.FundingAPRPct = fb.FundingAPRPct
 					meta := s.providerMeta(vID)
-					src = BtcSourceStatus{
+					src = SourceStatus{
 						ID:      vID,
 						Label:   meta.Label,
 						Via:     "coingecko",
@@ -428,9 +428,9 @@ func (h *APIHandler) buildMarketsData(ctx context.Context) BtcMarketsData {
 				unavailableVenues = append(unavailableVenues, vID)
 			}
 
-			row.Sources = []BtcSourceStatus{src}
+			row.Sources = []SourceStatus{src}
 			if hasSpot {
-				spotBadge := BtcSourceStatus{
+				spotBadge := SourceStatus{
 					ID:      "coingecko",
 					Label:   "CoinGecko (Spot)",
 					Status:  cgSpotSrc.Status,
@@ -593,7 +593,7 @@ func (h *APIHandler) buildMarketsData(ctx context.Context) BtcMarketsData {
 
 	// Combine top-level Sources list.
 	cgCombined := combineCGSourceStatus(cgBtcSrc, cgSpotSrc, cgDerivSrc)
-	sources := make([]BtcSourceStatus, 0, len(venueSourceBadges)+2)
+	sources := make([]SourceStatus, 0, len(venueSourceBadges)+2)
 	sources = append(sources, cgCombined)
 	sources = append(sources, venueSourceBadges...)
 	if okxRubikSrc.ID != "" && okxRubikSrc.Status != "ok" && okxRubikSrc.Status != "disabled" {
@@ -636,8 +636,8 @@ func (h *APIHandler) buildMarketsData(ctx context.Context) BtcMarketsData {
 	}
 }
 
-func combineCGSourceStatus(parts ...BtcSourceStatus) BtcSourceStatus {
-	out := BtcSourceStatus{
+func combineCGSourceStatus(parts ...SourceStatus) SourceStatus {
+	out := SourceStatus{
 		ID:      "coingecko",
 		Label:   "CoinGecko",
 		Status:  "ok",

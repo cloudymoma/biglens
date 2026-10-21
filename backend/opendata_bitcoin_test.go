@@ -259,7 +259,7 @@ func TestBtcCachedSourceDetachesCallerContext(t *testing.T) {
 	release := make(chan struct{})
 
 	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan BtcSourceStatus, 1)
+	done := make(chan SourceStatus, 1)
 	go func() {
 		_, st := h.btcCachedSource(ctx, "test:detach:ctx", 1*time.Minute, "mempool", func(fctx context.Context) (any, string) {
 			close(started)

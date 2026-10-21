@@ -1,12 +1,12 @@
 import { useState } from 'react';
 import { Bitcoin, RefreshCw } from 'lucide-react';
 import { fetchBitcoinLive, fetchBitcoinMeta } from './api';
-import { usePolling } from './usePolling';
+import { usePolling } from '../common/usePolling';
 import { useBitcoinBigQuery } from './useBitcoinBigQuery';
 import BitcoinTicker from './BitcoinTicker';
 import BigQuerySwitch from './BigQuerySwitch';
 import BigQueryStatusChip from './BigQueryStatusChip';
-import SourceBadge from './SourceBadge';
+import SourceBadge from '../common/SourceBadge';
 import FeesTab from './FeesTab';
 import HoldersTab from './HoldersTab';
 import MarketsTab from './MarketsTab';

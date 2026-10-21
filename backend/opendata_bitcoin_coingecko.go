@@ -527,7 +527,7 @@ func fetchCGDerivativesBTC(ctx context.Context, now time.Time) (*BtcCGDerivative
 			Kind:        acc.kind,
 			Deriv24hUSD: btcFloatPtr(acc.volUSD),
 			OIUSD:       btcFloatPtr(acc.oiUSD),
-			Sources: []BtcSourceStatus{
+			Sources: []SourceStatus{
 				{
 					ID:      vID,
 					Label:   vID + " (via CoinGecko)",

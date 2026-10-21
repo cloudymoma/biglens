@@ -80,7 +80,7 @@ type BtcValuationData struct {
 	Series        []BtcValuationPoint     `json:"series"`
 	Cycles        []BtcHalvingCycleSeries `json:"cycles"`
 	FearGreed     []BtcFnGPoint           `json:"fear_greed"`
-	Sources       []BtcSourceStatus       `json:"sources"`
+	Sources       []SourceStatus          `json:"sources"`
 }
 
 func fetchAlternativeMeFnG(ctx context.Context) ([]BtcFnGPoint, string) {
@@ -167,7 +167,7 @@ func (h *APIHandler) buildBitcoinValuation(ctx context.Context, rangeKey string,
 		fngRows = []BtcFnGPoint{}
 	}
 
-	priceSrc := BtcSourceStatus{
+	priceSrc := SourceStatus{
 		ID:      "prices",
 		Label:   "BTC Daily Price History (blockchain.com / Coinbase / Kraken)",
 		Status:  "ok",
@@ -178,7 +178,7 @@ func (h *APIHandler) buildBitcoinValuation(ctx context.Context, rangeKey string,
 		priceSrc.Status = "stale"
 		priceSrc.Error = "warming_up"
 	}
-	sources := []BtcSourceStatus{priceSrc, cmSrc, fngSrc}
+	sources := []SourceStatus{priceSrc, cmSrc, fngSrc}
 
 	n := len(priceRows)
 	dates := make([]string, n)
