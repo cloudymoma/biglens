@@ -6,11 +6,17 @@ import { fetchStableLive, fetchStableMeta, fetchStableOverview } from './api';
 import { effectiveRange, parseView, TAB_RANGES, viewSearch } from './deeplink';
 import type { StableAsset, StableRange, StableTab, StableView } from './deeplink';
 import type { Theme } from './signals';
+import ChainsTab from './ChainsTab';
+import ControlsTab from './ControlsTab';
+import OverviewTab from './OverviewTab';
+import PegTab from './PegTab';
+import ReservesTab from './ReservesTab';
 import StablecoinTicker from './StablecoinTicker';
 import { cx } from './styles';
+import SupplyTab from './SupplyTab';
 import { initialTheme, StableThemeContext, storeTheme } from './theme';
 import type { StableMeta } from './types';
-import { AsOf, ColdState, ErrorNote, SegmentedControl, Sources, TabBar } from './ui';
+import { AsOf, ErrorNote, SegmentedControl, Sources, TabBar } from './ui';
 import type { Choice } from './ui';
 
 const ASSET_CHOICES: readonly Choice<StableAsset>[] = [
@@ -98,6 +104,44 @@ export default function StablecoinDashboard() {
   const range = effectiveRange(view.tab, view.range);
   const updated = livePoll.data?.as_of || overviewPoll.data?.as_of;
   const sources = providerSources(metaPoll.data);
+  const matrix = overviewPoll.data?.matrix ?? [];
+  const providers = metaPoll.data?.providers ?? [];
+
+  const renderTab = (tab: StableTab) => {
+    const active = view.tab === tab;
+    switch (tab) {
+      case 'overview':
+        return <OverviewTab asset={view.asset} data={overviewPoll.data} loading={overviewPoll.loading} error={overviewPoll.error} />;
+      case 'peg':
+        return (
+          <PegTab
+            asset={view.asset}
+            range={effectiveRange('peg', view.range) ?? '7d'}
+            active={active}
+            refreshTick={refreshTick}
+            matrix={matrix}
+            providers={providers}
+          />
+        );
+      case 'supply':
+        return (
+          <SupplyTab
+            asset={view.asset}
+            range={effectiveRange('supply', view.range) ?? '90d'}
+            active={active}
+            refreshTick={refreshTick}
+            matrix={matrix}
+            watchlist={overviewPoll.data?.watchlist ?? null}
+          />
+        );
+      case 'reserves':
+        return <ReservesTab asset={view.asset} active={active} refreshTick={refreshTick} />;
+      case 'chains':
+        return <ChainsTab asset={view.asset} active={active} refreshTick={refreshTick} matrix={matrix} />;
+      case 'controls':
+        return <ControlsTab asset={view.asset} active={active} refreshTick={refreshTick} matrix={matrix} />;
+    }
+  };
 
   return (
     <StableThemeContext.Provider value={theme}>
@@ -170,7 +214,7 @@ export default function StablecoinDashboard() {
                 aria-labelledby={`stable-tab-${t.id}`}
                 hidden={view.tab !== t.id}
               >
-                <ColdState>{t.label}: this tab is not built yet.</ColdState>
+                {renderTab(t.id)}
               </div>
             ) : null,
           )}

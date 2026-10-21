@@ -70,7 +70,7 @@ export function CsvButton({
       onClick={() => downloadCsv(filename, headers, rows())}
       aria-label={`Download ${label} as CSV`}
       title={`Download ${label} as CSV`}
-      className={`${cx.button} ${cx.focus} px-2 py-1 text-[11px]`}
+      className={`${cx.buttonSmall} ${cx.focus}`}
     >
       <Download className="h-3.5 w-3.5" aria-hidden="true" />
       CSV

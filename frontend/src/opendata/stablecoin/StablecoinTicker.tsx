@@ -14,7 +14,7 @@ import type { StableLive, StableLiveAsset } from './types';
 function AssetCell({ a, pegWarmingUp }: { a: StableLiveAsset; pegWarmingUp: boolean }) {
   const noConsensus = !pegWarmingUp && a.consensus === null;
   return (
-    <div className={`${cx.card} p-3`}>
+    <div className={cx.cardTight}>
       <div className="flex items-center justify-between gap-2">
         <span className={`text-xs font-semibold ${cx.strong}`}>
           {a.symbol} <span className={`font-normal ${cx.muted}`}>in {a.numeraire === 'EUR' ? '€' : '$'}</span>
@@ -78,7 +78,7 @@ export default function StablecoinTicker({ live, loading }: { live: StableLive |
       {live.assets.map(a => (
         <AssetCell key={a.asset} a={a} pegWarmingUp={live.peg_warming_up} />
       ))}
-      <div className={`${cx.card} p-3`}>
+      <div className={cx.cardTight}>
         <div className="flex items-center justify-between">
           <span className={`text-xs font-semibold ${cx.strong}`}>All stablecoins</span>
           <Layers className={`h-3.5 w-3.5 ${cx.muted}`} aria-hidden="true" />
@@ -89,7 +89,7 @@ export default function StablecoinTicker({ live, loading }: { live: StableLive |
         </div>
         <p className={`mt-2 text-[10px] ${cx.faint}`}>DefiLlama, all peg types · as of {fmtTimeHM(live.market_as_of)}</p>
       </div>
-      <div className={`${cx.card} p-3`}>
+      <div className={cx.cardTight}>
         <div className="flex items-center justify-between">
           <span className={`text-xs font-semibold ${cx.strong}`}>Alerts</span>
           <Bell className={`h-3.5 w-3.5 ${cx.muted}`} aria-hidden="true" />
