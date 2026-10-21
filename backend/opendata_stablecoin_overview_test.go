@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 	"net/http"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -58,6 +59,38 @@ func TestStableWatchlist(t *testing.T) {
 	}
 	if cold := stableWatchlist(nil, time.Time{}, false, nil, time.Time{}); cold.Rows == nil || len(cold.Rows) != 0 {
 		t.Errorf("cold watchlist = %+v", cold)
+	}
+}
+
+// §2.1: the 15 largest USD coins by circulating supply, plus every EUR coin.
+func TestStableWatchlistSize(t *testing.T) {
+	snap := &llamaStableSnapshot{}
+	for i := 0; i < 17; i++ {
+		native := float64(1000-i) * 1e6
+		snap.Assets = append(snap.Assets, llamaAsset{LlamaID: "u" + strconv.Itoa(i), Symbol: "USD" + strconv.Itoa(i), PegType: "peggedUSD",
+			PriceUSD: stableF(1), CirculatingNative: stableF(native), CirculatingUSD: stableF(native)})
+	}
+	for i := 0; i < 12; i++ {
+		native := float64(100-i) * 1e6
+		snap.Assets = append(snap.Assets, llamaAsset{LlamaID: "e" + strconv.Itoa(i), Symbol: "EUR" + strconv.Itoa(i), PegType: "peggedEUR",
+			PriceUSD: stableF(1.1), CirculatingNative: stableF(native), CirculatingUSD: stableF(native * 1.1)})
+	}
+	at := time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC)
+	w := stableWatchlist(snap, at, false, stableF(1.1), at)
+	usd, eur := 0, 0
+	for _, r := range w.Rows {
+		switch r.Numeraire {
+		case "USD":
+			usd++
+			if r.Symbol == "USD15" || r.Symbol == "USD16" {
+				t.Errorf("%s is below the top 15 USD coins and must not be listed", r.Symbol)
+			}
+		case "EUR":
+			eur++
+		}
+	}
+	if usd != 15 || eur != 12 {
+		t.Errorf("watchlist has %d USD and %d EUR rows, want the top 15 USD coins and all 12 EUR coins", usd, eur)
 	}
 }
 

@@ -15,9 +15,9 @@ import (
 const (
 	stableOverviewTTL = 60 * time.Second
 	stableReservesTTL = 10 * time.Minute
-	// Watchlist size (§7.2 market table): the largest USD and EUR coins.
-	stableWatchUSDRows = 20
-	stableWatchEURRows = 10
+	// Watchlist size (§2.1): the 15 largest USD coins by circulating
+	// supply; every EUR coin is listed.
+	stableWatchUSDRows = 15
 	stableDisclaimer   = "Informational only, not financial advice. Signals are rule outputs, not ratings."
 )
 
@@ -62,12 +62,12 @@ type StableWatchlist struct {
 }
 
 // stableWatchlist builds the market table from a DefiLlama snapshot: the
-// largest USD- and EUR-pegged coins (other peg types are left out), with
-// native supply (value ÷ price, §5.1) and deviation in each coin's own
-// currency.
+// largest USD-pegged coins and every EUR-pegged coin (other peg types are
+// left out), with native supply (value ÷ price, §5.1) and deviation in each
+// coin's own currency.
 func stableWatchlist(snap *llamaStableSnapshot, asOf time.Time, stale bool, fx *float64, fxAsOf time.Time) StableWatchlist {
 	w := StableWatchlist{Source: "defillama", Rows: []StableWatchRow{},
-		Note: "USD- and EUR-pegged coins only; other peg types are not listed. Deviations are in each coin's own currency (EUR coins through the EUR/USD consensus)."}
+		Note: "The 15 largest USD-pegged coins and every EUR-pegged coin; other peg types are not listed. Deviations are in each coin's own currency (EUR coins through the EUR/USD consensus)."}
 	if snap == nil {
 		return w
 	}
@@ -118,7 +118,7 @@ func stableWatchlist(snap *llamaStableSnapshot, asOf time.Time, stale bool, fx *
 		}
 	}
 	add(usd, stableWatchUSDRows, usdTotal, "USD")
-	add(eur, stableWatchEURRows, eurTotal, "EUR")
+	add(eur, len(eur), eurTotal, "EUR")
 	return w
 }
 
