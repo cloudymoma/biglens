@@ -1,11 +1,12 @@
 import React from 'react';
-import { TrendingUp, Globe2, CloudSun, Bitcoin, Coins, Megaphone } from 'lucide-react';
+import { TrendingUp, Globe2, CloudSun, Bitcoin, CircleDollarSign, Coins, Megaphone } from 'lucide-react';
 import GoogleTrendsDashboard from './GoogleTrendsDashboard';
 import SemDashboard from './sem/SemDashboard';
 import GdeltDashboard from './gdelt/GdeltDashboard';
 import WeatherDashboard from './WeatherDashboard';
 import CryptoDashboard from './crypto/CryptoDashboard';
 import BitcoinDashboard from './bitcoin/BitcoinDashboard';
+import StablecoinDashboard from './stablecoin/StablecoinDashboard';
 
 // Registry of BigQuery Open Data dashboards. To add a new public dataset:
 // build its component in this directory, add an entry here, and expose its
@@ -61,6 +62,18 @@ export const OPEN_DATASETS: OpenDataset[] = [
     sourceTable:
       'mempool.space · Coinbase (Exchange / INTX / CDE) · Kraken · Deribit · OKX · Binance Futures · Hyperliquid · CFTC COT · Coin Metrics Community · CoinGecko · alternative.me · Bitnodes · DB-IP Lite · blockchain.com · bigquery-public-data.crypto_bitcoin (operator opt-in)',
     component: BitcoinDashboard,
+  },
+  {
+    id: 'stablecoin',
+    label: 'Stablecoins',
+    icon: <CircleDollarSign size={16} />,
+    description:
+      'Stablecoin intelligence for USDT, USDC and EURC: multi-venue peg monitoring (USD and EUR), issuance and ' +
+      'redemption flows, issuer-reported vs on-chain supply, reserves and attestation freshness, regulatory status, ' +
+      'contract controls and freeze activity — from free public APIs and BigLens\' own samplers.',
+    sourceTable:
+      'DefiLlama · Circle · Tether · Coinbase · Kraken · Bitstamp · OKX · Binance · Uniswap v3 · ECB · US Treasury · public RPCs · BigLens Address Risk & Scam Radar',
+    component: StablecoinDashboard,
   },
   {
     id: 'crypto',

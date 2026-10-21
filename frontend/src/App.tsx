@@ -39,6 +39,21 @@ const PRODUCTS: { id: string; label: string; icon: React.ReactNode }[] = [
   { id: 'gcp_resources', label: 'GCP Resources', icon: <Boxes size={20} /> },
 ];
 
+// Deep link: ?dataset=<id> opens that Open Data dashboard (dashboards read
+// their own parameters, e.g. stablecoin ?asset=&tab=&range=).
+function datasetFromURL(): string | null {
+  if (typeof window === 'undefined') return null;
+  const id = new URLSearchParams(window.location.search).get('dataset');
+  return OPEN_DATASETS.some(ds => ds.id === id) ? id : null;
+}
+
+// Navigating in the sidebar replaces the URL so a stale deep link does not
+// reopen the previous view on reload.
+function replaceURL(search: string): void {
+  if (typeof window === 'undefined') return;
+  window.history.replaceState(null, '', `${window.location.pathname}${search}`);
+}
+
 function App() {
   const [activeTab, setActiveTab] = useState<Tab>('storage');
   const [config, setConfig] = useState<any>(null);
@@ -62,8 +77,8 @@ function App() {
   const [refreshKey, setRefreshKey] = useState(0);
 
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [activeProduct, setActiveProduct] = useState('bigquery');
-  const [activeDataset, setActiveDataset] = useState(OPEN_DATASETS[0].id);
+  const [activeProduct, setActiveProduct] = useState(() => (datasetFromURL() ? 'opendata' : 'bigquery'));
+  const [activeDataset, setActiveDataset] = useState(() => datasetFromURL() ?? OPEN_DATASETS[0].id);
 
   useEffect(() => {
     Promise.all([fetchConfig(), fetchDatasets(), fetchRegions()])
@@ -106,6 +121,7 @@ function App() {
     if (activeProduct === productId && sidebarOpen) {
       setSidebarOpen(false);
     } else {
+      if (productId !== activeProduct) replaceURL(productId === 'opendata' ? `?dataset=${activeDataset}` : '');
       setActiveProduct(productId);
       setSidebarOpen(true);
     }
@@ -328,7 +344,10 @@ function App() {
                 {OPEN_DATASETS.map(ds => (
                   <button
                     key={ds.id}
-                    onClick={() => setActiveDataset(ds.id)}
+                    onClick={() => {
+                      if (ds.id !== activeDataset) replaceURL(`?dataset=${ds.id}`);
+                      setActiveDataset(ds.id);
+                    }}
                     className={`flex items-center gap-2.5 px-3 py-2 rounded-lg cursor-pointer transition-all text-sm text-left w-full ${
                       activeDataset === ds.id
                         ? 'text-white font-medium'

@@ -1,5 +1,9 @@
 @import "tailwindcss";
 
+/* `dark:` follows a `.dark` ancestor instead of the OS setting: the app shell is
+   dark-only, and dashboards with their own light theme (stablecoin) toggle it. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme {
   --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
   --font-mono: 'JetBrains Mono', 'Menlo', monospace;
