@@ -316,6 +316,7 @@ export interface StableLastDeviation {
 export interface StableAnnotation {
   date: string;
   end_date?: string;
+  kind?: 'depeg' | 'minting_halt' | string;
   asset: string;
   title: string;
   extreme?: string;

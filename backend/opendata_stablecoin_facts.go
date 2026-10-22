@@ -36,7 +36,8 @@ var (
 	stableRegimes     = map[string]bool{"EU-MiCA": true, "US-GENIUS": true, "HK-SO": true, "SG-MAS": true, "JP-PSA": true}
 	stableRegStatuses = map[string]bool{"authorized": true, "not_authorized": true, "pending_regime": true,
 		"not_applicable": true, "unknown": true}
-	stableEventKinds = map[string]bool{"depeg": true, "attestation": true, "regulatory": true, "control": true, "incident": true}
+	stableEventKinds      = map[string]bool{"depeg": true, "attestation": true, "regulatory": true, "control": true, "incident": true}
+	stableAnnotationKinds = map[string]bool{"depeg": true, "minting_halt": true}
 )
 
 type stableFactsFile struct {
@@ -71,6 +72,7 @@ type stableKeyDate struct {
 type stableAnnotation struct {
 	Date      string   `json:"date"`               // YYYY-MM-DD, or YYYY-MM when only the month is known
 	EndDate   string   `json:"end_date,omitempty"` // YYYY-MM-DD, for multi-day events
+	Kind      string   `json:"kind"`               // depeg | minting_halt
 	Asset     string   `json:"asset"`              // ticker, e.g. USDC, UST, USDe
 	Title     string   `json:"title"`
 	Extreme   string   `json:"extreme,omitempty"`   // approximate extreme, as text
@@ -303,6 +305,9 @@ func validateStableAnnotations(list []stableAnnotation) error {
 		}
 		if err := firstStableErr(stableFactRequired("asset", a.Asset), stableFactRequired("title", a.Title)); err != nil {
 			return wrap(err)
+		}
+		if !stableAnnotationKinds[a.Kind] {
+			return wrap(fmt.Errorf("kind %q (allowed: depeg, minting_halt)", a.Kind))
 		}
 		if a.LowPrice != nil && !(*a.LowPrice > 0) {
 			return wrap(errors.New("low_price must be positive"))

@@ -40,6 +40,27 @@ func TestStableFactsEmbeddedValid(t *testing.T) {
 	if len(f.Regimes) == 0 || f.Regimes[0].Regime != "US-GENIUS" || len(f.Regimes[0].KeyDates) == 0 {
 		t.Errorf("regimes = %+v, want the US-GENIUS key dates", f.Regimes)
 	}
+	if f.Version == "2026-10-20.1" {
+		t.Errorf("facts version = %q, want bumped version", f.Version)
+	}
+	var eurcGenius *stableRegulatory
+	for i := range f.Assets["eurc"].Regulatory {
+		if f.Assets["eurc"].Regulatory[i].Regime == "US-GENIUS" {
+			eurcGenius = &f.Assets["eurc"].Regulatory[i]
+		}
+	}
+	if eurcGenius == nil || eurcGenius.Status != "pending_regime" || !strings.Contains(eurcGenius.Note, "2028-07-18") || !strings.Contains(eurcGenius.Note, "2026-16796") {
+		t.Errorf("eurc US-GENIUS = %+v, want pending_regime with §18 / 2028-07-18 and Treasury NPRM Q75 note", eurcGenius)
+	}
+	if u := f.Assets["usdc"].Redemption[0].SourceURL; u != "https://help.circle.com/support/en/usdc-eurc-redemption-structure" {
+		t.Errorf("usdc Circle Mint redemption source_url = %q", u)
+	}
+	if u := f.Assets["eurc"].Redemption[0].SourceURL; u != "https://help.circle.com/support/en/usdc-eurc-redemption-structure" {
+		t.Errorf("eurc Circle Mint redemption source_url = %q", u)
+	}
+	if tl := f.Assets["usdt"].Issuer.Entities[2]; !strings.HasSuffix(tl.SourceURL, "31-10-2025.pdf") {
+		t.Errorf("Tether Limited source_url = %q, want 2025-09-30 BDO report", tl.SourceURL)
+	}
 	got := loadStableFacts("", os.ReadFile)
 	if got.Version == "" || got.OverrideStatus != "none" || len(got.Overridden) != 0 || len(got.Regimes) == 0 {
 		t.Errorf("loadStableFacts without override = %+v", got)

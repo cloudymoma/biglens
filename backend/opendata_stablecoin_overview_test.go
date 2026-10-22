@@ -266,8 +266,8 @@ func TestStablecoinReservesEndpoint(t *testing.T) {
 		t.Errorf("usdc reserves: tether %v, mix %+v (newest first)", usdc.Tether, usdc.ReserveMix)
 	}
 	one := decodeStable[StableReservesResponse](t, stableGet(t, h.StablecoinReserves, "/api/opendata/stablecoin/reserves?asset=eurc"))
-	if one.Asset != "eurc" || len(one.Assets) != 1 || one.Assets[0].Regulatory[1].Status != "unknown" {
-		t.Errorf("eurc reserves = %+v (EURC under GENIUS is unknown)", one.Assets)
+	if one.Asset != "eurc" || len(one.Assets) != 1 || one.Assets[0].Regulatory[1].Status != "pending_regime" {
+		t.Errorf("eurc reserves = %+v (EURC under GENIUS is pending_regime)", one.Assets)
 	}
 	if stableGet(t, h.StablecoinReserves, "/api/opendata/stablecoin/reserves?asset=dai").Code != http.StatusBadRequest {
 		t.Error("asset=dai accepted")

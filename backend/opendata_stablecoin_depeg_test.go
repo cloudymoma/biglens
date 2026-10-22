@@ -132,6 +132,19 @@ func TestStableAnnotations(t *testing.T) {
 		if a.Status != "verified" || !strings.HasPrefix(a.SourceURL, "https://") {
 			t.Errorf("annotation %+v must be verified with an https source", a)
 		}
+		wantKind := "depeg"
+		if a.Asset == "BUSD" {
+			wantKind = "minting_halt"
+		}
+		if a.Kind != wantKind {
+			t.Errorf("annotation %s kind = %q, want %q", a.Asset, a.Kind, wantKind)
+		}
+		if a.Asset == "DAI" && a.Extreme != "Coinbase DAI-USD daily low 0.8582 on 2023-03-11" {
+			t.Errorf("DAI annotation extreme = %q", a.Extreme)
+		}
+		if a.Asset == "USDe" && strings.Contains(a.Extreme, "283M") {
+			t.Errorf("USDe annotation extreme still cites $283M without source: %q", a.Extreme)
+		}
 	}
 	for _, want := range []string{"USDT", "USDC", "UST", "BUSD", "DAI", "FDUSD", "USDe"} {
 		if !assets[want] {
@@ -140,11 +153,12 @@ func TestStableAnnotations(t *testing.T) {
 	}
 	base := `{"version": "t", "assets": {"usdt": {"status": "unknown"}}, "annotations": [%s]}`
 	ok := []string{
-		`{"date": "2023-03-11", "asset": "USDC", "title": "SVB", "status": "unknown"}`,
-		`{"date": "2022-05", "asset": "UST", "title": "collapse", "status": "unknown"}`,
-		`{"date": "2025-10-10", "end_date": "2025-10-11", "asset": "USDe", "title": "dislocation", "low_price": 0.65, "status": "unknown"}`,
-		`{"date": "2023-03-11", "asset": "USDC", "title": "SVB", "low_price": 0.80526, "source_url": "https://example.com/svb"}`,
-		`{"date": "2023-03-11", "asset": "USDC", "title": "SVB", "low_price": 0.86, "status": "verified", "source_url": "https://example.com/svb"}`,
+		`{"date": "2023-03-11", "kind": "depeg", "asset": "USDC", "title": "SVB", "status": "unknown"}`,
+		`{"date": "2022-05", "kind": "depeg", "asset": "UST", "title": "collapse", "status": "unknown"}`,
+		`{"date": "2023-02-13", "kind": "minting_halt", "asset": "BUSD", "title": "halt", "status": "unknown"}`,
+		`{"date": "2025-10-10", "end_date": "2025-10-11", "kind": "depeg", "asset": "USDe", "title": "dislocation", "low_price": 0.65, "status": "unknown"}`,
+		`{"date": "2023-03-11", "kind": "depeg", "asset": "USDC", "title": "SVB", "low_price": 0.80526, "source_url": "https://example.com/svb"}`,
+		`{"date": "2023-03-11", "kind": "depeg", "asset": "USDC", "title": "SVB", "low_price": 0.86, "status": "verified", "source_url": "https://example.com/svb"}`,
 	}
 	for _, a := range ok {
 		if _, _, err := parseStableFactsAndValidate([]byte(strings.Replace(base, "%s", a, 1))); err != nil {
@@ -152,16 +166,18 @@ func TestStableAnnotations(t *testing.T) {
 		}
 	}
 	bad := map[string]string{
-		"no title":           `{"date": "2023-03-11", "asset": "USDC", "status": "unknown"}`,
-		"no asset":           `{"date": "2023-03-11", "title": "x", "status": "unknown"}`,
-		"bad date":           `{"date": "March 2023", "asset": "USDC", "title": "x", "status": "unknown"}`,
-		"end before start":   `{"date": "2023-03-11", "end_date": "2023-03-10", "asset": "USDC", "title": "x", "status": "unknown"}`,
-		"checked no source":  `{"date": "2023-03-11", "asset": "USDC", "title": "x"}`,
-		"verified no source": `{"date": "2023-03-11", "asset": "USDC", "title": "x", "status": "verified"}`,
-		"http source":        `{"date": "2023-03-11", "asset": "USDC", "title": "x", "source_url": "http://example.com"}`,
-		"other status":       `{"date": "2023-03-11", "asset": "USDC", "title": "x", "status": "likely", "source_url": "https://example.com"}`,
-		"zero low":           `{"date": "2023-03-11", "asset": "USDC", "title": "x", "low_price": 0, "status": "unknown"}`,
-		"unknown field":      `{"date": "2023-03-11", "asset": "USDC", "title": "x", "status": "unknown", "color": "red"}`,
+		"no title":           `{"date": "2023-03-11", "kind": "depeg", "asset": "USDC", "status": "unknown"}`,
+		"no asset":           `{"date": "2023-03-11", "kind": "depeg", "title": "x", "status": "unknown"}`,
+		"no kind":            `{"date": "2023-03-11", "asset": "USDC", "title": "x", "status": "unknown"}`,
+		"bad kind":           `{"date": "2023-03-11", "kind": "hack", "asset": "USDC", "title": "x", "status": "unknown"}`,
+		"bad date":           `{"date": "March 2023", "kind": "depeg", "asset": "USDC", "title": "x", "status": "unknown"}`,
+		"end before start":   `{"date": "2023-03-11", "end_date": "2023-03-10", "kind": "depeg", "asset": "USDC", "title": "x", "status": "unknown"}`,
+		"checked no source":  `{"date": "2023-03-11", "kind": "depeg", "asset": "USDC", "title": "x"}`,
+		"verified no source": `{"date": "2023-03-11", "kind": "depeg", "asset": "USDC", "title": "x", "status": "verified"}`,
+		"http source":        `{"date": "2023-03-11", "kind": "depeg", "asset": "USDC", "title": "x", "source_url": "http://example.com"}`,
+		"other status":       `{"date": "2023-03-11", "kind": "depeg", "asset": "USDC", "title": "x", "status": "likely", "source_url": "https://example.com"}`,
+		"zero low":           `{"date": "2023-03-11", "kind": "depeg", "asset": "USDC", "title": "x", "low_price": 0, "status": "unknown"}`,
+		"unknown field":      `{"date": "2023-03-11", "kind": "depeg", "asset": "USDC", "title": "x", "status": "unknown", "color": "red"}`,
 	}
 	for name, a := range bad {
 		if _, _, err := parseStableFactsAndValidate([]byte(strings.Replace(base, "%s", a, 1))); err == nil {
@@ -169,12 +185,12 @@ func TestStableAnnotations(t *testing.T) {
 		}
 	}
 	// An operator override replaces the list as a whole and is badged.
-	override := `{"version": "op-1", "annotations": [{"date": "2023-03-11", "asset": "USDC", "title": "SVB", "source_url": "https://example.com/svb"}]}`
+	override := `{"version": "op-1", "annotations": [{"date": "2023-03-11", "kind": "depeg", "asset": "USDC", "title": "SVB", "source_url": "https://example.com/svb"}]}`
 	got := loadStableFacts("/override.json", func(string) ([]byte, error) { return []byte(override), nil })
 	if got.OverrideStatus != "applied" || !got.AnnotationsOverridden || len(got.Annotations) != 1 || got.Annotations[0].SourceURL == "" {
 		t.Errorf("override = status %s, overridden %v, %+v", got.OverrideStatus, got.AnnotationsOverridden, got.Annotations)
 	}
-	invalid := `{"version": "op-2", "annotations": [{"date": "2023-03-11", "asset": "USDC", "title": "SVB"}]}`
+	invalid := `{"version": "op-2", "annotations": [{"date": "2023-03-11", "kind": "depeg", "asset": "USDC", "title": "SVB"}]}`
 	got = loadStableFacts("/override.json", func(string) ([]byte, error) { return []byte(invalid), nil })
 	if got.OverrideStatus != "invalid" || got.AnnotationsOverridden || len(got.Annotations) != 7 {
 		t.Errorf("invalid override = status %s, %d annotations", got.OverrideStatus, len(got.Annotations))
