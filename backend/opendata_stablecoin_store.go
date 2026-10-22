@@ -94,6 +94,7 @@ CREATE TABLE IF NOT EXISTS stable_peg_daily (
   low REAL,
   close REAL,
   vwap REAL,
+  volume REAL,
   min_dev_bps REAL,
   max_dev_bps REAL,
   minutes_ge_30 INTEGER,
@@ -278,8 +279,9 @@ func (s *riskStore) ensureStableSchema(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, stableSchema); err != nil {
 		return fmt.Errorf("stablecoin schema: %w", err)
 	}
-	// Idempotent migration for existing databases created before vwap was added.
+	// Idempotent migrations for existing databases created before vwap/volume were added.
 	_, _ = s.db.ExecContext(ctx, `ALTER TABLE stable_peg_daily ADD COLUMN vwap REAL`)
+	_, _ = s.db.ExecContext(ctx, `ALTER TABLE stable_peg_daily ADD COLUMN volume REAL`)
 	return nil
 }
 

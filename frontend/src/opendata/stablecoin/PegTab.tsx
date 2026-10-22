@@ -327,10 +327,8 @@ function depegOption(theme: Theme, assets: StablePegAsset[]) {
   );
   const ann: StableAnnotation[] = assets.flatMap(a => a.annotations);
   const lines = assets.map((a, i) => {
-    const llama180 = a.asset === 'eurc' ? a.daily_closes.filter(d => d.source === 'defillama' && d.threshold_bps === 180) : [];
-    const llamaStart = llama180[0]?.day;
-    const llamaEnd = llama180[llama180.length - 1]?.day;
-    const baseMarks =
+    const lineCloses = a.asset === 'eurc' ? a.daily_closes.filter(d => d.source !== 'bitstamp_ohlc') : a.daily_closes;
+    const markData =
       i === 0
         ? [
             { yAxis: 30, name: '+30', lineStyle: { color: c.muted, type: 'dotted' } },
@@ -340,26 +338,12 @@ function depegOption(theme: Theme, assets: StablePegAsset[]) {
             ...ann.map(x => ({ xAxis: x.date, name: `${x.asset}: ${x.title}`, lineStyle: { color: c.muted, type: 'solid', opacity: 0.6 } })),
           ]
         : [];
-    const eurcBand =
-      llamaStart && llamaEnd
-        ? [
-            [
-              { coord: [llamaStart, 180], name: '+180 (DefiLlama ÷ ECB)', lineStyle: { color: ASSET_COLOR.eurc, type: 'dashed', opacity: 0.75 } },
-              { coord: [llamaEnd, 180] },
-            ],
-            [
-              { coord: [llamaStart, -180], name: '−180 (DefiLlama ÷ ECB)', lineStyle: { color: ASSET_COLOR.eurc, type: 'dashed', opacity: 0.75 } },
-              { coord: [llamaEnd, -180] },
-            ],
-          ]
-        : [];
-    const markData = [...baseMarks, ...eurcBand];
     return {
       name: `${SYM[a.asset]} daily close`,
       type: 'line',
       showSymbol: false,
       color: ASSET_COLOR[a.asset],
-      data: a.daily_closes.map(d => ({ value: [d.day, d.dev_bps], close: d.close, source: d.source, numeraire: a.numeraire })),
+      data: lineCloses.map(d => ({ value: [d.day, d.dev_bps], close: d.close, source: d.source, numeraire: a.numeraire })),
       ...(markData.length > 0
         ? {
             markLine: {
@@ -372,6 +356,22 @@ function depegOption(theme: Theme, assets: StablePegAsset[]) {
         : {}),
     };
   });
+  const eurcBitstampPts = assets
+    .filter(a => a.asset === 'eurc')
+    .flatMap(a => {
+      const pts = a.daily_closes.filter(d => d.source === 'bitstamp_ohlc');
+      if (pts.length === 0) return [];
+      return [
+        {
+          name: 'EURC Bitstamp close (≥ 200k vol)',
+          type: 'scatter',
+          symbol: 'circle',
+          symbolSize: 6,
+          color: ASSET_COLOR.eurc,
+          data: pts.map(d => ({ value: [d.day, d.dev_bps], close: d.close, source: 'Bitstamp close (≥ 200k vol)', numeraire: a.numeraire })),
+        },
+      ];
+    });
   const marks = assets
     .filter(a => a.low_markers.length > 0)
     .map(a => ({
@@ -407,7 +407,7 @@ function depegOption(theme: Theme, assets: StablePegAsset[]) {
     xAxis: { type: 'time', ...ax },
     yAxis: { type: 'value', name: 'bps', ...ax },
     dataZoom: [{ type: 'inside' }, { type: 'slider', height: 16, bottom: 12, textStyle: { color: c.muted } }],
-    series: [...lines, ...marks],
+    series: [...lines, ...eurcBitstampPts, ...marks],
   };
 }
 
@@ -419,7 +419,7 @@ function DepegHistory({ peg }: { peg: StablePeg }) {
     <div className="space-y-4">
       <Panel
         title="Depeg history"
-        help="A day counts by its daily rule: the BigLens consensus rollup close, else Kraken EURCEUR same-sign min(|close_dev|, |vwap_dev|) for EURC from 2025-09-18 onward (30 bps threshold), else DefiLlama's daily price (EURC before Kraken: DefiLlama ÷ the same-day ECB rate, with a 180 bps resolution floor for FX-timing and $0.01 rounding noise). A Bitstamp intraday low is a marker only when it is at least 100 bps off and that day's candle close, BigLens close or DefiLlama price is at least 30 bps off."
+        help="A day counts by its daily rule at ±30 bps: the BigLens consensus rollup close, else for EURC Kraken EURCEUR same-sign min(|close_dev|, |vwap_dev|) from 2025-09-18 onward and Bitstamp EURC/EUR close on days with ≥ 200k EURC volume before 2025-09-18 (other pre-Kraken days are not classified), else DefiLlama's daily price for USD coins. A Bitstamp intraday low is a marker only when it is at least 100 bps off and that day's candle close, BigLens close or DefiLlama price is at least 30 bps off."
         right={
           <CsvButton
             filename="stablecoin-depeg-history.csv"
@@ -450,7 +450,7 @@ function DepegHistory({ peg }: { peg: StablePeg }) {
             const label = l
               ? `${SYM[a.asset]}: last ≥${l.threshold_bps} bps (${srcLabel})`
               : a.numeraire === 'EUR'
-                ? `${SYM[a.asset]}: last ≥30 bps (Kraken close & VWAP) / ≥180 bps (DefiLlama ÷ ECB)`
+                ? `${SYM[a.asset]}: last ≥30 bps (Kraken close & VWAP / Bitstamp close ≥ 200k vol)`
                 : `${SYM[a.asset]}: last ≥100 bps deviation`;
             return (
               <Stat
@@ -469,9 +469,8 @@ function DepegHistory({ peg }: { peg: StablePeg }) {
             <ReactECharts option={depegOption(theme, assets)} notMerge style={{ height: 360 }} />
             {hasEurc && (
               <p className={`mt-2 text-[11px] ${cx.muted}`}>
-                EURC uses per-source thresholds: before 2025-09-18 (DefiLlama ÷ same-day ECB), the dashed ±180 bps resolution floor applies (16:00 CET fix-timing gap plus $0.01
-                rounding until 2025-10); from 2025-09-18 onward (Kraken EURCEUR daily OHLC), the day deviation is the same-sign smaller magnitude of close and VWAP deviations (0
-                when signs differ) against ±30 bps.
+                2022-06 to 2025-09: Bitstamp EURC/EUR close on days with ≥ 200k EURC volume; other days not classified. From 2025-09-18 onward (Kraken EURCEUR daily OHLC), the
+                day deviation is the same-sign smaller magnitude of close and VWAP deviations (0 when signs differ) against ±30 bps.
               </p>
             )}
           </>
@@ -541,7 +540,7 @@ function DepegHistory({ peg }: { peg: StablePeg }) {
                     <tr key={`${a.asset}-${d.day}`} className={cx.tr}>
                       <td className={`${cx.td} font-mono`}>{d.day}</td>
                       <td className={cx.td}>{SYM[a.asset]}</td>
-                      <td className={cx.td}>{d.source}</td>
+                      <td className={cx.td}>{d.source_label || d.source}</td>
                       <td className={`${cx.td} font-mono`}>{fmtPrice(d.close, a.numeraire)}</td>
                       <td className={`${cx.td} font-mono`}>{fmtBps(d.close_dev_bps)}</td>
                       <td className={`${cx.td} font-mono`}>{fmtBps(d.vwap_dev_bps ?? null)}</td>

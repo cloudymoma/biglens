@@ -153,7 +153,7 @@ func TestStableVerifyPass(t *testing.T) {
 	for _, want := range []string{"PASS", "defillama", "circle", "tether", "ecb", "us_treasury", "rpc_supply", "EURC sol",
 		// M2 providers: every venue pair, the traps, the candles, DefiLlama prices and the pool.
 		"coinbase", "USDT-USDC", "EURC-USDC", "USDC-USD", "kraken", "USDTZUSD", "ZEURZUSD", "bitstamp", "eurceur", "eurcusd",
-		"daily OHLC usdcusd", "okx", "USDC-USDT", "binance", "USDCUSDT", "/stablecoinprices", "uniswap_rpc", "slot0",
+		"daily OHLC usdcusd", "daily OHLC eurceur", "okx", "USDC-USDT", "binance", "USDCUSDT", "/stablecoinprices", "uniswap_rpc", "slot0",
 		// M3: every control field of every monitored deployment.
 		"rpc_controls", "USDT tron controls", "EURC base controls", "USDC sol controls"} {
 		if !strings.Contains(out, want) {
@@ -163,10 +163,6 @@ func TestStableVerifyPass(t *testing.T) {
 	// Bridged and renamed deployments may report the asset symbol or the label.
 	if !strings.Contains(out, "0 of ") {
 		t.Errorf("summary line missing:\n%s", out)
-	}
-	// eurceur candles are not used (§7.2), so they are not verified either.
-	if strings.Contains(out, "daily OHLC eurceur") {
-		t.Errorf("eurceur candles verified:\n%s", out)
 	}
 	if venues.count("/kraken/0/public/Ticker") != 1 {
 		t.Errorf("kraken calls = %d, want one batched call", venues.count("/kraken/0/public/Ticker"))

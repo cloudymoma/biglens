@@ -271,6 +271,7 @@ export interface StablePegPoint {
 export interface StableDepegDay {
   day: string;
   source: string;
+  source_label?: string;
   close: number;
   close_dev_bps: number;
   vwap?: number | null;

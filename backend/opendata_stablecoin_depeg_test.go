@@ -72,7 +72,7 @@ func TestParseBitstampOHLC(t *testing.T) {
 	if len(rows) != 8 || rows[0].Day != "2023-03-08" || rows[7].Day != "2023-03-15" {
 		t.Fatalf("rows = %+v", rows)
 	}
-	if r := rows[3]; r.Day != "2023-03-11" || r.Low != 0.80526 || r.Open != 0.99729 || r.High != 0.99975 || r.Close != 0.96853 {
+	if r := rows[3]; r.Day != "2023-03-11" || r.Low != 0.80526 || r.Open != 0.99729 || r.High != 0.99975 || r.Close != 0.96853 || r.Volume == nil || *r.Volume != 1750000.5 {
 		t.Errorf("2023-03-11 = %+v", r)
 	}
 	good := string(readStableFixture(t, "replay/bitstamp_ohlc_usdcusd_2023-03.json"))
@@ -266,9 +266,9 @@ func TestSyncDepegHistory(t *testing.T) {
 	if eurc, _ := store.stablePegDailySeries(ctx, "eurc", stablePegSourceBitstamp, "2000-01-01"); len(eurc) != 0 {
 		t.Errorf("eurc bitstamp candles = %d, want none (no fixture)", len(eurc))
 	}
-	// Bitstamp's eurceur book is too thin for the history (§7.2): never read.
-	if q := stub.queries("/bitstamp/api/v2/ohlc/eurceur/"); len(q) != 0 {
-		t.Errorf("eurceur candles requested: %v", q)
+	// Bitstamp's eurceur daily candles are synced for EURC's pre-Kraken history.
+	if q := stub.queries("/bitstamp/api/v2/ohlc/eurceur/"); len(q) != 4 {
+		t.Errorf("eurceur candle requests = %v, want 4 windows", q)
 	}
 	// Kraken EURCEUR daily OHLC is synced for EURC's direct-EUR history,
 	// storing VWAP next to Close.
@@ -436,36 +436,33 @@ func TestStableClassifyDepeg(t *testing.T) {
 	}
 
 	// EURC: euro terms. The consensus close counts at 30 bps; Kraken EURCEUR
-	// daily candles (same-sign min(|close_dev|, |vwap_dev|) at 30 bps) take
-	// precedence over DefiLlama ÷ same-day ECB where Kraken has data;
-	// DefiLlama ÷ ECB historical closes use the 180 bps resolution floor
-	// (stableDepegEURLlamaECBBps), while a Saturday without Kraken or a
-	// same-day ECB rate is unclassified.
-	eur := stableDepegInputs{Numeraire: "EUR", Today: "2024-01-20",
-		Rollup: []stablePegDaily{roll("2024-01-18", 1.0035, 0, 0)},
+	// daily candles (same-sign min(|close_dev|, |vwap_dev|) at 30 bps) count
+	// from 2025-09-18 onward; before 2025-09-18 Bitstamp eurceur closes count
+	// at 30 bps only when volume ≥ stableBitstampEURCMinVolume (200k EURC).
+	// DefiLlama ÷ ECB is not used for EURC.
+	eur := stableDepegInputs{Numeraire: "EUR", Today: "2025-09-25",
+		Rollup: []stablePegDaily{roll("2025-09-20", 1.0035, 0, 0)},
 		Kraken: []stablePegDaily{
-			{Day: "2024-01-17", Source: stablePegSourceKraken, Close: f(1.0002), VWAP: f(1.0001), Low: f(0.9998), High: f(1.0004), Samples: 1},
+			{Day: "2025-09-18", Source: stablePegSourceKraken, Close: f(1.0002), VWAP: f(1.0001), Low: f(0.9998), High: f(1.0004), Samples: 1},
+		},
+		Candles: []stablePegDaily{
+			{Day: "2023-03-11", Source: stablePegSourceBitstamp, Close: f(0.9630), Low: f(0.9000), High: f(1.0000), Volume: f(2_600_000), Samples: 1},
+			{Day: "2024-02-19", Source: stablePegSourceBitstamp, Close: f(0.9900), Low: f(0.9805), High: f(1.0181), Volume: f(175_000), Samples: 1},
 		},
 		Prices: []stablePriceDaily{
-			price("2024-01-13", 1.1500), // Saturday: Friday's rate would make it +267.9 bps
-			price("2024-01-15", 1.1424), // ÷ 1.12 = +200.0 bps: above 180 bps
-			price("2024-01-16", 1.1390), // ÷ 1.12 = +169.6 bps: under 180 bps
-			price("2024-01-17", 1.1450), // ÷ 1.12 = +223.2 bps, but Kraken (+1.0 bps) overrides DefiLlama
+			price("2023-03-13", 1.0980), // ignored for EURC
+			price("2024-01-15", 1.1424), // ignored for EURC
 		},
-		ECB: map[string]float64{"2024-01-12": 1.12, "2024-01-15": 1.12, "2024-01-16": 1.12, "2024-01-17": 1.12},
+		ECB: map[string]float64{"2023-03-13": 1.0706, "2024-01-15": 1.12},
 	}
 	h = stableClassifyDepeg(eur)
-	if len(h.Days) != 2 || h.Days[0].Day != "2024-01-18" || h.Days[0].Source != "consensus" || h.Days[0].ThresholdBps != 30 ||
-		h.Days[1].Day != "2024-01-15" || h.Days[1].Source != "defillama" || h.Days[1].ThresholdBps != stableDepegEURLlamaECBBps ||
-		math.Abs(h.Days[1].CloseDevBps-(1.1424/1.12-1)*1e4) > 1e-9 || math.Abs(h.Days[1].Close-1.1424/1.12) > 1e-12 {
+	if len(h.Days) != 2 || h.Days[0].Day != "2025-09-20" || h.Days[0].Source != "consensus" || h.Days[0].ThresholdBps != 30 ||
+		h.Days[1].Day != "2023-03-11" || h.Days[1].Source != stablePegSourceBitstamp || h.Days[1].SourceLabel != "Bitstamp close (≥ 200k vol)" ||
+		h.Days[1].ThresholdBps != 30 || math.Abs(h.Days[1].CloseDevBps+370) > 1e-6 || math.Abs(h.Days[1].Close-0.9630) > 1e-12 {
 		t.Fatalf("eurc days = %+v", h.Days)
 	}
-	if len(h.Markers) != 0 || h.LastGE100 == nil || h.LastGE100.Day != "2024-01-18" || h.LastGE100.ThresholdBps != 30 || h.LastGE100.DaysSince != 2 || h.HistoryFrom != "2024-01-15" {
+	if len(h.Markers) != 0 || h.LastGE100 == nil || h.LastGE100.Day != "2025-09-20" || h.LastGE100.ThresholdBps != 30 || h.LastGE100.DaysSince != 5 || h.HistoryFrom != "2023-03-11" {
 		t.Errorf("eurc markers %+v, last %+v, history from %q", h.Markers, h.LastGE100, h.HistoryFrom)
-	}
-	// The same-day rule.
-	if v := stableDevFromUSD(1.15, "2024-01-13", eur.ECB); v != nil {
-		t.Errorf("Saturday deviation = %v, want none without a same-day rate", *v)
 	}
 	// Empty inputs: nothing, never a substitute.
 	if h := stableClassifyDepeg(stableDepegInputs{Numeraire: "USD", Today: "2024-01-20"}); len(h.Days) != 0 || h.Days == nil ||
@@ -474,42 +471,41 @@ func TestStableClassifyDepeg(t *testing.T) {
 	}
 }
 
-// TestStableEURC2024To2026Quiet pins the M6b EURC per-source rules using
-// synthetic fixtures (no verbatim Kraken rows):
+// TestStableEURC2024To2026Quiet pins the EURC per-source rules using
+// synthetic fixtures (no verbatim Kraken or Bitstamp rows):
+//   - Pre-Kraken Bitstamp segment (before 2025-09-18): classified on the close
+//     at 30 bps only when volume ≥ stableBitstampEURCMinVolume (200,000 EURC);
+//     all other days have no value (a gap, not a depeg day):
+//   - −370 bps at 2.6M volume -> depeg day;
+//   - −136 bps at 54k volume -> no value;
+//   - −100 bps at 175k volume -> no value;
+//   - −40 bps at 250k volume -> depeg day;
+//   - −25 bps at 500k volume -> classified close, not a depeg day.
 //   - Kraken segment (2025-09-18 onward): classified at 30 bps on the
-//     same-sign min(|close_dev|, |vwap_dev|) (0 when signs differ):
-//   - close +101 bps with VWAP +8 bps -> +8 bps (not a depeg day);
-//   - close +3 bps with VWAP +140 bps (a wick) -> +3 bps (not a depeg day);
-//   - close +40 bps with VWAP -40 bps (opposite signs) -> 0 bps (not a depeg day);
-//   - 0 Kraken days at >= 100 bps across the synthetic 2025-09-18..today series;
-//   - close +35 bps with VWAP +35 bps -> +35 bps (IS a depeg day at 30 bps).
-//   - DefiLlama ÷ ECB segment (before 2025-09-18): 180 bps resolution floor
-//     (stableDepegEURLlamaECBBps) keeps 2024-2025 noise (< 180 bps) out while
-//     retaining > 180 bps 2022-2023 dislocations.
+//     same-sign min(|close_dev|, |vwap_dev|) (0 when signs differ).
 func TestStableEURC2024To2026Quiet(t *testing.T) {
 	f := func(v float64) *float64 { return &v }
 	in := stableDepegInputs{
 		Numeraire: "EUR",
 		Today:     "2026-10-21",
-		ECB: map[string]float64{
-			"2023-03-13": 1.0706, // SVB aftermath: 1.098 / 1.0706 = +255.93 bps (>= 180 bps)
-			"2024-01-02": 1.0956, // 1.11 / 1.0956 = +131.43 bps ($0.01 rounding + fix-timing gap)
-			"2024-08-08": 1.0930, // 1.11 / 1.0930 = +155.54 bps
-			"2024-12-18": 1.0445, // 1.03 / 1.0445 = -138.82 bps
-			"2025-04-22": 1.1476, // 1.13 / 1.1476 = -153.36 bps
-			"2025-08-01": 1.1404, // 1.16 / 1.1404 = +171.87 bps (measured 2024-2025 max)
-			"2025-08-22": 1.1608, // 1.18 / 1.1608 = +165.40 bps
-			"2026-06-05": 1.1640, // 1.1510 / 1.1640 = -111.68 bps on DefiLlama ÷ ECB, overridden by Kraken
+		Candles: []stablePegDaily{
+			// −370 bps at 2.6M volume -> depeg day.
+			{Day: "2023-03-11", Source: stablePegSourceBitstamp, Close: f(0.9630), Low: f(0.9000), High: f(1.0000), Volume: f(2_600_000), Samples: 1},
+			// −25 bps at 500k volume -> classified close, not a depeg day (even if DefiLlama ÷ ECB had +256 bps).
+			{Day: "2023-03-13", Source: stablePegSourceBitstamp, Close: f(0.9975), Low: f(0.9950), High: f(0.9999), Volume: f(500_000), Samples: 1},
+			// −100 bps at 175k volume -> no value (below 200k floor).
+			{Day: "2024-02-19", Source: stablePegSourceBitstamp, Close: f(0.9900), Low: f(0.9805), High: f(1.0181), Volume: f(175_000), Samples: 1},
+			// −136 bps at 54k volume -> no value (below 200k floor).
+			{Day: "2024-12-11", Source: stablePegSourceBitstamp, Close: f(0.9864), Low: f(0.9864), High: f(1.0010), Volume: f(54_000), Samples: 1},
 		},
 		Prices: []stablePriceDaily{
+			// DefiLlama ÷ ECB rows are ignored for EURC.
 			{Day: "2023-03-13", GeckoID: "euro-coin", PriceUSD: 1.0980, Source: stablePriceSourceLlama},
-			{Day: "2024-01-02", GeckoID: "euro-coin", PriceUSD: 1.1100, Source: stablePriceSourceLlama},
-			{Day: "2024-08-08", GeckoID: "euro-coin", PriceUSD: 1.1100, Source: stablePriceSourceLlama},
-			{Day: "2024-12-18", GeckoID: "euro-coin", PriceUSD: 1.0300, Source: stablePriceSourceLlama},
-			{Day: "2025-04-22", GeckoID: "euro-coin", PriceUSD: 1.1300, Source: stablePriceSourceLlama},
 			{Day: "2025-08-01", GeckoID: "euro-coin", PriceUSD: 1.1600, Source: stablePriceSourceLlama},
-			{Day: "2025-08-22", GeckoID: "euro-coin", PriceUSD: 1.1800, Source: stablePriceSourceLlama},
-			{Day: "2026-06-05", GeckoID: "euro-coin", PriceUSD: 1.1510, Source: stablePriceSourceLlama},
+		},
+		ECB: map[string]float64{
+			"2023-03-13": 1.0706,
+			"2025-08-01": 1.1404,
 		},
 		Kraken: []stablePegDaily{
 			// Normal quiet day (+2 bps close, +1 bps VWAP -> +1 bps).
@@ -520,7 +516,7 @@ func TestStableEURC2024To2026Quiet(t *testing.T) {
 			{Day: "2026-02-03", Source: stablePegSourceKraken, Close: f(1.0101), VWAP: f(1.0008), Low: f(0.9996), High: f(1.0101), Samples: 1},
 			// Opposite signs: close +40 bps, VWAP -40 bps -> 0 bps (not a depeg day).
 			{Day: "2026-04-10", Source: stablePegSourceKraken, Close: f(1.0040), VWAP: f(0.9960), Low: f(0.9950), High: f(1.0045), Samples: 1},
-			// Kraken overrides DefiLlama ÷ ECB on the same day.
+			// Kraken day on 2026-06-05.
 			{Day: "2026-06-05", Source: stablePegSourceKraken, Close: f(1.0001), VWAP: f(1.0001), Low: f(0.9998), High: f(1.0003), Samples: 1},
 		},
 	}
@@ -534,6 +530,12 @@ func TestStableEURC2024To2026Quiet(t *testing.T) {
 	if len(days2024To2026) != 0 {
 		t.Fatalf("EURC 2024-2026 depeg days = %+v, want 0 (quiet)", days2024To2026)
 	}
+	// Low-volume Bitstamp days (54k and 175k) and DefiLlama days have no value at all.
+	for _, c := range h.Closes {
+		if c.Day == "2024-02-19" || c.Day == "2024-12-11" || c.Day == "2025-08-01" {
+			t.Errorf("unclassified day %s present in Closes: %+v", c.Day, c)
+		}
+	}
 	// Pin Kraken-period count at >= 100 bps as 0.
 	krakenGE100 := 0
 	for _, c := range h.Closes {
@@ -544,11 +546,12 @@ func TestStableEURC2024To2026Quiet(t *testing.T) {
 	if krakenGE100 != 0 {
 		t.Errorf("Kraken days at >= 100 bps = %d, want 0", krakenGE100)
 	}
-	if len(h.Days) != 1 || h.Days[0].Day != "2023-03-13" || h.Days[0].Source != stablePriceSourceLlama || h.Days[0].ThresholdBps != stableDepegEURLlamaECBBps {
-		t.Errorf("EURC all depeg days = %+v, want only 2023-03-13 at 180 bps", h.Days)
+	if len(h.Days) != 1 || h.Days[0].Day != "2023-03-11" || h.Days[0].Source != stablePegSourceBitstamp ||
+		h.Days[0].SourceLabel != "Bitstamp close (≥ 200k vol)" || h.Days[0].ThresholdBps != 30 || math.Abs(h.Days[0].DevBps+370) > 1e-6 {
+		t.Errorf("EURC all depeg days = %+v, want only 2023-03-11 (−370 bps) on Bitstamp close (≥ 200k vol)", h.Days)
 	}
-	if h.LastGE100 == nil || h.LastGE100.Day != "2023-03-13" || h.LastGE100.ThresholdBps != stableDepegEURLlamaECBBps || h.LastGE100.SourceLabel != "DefiLlama ÷ ECB" {
-		t.Errorf("EURC last_ge_100 = %+v, want 2023-03-13 at >=180 bps (DefiLlama ÷ ECB)", h.LastGE100)
+	if h.LastGE100 == nil || h.LastGE100.Day != "2023-03-11" || h.LastGE100.ThresholdBps != 30 || h.LastGE100.SourceLabel != "Bitstamp close (≥ 200k vol)" {
+		t.Errorf("EURC last deviation = %+v, want 2023-03-11 at >=30 bps (Bitstamp close (≥ 200k vol))", h.LastGE100)
 	}
 	for _, c := range h.Closes {
 		if c.Day == "2026-06-05" && (c.Source != stablePegSourceKraken || c.DevBps != 1 || c.ThresholdBps != 30) {
@@ -559,7 +562,18 @@ func TestStableEURC2024To2026Quiet(t *testing.T) {
 		}
 	}
 
-	// A close at +35 bps with a VWAP at +35 bps IS a depeg day at 30 bps, and
+	// −40 bps at 250k volume on Bitstamp -> depeg day.
+	withBitstamp40 := in
+	withBitstamp40.Candles = append(append([]stablePegDaily{}, in.Candles...), stablePegDaily{
+		Day: "2023-05-10", Source: stablePegSourceBitstamp, Close: f(0.9960), Low: f(0.9950), High: f(1.0000), Volume: f(250_000), Samples: 1,
+	})
+	hb := stableClassifyDepeg(withBitstamp40)
+	if len(hb.Days) != 2 || hb.Days[0].Day != "2023-05-10" || hb.Days[0].Source != stablePegSourceBitstamp ||
+		hb.Days[0].SourceLabel != "Bitstamp close (≥ 200k vol)" || math.Abs(hb.Days[0].DevBps+40) > 1e-6 {
+		t.Fatalf("with −40 bps at 250k Bitstamp candle: days = %+v, want 2023-05-10 (−40 bps) and 2023-03-11 (−370 bps)", hb.Days)
+	}
+
+	// A close at +35 bps with a VWAP at +35 bps on Kraken IS a depeg day at 30 bps, and
 	// becomes the more recent last deviation ("last >=30 bps (Kraken close & VWAP)").
 	withMove := in
 	withMove.Kraken = append(append([]stablePegDaily{}, in.Kraken...), stablePegDaily{
@@ -567,7 +581,7 @@ func TestStableEURC2024To2026Quiet(t *testing.T) {
 	})
 	hm := stableClassifyDepeg(withMove)
 	if len(hm.Days) != 2 || hm.Days[0].Day != "2026-07-15" || hm.Days[0].Source != stablePegSourceKraken || hm.Days[0].ThresholdBps != 30 {
-		t.Fatalf("with +35/+35 Kraken move: days = %+v, want 2026-07-15 (30 bps) and 2023-03-13 (180 bps)", hm.Days)
+		t.Fatalf("with +35/+35 Kraken move: days = %+v, want 2026-07-15 (30 bps) and 2023-03-11 (30 bps)", hm.Days)
 	}
 	d0 := hm.Days[0]
 	if math.Abs(d0.CloseDevBps-35) > 1e-6 || d0.VWAPDevBps == nil || math.Abs(*d0.VWAPDevBps-35) > 1e-6 || math.Abs(d0.DevBps-35) > 1e-6 {

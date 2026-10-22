@@ -43,6 +43,7 @@ type stablePegDaily struct {
 	Source                    string
 	Open, High, Low, Close    *float64
 	VWAP                      *float64
+	Volume                    *float64
 	MinDevBps, MaxDevBps      *float64
 	MinutesGE30, MinutesGE100 *int
 	Samples                   int
@@ -226,15 +227,15 @@ func (s *riskStore) upsertStablePegDaily(ctx context.Context, rows []stablePegDa
 	}
 	defer tx.Rollback()
 	stmt, err := tx.PrepareContext(ctx, `INSERT OR REPLACE INTO stable_peg_daily
-(day, asset, source, open, high, low, close, vwap, min_dev_bps, max_dev_bps, minutes_ge_30, minutes_ge_100, samples, updated_at)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+(day, asset, source, open, high, low, close, vwap, volume, min_dev_bps, max_dev_bps, minutes_ge_30, minutes_ge_100, samples, updated_at)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
 	for _, r := range rows {
 		if _, err := stmt.ExecContext(ctx, r.Day, r.Asset, r.Source, nullFloat(r.Open), nullFloat(r.High), nullFloat(r.Low), nullFloat(r.Close),
-			nullFloat(r.VWAP), nullFloat(r.MinDevBps), nullFloat(r.MaxDevBps), nullInt(r.MinutesGE30), nullInt(r.MinutesGE100), r.Samples, stableTS(r.UpdatedAt)); err != nil {
+			nullFloat(r.VWAP), nullFloat(r.Volume), nullFloat(r.MinDevBps), nullFloat(r.MaxDevBps), nullInt(r.MinutesGE30), nullInt(r.MinutesGE100), r.Samples, stableTS(r.UpdatedAt)); err != nil {
 			return err
 		}
 	}
@@ -248,7 +249,7 @@ func (s *riskStore) stablePegDailySeries(ctx context.Context, asset, source, fro
 		return nil, err
 	}
 	rs, err := s.db.QueryContext(ctx, `
-SELECT day, asset, source, open, high, low, close, vwap, min_dev_bps, max_dev_bps, minutes_ge_30, minutes_ge_100, samples, updated_at
+SELECT day, asset, source, open, high, low, close, vwap, volume, min_dev_bps, max_dev_bps, minutes_ge_30, minutes_ge_100, samples, updated_at
 FROM stable_peg_daily WHERE asset = ? AND source = ? AND day >= ? ORDER BY day`, asset, source, fromDay)
 	if err != nil {
 		return nil, err
@@ -257,13 +258,13 @@ FROM stable_peg_daily WHERE asset = ? AND source = ? AND day >= ? ORDER BY day`,
 	out := []stablePegDaily{}
 	for rs.Next() {
 		var r stablePegDaily
-		var o, h, l, c, vw, mn, mx sql.NullFloat64
+		var o, h, l, c, vw, vol, mn, mx sql.NullFloat64
 		var g30, g100 sql.NullInt64
 		var updated string
-		if err := rs.Scan(&r.Day, &r.Asset, &r.Source, &o, &h, &l, &c, &vw, &mn, &mx, &g30, &g100, &r.Samples, &updated); err != nil {
+		if err := rs.Scan(&r.Day, &r.Asset, &r.Source, &o, &h, &l, &c, &vw, &vol, &mn, &mx, &g30, &g100, &r.Samples, &updated); err != nil {
 			return nil, err
 		}
-		r.Open, r.High, r.Low, r.Close, r.VWAP, r.MinDevBps, r.MaxDevBps = ptrFromNull(o), ptrFromNull(h), ptrFromNull(l), ptrFromNull(c), ptrFromNull(vw), ptrFromNull(mn), ptrFromNull(mx)
+		r.Open, r.High, r.Low, r.Close, r.VWAP, r.Volume, r.MinDevBps, r.MaxDevBps = ptrFromNull(o), ptrFromNull(h), ptrFromNull(l), ptrFromNull(c), ptrFromNull(vw), ptrFromNull(vol), ptrFromNull(mn), ptrFromNull(mx)
 		if g30.Valid {
 			v := int(g30.Int64)
 			r.MinutesGE30 = &v

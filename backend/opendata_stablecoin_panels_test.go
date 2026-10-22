@@ -186,10 +186,10 @@ func TestStablecoinPegPanels(t *testing.T) {
 	}
 	for _, c := range eurc.Assets[0].DailyCloses {
 		switch {
-		case c.Source == stablePriceSourceLlama && c.ThresholdBps != stableDepegEURLlamaECBBps:
-			t.Errorf("eurc defillama ÷ ecb close %+v, want the 180 bps resolution floor", c)
-		case c.Source == stablePegSourceKraken && c.ThresholdBps != stableDepegThresholdBps:
-			t.Errorf("eurc kraken close %+v, want the 30 bps threshold", c)
+		case c.Source == stablePriceSourceLlama:
+			t.Errorf("eurc defillama close %+v, want no DefiLlama ÷ ECB closes for EURC", c)
+		case (c.Source == stablePegSourceKraken || c.Source == stablePegSourceBitstamp) && c.ThresholdBps != stableDepegThresholdBps:
+			t.Errorf("eurc close %+v, want the 30 bps threshold", c)
 		}
 	}
 	if resp.ECB != nil {
