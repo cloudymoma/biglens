@@ -123,20 +123,26 @@ func (s *stablecoinService) flowInput(ctx context.Context, asset string, now tim
 		}
 		return out
 	}
-	if p := points("issuer"); stableFlowCovers(p, stableS4IssuerMinDays) {
-		return stableFlowInput{Source: "issuer", Points: p}
+	iss := points("issuer")
+	if stableFlowCovers(iss, stableS4IssuerMinDays, now) {
+		return stableFlowInput{Source: "issuer", Points: iss, Now: now}
 	}
-	return stableFlowInput{Source: "aggregator", Points: points("aggregator")}
+	agg := points("aggregator")
+	if len(agg) < stableS4MedianPoints+1 && len(iss) >= stableS4MedianPoints+1 {
+		return stableFlowInput{Source: "issuer", Points: iss, Now: now}
+	}
+	return stableFlowInput{Source: "aggregator", Points: agg, Now: now}
 }
 
 // stableFlowCovers reports whether a series has each of the n days ending on
-// its latest day.
-func stableFlowCovers(points []stableFlowPoint, n int) bool {
+// its latest day, and its latest day is within stableS4MaxStaleDays UTC days
+// of now.
+func stableFlowCovers(points []stableFlowPoint, n int, now time.Time) bool {
 	if len(points) < n {
 		return false
 	}
 	last, err := time.Parse(time.DateOnly, points[len(points)-1].Day)
-	if err != nil {
+	if err != nil || stableFlowDayStale(last, now) {
 		return false
 	}
 	have := make(map[string]bool, len(points))

@@ -71,6 +71,9 @@ const (
 	// stableS4IssuerMinDays: the issuer's daily series replaces DefiLlama's
 	// once it covers a 7d change on 3-point medians (10 consecutive days).
 	stableS4IssuerMinDays = 10
+	// stableS4MaxStaleDays: the newest supply day in S4 must be within 2 UTC
+	// days of now, else the series is rejected as stale.
+	stableS4MaxStaleDays = 2
 	// S5: 2026-10-19 coverage 1.0302 (normal).
 	stableS5WatchCoverage    = 1.010
 	stableS5CriticalCoverage = 1.000
@@ -437,6 +440,17 @@ type stableFlowPoint struct {
 type stableFlowInput struct {
 	Source string // issuer | aggregator
 	Points []stableFlowPoint
+	Now    time.Time
+}
+
+// stableFlowDayStale reports whether a supply day (00:00 UTC) is more than
+// stableS4MaxStaleDays UTC calendar days older than now.
+func stableFlowDayStale(day, now time.Time) bool {
+	if now.IsZero() {
+		return false
+	}
+	nowDay := now.UTC().Truncate(24 * time.Hour)
+	return day.Before(nowDay.AddDate(0, 0, -stableS4MaxStaleDays))
 }
 
 // stableS4Raw: supply flows on the rolling median of the last 3 daily
@@ -473,6 +487,9 @@ func stableS4Raw(in stableFlowInput) stableRaw {
 	c24, c7 := change(1), change(7)
 	r.Inputs["day"], r.Inputs["median_native"] = last.Day, stableRound(cur, 0)
 	r.Inputs["change_24h_pct"], r.Inputs["change_7d_pct"] = stableRoundPtr(c24, 3), stableRoundPtr(c7, 3)
+	if stableFlowDayStale(day, in.Now) {
+		return stableUnknownRaw(r, "supply data stale")
+	}
 	if c24 == nil && c7 == nil {
 		return stableUnknownRaw(r, stableReasonWarmingUp)
 	}

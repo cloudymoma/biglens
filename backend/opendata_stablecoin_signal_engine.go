@@ -189,7 +189,11 @@ func (e *stableSignalEngine) apply(ctx context.Context, in stableSignalInputs) e
 		level(asset, "S8", stableS8Raw(asset, in.Controls, in.ControlEvents, in.ControlsEnabled, now))
 
 		// Level-triggered.
-		level(asset, "S4", stableS4Raw(in.Flows[asset]))
+		flow := in.Flows[asset]
+		if flow.Now.IsZero() {
+			flow.Now = now
+		}
+		level(asset, "S4", stableS4Raw(flow))
 		level(asset, "S5", stableS5Raw(asset, in.Tether))
 		level(asset, "S6", s6)
 		level(asset, "S10", stableS10Raw(supply))

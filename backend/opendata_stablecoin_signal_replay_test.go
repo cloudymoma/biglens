@@ -170,6 +170,7 @@ func replayS4(t *testing.T, name string) ([]string, map[string]int) {
 	level := map[string]int{}
 	for _, r := range rows {
 		in.Points = append(in.Points, stableFlowPoint{Day: r.Day, Value: *r.CirculatingNative})
+		in.Now, _ = time.Parse(time.DateOnly, r.Day)
 		level[r.Day] = stableS4Raw(in).Level
 		days = append(days, r.Day)
 	}

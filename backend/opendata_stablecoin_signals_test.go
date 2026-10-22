@@ -274,6 +274,9 @@ func sigFlow(vals ...float64) stableFlowInput {
 	for i, v := range vals {
 		in.Points = append(in.Points, stableFlowPoint{Day: d.AddDate(0, 0, i).Format(time.DateOnly), Value: v})
 	}
+	if len(vals) > 0 {
+		in.Now = d.AddDate(0, 0, len(vals)-1)
+	}
 	return in
 }
 
@@ -309,8 +312,43 @@ func TestStableS4Raw(t *testing.T) {
 	}
 	gappy := sigFlow(100, 100, 100, 100, 100, 100)
 	gappy.Points[5].Day = "2024-03-01" // neither d−1 nor d−7 has a median
+	gappy.Now = time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC)
 	if r := stableS4Raw(gappy); r.Level != stableLevelUnknown {
 		t.Errorf("S4 with no median at d−1 or d−7 = %d, want unknown", r.Level)
+	}
+
+	// M1: Circle stopping on 2026-09-11, evaluated on 2026-10-21, must be
+	// rejected by stableFlowCovers and return unknown ("supply data stale")
+	// from stableS4Raw.
+	evalNow := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
+	var circleStopped []stableFlowPoint
+	for i := 0; i < 10; i++ {
+		d := time.Date(2026, 9, 2, 0, 0, 0, 0, time.UTC).AddDate(0, 0, i).Format(time.DateOnly)
+		circleStopped = append(circleStopped, stableFlowPoint{Day: d, Value: 35e9})
+	}
+	if stableFlowCovers(circleStopped, stableS4IssuerMinDays, evalNow) {
+		t.Error("stableFlowCovers with Circle stopped on 2026-09-11 at 2026-10-21 = true, want false")
+	}
+	if r := stableS4Raw(stableFlowInput{Source: "issuer", Points: circleStopped, Now: evalNow}); r.Level != stableLevelUnknown || r.Reason != "supply data stale" {
+		t.Errorf("S4 with Circle stopped on 2026-09-11 at 2026-10-21 = level %d reason %q, want unknown \"supply data stale\"", r.Level, r.Reason)
+	}
+	// Boundary: newest day 2 UTC days old (2026-10-19 at 2026-10-21) is fresh; 3 UTC days old (2026-10-18) is stale.
+	var fresh2d, stale3d []stableFlowPoint
+	for i := 0; i < 10; i++ {
+		fresh2d = append(fresh2d, stableFlowPoint{Day: time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC).AddDate(0, 0, i).Format(time.DateOnly), Value: 100})
+		stale3d = append(stale3d, stableFlowPoint{Day: time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC).AddDate(0, 0, i).Format(time.DateOnly), Value: 100})
+	}
+	if !stableFlowCovers(fresh2d, stableS4IssuerMinDays, evalNow) {
+		t.Error("stableFlowCovers with newest day 2 UTC days old = false, want true")
+	}
+	if r := stableS4Raw(stableFlowInput{Source: "issuer", Points: fresh2d, Now: evalNow}); r.Level != stableLevelNormal {
+		t.Errorf("S4 with newest day 2 UTC days old = level %d reason %q, want normal", r.Level, r.Reason)
+	}
+	if stableFlowCovers(stale3d, stableS4IssuerMinDays, evalNow) {
+		t.Error("stableFlowCovers with newest day 3 UTC days old = true, want false")
+	}
+	if r := stableS4Raw(stableFlowInput{Source: "issuer", Points: stale3d, Now: evalNow}); r.Level != stableLevelUnknown || r.Reason != "supply data stale" {
+		t.Errorf("S4 with newest day 3 UTC days old = level %d reason %q, want unknown \"supply data stale\"", r.Level, r.Reason)
 	}
 }
 
