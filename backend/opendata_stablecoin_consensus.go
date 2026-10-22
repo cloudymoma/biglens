@@ -318,7 +318,8 @@ func stableAggregate(inputs []stablePegInput) (string, *float64, *float64, []str
 		shareWithin(venues[1], stableVenueCap)
 		return "ok", stableF((groupPrice(venues[0]) + groupPrice(venues[1])) / 2), nil, venues, weights
 	}
-	// ≥ 3 venues: cap the one group above 50% at the others' combined weight.
+	// ≥ 3 venues: cap the one group above 50% at the others' combined weight,
+	// then take the weighted median over the venue prices.
 	capped := make([]float64, len(inputs))
 	sums := map[string]float64{}
 	var total float64
@@ -327,21 +328,26 @@ func stableAggregate(inputs []stablePegInput) (string, *float64, *float64, []str
 		sums[in.venue] += in.weight
 		total += in.weight
 	}
+	cappedSums := map[string]float64{}
 	for v, s := range sums {
+		cappedSums[v] = s
 		if others := total - s; s > others {
+			cappedSums[v] = others
 			for _, i := range groups[v] {
 				capped[i] *= others / s
 			}
 		}
 	}
-	var xs []stableWV
 	var cappedTotal float64
-	for i, in := range inputs {
-		xs = append(xs, stableWV{in.mid, capped[i]})
+	for i := range inputs {
 		cappedTotal += capped[i]
 	}
 	for i := range inputs {
 		weights[i] = capped[i] / cappedTotal
+	}
+	var xs []stableWV
+	for _, v := range venues {
+		xs = append(xs, stableWV{groupPrice(v), cappedSums[v]})
 	}
 	return "ok", stableF(stableWeightedMedian(xs)), nil, venues, weights
 }

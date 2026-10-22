@@ -50,6 +50,16 @@ func TestStableWeightedMedian(t *testing.T) {
 		{"two venues, one with two inputs", []stablePegInput{in("a", 1, 1), in("a", 1.2, 3), in("b", 2, 1)}, "ok", 1.6},
 		// Two inputs from one venue are still one venue.
 		{"single venue", []stablePegInput{in("a", 1, 1), in("a", 1.2, 3)}, "single_venue", 1.2},
+		// ≥ 3 venues, one with two inputs: Kraken's venue price is its own
+		// weighted median (1.0000, weight 150k of 200k), capped to 160k (the
+		// sum of Bitstamp 60k + Coinbase 100k); the 50% threshold lands
+		// exactly between Kraken (1.0000) and Bitstamp (1.0010) -> 1.000500.
+		{"three venues, venue-first weighted median", []stablePegInput{
+			in("kraken", 1.0000, 150_000),
+			in("kraken", 1.0040, 50_000),
+			in("bitstamp", 1.0010, 60_000),
+			in("coinbase", 1.0020, 100_000),
+		}, "ok", 1.000500},
 	}
 	for _, c := range cases {
 		state, consensus, single, venues, _ := stableAggregate(c.inputs)
