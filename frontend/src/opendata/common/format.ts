@@ -40,13 +40,14 @@ export const escapeHtml = (s: string): string =>
 export const downloadCsv = (filename: string, headers: string[], rows: (string | number | null | undefined)[][]): void => {
   const esc = (v: string | number | null | undefined): string => {
     if (v === null || v === undefined) return '';
-    const s = String(v);
-    if (s.includes(',') || s.includes('"') || s.includes('\n')) {
+    if (typeof v === 'number') return Number.isNaN(v) ? '' : String(v);
+    const s = /^[=+\-@\t\r]/.test(v) ? `'${v}` : v;
+    if (s.includes(',') || s.includes('"') || s.includes('\n') || s.includes('\r')) {
       return `"${s.replace(/"/g, '""')}"`;
     }
     return s;
   };
-  const csv = [headers.map(esc).join(','), ...rows.map(r => r.map(esc).join(','))].join('\n');
+  const csv = '\uFEFF' + [headers.map(esc).join(','), ...rows.map(r => r.map(esc).join(','))].join('\n');
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
