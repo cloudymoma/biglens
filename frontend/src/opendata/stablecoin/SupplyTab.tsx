@@ -5,7 +5,7 @@ import { usePolling } from '../common/usePolling';
 import { fetchStableSupply } from './api';
 import { ASSET_COLOR, axisStyle, baseOption, chrome, colorOf, tipHtml } from './charts';
 import type { StableAsset, StableRange } from './deeplink';
-import { fmtDateTime, fmtMoney, fmtNative } from './format';
+import { computeEurMarketStats, fmtDateTime, fmtMoney, fmtNative } from './format';
 import SignalMatrix from './SignalMatrix';
 import type { Theme } from './signals';
 import { cx } from './styles';
@@ -195,8 +195,7 @@ function AssetSupply({ a, matrix, watchlist }: { a: StableSupplyAsset; matrix: S
   const effSource: Source = source ?? (issuerDays >= MIN_ISSUER_DAYS ? 'issuer' : 'aggregator');
   const rowsWithMigration = a.chains.some(r => delta7d(r) !== null);
   const eur = a.asset === 'eurc' && watchlist ? watchlist.rows.filter(r => r.numeraire === 'EUR') : [];
-  const eurTotal = eur.reduce((s, r) => s + (r.circulating_native ?? 0), 0);
-  const eurc = eur.find(r => r.core === 'eurc');
+  const eurStats = computeEurMarketStats(eur);
   return (
     <section className="space-y-4" aria-label={`${a.symbol} supply`}>
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -459,14 +458,14 @@ function AssetSupply({ a, matrix, watchlist }: { a: StableSupplyAsset; matrix: S
       {a.asset === 'eurc' && (
         <Panel
           title="EUR stablecoin market"
-          help="EURC's share among all EUR-pegged coins on DefiLlama, on native € amounts after the §5.1 normalization (every EUR coin is in the watchlist)."
+          help="EURC's share among all EUR-pegged coins on DefiLlama, from USD supply (every EUR coin in the watchlist has a USD figure); native € total is shown only when every coin has a native figure."
         >
           {eur.length === 0 ? (
             <ColdState>Waiting for the DefiLlama watchlist.</ColdState>
           ) : (
             <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
-              <Stat label="EURC share of EUR stablecoins" value={eurc?.circulating_native != null && eurTotal > 0 ? fmtPct((eurc.circulating_native / eurTotal) * 100, 1) : '—'} />
-              <Stat label="EUR stablecoins (native)" value={`€${fmtNative(eurTotal, '').trim()}`} sub={`${eur.length} coins`} />
+              <Stat label="EURC share of EUR stablecoins" value={eurStats.sharePct} sub={eurStats.totalUsd !== '—' ? `${eurStats.totalUsd} total` : undefined} />
+              <Stat label="EUR stablecoins (native)" value={eurStats.nativeTotal} sub={eurStats.nativeSub} />
               <Stat label="Largest EUR coins" value={eur.slice(0, 3).map(r => r.symbol).join(', ')} />
             </div>
           )}

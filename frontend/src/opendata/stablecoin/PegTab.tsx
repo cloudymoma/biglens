@@ -4,7 +4,7 @@ import { fetchStablePeg } from './api';
 import { ASSET_COLOR, axisStyle, baseOption, chrome, colorOf, HEAT_BINS, tipHtml, withGaps } from './charts';
 import type { TipRow } from './charts';
 import type { StableAsset, StableRange } from './deeplink';
-import { fmtBps, fmtDateTime, fmtPrice, fmtTimeHM } from './format';
+import { fmtBps, fmtDateTime, fmtEurcBool, fmtPrice, fmtTimeHM } from './format';
 import SignalChip from './SignalChip';
 import SignalMatrix from './SignalMatrix';
 import type { Theme } from './signals';
@@ -283,8 +283,8 @@ function EurcMode({ a, peg, providers }: { a: StablePegAsset; peg: StablePeg; pr
               <span className="font-mono">{fmtBps(a.dev_bps)}</span>
             </KV>
             <KV k="Direct EUR venues">{a.direct_eur_venues ?? '—'}</KV>
-            <KV k="Second direct EUR venue">{a.second_direct_eur_venue ? 'yes' : 'no: S1 is capped at warning'}</KV>
-            <KV k="Partly dependent inputs">{a.partially_dependent ? 'yes: derived inputs share the FX venues' : 'no'}</KV>
+            <KV k="Second direct EUR venue">{fmtEurcBool(a.second_direct_eur_venue, 'S1 is capped at warning')}</KV>
+            <KV k="Partly dependent inputs">{fmtEurcBool(a.partially_dependent, undefined, 'derived inputs share the FX venues')}</KV>
           </div>
           <div>
             <KV k="EUR/USD consensus">

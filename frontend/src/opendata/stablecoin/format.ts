@@ -84,3 +84,35 @@ export const fmtShortAddr = (addr: string | null | undefined): string => {
 // while the stored samples span less than 24 h (cold start, §7.4).
 export const fmtRangeWindow = (from: string | null | undefined, partial: boolean): string =>
   partial && from ? `since ${fmtTimeHM(from)}` : '24h';
+
+// fmtEurcBool renders an EURC boolean flag: absent values (null/undefined)
+// render as "—", never "no".
+export const fmtEurcBool = (v: boolean | null | undefined, falseDetail?: string, trueDetail?: string): string => {
+  if (v === null || v === undefined) return DASH;
+  if (v) return trueDetail ? `yes: ${trueDetail}` : 'yes';
+  return falseDetail ? `no: ${falseDetail}` : 'no';
+};
+
+export interface EurMarketStats {
+  sharePct: string;
+  totalUsd: string;
+  nativeTotal: string;
+  nativeSub: string;
+}
+
+export const computeEurMarketStats = (
+  rows: { core?: string; numeraire: string; circulating_native: number | null; circulating_usd: number | null }[],
+): EurMarketStats => {
+  const eur = rows.filter(r => r.numeraire === 'EUR');
+  const eurUsdTotal = eur.reduce((s, r) => s + (r.circulating_usd ?? 0), 0);
+  const eurWithNative = eur.filter(r => r.circulating_native != null);
+  const allHaveNative = eur.length > 0 && eurWithNative.length === eur.length;
+  const eurNativeTotal = allHaveNative ? eur.reduce((s, r) => s + (r.circulating_native ?? 0), 0) : null;
+  const eurc = eur.find(r => r.core === 'eurc');
+  return {
+    sharePct: eurc?.circulating_usd != null && eurUsdTotal > 0 ? `${((eurc.circulating_usd / eurUsdTotal) * 100).toFixed(1)}%` : DASH,
+    totalUsd: eurUsdTotal > 0 ? fmtMoney(eurUsdTotal, 'USD') : DASH,
+    nativeTotal: eurNativeTotal !== null ? `€${fmtNative(eurNativeTotal, '').trim()}` : DASH,
+    nativeSub: allHaveNative ? `${eur.length} coins` : `${eurWithNative.length} of ${eur.length} coins have native supply`,
+  };
+};

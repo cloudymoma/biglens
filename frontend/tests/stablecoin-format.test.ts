@@ -13,6 +13,8 @@ import {
   fmtPrice,
   fmtShortAddr,
   fmtTimeHM,
+  fmtEurcBool,
+  computeEurMarketStats,
 } from '../src/opendata/stablecoin/format.ts';
 
 test('missing values render as a dash, never 0', () => {
@@ -85,4 +87,40 @@ test('PegTab Depeg days table shows close deviation, VWAP deviation, and classif
     pegSrc.includes('vwap_dev_bps') && pegSrc.includes('VWAP deviation') && pegSrc.includes('source_label'),
     'PegTab must render VWAP deviation and classified deviation in Depeg days and source_label/threshold_bps in the last deviation headline',
   );
+});
+
+test('absent EURC booleans render as a dash, never no (M5)', () => {
+  assert.equal(fmtEurcBool(undefined, 'S1 is capped at warning'), '—');
+  assert.equal(fmtEurcBool(null, 'S1 is capped at warning'), '—');
+  assert.equal(fmtEurcBool(false, 'S1 is capped at warning'), 'no: S1 is capped at warning');
+  assert.equal(fmtEurcBool(true, 'S1 is capped at warning'), 'yes');
+  assert.equal(fmtEurcBool(undefined, undefined, 'derived inputs share the FX venues'), '—');
+  assert.equal(fmtEurcBool(false, undefined, 'derived inputs share the FX venues'), 'no');
+  assert.equal(fmtEurcBool(true, undefined, 'derived inputs share the FX venues'), 'yes: derived inputs share the FX venues');
+  const dir = dirname(fileURLToPath(import.meta.url));
+  const pegSrc = readFileSync(join(dir, '../src/opendata/stablecoin/PegTab.tsx'), 'utf8');
+  assert.ok(pegSrc.includes('fmtEurcBool('), 'PegTab EurcMode must use fmtEurcBool');
+});
+
+test('EUR market share and total come from USD supply, and native total shows a dash when any EUR coin lacks native supply (M6)', () => {
+  const partial = computeEurMarketStats([
+    { core: 'eurc', numeraire: 'EUR', circulating_native: 400_000_000, circulating_usd: 440_000_000 },
+    { numeraire: 'EUR', circulating_native: null, circulating_usd: 110_000_000 },
+  ]);
+  assert.equal(partial.sharePct, '80.0%');
+  assert.equal(partial.totalUsd, '$550.00M');
+  assert.equal(partial.nativeTotal, '—');
+  assert.equal(partial.nativeSub, '1 of 2 coins have native supply');
+
+  const complete = computeEurMarketStats([
+    { core: 'eurc', numeraire: 'EUR', circulating_native: 400_000_000, circulating_usd: 440_000_000 },
+    { numeraire: 'EUR', circulating_native: 100_000_000, circulating_usd: 110_000_000 },
+  ]);
+  assert.equal(complete.sharePct, '80.0%');
+  assert.equal(complete.nativeTotal, '€500.00M');
+  assert.equal(complete.nativeSub, '2 coins');
+
+  const dir = dirname(fileURLToPath(import.meta.url));
+  const supplySrc = readFileSync(join(dir, '../src/opendata/stablecoin/SupplyTab.tsx'), 'utf8');
+  assert.ok(supplySrc.includes('computeEurMarketStats('), 'SupplyTab must use computeEurMarketStats');
 });
