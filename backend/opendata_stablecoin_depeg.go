@@ -602,12 +602,12 @@ type stableDepegInputs struct {
 }
 
 type stableDepegHistory struct {
-	Days        []StableDepegDay   // newest first
-	Closes      []StableDepegClose // every day with a close, oldest first
-	Total       int
-	Markers     []StableDepegMarker // newest first
-	LastGE100   *StableLastDeviation
-	HistoryFrom string // the first stored day with a close or a candle; "" without history
+	Days          []StableDepegDay   // newest first
+	Closes        []StableDepegClose // every day with a close, oldest first
+	Total         int
+	Markers       []StableDepegMarker // newest first
+	LastDeviation *StableLastDeviation
+	HistoryFrom   string // the first stored day with a close or a candle; "" without history
 }
 
 // stableClassifyDepeg applies the §7.2 rules to one asset's stored history.
@@ -621,6 +621,9 @@ func stableClassifyDepeg(in stableDepegInputs) stableDepegHistory {
 		llamaDev    *float64
 	}
 	days := map[string]*dayIn{}
+	finished := func(d string) bool {
+		return in.Today == "" || d < in.Today
+	}
 	at := func(d string) *dayIn {
 		if days[d] == nil {
 			days[d] = &dayIn{}
@@ -628,12 +631,15 @@ func stableClassifyDepeg(in stableDepegInputs) stableDepegHistory {
 		return days[d]
 	}
 	for i := range in.Rollup {
-		if r := &in.Rollup[i]; r.Close != nil {
+		if r := &in.Rollup[i]; r.Close != nil && finished(r.Day) {
 			at(r.Day).roll = r
 		}
 	}
 	for i := range in.Candles {
 		c := &in.Candles[i]
+		if !finished(c.Day) {
+			continue
+		}
 		if in.Numeraire == "EUR" {
 			if c.Day < stableKrakenEURCStartDay && c.Close != nil && c.Volume != nil && *c.Volume >= stableBitstampEURCMinVolume {
 				at(c.Day).eurBitstamp = c
@@ -643,12 +649,15 @@ func stableClassifyDepeg(in stableDepegInputs) stableDepegHistory {
 		}
 	}
 	for i := range in.Kraken {
-		if c := &in.Kraken[i]; c.Close != nil {
+		if c := &in.Kraken[i]; c.Close != nil && finished(c.Day) {
 			at(c.Day).kraken = c
 		}
 	}
 	if in.Numeraire != "EUR" {
 		for _, p := range in.Prices {
+			if !finished(p.Day) {
+				continue
+			}
 			dev, price := stableF((p.PriceUSD-1)*1e4), p.PriceUSD
 			d := at(p.Day)
 			d.llama, d.llamaDev = &price, dev
@@ -665,8 +674,8 @@ func stableClassifyDepeg(in stableDepegInputs) stableDepegHistory {
 		out.HistoryFrom = keys[len(keys)-1]
 	}
 	last := func(day, source, label string, thr, dev float64) {
-		if out.LastGE100 == nil {
-			out.LastGE100 = &StableLastDeviation{Day: day, Source: source, SourceLabel: label, ThresholdBps: thr, DevBps: dev, DaysSince: stableDaysBetween(day, in.Today)}
+		if out.LastDeviation == nil {
+			out.LastDeviation = &StableLastDeviation{Day: day, Source: source, SourceLabel: label, ThresholdBps: thr, DevBps: dev, DaysSince: stableDaysBetween(day, in.Today)}
 		}
 	}
 	for _, k := range keys {

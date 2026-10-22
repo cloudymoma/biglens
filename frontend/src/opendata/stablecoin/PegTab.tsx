@@ -445,7 +445,7 @@ function DepegHistory({ peg }: { peg: StablePeg }) {
       >
         <div className="mb-3 grid grid-cols-1 gap-2 md:grid-cols-3">
           {peg.assets.map(a => {
-            const l = a.last_ge_100;
+            const l = a.last_deviation;
             const srcLabel = l?.source_label || l?.source || '';
             const label = l
               ? `${SYM[a.asset]}: last ≥${l.threshold_bps} bps (${srcLabel})`

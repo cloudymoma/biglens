@@ -86,7 +86,7 @@ func TestStablecoinPegEndpoint(t *testing.T) {
 		t.Errorf("usdc 2023-03-11 marker = %+v", m)
 	}
 	since := int(clock.Sub(time.Date(2023, 3, 13, 0, 0, 0, 0, time.UTC)).Hours() / 24)
-	if l := usdc.LastGE100; l == nil || l.Day != "2023-03-13" || l.Source != stablePegSourceBitstamp || math.Abs(l.DevBps+500) > 1e-9 || l.DaysSince != since {
+	if l := usdc.LastDeviation; l == nil || l.Day != "2023-03-13" || l.Source != stablePegSourceBitstamp || math.Abs(l.DevBps+500) > 1e-9 || l.DaysSince != since {
 		t.Errorf("usdc last ≥ 100 bps = %+v, want the 2023-03-13 low, %d days ago", l, since)
 	}
 	if usdc.HistoryFrom != "2023-03-01" || resp.LowMarkerBps != 100 {
@@ -119,8 +119,8 @@ func TestStablecoinPegEndpoint(t *testing.T) {
 	if eurc.Numeraire != "EUR" || eurc.SecondDirectEURVenue == nil || eurc.PartiallyDependent == nil {
 		t.Errorf("eurc = %+v", eurc.StablePeg)
 	}
-	if len(eurc.LowMarkers) != 0 || eurc.LastGE100 != nil || len(eurc.DepegDays) != 0 {
-		t.Errorf("eurc history: markers %+v, last ≥ 100 %+v, days %+v", eurc.LowMarkers, eurc.LastGE100, eurc.DepegDays)
+	if len(eurc.LowMarkers) != 0 || eurc.LastDeviation != nil || len(eurc.DepegDays) != 0 {
+		t.Errorf("eurc history: markers %+v, last deviation %+v, days %+v", eurc.LowMarkers, eurc.LastDeviation, eurc.DepegDays)
 	}
 	// USDT: the 2022-05-13 wick (low −110 bps, close −20, no DefiLlama row)
 	// is not a marker; the newest ≥ 100 bps day is DefiLlama's 2023-03-21.
@@ -132,7 +132,7 @@ func TestStablecoinPegEndpoint(t *testing.T) {
 	if got := strings.Join(marks, " "); got != "2022-05-12:bitstamp_close 2022-05-11:bitstamp_close" {
 		t.Errorf("usdt low markers = %s", got)
 	}
-	if l := usdt.LastGE100; usdt.DepegDaysTotal != 15 || l == nil || l.Day != "2023-03-21" || l.Source != stablePriceSourceLlama {
+	if l := usdt.LastDeviation; usdt.DepegDaysTotal != 15 || l == nil || l.Day != "2023-03-21" || l.Source != stablePriceSourceLlama {
 		t.Errorf("usdt: %d depeg days, last ≥ 100 bps %+v", usdt.DepegDaysTotal, l)
 	}
 	// All assets; long ranges use the daily rollup.

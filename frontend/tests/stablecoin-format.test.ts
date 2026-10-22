@@ -84,8 +84,12 @@ test('PegTab Depeg days table shows close deviation, VWAP deviation, and classif
   const dir = dirname(fileURLToPath(import.meta.url));
   const pegSrc = readFileSync(join(dir, '../src/opendata/stablecoin/PegTab.tsx'), 'utf8');
   assert.ok(
-    pegSrc.includes('vwap_dev_bps') && pegSrc.includes('VWAP deviation') && pegSrc.includes('source_label'),
-    'PegTab must render VWAP deviation and classified deviation in Depeg days and source_label/threshold_bps in the last deviation headline',
+    pegSrc.includes('vwap_dev_bps') &&
+      pegSrc.includes('VWAP deviation') &&
+      pegSrc.includes('source_label') &&
+      pegSrc.includes('a.last_deviation') &&
+      !pegSrc.includes('last_ge_100'),
+    'PegTab must render VWAP deviation and classified deviation in Depeg days and use last_deviation with source_label/threshold_bps in the headline',
   );
 });
 

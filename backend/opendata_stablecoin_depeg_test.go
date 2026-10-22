@@ -431,24 +431,30 @@ func TestStableClassifyDepeg(t *testing.T) {
 		math.Abs(m.LowDevBps-(0.80526-1)*1e4) > 1e-9 {
 		t.Errorf("marker 2024-01-14 = %+v", m)
 	}
-	if l := h.LastGE100; l == nil || l.Day != "2024-01-16" || l.Source != stablePegSourceBitstamp || l.DaysSince != 4 || math.Abs(l.DevBps+100) > 1e-6 {
-		t.Errorf("last ≥ 100 bps = %+v, want the 2024-01-16 marker, 4 days ago", h.LastGE100)
+	if l := h.LastDeviation; l == nil || l.Day != "2024-01-16" || l.Source != stablePegSourceBitstamp || l.DaysSince != 4 || math.Abs(l.DevBps+100) > 1e-6 {
+		t.Errorf("last ≥ 100 bps = %+v, want the 2024-01-16 marker, 4 days ago", h.LastDeviation)
 	}
 	if h.HistoryFrom != "2024-01-10" {
 		t.Errorf("history from %q", h.HistoryFrom)
+	}
+	// Today's unfinished UTC day (Day == Today) is excluded from classification.
+	withToday := usd
+	withToday.Rollup = append(append([]stablePegDaily{}, usd.Rollup...), roll("2024-01-20", 0.9900, -150, 30))
+	if ht := stableClassifyDepeg(withToday); len(ht.Days) != len(want) || ht.Days[0].Day == "2024-01-20" {
+		t.Errorf("unfinished today classified in Days: %+v", ht.Days)
 	}
 	// Without the candles, the newest ≥ 100 bps deviation is the consensus
 	// on 2024-01-12: 20 minutes at ≥ 100 bps (S1's 15-minute window).
 	noCandles := usd
 	noCandles.Candles = nil
-	if l := stableClassifyDepeg(noCandles).LastGE100; l == nil || l.Day != "2024-01-12" || l.Source != "consensus_intraday" || l.DevBps != -120 || l.DaysSince != 8 {
+	if l := stableClassifyDepeg(noCandles).LastDeviation; l == nil || l.Day != "2024-01-12" || l.Source != "consensus_intraday" || l.DevBps != -120 || l.DaysSince != 8 {
 		t.Errorf("last ≥ 100 bps without candles = %+v", l)
 	}
 	// 10 minutes is not sustained: nothing at ≥ 100 bps in the history.
 	short := noCandles
 	short.Rollup = []stablePegDaily{roll("2024-01-12", 0.9990, -120, 10)}
-	if h := stableClassifyDepeg(short); h.LastGE100 != nil || h.HistoryFrom != "2024-01-10" {
-		t.Errorf("10 minutes at ≥ 100 bps: last %+v, history from %q", h.LastGE100, h.HistoryFrom)
+	if h := stableClassifyDepeg(short); h.LastDeviation != nil || h.HistoryFrom != "2024-01-10" {
+		t.Errorf("10 minutes at ≥ 100 bps: last %+v, history from %q", h.LastDeviation, h.HistoryFrom)
 	}
 
 	// EURC: euro terms. The consensus close counts at 30 bps; Kraken EURCEUR
@@ -477,12 +483,12 @@ func TestStableClassifyDepeg(t *testing.T) {
 		h.Days[1].ThresholdBps != 30 || math.Abs(h.Days[1].CloseDevBps+370) > 1e-6 || math.Abs(h.Days[1].Close-0.9630) > 1e-12 {
 		t.Fatalf("eurc days = %+v", h.Days)
 	}
-	if len(h.Markers) != 0 || h.LastGE100 == nil || h.LastGE100.Day != "2025-09-20" || h.LastGE100.ThresholdBps != 30 || h.LastGE100.DaysSince != 5 || h.HistoryFrom != "2023-03-11" {
-		t.Errorf("eurc markers %+v, last %+v, history from %q", h.Markers, h.LastGE100, h.HistoryFrom)
+	if len(h.Markers) != 0 || h.LastDeviation == nil || h.LastDeviation.Day != "2025-09-20" || h.LastDeviation.ThresholdBps != 30 || h.LastDeviation.DaysSince != 5 || h.HistoryFrom != "2023-03-11" {
+		t.Errorf("eurc markers %+v, last %+v, history from %q", h.Markers, h.LastDeviation, h.HistoryFrom)
 	}
 	// Empty inputs: nothing, never a substitute.
-	if h := stableClassifyDepeg(stableDepegInputs{Numeraire: "USD", Today: "2024-01-20"}); len(h.Days) != 0 || h.Days == nil ||
-		len(h.Markers) != 0 || h.Markers == nil || h.LastGE100 != nil || h.HistoryFrom != "" {
+	if h := stableClassifyDepeg(stableDepegInputs{Numeraire: "EUR", Today: "2024-01-20"}); len(h.Days) != 0 || h.Days == nil ||
+		len(h.Markers) != 0 || h.Markers == nil || h.LastDeviation != nil || h.HistoryFrom != "" {
 		t.Errorf("empty history = %+v", h)
 	}
 }
@@ -566,8 +572,8 @@ func TestStableEURC2024To2026Quiet(t *testing.T) {
 		h.Days[0].SourceLabel != "Bitstamp close (≥ 200k vol)" || h.Days[0].ThresholdBps != 30 || math.Abs(h.Days[0].DevBps+370) > 1e-6 {
 		t.Errorf("EURC all depeg days = %+v, want only 2023-03-11 (−370 bps) on Bitstamp close (≥ 200k vol)", h.Days)
 	}
-	if h.LastGE100 == nil || h.LastGE100.Day != "2023-03-11" || h.LastGE100.ThresholdBps != 30 || h.LastGE100.SourceLabel != "Bitstamp close (≥ 200k vol)" {
-		t.Errorf("EURC last deviation = %+v, want 2023-03-11 at >=30 bps (Bitstamp close (≥ 200k vol))", h.LastGE100)
+	if h.LastDeviation == nil || h.LastDeviation.Day != "2023-03-11" || h.LastDeviation.ThresholdBps != 30 || h.LastDeviation.SourceLabel != "Bitstamp close (≥ 200k vol)" {
+		t.Errorf("EURC last deviation = %+v, want 2023-03-11 at >=30 bps (Bitstamp close (≥ 200k vol))", h.LastDeviation)
 	}
 	for _, c := range h.Closes {
 		if c.Day == "2026-06-05" && (c.Source != stablePegSourceKraken || c.DevBps != 1 || c.ThresholdBps != 30) {
@@ -589,6 +595,18 @@ func TestStableEURC2024To2026Quiet(t *testing.T) {
 		t.Fatalf("with −40 bps at 250k Bitstamp candle: days = %+v, want 2023-05-10 (−40 bps) and 2023-03-11 (−370 bps)", hb.Days)
 	}
 
+	// Kraken 30 bps threshold boundary (L4): close +86 / VWAP +30 -> depeg day;
+	// close +86 / VWAP +29 -> not a depeg day.
+	withBoundary := in
+	withBoundary.Kraken = append(append([]stablePegDaily{}, in.Kraken...),
+		stablePegDaily{Day: "2026-01-25", Source: stablePegSourceKraken, Close: f(1.0086), VWAP: f(1.0030), Low: f(0.9990), High: f(1.0090), Samples: 1},
+		stablePegDaily{Day: "2026-01-26", Source: stablePegSourceKraken, Close: f(1.0086), VWAP: f(1.0029), Low: f(0.9990), High: f(1.0090), Samples: 1},
+	)
+	hBound := stableClassifyDepeg(withBoundary)
+	if len(hBound.Days) != 2 || hBound.Days[0].Day != "2026-01-25" || math.Abs(hBound.Days[0].DevBps-30) > 1e-6 {
+		t.Fatalf("Kraken 30 bps boundary: days = %+v, want 2026-01-25 (+86/+30 -> +30 bps) classified and 2026-01-26 (+86/+29 -> +29 bps) excluded", hBound.Days)
+	}
+
 	// A close at +35 bps with a VWAP at +35 bps on Kraken IS a depeg day at 30 bps, and
 	// becomes the more recent last deviation ("last >=30 bps (Kraken close & VWAP)").
 	withMove := in
@@ -603,7 +621,7 @@ func TestStableEURC2024To2026Quiet(t *testing.T) {
 	if math.Abs(d0.CloseDevBps-35) > 1e-6 || d0.VWAPDevBps == nil || math.Abs(*d0.VWAPDevBps-35) > 1e-6 || math.Abs(d0.DevBps-35) > 1e-6 {
 		t.Errorf("Kraken depeg day fields = %+v, want close_dev=+35, vwap_dev=+35, dev=+35", d0)
 	}
-	if hm.LastGE100 == nil || hm.LastGE100.Day != "2026-07-15" || hm.LastGE100.ThresholdBps != 30 || hm.LastGE100.SourceLabel != "Kraken close & VWAP" {
-		t.Errorf("last deviation with recent Kraken depeg = %+v, want 2026-07-15 at >=30 bps (Kraken close & VWAP)", hm.LastGE100)
+	if hm.LastDeviation == nil || hm.LastDeviation.Day != "2026-07-15" || hm.LastDeviation.ThresholdBps != 30 || hm.LastDeviation.SourceLabel != "Kraken close & VWAP" {
+		t.Errorf("last deviation with recent Kraken depeg = %+v, want 2026-07-15 at >=30 bps (Kraken close & VWAP)", hm.LastDeviation)
 	}
 }

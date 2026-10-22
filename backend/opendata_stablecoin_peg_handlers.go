@@ -64,10 +64,10 @@ type StablePegAssetView struct {
 	DepegDays      []StableDepegDay    `json:"depeg_days"`
 	DepegDaysTotal int                 `json:"depeg_days_total"`
 	LowMarkers     []StableDepegMarker `json:"low_markers"`
-	// LastGE100 is the newest ≥ 100 bps deviation in the stored history;
-	// null when there is none since HistoryFrom.
-	LastGE100   *StableLastDeviation `json:"last_ge_100"`
-	HistoryFrom string               `json:"history_from,omitempty"`
+	// LastDeviation is the newest ≥ 100 bps USD deviation (or ≥ 30 bps EURC
+	// deviation) in the stored history; null when there is none since HistoryFrom.
+	LastDeviation *StableLastDeviation `json:"last_deviation"`
+	HistoryFrom   string               `json:"history_from,omitempty"`
 	Annotations []stableAnnotation   `json:"annotations"`
 	// DailyCloses is the depeg-history chart: every stored day's close by
 	// the same rule, oldest first.
@@ -157,7 +157,7 @@ func (s *stablecoinService) buildPeg(r *http.Request, assets []string, rangeLabe
 			out.ECB = stableLatestECB(fxHistory)
 		}
 		if hist, ok := s.depegHistory(ctx, def, fxHistory, now); ok {
-			v.DepegDays, v.DepegDaysTotal, v.LowMarkers, v.LastGE100, v.HistoryFrom = hist.Days, hist.Total, hist.Markers, hist.LastGE100, hist.HistoryFrom
+			v.DepegDays, v.DepegDaysTotal, v.LowMarkers, v.LastDeviation, v.HistoryFrom = hist.Days, hist.Total, hist.Markers, hist.LastDeviation, hist.HistoryFrom
 			v.DailyCloses = hist.Closes
 		}
 		for _, a := range out.Annotations {

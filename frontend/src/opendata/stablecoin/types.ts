@@ -359,7 +359,7 @@ export interface StablePegAsset {
   depeg_days: StableDepegDay[];
   depeg_days_total: number;
   low_markers: StableDepegMarker[];
-  last_ge_100: StableLastDeviation | null;
+  last_deviation: StableLastDeviation | null;
   history_from?: string;
   annotations: StableAnnotation[];
   daily_closes: StableDepegClose[];

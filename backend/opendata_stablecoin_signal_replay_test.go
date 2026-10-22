@@ -222,16 +222,25 @@ func TestStableReplayS4(t *testing.T) {
 		{"charts_usdt_2024.json", map[string]int{"2024-12-02": 2}},
 	} {
 		days, lvl := replayS4(t, c.file)
-		for d := range c.want {
-			if _, ok := lvl[d]; !ok {
+		for d, want := range c.want {
+			got, ok := lvl[d]
+			if !ok {
 				t.Errorf("%s: no day %s", c.file, d)
+			} else if got != want {
+				t.Errorf("%s %s: pinned S4 level %d, want %d", c.file, d, got, want)
 			}
 		}
+		warmed := false
 		for _, d := range days {
 			got := lvl[d]
 			if got == stableLevelUnknown {
-				continue // the first days have no median to compare
+				if !warmed {
+					continue // the first days have no median to compare
+				}
+				t.Errorf("%s %s: S4 returned unknown after warm-up", c.file, d)
+				continue
 			}
+			warmed = true
 			if want := c.want[d]; got != want {
 				t.Errorf("%s %s: S4 level %d, want %d", c.file, d, got, want)
 			}
