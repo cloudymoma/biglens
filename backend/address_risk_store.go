@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"cloud.google.com/go/civil"
@@ -121,7 +122,11 @@ CREATE TABLE IF NOT EXISTS scam_fake_token_deployers (
   PRIMARY KEY (chain, address)
 );`
 
-type riskStore struct{ db *sql.DB }
+type riskStore struct {
+	db              *sql.DB
+	stableOnce      sync.Once
+	stableSchemaErr error
+}
 
 type listEntry struct{ Address, Label, ListedAt string }
 

@@ -114,7 +114,7 @@ func (h *APIHandler) cachedFetch(key string, ttl time.Duration, fetch func() (an
 	v, err, _ := cryptoFlight.Do(key, func() (any, error) {
 		v, err := fetch()
 		if err != nil {
-			return nil, err
+			return v, err
 		}
 		h.cache.SetWithTTL(key, v, ttl)
 		return v, nil

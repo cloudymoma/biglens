@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log/slog"
 	"math"
 	"os"
 	"path/filepath"
@@ -470,6 +471,8 @@ func (c StablecoinConfig) settings() stableSettings {
 	for k, v := range c.Providers {
 		if _, ok := stableDefaultProviders[k]; ok {
 			providers[k] = v
+		} else {
+			slog.Warn("stablecoin config: unknown provider", "provider", k)
 		}
 	}
 	initialDays := 90

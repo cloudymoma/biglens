@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"math"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -295,5 +298,31 @@ func TestStablePegPersistFailure(t *testing.T) {
 	s13 := sigState(t, th.stable.signals, "usdt", "S13")
 	if s13.State != stableStateWatch {
 		t.Errorf("usdt S13 after 3 failed persists = %+v, want watch", s13)
+	}
+}
+
+func TestStableECBRateLogsErrorAndUnknownProviderWarns(t *testing.T) {
+	var buf bytes.Buffer
+	orig := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	defer slog.SetDefault(orig)
+
+	_ = (StablecoinConfig{Providers: map[string]bool{"coinbse": false}}).settings()
+	if !strings.Contains(buf.String(), "unknown provider") || !strings.Contains(buf.String(), "coinbse") {
+		t.Errorf("settings() with unknown provider logged %q, want warning naming coinbse", buf.String())
+	}
+
+	buf.Reset()
+	ctx := context.Background()
+	clock := time.Date(2026, 10, 19, 13, 21, 0, 0, time.UTC)
+	th, _, _ := newStablePegTestHandler(t, StablecoinConfig{}, &clock)
+	if err := th.stable.store.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := th.stable.peg.ecbRate(ctx, clock); got != nil {
+		t.Errorf("ecbRate on closed DB = %v, want nil", got)
+	}
+	if !strings.Contains(buf.String(), "stablecoin ecb rate read") {
+		t.Errorf("ecbRate on closed DB logged %q, want 'stablecoin ecb rate read'", buf.String())
 	}
 }

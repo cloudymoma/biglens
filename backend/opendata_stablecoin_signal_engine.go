@@ -72,15 +72,15 @@ func (e *stableSignalEngine) apply(ctx context.Context, in stableSignalInputs) e
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if !e.loaded {
-		e.loaded = true
-		if e.store != nil {
-			recs, err := e.store.stableSignalStates(ctx)
-			if err != nil {
-				slog.Warn("stablecoin signals: load state", "error", err)
-			}
+		if e.store == nil {
+			e.loaded = true
+		} else if recs, err := e.store.stableSignalStates(ctx); err != nil {
+			slog.Warn("stablecoin signals: load state", "error", err)
+		} else {
 			for k, r := range recs {
 				e.recs[k] = r
 			}
+			e.loaded = true
 		}
 	}
 	now := in.Now
@@ -199,7 +199,7 @@ func (e *stableSignalEngine) apply(ctx context.Context, in stableSignalInputs) e
 		level(asset, "S10", stableS10Raw(supply))
 		level(asset, "S11", stableS11Raw(facts))
 	}
-	if e.store == nil {
+	if e.store == nil || !e.loaded {
 		return nil
 	}
 	recs := make([]stableSignalRecord, 0, len(e.recs))

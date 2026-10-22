@@ -333,7 +333,7 @@ type StableSupplyAsset struct {
 // Only the checks listed in Checks are evaluated; normal means none of them
 // failed.
 type StableDataHealth struct {
-	State   string               `json:"state"`   // normal | watch
+	State   string               `json:"state"`   // unknown | normal | watch
 	Checks  []string             `json:"checks"`  // evaluated S13 inputs: tether_sum
 	Reasons []StableHealthReason `json:"reasons"` // why the state is above normal
 }
@@ -346,7 +346,7 @@ type StableHealthReason struct {
 }
 
 func newStableDataHealth() StableDataHealth {
-	return StableDataHealth{State: "normal", Checks: []string{}, Reasons: []StableHealthReason{}}
+	return StableDataHealth{State: "unknown", Checks: []string{}, Reasons: []StableHealthReason{}}
 }
 
 // merge folds another asset's health into h (the /meta view).
@@ -359,6 +359,8 @@ func (h *StableDataHealth) merge(o StableDataHealth) {
 	h.Reasons = append(h.Reasons, o.Reasons...)
 	if o.State == "watch" {
 		h.State = "watch"
+	} else if o.State == "normal" && h.State == "unknown" {
+		h.State = "normal"
 	}
 }
 
@@ -595,6 +597,10 @@ func buildStableSupplyAsset(def stableAssetDef, in stableSupplyInputs) StableSup
 // at watch while it fails.
 func stableAssetDataHealth(def stableAssetDef, in stableSupplyInputs) StableDataHealth {
 	h := newStableDataHealth()
+	if !in.Circle.Has && !in.Tether.Has && !in.Llama.Has && len(in.Onchain) == 0 {
+		return h
+	}
+	h.State = "normal"
 	if def.Issuer != "tether" || !in.Tether.Has {
 		return h
 	}

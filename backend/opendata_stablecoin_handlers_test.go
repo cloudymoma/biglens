@@ -120,8 +120,8 @@ func TestStablecoinTetherDegraded(t *testing.T) {
 	clock := time.Date(2026, 10, 19, 13, 20, 0, 0, time.UTC)
 	h := newStableTestHandler(t, StablecoinConfig{Providers: map[string]bool{"rpc_supply": false}}, ep, nil, &clock)
 	cold := decodeStable[StableMeta](t, stableGet(t, h.StablecoinMeta, "/api/opendata/stablecoin/meta"))
-	if cold.DataHealth.State != "normal" || len(cold.DataHealth.Checks) != 0 {
-		t.Errorf("cold data health = %+v, want nothing evaluated", cold.DataHealth)
+	if cold.DataHealth.State != "unknown" || len(cold.DataHealth.Checks) != 0 {
+		t.Errorf("cold data health = %+v, want unknown with nothing evaluated", cold.DataHealth)
 	}
 	runStableOnce(context.Background(), h.stable.supply, h.stable.health)
 	h.cache = NewCache(time.Minute)
@@ -317,5 +317,83 @@ func TestStableRunOncePrunesDaily(t *testing.T) {
 	runStableOnce(ctx, h.stable.supply, h.stable.health)
 	if n := countStableRows(t, h.stable.store, `WHERE ts = ?`, stableTS(old)); n != 0 {
 		t.Errorf("not pruned after 24 h (rows %d)", n)
+	}
+}
+
+func TestStableEnsureSchemaOnceAndAlterCheck(t *testing.T) {
+	ctx := context.Background()
+	store := newTestRiskStore(t)
+	if err := store.ensureStableSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `DROP TABLE stable_rates_daily`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ensureStableSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.upsertStableRatesDaily(ctx, []stableRateDaily{{Day: "2026-10-18", Series: stableSeriesECBEURUSD, Value: 1.08, FetchedAt: time.Now()}}); err == nil {
+		t.Errorf("upsertStableRatesDaily succeeded after dropping table; ensureStableSchema re-ran DDL instead of running once")
+	}
+
+	// Non-duplicate-column ALTER TABLE errors must not be ignored.
+	badStore := newTestRiskStore(t)
+	if _, err := badStore.db.ExecContext(ctx, `CREATE VIEW stable_peg_daily AS SELECT 1 AS day`); err != nil {
+		t.Fatal(err)
+	}
+	if err := badStore.ensureStableSchema(ctx); err == nil {
+		t.Errorf("ensureStableSchema with view blocking ALTER TABLE = nil, want error")
+	}
+}
+
+func TestStableHistoryErrorNotCached(t *testing.T) {
+	ctx := context.Background()
+	clock := time.Date(2026, 10, 19, 13, 21, 0, 0, time.UTC)
+	th, _, _ := newStablePegTestHandler(t, StablecoinConfig{}, &clock)
+	if err := th.stable.store.upsertStableSupplyDaily(ctx, []stableSupplyDaily{
+		{Day: "2026-10-18", Asset: "usdt", Source: "issuer", CirculatingNative: btcFloatPtr(120e9)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := th.stable.store.upsertStablePegDaily(ctx, []stablePegDaily{
+		{Day: "2026-10-18", Asset: "usdt", Source: stablePegSourceConsensus, Close: btcFloatPtr(1.0)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Rename history tables so reads fail.
+	for _, q := range []string{
+		`ALTER TABLE stable_supply_daily RENAME TO stable_supply_daily_bak`,
+		`ALTER TABLE stable_peg_daily RENAME TO stable_peg_daily_bak`,
+	} {
+		if _, err := th.stable.store.db.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	supBad := decodeStable[StableSupplyResponse](t, stableGet(t, th.StablecoinSupply, "/api/opendata/stablecoin/supply?asset=usdt&range=90d"))
+	if !supBad.HistoryError {
+		t.Errorf("supply with broken DB: HistoryError = false, want true")
+	}
+	pegBad := decodeStable[StablePegResponse](t, stableGet(t, th.StablecoinPeg, "/api/opendata/stablecoin/peg?asset=usdt&range=90d"))
+	if !pegBad.HistoryError {
+		t.Errorf("peg with broken DB: HistoryError = false, want true")
+	}
+	// Restore tables without clearing h.cache: next request must succeed because degraded responses are not cached.
+	for _, q := range []string{
+		`ALTER TABLE stable_supply_daily_bak RENAME TO stable_supply_daily`,
+		`ALTER TABLE stable_peg_daily_bak RENAME TO stable_peg_daily`,
+	} {
+		if _, err := th.stable.store.db.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	supOK := decodeStable[StableSupplyResponse](t, stableGet(t, th.StablecoinSupply, "/api/opendata/stablecoin/supply?asset=usdt&range=90d"))
+	if supOK.HistoryError || len(supOK.Assets[0].History) == 0 {
+		t.Errorf("supply after DB recovery = HistoryError %v len(History) %d, want false and >0 (degraded response was cached)",
+			supOK.HistoryError, len(supOK.Assets[0].History))
+	}
+	pegOK := decodeStable[StablePegResponse](t, stableGet(t, th.StablecoinPeg, "/api/opendata/stablecoin/peg?asset=usdt&range=90d"))
+	if pegOK.HistoryError || len(pegOK.Assets[0].DailyCloses) == 0 {
+		t.Errorf("peg after DB recovery = HistoryError %v len(DailyCloses) %d, want false and >0 (degraded response was cached)",
+			pegOK.HistoryError, len(pegOK.Assets[0].DailyCloses))
 	}
 }

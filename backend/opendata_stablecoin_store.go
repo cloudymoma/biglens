@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 )
 
@@ -276,13 +277,23 @@ func (s *riskStore) ensureStableSchema(ctx context.Context) error {
 	if s == nil || s.db == nil {
 		return fmt.Errorf("stablecoin store: nil store")
 	}
-	if _, err := s.db.ExecContext(ctx, stableSchema); err != nil {
-		return fmt.Errorf("stablecoin schema: %w", err)
-	}
-	// Idempotent migrations for existing databases created before vwap/volume were added.
-	_, _ = s.db.ExecContext(ctx, `ALTER TABLE stable_peg_daily ADD COLUMN vwap REAL`)
-	_, _ = s.db.ExecContext(ctx, `ALTER TABLE stable_peg_daily ADD COLUMN volume REAL`)
-	return nil
+	s.stableOnce.Do(func() {
+		if _, err := s.db.ExecContext(ctx, stableSchema); err != nil {
+			s.stableSchemaErr = fmt.Errorf("stablecoin schema: %w", err)
+			return
+		}
+		// Idempotent migrations for existing databases created before vwap/volume were added.
+		for _, stmt := range []string{
+			`ALTER TABLE stable_peg_daily ADD COLUMN vwap REAL`,
+			`ALTER TABLE stable_peg_daily ADD COLUMN volume REAL`,
+		} {
+			if _, err := s.db.ExecContext(ctx, stmt); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+				s.stableSchemaErr = fmt.Errorf("stablecoin migrate: %w", err)
+				return
+			}
+		}
+	})
+	return s.stableSchemaErr
 }
 
 // insertStableSupplySnapshots stores observations; an observation already

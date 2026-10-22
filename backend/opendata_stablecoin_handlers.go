@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
@@ -323,10 +324,11 @@ func (h *APIHandler) StablecoinLive(w http.ResponseWriter, r *http.Request) {
 // --- /supply ---
 
 type StableSupplyResponse struct {
-	AsOf      string              `json:"as_of,omitempty"`
-	Range     string              `json:"range"`
-	WarmingUp bool                `json:"warming_up"`
-	Assets    []StableSupplyAsset `json:"assets"`
+	AsOf         string              `json:"as_of,omitempty"`
+	Range        string              `json:"range"`
+	WarmingUp    bool                `json:"warming_up"`
+	HistoryError bool                `json:"history_error,omitempty"`
+	Assets       []StableSupplyAsset `json:"assets"`
 }
 
 // stableColdAsset is an asset's view before the first sample: every value
@@ -369,6 +371,7 @@ func (s *stablecoinService) buildSupply(r *http.Request, assets []string, rangeL
 		hist, err := stableSupplyHistory(ctx, s.store, id, fromDay)
 		if err != nil {
 			slog.Warn("stablecoin supply history read", "asset", id, "error", err)
+			out.HistoryError = true
 			hist = []StableSupplyDay{}
 		}
 		a.History = hist
@@ -376,6 +379,8 @@ func (s *stablecoinService) buildSupply(r *http.Request, assets []string, rangeL
 	}
 	return out
 }
+
+var errStableHistoryRead = errors.New("stablecoin history read failed")
 
 func (h *APIHandler) StablecoinSupply(w http.ResponseWriter, r *http.Request) {
 	if !h.stableAvailable(w) || !stableGETOnly(w, r) {
@@ -402,6 +407,12 @@ func (h *APIHandler) StablecoinSupply(w http.ResponseWriter, r *http.Request) {
 		rangeLabel = stableDefaultRange
 	}
 	key := "stablecoin:supply:" + asset + ":" + rangeLabel
-	v, _ := h.cachedFetch(key, stableSupplyTTL, func() (any, error) { return h.stable.buildSupply(r, assets, rangeLabel), nil })
+	v, _ := h.cachedFetch(key, stableSupplyTTL, func() (any, error) {
+		res := h.stable.buildSupply(r, assets, rangeLabel)
+		if res.HistoryError {
+			return res, errStableHistoryRead
+		}
+		return res, nil
+	})
 	writeJSON(w, v)
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"math"
 	"strings"
 	"testing"
@@ -680,5 +681,37 @@ func TestStableWorstState(t *testing.T) {
 		if got := stableWorstState(c.in); got != c.want {
 			t.Errorf("worst(%v) = %s, want %s", c.in, got, c.want)
 		}
+	}
+}
+
+func TestStableSignalEngineLoadRetry(t *testing.T) {
+	ctx := context.Background()
+	store := newTestRiskStore(t)
+	t0 := time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC)
+	if err := store.saveStableSignals(ctx, []stableSignalRecord{
+		{Asset: "usdt", Signal: "S1", State: stableStateWarning, Since: t0, UpdatedAt: t0, Inputs: map[string]any{}},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	// Make initial load fail by renaming stable_signal_state.
+	if _, err := store.db.ExecContext(ctx, `ALTER TABLE stable_signal_state RENAME TO stable_signal_state_bak`); err != nil {
+		t.Fatal(err)
+	}
+	now := t0.Add(5 * time.Minute)
+	eng := newStableSignalEngine(store, func() time.Time { return now })
+	if err := eng.apply(ctx, stableSignalInputs{Now: now, Facts: loadStableFacts("", nil)}); err != nil {
+		t.Fatal(err)
+	}
+	// Restore the table: persisted state must not have been overwritten, and the next apply must reload it.
+	if _, err := store.db.ExecContext(ctx, `ALTER TABLE stable_signal_state_bak RENAME TO stable_signal_state`); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(5 * time.Minute)
+	if err := eng.apply(ctx, stableSignalInputs{Now: now, Facts: loadStableFacts("", nil)}); err != nil {
+		t.Fatal(err)
+	}
+	s1 := sigState(t, eng, "usdt", "S1")
+	if s1.State != stableStateWarning || s1.Since != stableFmt(t0) {
+		t.Errorf("usdt S1 after load retry = %+v, want warning since %s", s1, stableFmt(t0))
 	}
 }

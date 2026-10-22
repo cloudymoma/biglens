@@ -68,7 +68,7 @@ type StablePegAssetView struct {
 	// deviation) in the stored history; null when there is none since HistoryFrom.
 	LastDeviation *StableLastDeviation `json:"last_deviation"`
 	HistoryFrom   string               `json:"history_from,omitempty"`
-	Annotations []stableAnnotation   `json:"annotations"`
+	Annotations   []stableAnnotation   `json:"annotations"`
 	// DailyCloses is the depeg-history chart: every stored day's close by
 	// the same rule, oldest first.
 	DailyCloses []StableDepegClose `json:"daily_closes"`
@@ -88,13 +88,14 @@ type StableRelativePegView struct {
 }
 
 type StablePegResponse struct {
-	AsOf      string                `json:"as_of,omitempty"`
-	Range     string                `json:"range"`
-	WarmingUp bool                  `json:"warming_up"` // no peg sample yet
-	Stale     bool                  `json:"stale"`      // the latest sample is older than 3 intervals
-	Assets    []StablePegAssetView  `json:"assets"`
-	Relative  StableRelativePegView `json:"relative"`
-	FX        *StableFX             `json:"fx"`
+	AsOf         string                `json:"as_of,omitempty"`
+	Range        string                `json:"range"`
+	WarmingUp    bool                  `json:"warming_up"`              // no peg sample yet
+	Stale        bool                  `json:"stale"`                   // the latest sample is older than 3 intervals
+	HistoryError bool                  `json:"history_error,omitempty"` // a store history read failed; response is not cached
+	Assets       []StablePegAssetView  `json:"assets"`
+	Relative     StableRelativePegView `json:"relative"`
+	FX           *StableFX             `json:"fx"`
 	// FXSingleVenue: the EUR/USD consensus behind EURC's derived inputs
 	// comes from one venue (Kraken or Bitstamp) in the latest sample.
 	FXSingleVenue bool          `json:"fx_single_venue"`
@@ -137,7 +138,11 @@ func (s *stablecoinService) buildPeg(r *http.Request, assets []string, rangeLabe
 	} else {
 		out.Relative.StableRelativePeg = StableRelativePeg{Pair: "USDC/USDT", Quotes: []StableQuote{}}
 	}
-	out.Relative.SeriesResolution, out.Relative.Series = s.pegSeries(ctx, stableRelativeAsset, rg.Span, rg.Daily, now)
+	var relErr bool
+	out.Relative.SeriesResolution, out.Relative.Series, relErr = s.pegSeries(ctx, stableRelativeAsset, rg.Span, rg.Daily, now)
+	if relErr {
+		out.HistoryError = true
+	}
 	out.Relative.Heatmap = s.pegHeatmap(ctx, stableRelativeAsset, rg.Span, now)
 	out.Relative.UniswapSeries = s.pegDexSeries(ctx, rg.Span, rg.Daily, now)
 	var fxHistory map[string]float64
@@ -150,13 +155,24 @@ func (s *stablecoinService) buildPeg(r *http.Request, assets []string, rangeLabe
 		} else {
 			v.StablePeg = StablePeg{Asset: id, Numeraire: def.Numeraire, State: "unknown", Venues: []string{}, Quotes: []StableQuote{}}
 		}
-		v.SeriesResolution, v.Series = s.pegSeries(ctx, id, rg.Span, rg.Daily, now)
+		var serErr bool
+		v.SeriesResolution, v.Series, serErr = s.pegSeries(ctx, id, rg.Span, rg.Daily, now)
+		if serErr {
+			out.HistoryError = true
+		}
 		v.Heatmap = s.pegHeatmap(ctx, id, rg.Span, now)
 		if def.Numeraire == "EUR" && fxHistory == nil {
-			fxHistory = s.ecbHistory(ctx)
+			var fxErr bool
+			fxHistory, fxErr = s.ecbHistory(ctx)
+			if fxErr {
+				out.HistoryError = true
+			}
 			out.ECB = stableLatestECB(fxHistory)
 		}
-		if hist, ok := s.depegHistory(ctx, def, fxHistory, now); ok {
+		if hist, ok, histErr := s.depegHistory(ctx, def, fxHistory, now); ok {
+			if histErr {
+				out.HistoryError = true
+			}
 			v.DepegDays, v.DepegDaysTotal, v.LowMarkers, v.LastDeviation, v.HistoryFrom = hist.Days, hist.Total, hist.Markers, hist.LastDeviation, hist.HistoryFrom
 			v.DailyCloses = hist.Closes
 		}
@@ -172,10 +188,10 @@ func (s *stablecoinService) buildPeg(r *http.Request, assets []string, rangeLabe
 
 // pegSeries reads the 5-minute samples (spans up to 30 days) or the daily
 // consensus rollup.
-func (s *stablecoinService) pegSeries(ctx context.Context, asset string, span time.Duration, daily bool, now time.Time) (string, []StablePegPoint) {
+func (s *stablecoinService) pegSeries(ctx context.Context, asset string, span time.Duration, daily bool, now time.Time) (string, []StablePegPoint, bool) {
 	points := []StablePegPoint{}
 	if s.store == nil {
-		return map[bool]string{false: "5m", true: "1d"}[daily], points
+		return map[bool]string{false: "5m", true: "1d"}[daily], points, false
 	}
 	if !daily {
 		rows, err := s.store.stablePeg5mSeries(ctx, asset, now.Add(-span))
@@ -187,7 +203,7 @@ func (s *stablecoinService) pegSeries(ctx context.Context, asset string, span ti
 			points = append(points, StablePegPoint{TS: stableFmt(r.Bucket), State: r.State, Consensus: r.Consensus, DevBps: r.DevBps,
 				DispBps: r.DispBps, VenuesUsed: &vu})
 		}
-		return "5m", points
+		return "5m", points, err != nil
 	}
 	from := "0000-01-01"
 	if span > 0 {
@@ -205,13 +221,13 @@ func (s *stablecoinService) pegSeries(ctx context.Context, asset string, span ti
 		}
 		points = append(points, p)
 	}
-	return "1d", points
+	return "1d", points, err != nil
 }
 
-func (s *stablecoinService) ecbHistory(ctx context.Context) map[string]float64 {
+func (s *stablecoinService) ecbHistory(ctx context.Context) (map[string]float64, bool) {
 	out := map[string]float64{}
 	if s.store == nil {
-		return out
+		return out, false
 	}
 	rows, err := s.store.stableRatesSeries(ctx, stableSeriesECBEURUSD, "0000-01-01")
 	if err != nil {
@@ -220,20 +236,22 @@ func (s *stablecoinService) ecbHistory(ctx context.Context) map[string]float64 {
 	for _, r := range rows {
 		out[r.Day] = r.Value
 	}
-	return out
+	return out, err != nil
 }
 
 // depegHistory reads one asset's stored history (consensus rollup, Bitstamp
 // candles for the pairs in stableOHLCPairs, DefiLlama prices) and applies
 // the §7.2 classification. ok is false without a store.
-func (s *stablecoinService) depegHistory(ctx context.Context, def stableAssetDef, fx map[string]float64, now time.Time) (stableDepegHistory, bool) {
+func (s *stablecoinService) depegHistory(ctx context.Context, def stableAssetDef, fx map[string]float64, now time.Time) (stableDepegHistory, bool, bool) {
 	if s.store == nil {
-		return stableDepegHistory{}, false
+		return stableDepegHistory{}, false, false
 	}
 	in := stableDepegInputs{Numeraire: def.Numeraire, ECB: fx, Today: now.Format(time.DateOnly)}
 	var err error
+	var hadErr bool
 	if in.Rollup, err = s.store.stablePegDailySeries(ctx, def.ID, stablePegSourceConsensus, "0000-01-01"); err != nil {
 		slog.Warn("stablecoin depeg history read", "asset", def.ID, "source", stablePegSourceConsensus, "error", err)
+		hadErr = true
 	}
 	for _, p := range stableOHLCPairs {
 		if p.Asset != def.ID {
@@ -241,23 +259,26 @@ func (s *stablecoinService) depegHistory(ctx context.Context, def stableAssetDef
 		}
 		if in.Candles, err = s.store.stablePegDailySeries(ctx, def.ID, stablePegSourceBitstamp, "0000-01-01"); err != nil {
 			slog.Warn("stablecoin depeg history read", "asset", def.ID, "source", stablePegSourceBitstamp, "error", err)
+			hadErr = true
 		}
 	}
 	if def.Numeraire == "EUR" {
 		if in.Kraken, err = s.store.stablePegDailySeries(ctx, def.ID, stablePegSourceKraken, "0000-01-01"); err != nil {
 			slog.Warn("stablecoin depeg history read", "asset", def.ID, "source", stablePegSourceKraken, "error", err)
+			hadErr = true
 		}
 	}
 	if gecko, ok := stableGeckoIDs[def.ID]; ok {
 		if in.Prices, err = s.store.stablePriceDailySeries(ctx, gecko, "0000-01-01"); err != nil {
 			slog.Warn("stablecoin price history read", "asset", def.ID, "error", err)
+			hadErr = true
 		}
 	}
 	h := stableClassifyDepeg(in)
 	if len(h.Days) > stableDepegDaysMax {
 		h.Days = h.Days[:stableDepegDaysMax]
 	}
-	return h, true
+	return h, true, hadErr
 }
 
 func (h *APIHandler) StablecoinPeg(w http.ResponseWriter, r *http.Request) {
@@ -285,6 +306,12 @@ func (h *APIHandler) StablecoinPeg(w http.ResponseWriter, r *http.Request) {
 		rangeLabel = stablePegDefaultRange
 	}
 	key := "stablecoin:peg:" + asset + ":" + rangeLabel
-	v, _ := h.cachedFetch(key, stablePegTTL, func() (any, error) { return h.stable.buildPeg(r, assets, rangeLabel), nil })
+	v, _ := h.cachedFetch(key, stablePegTTL, func() (any, error) {
+		res := h.stable.buildPeg(r, assets, rangeLabel)
+		if res.HistoryError {
+			return res, errStableHistoryRead
+		}
+		return res, nil
+	})
 	writeJSON(w, v)
 }

@@ -145,7 +145,11 @@ func (p *stablePegSampler) ecbRate(ctx context.Context, now time.Time) *float64 
 		return nil
 	}
 	rows, err := p.store.stableRatesSeries(ctx, stableSeriesECBEURUSD, now.Add(-stablePegECBWindow).Format(time.DateOnly))
-	if err != nil || len(rows) == 0 {
+	if err != nil {
+		slog.Warn("stablecoin ecb rate read", "error", err)
+		return nil
+	}
+	if len(rows) == 0 {
 		return nil
 	}
 	return stableF(rows[len(rows)-1].Value)
