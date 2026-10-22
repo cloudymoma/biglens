@@ -37,7 +37,7 @@ const META: Record<SignalState, Omit<StateMeta, 'state'>> = {
 // stateMeta never returns a blank chip: an unexpected state keeps its own
 // word with the unknown icon; a missing one reads "unknown".
 export function stateMeta(state: string | null | undefined): StateMeta {
-  const s = state ?? 'unknown';
+  const s = state || 'unknown';
   const m = (META as Record<string, Omit<StateMeta, 'state'>>)[s];
   if (m) return { state: s, ...m };
   return { state: s, ...META.unknown, label: s };

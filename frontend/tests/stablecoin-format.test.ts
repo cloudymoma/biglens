@@ -128,3 +128,10 @@ test('EUR market share and total come from USD supply, and native total shows a 
   const supplySrc = readFileSync(join(dir, '../src/opendata/stablecoin/SupplyTab.tsx'), 'utf8');
   assert.ok(supplySrc.includes('computeEurMarketStats('), 'SupplyTab must use computeEurMarketStats');
 });
+
+test("PegTab renders missing minutes_ge_100 as '—', never 0 (L10)", () => {
+  const dir = dirname(fileURLToPath(import.meta.url));
+  const pegSrc = readFileSync(join(dir, '../src/opendata/stablecoin/PegTab.tsx'), 'utf8');
+  assert.ok(!pegSrc.includes('minutes_ge_100 ?? 0'), 'PegTab must not fall back minutes_ge_100 to 0');
+  assert.ok(pegSrc.includes("minutes_ge_100 ?? '—'"), "PegTab must fall back minutes_ge_100 to '—'");
+});

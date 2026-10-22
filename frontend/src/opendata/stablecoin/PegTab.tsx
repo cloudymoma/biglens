@@ -549,7 +549,7 @@ function DepegHistory({ peg }: { peg: StablePeg }) {
                       <td className={`${cx.td} font-mono`}>
                         {d.min_dev_bps == null ? '—' : `${fmtBps(d.min_dev_bps)} … ${fmtBps(d.max_dev_bps ?? null)}`}
                       </td>
-                      <td className={`${cx.td} font-mono`}>{d.minutes_ge_30 == null ? '—' : `${d.minutes_ge_30} / ${d.minutes_ge_100 ?? 0}`}</td>
+                      <td className={`${cx.td} font-mono`}>{d.minutes_ge_30 == null ? '—' : `${d.minutes_ge_30} / ${d.minutes_ge_100 ?? '—'}`}</td>
                     </tr>
                   )),
                 )}

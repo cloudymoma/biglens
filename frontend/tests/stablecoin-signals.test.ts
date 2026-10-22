@@ -50,6 +50,8 @@ test('every state has a word and its own icon', () => {
   // Unexpected states from the API still render a word, never a blank chip.
   assert.equal(stateMeta('something_new').label, 'something_new');
   assert.equal(stateMeta(undefined).label, 'unknown');
+  assert.equal(stateMeta('').state, 'unknown');
+  assert.equal(stateMeta('').label, 'unknown');
 });
 
 test('state colors are non-text contrast ≥ 3:1 on the panel surface (WCAG 1.4.11)', () => {

@@ -74,7 +74,7 @@ export default function StablecoinTicker({ live, loading }: { live: StableLive |
   }
   const alerts = live.alerts;
   return (
-    <div className="grid grid-cols-1 gap-3 md:grid-cols-3 xl:grid-cols-5" aria-label="Live stablecoin ticker">
+    <div role="region" className="grid grid-cols-1 gap-3 md:grid-cols-3 xl:grid-cols-5" aria-label="Live stablecoin ticker">
       {live.assets.map(a => (
         <AssetCell key={a.asset} a={a} pegWarmingUp={live.peg_warming_up} />
       ))}

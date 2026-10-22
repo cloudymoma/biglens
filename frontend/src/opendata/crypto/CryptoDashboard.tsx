@@ -20,8 +20,9 @@ const TABS = [
 type TabId = (typeof TABS)[number]['id'];
 
 function initialCryptoTab(): TabId {
-  if (typeof window !== 'undefined' && window.location.hash.startsWith('#pay')) {
-    return 'payments';
+  if (typeof window !== 'undefined') {
+    if (window.location.hash.startsWith('#pay')) return 'payments';
+    if (window.location.hash.startsWith('#risk')) return 'risk';
   }
   return 'pulse';
 }

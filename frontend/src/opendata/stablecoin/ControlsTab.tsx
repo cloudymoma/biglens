@@ -122,7 +122,7 @@ function Freezes({ data }: { data: StableControls }) {
         </div>
       )}
       <p className={`mt-3 text-[11px] ${cx.muted}`}>
-        Check an address against these blacklists in <a href={datasetHref('crypto')} className={`${cx.link} ${cx.focus}`}>Crypto Pulse → Address Risk</a>.
+        Check an address against these blacklists in <a href={`${datasetHref('crypto')}#risk`} className={`${cx.link} ${cx.focus}`}>Crypto Pulse → Address Risk</a>.
       </p>
     </Panel>
   );

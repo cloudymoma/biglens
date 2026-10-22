@@ -23,7 +23,7 @@ function fmtInput(v: unknown): string {
 function SignalDetail({ asset, signal }: { asset: string; signal: StableSignal }) {
   const inputs = Object.entries(signal.inputs ?? {});
   return (
-    <div className={`${cx.inset} mt-3 space-y-2`} aria-live="polite">
+    <div className={`${cx.inset} mt-3 space-y-2`}>
       <div className="flex flex-wrap items-center gap-2">
         <span className={`text-xs font-semibold ${cx.strong}`}>
           {asset.toUpperCase()} · {signal.id} {signal.dimension}
@@ -150,7 +150,7 @@ export default function SignalMatrix({ rows, only }: { rows: StableMatrixRow[]; 
             })}
           </tbody>
         </table>
-        {sel && selected && <SignalDetail asset={sel.asset} signal={selected} />}
+        <div aria-live="polite">{sel && selected && <SignalDetail asset={sel.asset} signal={selected} />}</div>
       </div>
     );
   }
@@ -217,7 +217,7 @@ export default function SignalMatrix({ rows, only }: { rows: StableMatrixRow[]; 
           </tbody>
         </table>
       </div>
-      {sel && selected && <SignalDetail asset={sel.asset} signal={selected} />}
+      <div aria-live="polite">{sel && selected && <SignalDetail asset={sel.asset} signal={selected} />}</div>
     </div>
   );
 }

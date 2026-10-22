@@ -83,7 +83,7 @@ export default function StablecoinDashboard() {
   // The ticker polls /live every 60 s; usePolling skips runs while the
   // browser tab is hidden (§7.1).
   const livePoll = usePolling(fetchStableLive, 60_000, `stable-live-${refreshTick}`);
-  const overviewRange = effectiveRange('overview', view.range) ?? '90d';
+  const [overviewRange, setOverviewRange] = useState<StableRange>(() => effectiveRange('overview', view.range) ?? '90d');
   const overviewPoll = usePolling(
     () => fetchStableOverview(overviewRange),
     60_000,
@@ -172,7 +172,12 @@ export default function StablecoinDashboard() {
                   label="Range"
                   options={tabRanges.map(r => ({ id: r, label: RANGE_LABELS[r] }))}
                   value={range}
-                  onChange={r => setView(v => ({ ...v, range: r }))}
+                  onChange={r => {
+                    setView(v => ({ ...v, range: r }));
+                    if (view.tab === 'overview') {
+                      setOverviewRange(r);
+                    }
+                  }}
                 />
               )}
               <button
@@ -205,19 +210,17 @@ export default function StablecoinDashboard() {
 
           <TabBar label="Stablecoin views" tabs={TAB_CHOICES} active={view.tab} onSelect={selectTab} idPrefix="stable" />
 
-          {TAB_CHOICES.map(t =>
-            mounted[t.id] ? (
-              <div
-                key={t.id}
-                role="tabpanel"
-                id={`stable-panel-${t.id}`}
-                aria-labelledby={`stable-tab-${t.id}`}
-                hidden={view.tab !== t.id}
-              >
-                {renderTab(t.id)}
-              </div>
-            ) : null,
-          )}
+          {TAB_CHOICES.map(t => (
+            <div
+              key={t.id}
+              role="tabpanel"
+              id={`stable-panel-${t.id}`}
+              aria-labelledby={`stable-tab-${t.id}`}
+              hidden={view.tab !== t.id}
+            >
+              {mounted[t.id] ? renderTab(t.id) : null}
+            </div>
+          ))}
 
           {/* Footer: sources, BigQuery status and the disclaimer (§7.3). */}
           <div className={`space-y-2 border-t pt-3 ${cx.border}`}>
