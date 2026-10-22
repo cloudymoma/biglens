@@ -40,6 +40,7 @@ type stablePegSampler struct {
 	mu         sync.Mutex
 	poolOK     bool // the pool identity check passed once
 	lastResult *stablePegResult
+	persistErr error
 	depegDue   time.Time
 	ecbLoaded  bool // the ECB EUR/USD history was loaded in this process
 }
@@ -60,6 +61,12 @@ func (p *stablePegSampler) latest() *stablePegResult {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.lastResult
+}
+
+func (p *stablePegSampler) persistFailed() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.persistErr != nil
 }
 
 // stableFetchFailed reports whether a quote code is an upstream failure (not
@@ -92,9 +99,13 @@ func (p *stablePegSampler) tick(ctx context.Context) bool {
 	}
 	in := stablePegInputs{Quotes: quotes, Uniswap: uni, Now: now, ECBEURUSD: p.ecbRate(ctx, now)}
 	res := stableComputePeg(in)
-	p.persist(ctx, now, quotes, uni, res)
+	err := p.persist(ctx, now, quotes, uni, res)
+	if err != nil {
+		ok = false
+	}
 	p.mu.Lock()
 	p.lastResult = &res
+	p.persistErr = err
 	p.mu.Unlock()
 	if p.onResult != nil {
 		p.onResult(ctx)
@@ -140,9 +151,15 @@ func (p *stablePegSampler) ecbRate(ctx context.Context, now time.Time) *float64 
 	return stableF(rows[len(rows)-1].Value)
 }
 
-func (p *stablePegSampler) persist(ctx context.Context, now time.Time, quotes []stableVenueQuote, uni *stableUniswapReading, res stablePegResult) {
+func (p *stablePegSampler) persist(ctx context.Context, now time.Time, quotes []stableVenueQuote, uni *stableUniswapReading, res stablePegResult) error {
 	if p.store == nil {
-		return
+		return nil
+	}
+	var firstErr error
+	keepErr := func(err error) {
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
 	last := map[string]*float64{}
 	for _, q := range quotes {
@@ -150,9 +167,11 @@ func (p *stablePegSampler) persist(ctx context.Context, now time.Time, quotes []
 	}
 	if err := p.store.insertStableQuotes5m(ctx, now, res.Markets, last); err != nil {
 		slog.Warn("stablecoin peg quotes store", "error", err)
+		keepErr(err)
 	}
 	if err := p.store.insertStableInputs5m(ctx, now, res); err != nil {
 		slog.Warn("stablecoin peg inputs store", "error", err)
+		keepErr(err)
 	}
 	var rows []stablePeg5mRow
 	for _, def := range stableCoreAssets {
@@ -187,19 +206,23 @@ func (p *stablePegSampler) persist(ctx context.Context, now time.Time, quotes []
 	rows = append(rows, relRow)
 	if err := p.store.insertStablePeg5m(ctx, rows); err != nil {
 		slog.Warn("stablecoin peg samples store", "error", err)
-		return
+		keepErr(err)
+		return firstErr
 	}
 	day := now.Format(time.DateOnly)
 	for _, r := range rows {
 		if err := p.store.rollupStablePegDaily(ctx, r.Asset, day, now); err != nil {
 			slog.Warn("stablecoin peg daily rollup", "asset", r.Asset, "error", err)
+			keepErr(err)
 		}
 	}
 	if uni != nil && uni.Code == "" {
 		if err := p.store.insertStableDex10m(ctx, now, *uni); err != nil {
 			slog.Warn("stablecoin dex store", "error", err)
+			keepErr(err)
 		}
 	}
+	return firstErr
 }
 
 // runStablePegOnce runs one peg tick, then the daily depeg-history job when

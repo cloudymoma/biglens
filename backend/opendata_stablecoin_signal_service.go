@@ -168,7 +168,7 @@ func (s *stablecoinService) healthInput(def stableAssetDef, state *stableSupplyS
 			}
 		}
 		for _, sm := range s.health.samplers() {
-			if sm.Stalled {
+			if sm.Stalled || (sm.Name == "peg" && s.peg != nil && s.peg.persistFailed()) {
 				h.StalledSamplers = append(h.StalledSamplers, sm.Name)
 			}
 		}

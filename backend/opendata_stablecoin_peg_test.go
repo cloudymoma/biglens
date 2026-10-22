@@ -274,3 +274,26 @@ func TestRunStablePegOnceRecordsHealth(t *testing.T) {
 		t.Errorf("uniswap_rpc = %+v, want disabled", u)
 	}
 }
+
+func TestStablePegPersistFailure(t *testing.T) {
+	ctx := context.Background()
+	clock := time.Date(2026, 10, 19, 13, 21, 0, 0, time.UTC)
+	th, _, _ := newStablePegTestHandler(t, StablecoinConfig{}, &clock)
+	th.stable.wireSignals()
+	// Close the SQLite DB so persist writes fail while upstream fetches succeed.
+	if err := th.stable.store.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		runStablePegOnce(ctx, th.stable.peg, th.stable.health)
+		clock = clock.Add(5 * time.Minute)
+	}
+	smp := th.stable.health.sampler("peg")
+	if smp.ConsecutiveFailures != 3 || smp.LastOK != "" {
+		t.Errorf("peg sampler health after 3 failed persists = %+v, want ConsecutiveFailures=3 and empty LastOK", smp)
+	}
+	s13 := sigState(t, th.stable.signals, "usdt", "S13")
+	if s13.State != stableStateWatch {
+		t.Errorf("usdt S13 after 3 failed persists = %+v, want watch", s13)
+	}
+}
