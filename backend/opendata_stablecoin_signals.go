@@ -92,8 +92,11 @@ const (
 	stableS6QuarterlyFallbackWatchDays   = 150
 	stableS6QuarterlyFallbackWarningDays = 180
 	stableS6CheckedWithin                = 14 * 24 * time.Hour
-	// S8: a confirmed change stays at warning for 7 days.
-	stableS8Window = 7 * 24 * time.Hour
+	// S8: a confirmed change stays at warning for 7 days; any monitored
+	// field not successfully read for more than 6 hours (3 × 2h controls
+	// interval) makes S8 unknown.
+	stableS8Window   = 7 * 24 * time.Hour
+	stableS8MaxStale = 3 * stableControlsTick
 	// S10: example USDT on TRON ≈ 51% (largest chain, info).
 	stableS10BridgedWatchPct = 10.0
 
@@ -650,7 +653,7 @@ func stableS8Raw(asset string, states map[string]stableControlState, events []st
 	if !enabled {
 		return stableUnknownRaw(r, "rpc_controls is disabled")
 	}
-	var missing, critical, deployments []string
+	var missing, stale, critical, deployments []string
 	for _, d := range stableControlDeployments {
 		if d.Asset != asset {
 			continue
@@ -664,6 +667,9 @@ func stableS8Raw(asset string, states map[string]stableControlState, events []st
 			}
 			if st.LastSeen.After(r.AsOf) {
 				r.AsOf = st.LastSeen
+			}
+			if st.LastSeen.IsZero() || now.Sub(st.LastSeen) > stableS8MaxStale {
+				stale = append(stale, d.Chain+"."+f.Name)
 			}
 			if f.Critical && *st.Value == "true" {
 				critical = append(critical, d.Chain+"."+f.Name)
@@ -682,13 +688,17 @@ func stableS8Raw(asset string, states map[string]stableControlState, events []st
 			info = append(info, label)
 		}
 	}
-	r.Inputs["deployments"], r.Inputs["not_baselined"], r.Inputs["critical_flags"] = deployments, stableNonNil(missing), stableNonNil(critical)
+	r.Inputs["deployments"], r.Inputs["not_baselined"], r.Inputs["stale_fields"], r.Inputs["critical_flags"] = deployments, stableNonNil(missing), stableNonNil(stale), stableNonNil(critical)
 	r.Inputs["changes_7d"], r.Inputs["info_changes_7d"] = stableNonNil(warn), stableNonNil(info)
 	switch {
 	case len(critical) > 0:
 		r.Level, r.Summary = stableLevelCritical, "set on a monitored deployment: "+strings.Join(critical, ", ")
 	case len(missing) > 0:
 		return stableUnknownRaw(r, stableReasonWarmingUp+": no confirmed baseline yet for "+strings.Join(missing, ", "))
+	case len(stale) > 0:
+		msg := "control reads older than 6h: " + strings.Join(stale, ", ")
+		r.Summary = msg
+		return stableUnknownRaw(r, msg)
 	case len(warn) > 0:
 		r.Level, r.Summary = stableLevelWarning, strings.Join(warn, "; ")
 	case len(info) > 0:

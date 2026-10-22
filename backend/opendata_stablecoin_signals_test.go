@@ -501,7 +501,8 @@ func sigBaseline(asset string) map[string]stableControlState {
 			case "authority":
 				v = "Auth1111111111111111111111111111111111111111"
 			}
-			out[asset+"|"+d.Chain+"|"+f.Name] = stableControlState{Asset: asset, Chain: d.Chain, Field: f.Name, Value: &v, Baseline: true}
+			out[asset+"|"+d.Chain+"|"+f.Name] = stableControlState{Asset: asset, Chain: d.Chain, Field: f.Name, Value: &v, Baseline: true,
+				LastSeen: time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)}
 		}
 	}
 	return out
@@ -512,6 +513,14 @@ func TestStableS8Raw(t *testing.T) {
 	states := sigBaseline("usdc")
 	if r := stableS8Raw("usdc", states, nil, true, now); r.Level != stableLevelNormal {
 		t.Errorf("S8 baselined, no changes = %d %q, want normal", r.Level, r.Reason)
+	}
+	// M2: one TRON field failing for 7 hours (> 6h = 3 × 2h controls interval) -> unknown, listing the stale field in the summary.
+	usdtStale := sigBaseline("usdt")
+	tronOwner := usdtStale["usdt|tron|owner"]
+	tronOwner.LastSeen = now.Add(-7 * time.Hour)
+	usdtStale["usdt|tron|owner"] = tronOwner
+	if r := stableS8Raw("usdt", usdtStale, nil, true, now); r.Level != stableLevelUnknown || !strings.Contains(r.Summary, "tron.owner") {
+		t.Errorf("S8 with tron.owner 7h old = level %d summary %q reason %q, want unknown listing tron.owner in summary", r.Level, r.Summary, r.Reason)
 	}
 	if r := stableS8Raw("usdc", states, nil, false, now); r.Level != stableLevelUnknown {
 		t.Error("S8 with rpc_controls off: want unknown")
