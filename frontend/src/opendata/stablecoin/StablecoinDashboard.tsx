@@ -79,15 +79,16 @@ export default function StablecoinDashboard() {
     }
   }, [view]);
 
-  const metaPoll = usePolling(fetchStableMeta, 60_000, `stable-meta-${refreshTick}`);
   // The ticker polls /live every 60 s; usePolling skips runs while the
   // browser tab is hidden (§7.1).
   const livePoll = usePolling(fetchStableLive, 60_000, `stable-live-${refreshTick}`);
+  const liveWarm = `${livePoll.data && !livePoll.data.warming_up ? 's1' : 's0'}-${livePoll.data && !livePoll.data.peg_warming_up ? 'p1' : 'p0'}`;
+  const metaPoll = usePolling(fetchStableMeta, 60_000, `stable-meta-${refreshTick}-${liveWarm}`);
   const [overviewRange, setOverviewRange] = useState<StableRange>(() => effectiveRange('overview', view.range) ?? '90d');
   const overviewPoll = usePolling(
     () => fetchStableOverview(overviewRange),
     60_000,
-    `stable-overview-${overviewRange}-${refreshTick}`,
+    `stable-overview-${overviewRange}-${refreshTick}-${liveWarm}`,
   );
 
   const selectTab = (tab: StableTab) => {

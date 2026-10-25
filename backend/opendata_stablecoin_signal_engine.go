@@ -127,6 +127,9 @@ func (e *stableSignalEngine) apply(ctx context.Context, in stableSignalInputs) e
 			h = rec.Hyst
 		}
 		h, state, reason := stableSampledStep(h, raw, thr, in.Peg.AsOf)
+		if id == "S13" && state == stableStateUnknown && raw.Level == stableLevelNormal {
+			raw.Summary = ""
+		}
 		set(asset, id, state, reason, raw, &h)
 	}
 	// placeholder keeps a signal that has had no sample yet at unknown.
@@ -303,6 +306,9 @@ func (e *stableSignalEngine) snapshot(asset string) []StableSignal {
 			State: stableStateUnknown, Reason: stableReasonWarmingUp, Inputs: map[string]any{}}
 		if r := e.recs[asset+"|"+def.ID]; r != nil {
 			s.State, s.Reason, s.Summary, s.Since, s.AsOf = r.State, r.Reason, r.Summary, stableFmt(r.Since), stableFmt(r.AsOf)
+			if def.ID == "S13" && s.State == stableStateUnknown && s.Summary == "all core sources healthy" {
+				s.Summary = ""
+			}
 			if r.Inputs != nil {
 				s.Inputs = r.Inputs
 			}

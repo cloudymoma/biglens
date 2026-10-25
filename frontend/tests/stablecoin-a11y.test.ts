@@ -55,3 +55,28 @@ test('overview range stability and ARIA landmarks/live-region/tabpanel mounts (L
     'StablecoinDashboard must always mount role="tabpanel" elements so aria-controls resolves',
   );
 });
+
+test('cold-start synchronization across overview, peg, supply, chains and SignalMatrix', () => {
+  const dashSrc = readFileSync(new URL('../src/opendata/stablecoin/StablecoinDashboard.tsx', import.meta.url), 'utf8');
+  const pegSrc = readFileSync(new URL('../src/opendata/stablecoin/PegTab.tsx', import.meta.url), 'utf8');
+  const supplySrc = readFileSync(new URL('../src/opendata/stablecoin/SupplyTab.tsx', import.meta.url), 'utf8');
+  const chainsSrc = readFileSync(new URL('../src/opendata/stablecoin/ChainsTab.tsx', import.meta.url), 'utf8');
+  const matrixSrc = readFileSync(new URL('../src/opendata/stablecoin/SignalMatrix.tsx', import.meta.url), 'utf8');
+
+  assert.ok(
+    matrixSrc.includes('title={s.summary || s.reason || s.rule}'),
+    'SignalMatrix cell tooltip must fall back to s.reason when s.summary is empty during warm-up',
+  );
+  assert.ok(
+    pegSrc.includes('matrixHasPeg') && pegSrc.includes("matrixHasPeg ? 'warm' : 'cold'"),
+    'PegTab usePolling key must include matrixHasPeg warm/cold token so /peg refetches when S1 receives its first sample',
+  );
+  assert.ok(
+    supplySrc.includes('matrixHasSupply') && chainsSrc.includes('matrixHasSupply'),
+    'SupplyTab and ChainsTab usePolling keys must re-fetch when matrix supply signals transition from cold to warm',
+  );
+  assert.ok(
+    dashSrc.includes('liveWarm'),
+    'StablecoinDashboard must include liveWarm in overviewPoll and metaPoll keys so cold-start transitions sync immediately',
+  );
+});

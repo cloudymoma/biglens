@@ -355,7 +355,11 @@ func (h *APIHandler) StablecoinChains(w http.ResponseWriter, r *http.Request) {
 		assets = []string{asset}
 	}
 	v, _ := h.cachedFetch("stablecoin:chains:"+asset, stableChainsTTL, func() (any, error) {
-		return h.stable.buildChains(assets, h.stable.gasView()), nil
+		res := h.stable.buildChains(assets, h.stable.gasView())
+		if res.WarmingUp {
+			return res, errStableWarmingUp
+		}
+		return res, nil
 	})
 	writeJSON(w, v)
 }

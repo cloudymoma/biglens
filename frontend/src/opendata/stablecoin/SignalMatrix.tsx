@@ -201,7 +201,7 @@ export default function SignalMatrix({ rows, only }: { rows: StableMatrixRow[]; 
                           onClick={() => setSel(on ? null : { asset: r.asset, id })}
                           aria-pressed={on}
                           aria-label={`${r.asset.toUpperCase()} ${id} ${s.dimension}: ${s.state}. ${on ? 'Hide' : 'Show'} details`}
-                          title={s.summary || s.rule}
+                          title={s.summary || s.reason || s.rule}
                           className={`rounded-full ${cx.focus} ${on ? 'ring-2 ring-sky-500/60' : ''}`}
                         >
                           <SignalChip state={s.state} />

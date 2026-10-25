@@ -86,6 +86,10 @@ func TestStableSignalEngineTransitionsAndReload(t *testing.T) {
 		if s := sigState(t, e, "usdt", "S1"); s.State != stableStateUnknown {
 			t.Fatalf("S1 after %d samples = %s, want unknown (warming up)", i+1, s.State)
 		}
+		if s13 := sigState(t, e, "usdt", "S13"); s13.State != stableStateUnknown || s13.Reason != stableReasonWarmingUp || s13.Summary != "" {
+			t.Fatalf("S13 after %d samples = state %q reason %q summary %q, want unknown / warming up with empty summary",
+				i+1, s13.State, s13.Reason, s13.Summary)
+		}
 	}
 	// The same sample applied again (another sampler's trigger) is not a new sample.
 	if err := e.apply(ctx, stableSignalInputs{Now: now, Peg: sigPegResult(now, -5), ControlsEnabled: true}); err != nil {
@@ -98,6 +102,9 @@ func TestStableSignalEngineTransitionsAndReload(t *testing.T) {
 	s1 := sigState(t, e, "usdt", "S1")
 	if s1.State != stableStateNormal || s1.Inputs["dev_bps"] == nil || s1.AsOf != stableFmt(now) {
 		t.Fatalf("S1 after 3 samples = %+v, want normal with inputs and as_of", s1)
+	}
+	if s13 := sigState(t, e, "usdt", "S13"); s13.State != stableStateNormal || s13.Summary != "all core sources healthy" {
+		t.Fatalf("S13 after 3 samples = %+v, want normal with 'all core sources healthy'", s13)
 	}
 	if s := sigState(t, e, "usdc", "S3"); s.State != stableStateNormal {
 		t.Errorf("S3 usdc = %s, want normal", s.State)

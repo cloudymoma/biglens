@@ -637,7 +637,13 @@ export default function PegTab({
   providers: StableProviderHealth[];
 }) {
   const theme = useStableTheme();
-  const poll = usePolling(() => fetchStablePeg(asset, range), 60_000, `stable-peg-${asset}-${range}-${refreshTick}`, active);
+  const matrixHasPeg = matrix.some(r => r.signals.some(s => s.id === 'S1' && Boolean(s.as_of)));
+  const poll = usePolling(
+    () => fetchStablePeg(asset, range),
+    60_000,
+    `stable-peg-${asset}-${range}-${refreshTick}-${matrixHasPeg ? 'warm' : 'cold'}`,
+    active,
+  );
   const peg = poll.data;
   if (!peg) {
     return poll.error ? <ErrorNote message={poll.error} /> : <ColdState>Loading the peg view…</ColdState>;

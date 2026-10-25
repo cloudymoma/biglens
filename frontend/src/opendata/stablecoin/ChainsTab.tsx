@@ -36,7 +36,13 @@ export default function ChainsTab({
   refreshTick: number;
   matrix: StableMatrixRow[];
 }) {
-  const poll = usePolling(() => fetchStableChains(asset), 60_000, `stable-chains-${asset}-${refreshTick}`, active);
+  const matrixHasSupply = matrix.some(r => r.signals.some(s => s.id === 'S12' && Boolean(s.as_of)));
+  const poll = usePolling(
+    () => fetchStableChains(asset),
+    60_000,
+    `stable-chains-${asset}-${refreshTick}-${matrixHasSupply ? 'warm' : 'cold'}`,
+    active,
+  );
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const data = poll.data;
   if (!data) {

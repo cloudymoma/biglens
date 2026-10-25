@@ -311,6 +311,9 @@ func (h *APIHandler) StablecoinPeg(w http.ResponseWriter, r *http.Request) {
 		if res.HistoryError {
 			return res, errStableHistoryRead
 		}
+		if res.WarmingUp {
+			return res, errStableWarmingUp
+		}
 		return res, nil
 	})
 	writeJSON(w, v)

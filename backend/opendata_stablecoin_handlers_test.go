@@ -397,3 +397,64 @@ func TestStableHistoryErrorNotCached(t *testing.T) {
 			pegOK.HistoryError, len(pegOK.Assets[0].DailyCloses))
 	}
 }
+
+func TestStableWarmingUpNotCached(t *testing.T) {
+	ctx := context.Background()
+	clock := time.Date(2026, 10, 19, 13, 21, 0, 0, time.UTC)
+	th, _, _ := newStablePegTestHandler(t, StablecoinConfig{Providers: map[string]bool{"rpc_supply": false}}, &clock)
+
+	// Cold requests before the first sampler tick.
+	pegCold := decodeStable[StablePegResponse](t, stableGet(t, th.StablecoinPeg, "/api/opendata/stablecoin/peg?asset=eurc&range=7d"))
+	if !pegCold.WarmingUp {
+		t.Fatalf("cold peg WarmingUp = false, want true")
+	}
+	liveCold := decodeStable[StableLive](t, stableGet(t, th.StablecoinLive, "/api/opendata/stablecoin/live"))
+	if !liveCold.WarmingUp || !liveCold.PegWarmingUp {
+		t.Fatalf("cold live = %+v, want WarmingUp and PegWarmingUp true", liveCold)
+	}
+	ovCold := decodeStable[StableOverviewResponse](t, stableGet(t, th.StablecoinOverview, "/api/opendata/stablecoin/overview?asset=eurc"))
+	if !ovCold.WarmingUp {
+		t.Fatalf("cold overview WarmingUp = false, want true")
+	}
+	supCold := decodeStable[StableSupplyResponse](t, stableGet(t, th.StablecoinSupply, "/api/opendata/stablecoin/supply?asset=eurc&range=90d"))
+	if !supCold.WarmingUp {
+		t.Fatalf("cold supply WarmingUp = false, want true")
+	}
+	chainsCold := decodeStable[StableChainsResponse](t, stableGet(t, th.StablecoinChains, "/api/opendata/stablecoin/chains?asset=eurc"))
+	if !chainsCold.WarmingUp {
+		t.Fatalf("cold chains WarmingUp = false, want true")
+	}
+	metaCold := decodeStable[StableMeta](t, stableGet(t, th.StablecoinMeta, "/api/opendata/stablecoin/meta"))
+	if metaCold.DataHealth.State != "unknown" {
+		t.Fatalf("cold meta DataHealth.State = %q, want unknown", metaCold.DataHealth.State)
+	}
+
+	// Run one peg and supply pass without clearing th.cache.
+	runStablePegOnce(ctx, th.stable.peg, th.stable.health)
+	runStableOnce(ctx, th.stable.supply, th.stable.health)
+
+	pegWarm := decodeStable[StablePegResponse](t, stableGet(t, th.StablecoinPeg, "/api/opendata/stablecoin/peg?asset=eurc&range=7d"))
+	if pegWarm.WarmingUp || len(pegWarm.Assets) == 0 || pegWarm.Assets[0].Consensus == nil {
+		t.Errorf("peg after first sample (without clearing cache) = WarmingUp %v assets %+v, want warm consensus", pegWarm.WarmingUp, pegWarm.Assets)
+	}
+	liveWarm := decodeStable[StableLive](t, stableGet(t, th.StablecoinLive, "/api/opendata/stablecoin/live"))
+	if liveWarm.WarmingUp || liveWarm.PegWarmingUp {
+		t.Errorf("live after first sample (without clearing cache) = WarmingUp %v PegWarmingUp %v, want both false", liveWarm.WarmingUp, liveWarm.PegWarmingUp)
+	}
+	ovWarm := decodeStable[StableOverviewResponse](t, stableGet(t, th.StablecoinOverview, "/api/opendata/stablecoin/overview?asset=eurc"))
+	if ovWarm.WarmingUp {
+		t.Errorf("overview after first sample (without clearing cache) = WarmingUp true, want false")
+	}
+	supWarm := decodeStable[StableSupplyResponse](t, stableGet(t, th.StablecoinSupply, "/api/opendata/stablecoin/supply?asset=eurc&range=90d"))
+	if supWarm.WarmingUp {
+		t.Errorf("supply after first sample (without clearing cache) = WarmingUp true, want false")
+	}
+	chainsWarm := decodeStable[StableChainsResponse](t, stableGet(t, th.StablecoinChains, "/api/opendata/stablecoin/chains?asset=eurc"))
+	if chainsWarm.WarmingUp {
+		t.Errorf("chains after first sample (without clearing cache) = WarmingUp true, want false")
+	}
+	metaWarm := decodeStable[StableMeta](t, stableGet(t, th.StablecoinMeta, "/api/opendata/stablecoin/meta"))
+	if metaWarm.DataHealth.State != "normal" {
+		t.Errorf("meta after first sample (without clearing cache) = DataHealth.State %q, want normal", metaWarm.DataHealth.State)
+	}
+}

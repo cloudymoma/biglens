@@ -139,7 +139,13 @@ func (h *APIHandler) StablecoinMeta(w http.ResponseWriter, r *http.Request) {
 	if !h.stableAvailable(w) || !stableGETOnly(w, r) {
 		return
 	}
-	v, _ := h.cachedFetch("stablecoin:meta", stableMetaTTL, func() (any, error) { return h.stable.buildMeta(), nil })
+	v, _ := h.cachedFetch("stablecoin:meta", stableMetaTTL, func() (any, error) {
+		res := h.stable.buildMeta()
+		if res.DataHealth.State == "unknown" || h.stable.pegLatest() == nil {
+			return res, errStableWarmingUp
+		}
+		return res, nil
+	})
 	writeJSON(w, v)
 }
 
@@ -317,7 +323,13 @@ func (h *APIHandler) StablecoinLive(w http.ResponseWriter, r *http.Request) {
 	if !h.stableAvailable(w) || !stableGETOnly(w, r) {
 		return
 	}
-	v, _ := h.cachedFetch("stablecoin:live", stableLiveTTL, func() (any, error) { return h.stable.buildLive(), nil })
+	v, _ := h.cachedFetch("stablecoin:live", stableLiveTTL, func() (any, error) {
+		res := h.stable.buildLive()
+		if res.WarmingUp || res.PegWarmingUp {
+			return res, errStableWarmingUp
+		}
+		return res, nil
+	})
 	writeJSON(w, v)
 }
 
@@ -380,7 +392,10 @@ func (s *stablecoinService) buildSupply(r *http.Request, assets []string, rangeL
 	return out
 }
 
-var errStableHistoryRead = errors.New("stablecoin history read failed")
+var (
+	errStableHistoryRead = errors.New("stablecoin history read failed")
+	errStableWarmingUp   = errors.New("stablecoin warming up")
+)
 
 func (h *APIHandler) StablecoinSupply(w http.ResponseWriter, r *http.Request) {
 	if !h.stableAvailable(w) || !stableGETOnly(w, r) {
@@ -411,6 +426,9 @@ func (h *APIHandler) StablecoinSupply(w http.ResponseWriter, r *http.Request) {
 		res := h.stable.buildSupply(r, assets, rangeLabel)
 		if res.HistoryError {
 			return res, errStableHistoryRead
+		}
+		if res.WarmingUp {
+			return res, errStableWarmingUp
 		}
 		return res, nil
 	})

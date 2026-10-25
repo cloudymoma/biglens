@@ -351,7 +351,11 @@ func (h *APIHandler) StablecoinOverview(w http.ResponseWriter, r *http.Request) 
 	v, _ := h.cachedFetch("stablecoin:overview:"+rangeLabel, stableOverviewTTL, func() (any, error) {
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 10*time.Second)
 		defer cancel()
-		return h.stable.buildOverview(ctx, rangeLabel), nil
+		res := h.stable.buildOverview(ctx, rangeLabel)
+		if res.WarmingUp || h.stable.pegLatest() == nil {
+			return res, errStableWarmingUp
+		}
+		return res, nil
 	})
 	writeJSON(w, v)
 }

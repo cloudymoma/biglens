@@ -490,7 +490,13 @@ export default function SupplyTab({
   matrix: StableMatrixRow[];
   watchlist: StableWatchlist | null;
 }) {
-  const poll = usePolling(() => fetchStableSupply(asset, range), 60_000, `stable-supply-${asset}-${range}-${refreshTick}`, active);
+  const matrixHasSupply = matrix.some(r => r.signals.some(s => s.id === 'S12' && Boolean(s.as_of)));
+  const poll = usePolling(
+    () => fetchStableSupply(asset, range),
+    60_000,
+    `stable-supply-${asset}-${range}-${refreshTick}-${matrixHasSupply ? 'warm' : 'cold'}`,
+    active,
+  );
   const data = poll.data;
   if (!data) {
     return poll.error ? <ErrorNote message={poll.error} /> : <ColdState>Loading supply…</ColdState>;
