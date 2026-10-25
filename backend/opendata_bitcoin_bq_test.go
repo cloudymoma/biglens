@@ -110,6 +110,95 @@ func TestBtcReservationStaleRecovery(t *testing.T) {
 	}
 }
 
+func TestStableBudgetSuite(t *testing.T) {
+	ctx := context.Background()
+	dbFile := filepath.Join(t.TempDir(), "security.db")
+	h1, err := openRiskStore(dbFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h1.db.Close()
+	h2, err := openRiskStore(dbFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h2.db.Close()
+
+	cfg := bqBudgetConfig{TablePrefix: bqPrefixStable, BudgetBytes: 100 << 30}
+	now := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
+
+	b1 := newBqBudget(h1, cfg, func() time.Time { return now })
+	b2 := newBqBudget(h2, cfg, func() time.Time { return now })
+	if err := h1.ensureStableSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	var (
+		wg         sync.WaitGroup
+		id1, id2   string
+		err1, err2 error
+	)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		id1, err1 = b1.reserve(ctx, "stable_eth", 60<<30)
+	}()
+	go func() {
+		defer wg.Done()
+		id2, err2 = b2.reserve(ctx, "stable_tron", 60<<30)
+	}()
+	wg.Wait()
+
+	ok1 := err1 == nil && id1 != ""
+	ok2 := err2 == nil && id2 != ""
+	if ok1 == ok2 {
+		t.Fatalf("concurrent 60 GiB reservations on 100 GiB stable_ budget: ok1=%v (%v) ok2=%v (%v); want exactly one to succeed",
+			ok1, err1, ok2, err2)
+	}
+	st, err := b1.status(ctx, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.ReservedBytes != 60<<30 || st.RemainingBytes != 40<<30 {
+		t.Errorf("stable_ budget status after reservation = %+v, want reserved 60 GiB and remaining 40 GiB", st)
+	}
+
+	// Verify isolation from btc_budget / btc_reservations and stale recovery.
+	winID := id1
+	if !ok1 {
+		winID = id2
+	}
+	if err := b1.attachJob(ctx, winID, "bq-stable-settled"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b1.reserve(ctx, "stable_tron", 10<<30); err != nil {
+		t.Fatal(err)
+	}
+	later := now.Add(2 * time.Hour)
+	if err := b1.recoverStale(ctx, later, func(jobID string) (int64, bool, error) {
+		if jobID == "bq-stable-settled" {
+			return 25 << 30, true, nil
+		}
+		return 0, false, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	st, err = b1.status(ctx, later)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.ReservedBytes != 0 || st.SettledBytes != 35<<30 {
+		t.Errorf("stable_ budget after stale recovery = %+v, want reserved 0 and settled 35 GiB", st)
+	}
+	var btcCount int
+	if err := h1.ensureBtcBQSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := h1.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM btc_budget`).Scan(&btcCount); err != nil || btcCount != 0 {
+		t.Errorf("btc_budget rows = %d (%v), want 0 (stable_ budget must use stable_budget table)", btcCount, err)
+	}
+}
+
 func TestBitcoinSyncJobsRecoversStaleReservations(t *testing.T) {
 	ctx := context.Background()
 	store := newTestRiskStore(t)

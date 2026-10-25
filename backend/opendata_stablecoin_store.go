@@ -190,6 +190,25 @@ CREATE TABLE IF NOT EXISTS stable_signal_events (
   summary TEXT NOT NULL DEFAULT '',
   inputs_json TEXT NOT NULL DEFAULT '{}',
   PRIMARY KEY (ts, asset, signal)
+);
+CREATE TABLE IF NOT EXISTS stable_budget (
+  month TEXT NOT NULL,
+  job TEXT NOT NULL,
+  billed_bytes INTEGER NOT NULL,
+  PRIMARY KEY (month, job)
+);
+CREATE TABLE IF NOT EXISTS stable_reservations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job TEXT NOT NULL,
+  bytes INTEGER NOT NULL,
+  pid INTEGER NOT NULL,
+  bq_job_id TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS stable_kv (
+  k TEXT PRIMARY KEY,
+  v TEXT NOT NULL
 );`
 
 // stableSnapshotRetention: supply snapshots are kept 180 days; the daily

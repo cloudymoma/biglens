@@ -178,18 +178,53 @@ func (s *riskStore) deleteBtcKV(ctx context.Context, keys ...string) error {
 	return tx.Commit()
 }
 
+const (
+	bqPrefixBtc    = "btc_"
+	bqPrefixStable = "stable_"
+
+	btcBudgetTable          = "btc_budget"
+	btcReservationsTable    = "btc_reservations"
+	stableBudgetTable       = "stable_budget"
+	stableReservationsTable = "stable_reservations"
+)
+
+// bqBudgetConfig parameterizes monthly budget accounting and cross-process
+// reservations across table prefixes (stablecoin.md §8.3). Table names are
+// selected from Go constants derived from TablePrefix, never request input.
+type bqBudgetConfig struct {
+	TablePrefix string
+	BudgetBytes int64
+}
+
 // btcBudget manages monthly budget accounting and cross-process reservations.
 type btcBudget struct {
 	store    *riskStore
+	cfg      bqBudgetConfig
 	settings btcSettings
 	now      func() time.Time
 }
 
-func newBtcBudget(store *riskStore, settings btcSettings, now func() time.Time) *btcBudget {
+func newBqBudget(store *riskStore, cfg bqBudgetConfig, now func() time.Time) *btcBudget {
 	if now == nil {
 		now = time.Now
 	}
-	return &btcBudget{store: store, settings: settings, now: now}
+	if cfg.TablePrefix == "" {
+		cfg.TablePrefix = bqPrefixBtc
+	}
+	return &btcBudget{store: store, cfg: cfg, now: now}
+}
+
+func newBtcBudget(store *riskStore, settings btcSettings, now func() time.Time) *btcBudget {
+	b := newBqBudget(store, bqBudgetConfig{TablePrefix: bqPrefixBtc, BudgetBytes: settings.BudgetBytes}, now)
+	b.settings = settings
+	return b
+}
+
+func (b *btcBudget) tables() (budgetTbl, resTbl string, ensure func(context.Context) error) {
+	if b.cfg.TablePrefix == bqPrefixStable {
+		return stableBudgetTable, stableReservationsTable, b.store.ensureStableSchema
+	}
+	return btcBudgetTable, btcReservationsTable, b.store.ensureBtcBQSchema
 }
 
 func (b *btcBudget) defaultJobTTL(job string) time.Duration {
@@ -214,7 +249,8 @@ func (b *btcBudget) reserveWithOpts(ctx context.Context, job string, bytes, hard
 	if b == nil || b.store == nil || b.store.db == nil {
 		return "", fmt.Errorf("btc budget: nil store")
 	}
-	if err := b.store.ensureBtcBQSchema(ctx); err != nil {
+	budgetTbl, resTbl, ensure := b.tables()
+	if err := ensure(ctx); err != nil {
 		return "", err
 	}
 	if hardCap > 0 && bytes > hardCap {
@@ -234,7 +270,7 @@ func (b *btcBudget) reserveWithOpts(ctx context.Context, job string, bytes, hard
 	if job == btcBaselineJobID {
 		var active int64
 		if err := tx.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM btc_reservations WHERE job = ? AND expires_at > ?`,
+			`SELECT COUNT(*) FROM `+resTbl+` WHERE job = ? AND expires_at > ?`,
 			btcBaselineJobID, nowStr,
 		).Scan(&active); err != nil {
 			return "", err
@@ -260,25 +296,25 @@ func (b *btcBudget) reserveWithOpts(ctx context.Context, job string, bytes, hard
 
 	var settled int64
 	if err := tx.QueryRowContext(ctx,
-		`SELECT COALESCE(SUM(billed_bytes), 0) FROM btc_budget WHERE month = ?`,
+		`SELECT COALESCE(SUM(billed_bytes), 0) FROM `+budgetTbl+` WHERE month = ?`,
 		month,
 	).Scan(&settled); err != nil {
 		return "", err
 	}
 	var reserved int64
 	if err := tx.QueryRowContext(ctx,
-		`SELECT COALESCE(SUM(bytes), 0) FROM btc_reservations WHERE expires_at > ? OR bq_job_id != ''`,
+		`SELECT COALESCE(SUM(bytes), 0) FROM `+resTbl+` WHERE expires_at > ? OR bq_job_id != ''`,
 		nowStr,
 	).Scan(&reserved); err != nil {
 		return "", err
 	}
-	remaining := b.settings.BudgetBytes - settled - reserved
+	remaining := b.cfg.BudgetBytes - settled - reserved
 	if bytes > remaining {
 		return "", errBtcOverBudget
 	}
 
 	res, err := tx.ExecContext(ctx, `
-INSERT INTO btc_reservations (job, bytes, pid, bq_job_id, created_at, expires_at)
+INSERT INTO `+resTbl+` (job, bytes, pid, bq_job_id, created_at, expires_at)
 VALUES (?, ?, ?, '', ?, ?)`,
 		job, bytes, os.Getpid(), nowStr, expStr,
 	)
@@ -303,8 +339,9 @@ func (b *btcBudget) attachJob(ctx context.Context, id, bqJobID string) error {
 	if err != nil {
 		return err
 	}
+	_, resTbl, _ := b.tables()
 	_, err = b.store.db.ExecContext(ctx,
-		`UPDATE btc_reservations SET bq_job_id = CASE WHEN bq_job_id = '' THEN ? ELSE bq_job_id || ',' || ? END WHERE id = ?`,
+		`UPDATE `+resTbl+` SET bq_job_id = CASE WHEN bq_job_id = '' THEN ? ELSE bq_job_id || ',' || ? END WHERE id = ?`,
 		bqJobID, bqJobID, idNum,
 	)
 	return err
@@ -330,9 +367,10 @@ func (b *btcBudget) settleTx(ctx context.Context, tx *sql.Tx, id string, billed 
 	if err != nil {
 		return err
 	}
+	budgetTbl, resTbl, _ := b.tables()
 	var job, createdAt string
 	err = tx.QueryRowContext(ctx,
-		`SELECT job, created_at FROM btc_reservations WHERE id = ?`,
+		`SELECT job, created_at FROM `+resTbl+` WHERE id = ?`,
 		idNum,
 	).Scan(&job, &createdAt)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -341,7 +379,7 @@ func (b *btcBudget) settleTx(ctx context.Context, tx *sql.Tx, id string, billed 
 	if err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM btc_reservations WHERE id = ?`, idNum); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM `+resTbl+` WHERE id = ?`, idNum); err != nil {
 		return err
 	}
 	if billed > 0 {
@@ -350,8 +388,8 @@ func (b *btcBudget) settleTx(ctx context.Context, tx *sql.Tx, id string, billed 
 			month = createdAt[:7]
 		}
 		if _, err := tx.ExecContext(ctx, `
-INSERT INTO btc_budget (month, job, billed_bytes) VALUES (?, ?, ?)
-ON CONFLICT(month, job) DO UPDATE SET billed_bytes = btc_budget.billed_bytes + excluded.billed_bytes`,
+INSERT INTO `+budgetTbl+` (month, job, billed_bytes) VALUES (?, ?, ?)
+ON CONFLICT(month, job) DO UPDATE SET billed_bytes = `+budgetTbl+`.billed_bytes + excluded.billed_bytes`,
 			month, job, billed,
 		); err != nil {
 			return err
@@ -369,12 +407,13 @@ func (b *btcBudget) recoverStale(ctx context.Context, now time.Time, lookup func
 	if b == nil || b.store == nil || b.store.db == nil {
 		return nil
 	}
-	if err := b.store.ensureBtcBQSchema(ctx); err != nil {
+	_, resTbl, ensure := b.tables()
+	if err := ensure(ctx); err != nil {
 		return err
 	}
 	nowStr := now.UTC().Format(time.RFC3339)
 	rows, err := b.store.db.QueryContext(ctx,
-		`SELECT id, bq_job_id, bytes FROM btc_reservations WHERE expires_at <= ? ORDER BY id`,
+		`SELECT id, bq_job_id, bytes FROM `+resTbl+` WHERE expires_at <= ? ORDER BY id`,
 		nowStr,
 	)
 	if err != nil {
@@ -422,7 +461,8 @@ func (b *btcBudget) status(ctx context.Context, now time.Time) (BtcBudgetStatus,
 	if b == nil || b.store == nil || b.store.db == nil {
 		return BtcBudgetStatus{}, fmt.Errorf("btc budget: nil store")
 	}
-	if err := b.store.ensureBtcBQSchema(ctx); err != nil {
+	budgetTbl, resTbl, ensure := b.tables()
+	if err := ensure(ctx); err != nil {
 		return BtcBudgetStatus{}, err
 	}
 	now = now.UTC()
@@ -431,27 +471,31 @@ func (b *btcBudget) status(ctx context.Context, now time.Time) (BtcBudgetStatus,
 
 	var settled, reserved int64
 	if err := b.store.db.QueryRowContext(ctx,
-		`SELECT COALESCE(SUM(billed_bytes), 0) FROM btc_budget WHERE month = ?`,
+		`SELECT COALESCE(SUM(billed_bytes), 0) FROM `+budgetTbl+` WHERE month = ?`,
 		month,
 	).Scan(&settled); err != nil {
 		return BtcBudgetStatus{}, err
 	}
 	if err := b.store.db.QueryRowContext(ctx,
-		`SELECT COALESCE(SUM(bytes), 0) FROM btc_reservations WHERE expires_at > ? OR bq_job_id != ''`,
+		`SELECT COALESCE(SUM(bytes), 0) FROM `+resTbl+` WHERE expires_at > ? OR bq_job_id != ''`,
 		nowStr,
 	).Scan(&reserved); err != nil {
 		return BtcBudgetStatus{}, err
 	}
-	rem := b.settings.BudgetBytes - settled - reserved
+	rem := b.cfg.BudgetBytes - settled - reserved
 	if rem < 0 {
 		rem = 0
 	}
-	expGiB, warn := btcFeasibility(b.settings, btcEstRollup1dBytes, btcEstCoinAgeRunBytes)
+	var expGiB float64
+	var warn string
+	if b.cfg.TablePrefix != bqPrefixStable {
+		expGiB, warn = btcFeasibility(b.settings, btcEstRollup1dBytes, btcEstCoinAgeRunBytes)
+	}
 	const gib = float64(1 << 30)
 	return BtcBudgetStatus{
 		Month:          month,
-		BudgetBytes:    b.settings.BudgetBytes,
-		BudgetGiB:      float64(b.settings.BudgetBytes) / gib,
+		BudgetBytes:    b.cfg.BudgetBytes,
+		BudgetGiB:      float64(b.cfg.BudgetBytes) / gib,
 		SettledBytes:   settled,
 		MonthBilledGiB: float64(settled) / gib,
 		ReservedBytes:  reserved,
