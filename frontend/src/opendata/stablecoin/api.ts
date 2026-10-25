@@ -5,6 +5,7 @@ import type {
   StableControls,
   StableLive,
   StableMeta,
+  StableOnchainResponse,
   StableOverview,
   StablePeg,
   StableReserves,
@@ -52,5 +53,10 @@ export const fetchStableChains = async (asset: StableAsset): Promise<StableChain
 
 export const fetchStableControls = async (asset: StableAsset): Promise<StableControls> => {
   const { data } = await axios.get<StableControls>(`${BASE}/controls`, { params: { asset } });
+  return data;
+};
+
+export const fetchStableOnchain = async (asset: StableAsset, days = 90): Promise<StableOnchainResponse> => {
+  const { data } = await axios.get<StableOnchainResponse>(`${BASE}/onchain`, { params: { asset, days } });
   return data;
 };

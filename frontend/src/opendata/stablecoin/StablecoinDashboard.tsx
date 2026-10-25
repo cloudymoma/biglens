@@ -11,6 +11,7 @@ import ControlsTab from './ControlsTab';
 import OverviewTab from './OverviewTab';
 import PegTab from './PegTab';
 import ReservesTab from './ReservesTab';
+import { StableBigQueryStatusChip, StableBigQuerySwitch } from './StableBigQueryLocked';
 import StablecoinTicker from './StablecoinTicker';
 import { cx } from './styles';
 import SupplyTab from './SupplyTab';
@@ -18,6 +19,7 @@ import { initialTheme, StableThemeContext, storeTheme } from './theme';
 import type { StableMeta } from './types';
 import { AsOf, ErrorNote, SegmentedControl, Sources, TabBar } from './ui';
 import type { Choice } from './ui';
+import { useStableBigQuery } from './useStableBigQuery';
 
 const ASSET_CHOICES: readonly Choice<StableAsset>[] = [
   { id: 'all', label: 'All' },
@@ -107,6 +109,7 @@ export default function StablecoinDashboard() {
   const sources = providerSources(metaPoll.data);
   const matrix = overviewPoll.data?.matrix ?? [];
   const providers = metaPoll.data?.providers ?? [];
+  const bqControl = useStableBigQuery(metaPoll.data);
 
   const renderTab = (tab: StableTab) => {
     const active = view.tab === tab;
@@ -138,7 +141,16 @@ export default function StablecoinDashboard() {
       case 'reserves':
         return <ReservesTab asset={view.asset} active={active} refreshTick={refreshTick} />;
       case 'chains':
-        return <ChainsTab asset={view.asset} active={active} refreshTick={refreshTick} matrix={matrix} />;
+        return (
+          <ChainsTab
+            asset={view.asset}
+            active={active}
+            refreshTick={refreshTick}
+            matrix={matrix}
+            bqControl={bqControl}
+            bigquery={metaPoll.data?.bigquery ?? null}
+          />
+        );
       case 'controls':
         return <ControlsTab asset={view.asset} active={active} refreshTick={refreshTick} matrix={matrix} />;
     }
@@ -162,6 +174,8 @@ export default function StablecoinDashboard() {
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2.5">
+              <StableBigQueryStatusChip bigquery={metaPoll.data?.bigquery} />
+              <StableBigQuerySwitch control={bqControl} />
               <SegmentedControl
                 label="Asset"
                 options={ASSET_CHOICES}
@@ -232,7 +246,7 @@ export default function StablecoinDashboard() {
               </div>
             )}
             <p className={`text-[11px] ${cx.muted}`}>
-              {overviewPoll.data?.disclaimer || DISCLAIMER} BigQuery activity panels ship in v1.1; this view issues no BigQuery jobs.
+              {overviewPoll.data?.disclaimer || DISCLAIMER} BigQuery activity panels are opt-in and off by default; browser requests read SQLite only and never issue a BigQuery job.
             </p>
           </div>
         </div>

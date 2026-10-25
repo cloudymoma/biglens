@@ -65,6 +65,33 @@ export interface StableDataHealth {
   reasons: StableHealthReason[];
 }
 
+export interface StableBQJobStatus {
+  job: string;
+  jobs: boolean;
+  state: 'ready' | 'cold_start' | 'retrying' | 'budget_paused' | 'stopped' | 'off' | string;
+  synced_through?: string;
+  coverage_from?: string;
+  last_error?: string;
+  failures?: number;
+  next_run_after?: string;
+  stop_reason?: string;
+}
+
+export interface StableMetaBigQuery {
+  jobs: boolean;
+  data_available?: boolean;
+  status: string;
+  initial_days: number;
+  monthly_budget_gib: number;
+  month_billed_gib?: number;
+  reserved_gib?: number;
+  remaining_gib?: number;
+  tron: boolean;
+  statuses?: Record<string, StableBQJobStatus>;
+  stopped_jobs?: string[];
+  aggregate_exposure_note?: string;
+}
+
 export interface StableMeta {
   as_of: string;
   assets: StableMetaAsset[];
@@ -77,7 +104,7 @@ export interface StableMeta {
     overridden?: Record<string, string[]>;
     asset_status: Record<string, string>;
   };
-  bigquery: { jobs: boolean; status: string; initial_days: number; monthly_budget_gib: number; tron: boolean };
+  bigquery: StableMetaBigQuery;
   coverage_notes: string[];
   data_health: StableDataHealth;
 }
@@ -757,4 +784,67 @@ export interface StableControls {
     chains: { chain: string; chain_label: string; quarantined_native: number }[];
   } | null;
   scam: { window_days: number; note: string; eth: StableScamChainCounters | null; tron: StableScamChainCounters | null };
+}
+
+// --- /onchain ---
+
+export interface StableOnchainDay {
+  day: string;
+  asset: string;
+  chain: string;
+  transfers: number;
+  zero_value: number;
+  volume_raw: string;
+  volume_native: number;
+  senders: number;
+  receivers: number;
+  ge_1m_count: number;
+  ge_1m_volume_raw: string;
+  ge_1m_volume_native: number;
+  minted_raw?: string;
+  minted_native: number | null;
+  burned_raw?: string;
+  burned_native: number | null;
+  velocity?: number | null;
+  synced_at: string;
+}
+
+export interface StableLargeTransfer {
+  day: string;
+  asset: string;
+  chain: string;
+  tx_hash: string;
+  log_index: number;
+  ts: string;
+  from: string;
+  to: string;
+  amount_raw: string;
+  amount_native: number;
+  explorer_url?: string;
+}
+
+export interface StableSupplyEvent {
+  day: string;
+  ts: string;
+  asset: string;
+  chain: string;
+  tx_hash: string;
+  log_index: number;
+  kind: 'mint' | 'burn' | 'issue' | 'redeem' | string;
+  amount_raw: string;
+  amount_native: number;
+  actor?: string;
+  explorer_url?: string;
+}
+
+export interface StableOnchainResponse {
+  as_of: string;
+  asset: string;
+  days: number;
+  data_available: boolean;
+  statuses: Record<string, StableBQJobStatus>;
+  daily: StableOnchainDay[];
+  large_transfers: StableLargeTransfer[];
+  supply_events: StableSupplyEvent[];
+  coverage_note: string;
 }

@@ -174,7 +174,7 @@ export default function ControlsTab({
       })}
       <Panel
         title="Change log"
-        help="Confirmed control changes detected over RPC, newest first (at most 100). BigQuery tx-linked admin events arrive with the v1.1 jobs."
+        help="Confirmed control changes detected over RPC or synced from BigQuery admin logs, newest first (at most 100)."
         right={
           <CsvButton
             filename={`stablecoin-control-changes-${asset}.csv`}
@@ -191,7 +191,7 @@ export default function ControlsTab({
             <table className={cx.table}>
               <thead>
                 <tr>
-                  {['Detected', 'Asset', 'Chain', 'Field', 'Old → new', 'Confirmed by', ''].map(h => (
+                  {['Detected', 'Asset', 'Chain', 'Field', 'Old → new', 'Confirmed by', 'Tx', ''].map(h => (
                     <th key={h || 'crit'} scope="col" className={cx.th}>
                       {h}
                     </th>
@@ -209,6 +209,9 @@ export default function ControlsTab({
                       {fmtShortAddr(c.old)} → {fmtShortAddr(c.new)}
                     </td>
                     <td className={cx.td}>{c.confirmed_by.replace('_', ' ')}</td>
+                    <td className={`${cx.td} ${cx.mono}`} title={c.tx_hash || undefined}>
+                      {c.tx_hash ? fmtShortAddr(c.tx_hash) : '—'}
+                    </td>
                     <td className={cx.td}>{c.critical && <SignalChip state="critical" />}</td>
                   </tr>
                 ))}
