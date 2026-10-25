@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
+	"math/big"
 	"strings"
 	"time"
 )
@@ -209,6 +212,46 @@ CREATE TABLE IF NOT EXISTS stable_reservations (
 CREATE TABLE IF NOT EXISTS stable_kv (
   k TEXT PRIMARY KEY,
   v TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS stable_onchain_daily (
+  day TEXT NOT NULL,
+  asset TEXT NOT NULL,
+  chain TEXT NOT NULL,
+  transfers INTEGER NOT NULL,
+  zero_value INTEGER NOT NULL,
+  volume_raw TEXT NOT NULL,
+  senders INTEGER NOT NULL,
+  receivers INTEGER NOT NULL,
+  ge_1m_count INTEGER NOT NULL,
+  ge_1m_volume_raw TEXT NOT NULL,
+  minted_raw TEXT,
+  burned_raw TEXT,
+  synced_at TEXT NOT NULL,
+  PRIMARY KEY (day, asset, chain)
+);
+CREATE TABLE IF NOT EXISTS stable_large_transfers (
+  day TEXT NOT NULL,
+  asset TEXT NOT NULL,
+  chain TEXT NOT NULL,
+  tx_hash TEXT NOT NULL,
+  log_index INTEGER NOT NULL,
+  ts TEXT NOT NULL,
+  from_addr TEXT NOT NULL,
+  to_addr TEXT NOT NULL,
+  amount_raw TEXT NOT NULL,
+  PRIMARY KEY (day, asset, chain, tx_hash, log_index)
+);
+CREATE TABLE IF NOT EXISTS stable_supply_events (
+  chain TEXT NOT NULL,
+  tx_hash TEXT NOT NULL,
+  log_index INTEGER NOT NULL,
+  day TEXT NOT NULL,
+  ts TEXT NOT NULL,
+  asset TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  amount_raw TEXT NOT NULL,
+  actor TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (chain, tx_hash, log_index)
 );`
 
 // stableSnapshotRetention: supply snapshots are kept 180 days; the daily
@@ -615,6 +658,15 @@ func (s *riskStore) pruneStable(ctx context.Context, now time.Time) (int64, erro
 		slog.Info("stablecoin retention prune", "table", t.table, "cutoff", cutoff, "deleted", n)
 		total += n
 	}
+	dayCutoff := now.Add(-365 * 24 * time.Hour).UTC().Format(time.DateOnly)
+	if res, err := s.db.ExecContext(ctx, `DELETE FROM stable_large_transfers WHERE day < ?`, dayCutoff); err != nil {
+		return total, err
+	} else if n, err := res.RowsAffected(); err != nil {
+		return total, err
+	} else {
+		slog.Info("stablecoin retention prune", "table", "stable_large_transfers", "cutoff", dayCutoff, "deleted", n)
+		total += n
+	}
 	return total, nil
 }
 
@@ -660,4 +712,384 @@ LIMIT 1`, asset, source, chain, stableTS(target.Add(-tol)), stableTS(target.Add(
 	}
 	r.TS, r.FetchedAt = parseStableTS(ts), parseStableTS(fetched)
 	return &r, nil
+}
+
+func (s *riskStore) getStableKV(ctx context.Context, k string) (string, bool, error) {
+	if err := s.ensureStableSchema(ctx); err != nil {
+		return "", false, err
+	}
+	var v string
+	err := s.db.QueryRowContext(ctx, `SELECT v FROM stable_kv WHERE k = ?`, k).Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return v, true, nil
+}
+
+func (s *riskStore) setStableKV(ctx context.Context, k, v string) error {
+	if err := s.ensureStableSchema(ctx); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `
+INSERT INTO stable_kv (k, v) VALUES (?, ?)
+ON CONFLICT(k) DO UPDATE SET v = excluded.v`, k, v)
+	return err
+}
+
+func (s *riskStore) deleteStableKV(ctx context.Context, keys ...string) error {
+	if err := s.ensureStableSchema(ctx); err != nil {
+		return err
+	}
+	for _, k := range keys {
+		if _, err := s.db.ExecContext(ctx, `DELETE FROM stable_kv WHERE k = ?`, k); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type stableOnchainDailyRow struct {
+	Day           string
+	Asset         string
+	Chain         string
+	Transfers     int64
+	ZeroValue     int64
+	VolumeRaw     string
+	Senders       int64
+	Receivers     int64
+	Ge1MCount     int64
+	Ge1MVolumeRaw string
+	MintedRaw     string
+	BurnedRaw     string
+	SyncedAt      time.Time
+}
+
+type StableOnchainDay struct {
+	Day              string   `json:"day"`
+	Asset            string   `json:"asset"`
+	Chain            string   `json:"chain"`
+	Transfers        int64    `json:"transfers"`
+	ZeroValue        int64    `json:"zero_value"`
+	VolumeRaw        string   `json:"volume_raw"`
+	VolumeNative     float64  `json:"volume_native"`
+	Senders          int64    `json:"senders"`
+	Receivers        int64    `json:"receivers"`
+	Ge1MCount        int64    `json:"ge_1m_count"`
+	Ge1MVolumeRaw    string   `json:"ge_1m_volume_raw"`
+	Ge1MVolumeNative float64  `json:"ge_1m_volume_native"`
+	MintedRaw        string   `json:"minted_raw,omitempty"`
+	MintedNative     *float64 `json:"minted_native"`
+	BurnedRaw        string   `json:"burned_raw,omitempty"`
+	BurnedNative     *float64 `json:"burned_native"`
+	Velocity         *float64 `json:"velocity,omitempty"`
+	SyncedAt         string   `json:"synced_at"`
+}
+
+type StableLargeTransfer struct {
+	Day          string  `json:"day"`
+	Asset        string  `json:"asset"`
+	Chain        string  `json:"chain"`
+	TxHash       string  `json:"tx_hash"`
+	LogIndex     int64   `json:"log_index"`
+	TS           string  `json:"ts"`
+	From         string  `json:"from"`
+	To           string  `json:"to"`
+	AmountRaw    string  `json:"amount_raw"`
+	AmountNative float64 `json:"amount_native"`
+	ExplorerURL  string  `json:"explorer_url,omitempty"`
+}
+
+type StableSupplyEvent struct {
+	Day          string  `json:"day"`
+	TS           string  `json:"ts"`
+	Asset        string  `json:"asset"`
+	Chain        string  `json:"chain"`
+	TxHash       string  `json:"tx_hash"`
+	LogIndex     int64   `json:"log_index"`
+	Kind         string  `json:"kind"` // mint | burn | issue | redeem
+	AmountRaw    string  `json:"amount_raw"`
+	AmountNative float64 `json:"amount_native"`
+	Actor        string  `json:"actor,omitempty"`
+	ExplorerURL  string  `json:"explorer_url,omitempty"`
+}
+
+// stableRawToNative6 converts a 6-decimal integer string to float64 native units.
+func stableRawToNative6(raw string) (float64, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, false
+	}
+	z, ok := new(big.Int).SetString(raw, 10)
+	if !ok {
+		return 0, false
+	}
+	r := new(big.Rat).SetFrac(z, big.NewInt(1_000_000))
+	f, _ := r.Float64()
+	return f, true
+}
+
+func (s *riskStore) upsertStableOnchainDaily(ctx context.Context, rows []stableOnchainDailyRow) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	if err := s.ensureStableSchema(ctx); err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	stmt, err := tx.PrepareContext(ctx, `
+INSERT INTO stable_onchain_daily (
+  day, asset, chain, transfers, zero_value, volume_raw, senders, receivers,
+  ge_1m_count, ge_1m_volume_raw, minted_raw, burned_raw, synced_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(day, asset, chain) DO UPDATE SET
+  transfers = excluded.transfers,
+  zero_value = excluded.zero_value,
+  volume_raw = excluded.volume_raw,
+  senders = excluded.senders,
+  receivers = excluded.receivers,
+  ge_1m_count = excluded.ge_1m_count,
+  ge_1m_volume_raw = excluded.ge_1m_volume_raw,
+  minted_raw = excluded.minted_raw,
+  burned_raw = excluded.burned_raw,
+  synced_at = excluded.synced_at`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, r := range rows {
+		var minted, burned any
+		if r.MintedRaw != "" {
+			minted = r.MintedRaw
+		}
+		if r.BurnedRaw != "" {
+			burned = r.BurnedRaw
+		}
+		if _, err := stmt.ExecContext(ctx,
+			r.Day, r.Asset, r.Chain, r.Transfers, r.ZeroValue, r.VolumeRaw,
+			r.Senders, r.Receivers, r.Ge1MCount, r.Ge1MVolumeRaw, minted, burned,
+			stableTS(r.SyncedAt),
+		); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *riskStore) replaceStableLargeTransfers(ctx context.Context, chain, fromDay, toDay string, rows []StableLargeTransfer) error {
+	if err := s.ensureStableSchema(ctx); err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM stable_large_transfers WHERE chain = ? AND day >= ? AND day <= ?`,
+		chain, fromDay, toDay,
+	); err != nil {
+		return err
+	}
+	if len(rows) > 0 {
+		stmt, err := tx.PrepareContext(ctx, `
+INSERT OR REPLACE INTO stable_large_transfers (
+  day, asset, chain, tx_hash, log_index, ts, from_addr, to_addr, amount_raw
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		if err != nil {
+			return err
+		}
+		defer stmt.Close()
+		for _, r := range rows {
+			if _, err := stmt.ExecContext(ctx,
+				r.Day, r.Asset, r.Chain, r.TxHash, r.LogIndex, r.TS, r.From, r.To, r.AmountRaw,
+			); err != nil {
+				return err
+			}
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *riskStore) insertStableSupplyEvents(ctx context.Context, rows []StableSupplyEvent) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	if err := s.ensureStableSchema(ctx); err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	stmt, err := tx.PrepareContext(ctx, `
+INSERT OR REPLACE INTO stable_supply_events (
+  chain, tx_hash, log_index, day, ts, asset, kind, amount_raw, actor
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, r := range rows {
+		if _, err := stmt.ExecContext(ctx,
+			r.Chain, r.TxHash, r.LogIndex, r.Day, r.TS, r.Asset, r.Kind, r.AmountRaw, r.Actor,
+		); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *riskStore) insertStableBQControlEvents(ctx context.Context, events []stableControlEvent) error {
+	if len(events) == 0 {
+		return nil
+	}
+	if err := s.ensureStableSchema(ctx); err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, ev := range events {
+		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO stable_control_events
+(detected_at, asset, chain, field, old_value, new_value, first_seen, source, confirmed_by, tx_hash) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+			stableTS(ev.DetectedAt), ev.Asset, ev.Chain, ev.Field, ev.Old, ev.New, stableTS(ev.FirstSeen), ev.Source, ev.ConfirmedBy, ev.TxHash); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *riskStore) stableOnchainDaily(ctx context.Context, asset, fromDay string) ([]StableOnchainDay, error) {
+	if err := s.ensureStableSchema(ctx); err != nil {
+		return nil, err
+	}
+	rs, err := s.db.QueryContext(ctx, `
+SELECT day, asset, chain, transfers, zero_value, volume_raw, senders, receivers,
+       ge_1m_count, ge_1m_volume_raw, minted_raw, burned_raw, synced_at
+FROM stable_onchain_daily
+WHERE (? = '' OR ? = 'all' OR asset = ?) AND day >= ?
+ORDER BY day, asset, chain`, asset, asset, asset, fromDay)
+	if err != nil {
+		return nil, err
+	}
+	defer rs.Close()
+	out := []StableOnchainDay{}
+	for rs.Next() {
+		var r StableOnchainDay
+		var minted, burned sql.NullString
+		if err := rs.Scan(
+			&r.Day, &r.Asset, &r.Chain, &r.Transfers, &r.ZeroValue, &r.VolumeRaw,
+			&r.Senders, &r.Receivers, &r.Ge1MCount, &r.Ge1MVolumeRaw,
+			&minted, &burned, &r.SyncedAt,
+		); err != nil {
+			return nil, err
+		}
+		if v, ok := stableRawToNative6(r.VolumeRaw); ok {
+			r.VolumeNative = v
+		}
+		if v, ok := stableRawToNative6(r.Ge1MVolumeRaw); ok {
+			r.Ge1MVolumeNative = v
+		}
+		if minted.Valid && minted.String != "" {
+			r.MintedRaw = minted.String
+			if v, ok := stableRawToNative6(minted.String); ok {
+				r.MintedNative = &v
+			}
+		}
+		if burned.Valid && burned.String != "" {
+			r.BurnedRaw = burned.String
+			if v, ok := stableRawToNative6(burned.String); ok {
+				r.BurnedNative = &v
+			}
+		}
+		out = append(out, r)
+	}
+	return out, rs.Err()
+}
+
+func (s *riskStore) stableLargeTransfers(ctx context.Context, asset, fromDay string, limit int) ([]StableLargeTransfer, error) {
+	if err := s.ensureStableSchema(ctx); err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	rs, err := s.db.QueryContext(ctx, `
+SELECT day, asset, chain, tx_hash, log_index, ts, from_addr, to_addr, amount_raw
+FROM stable_large_transfers
+WHERE (? = '' OR ? = 'all' OR asset = ?) AND day >= ?
+ORDER BY day DESC, CAST(amount_raw AS INTEGER) DESC, tx_hash, log_index
+LIMIT ?`, asset, asset, asset, fromDay, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rs.Close()
+	out := []StableLargeTransfer{}
+	for rs.Next() {
+		var r StableLargeTransfer
+		if err := rs.Scan(&r.Day, &r.Asset, &r.Chain, &r.TxHash, &r.LogIndex, &r.TS, &r.From, &r.To, &r.AmountRaw); err != nil {
+			return nil, err
+		}
+		if v, ok := stableRawToNative6(r.AmountRaw); ok {
+			r.AmountNative = v
+		}
+		if info, ok := chains[r.Chain]; ok && info.TxURL != "" && r.TxHash != "" {
+			r.ExplorerURL = fmt.Sprintf(info.TxURL, r.TxHash)
+		}
+		out = append(out, r)
+	}
+	return out, rs.Err()
+}
+
+func (s *riskStore) stableSupplyEvents(ctx context.Context, asset, fromDay string, limit int) ([]StableSupplyEvent, error) {
+	if err := s.ensureStableSchema(ctx); err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	rs, err := s.db.QueryContext(ctx, `
+SELECT day, ts, asset, chain, tx_hash, log_index, kind, amount_raw, actor
+FROM stable_supply_events
+WHERE (? = '' OR ? = 'all' OR asset = ?) AND day >= ?
+ORDER BY ts DESC, tx_hash, log_index
+LIMIT ?`, asset, asset, asset, fromDay, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rs.Close()
+	out := []StableSupplyEvent{}
+	for rs.Next() {
+		var r StableSupplyEvent
+		if err := rs.Scan(&r.Day, &r.TS, &r.Asset, &r.Chain, &r.TxHash, &r.LogIndex, &r.Kind, &r.AmountRaw, &r.Actor); err != nil {
+			return nil, err
+		}
+		if v, ok := stableRawToNative6(r.AmountRaw); ok {
+			r.AmountNative = v
+		}
+		if info, ok := chains[r.Chain]; ok && info.TxURL != "" && r.TxHash != "" {
+			r.ExplorerURL = fmt.Sprintf(info.TxURL, r.TxHash)
+		}
+		out = append(out, r)
+	}
+	return out, rs.Err()
+}
+
+func (s *riskStore) stableHasOnchainData(ctx context.Context) (bool, error) {
+	if err := s.ensureStableSchema(ctx); err != nil {
+		return false, err
+	}
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM (SELECT 1 FROM stable_onchain_daily LIMIT 1)`).Scan(&n)
+	return n > 0, err
 }

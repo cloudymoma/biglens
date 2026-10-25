@@ -73,6 +73,7 @@ func (s *stablecoinService) buildEvents(ctx context.Context, assets []string, no
 		for _, a := range assets {
 			out = append(out, s.supplyMoveEvents(ctx, a, now)...)
 		}
+		out = append(out, s.bqSupplyEvents(ctx, want, now)...)
 	}
 	out = append(out, s.curatedEvents(want, now)...)
 	sort.SliceStable(out, func(i, j int) bool { return out[i].TS > out[j].TS })
@@ -100,10 +101,60 @@ func (s *stablecoinService) controlEvents(ctx context.Context, want map[string]b
 		case stableS8WarningFields[ev.Field] && now.Sub(ev.DetectedAt) <= stableS8Window:
 			sev = stableStateWarning
 		}
+		detail := map[string]any{"chain": ev.Chain, "field": ev.Field, "old": ev.Old, "new": ev.New,
+			"first_seen": stableFmt(ev.FirstSeen), "confirmed_by": ev.ConfirmedBy}
+		var url string
+		if ev.TxHash != "" {
+			detail["tx_hash"] = ev.TxHash
+			if info, ok := chains[ev.Chain]; ok && info.TxURL != "" {
+				url = fmt.Sprintf(info.TxURL, ev.TxHash)
+			}
+		}
 		out = append(out, StableEvent{TS: stableFmt(ev.DetectedAt), Asset: ev.Asset, Kind: "control_change", Severity: sev,
 			Title:  fmt.Sprintf("%s on %s: %s changed", strings.ToUpper(ev.Asset), stableChainName(ev.Chain), ev.Field),
-			Source: ev.Source, Detail: map[string]any{"chain": ev.Chain, "field": ev.Field, "old": ev.Old, "new": ev.New,
-				"first_seen": stableFmt(ev.FirstSeen), "confirmed_by": ev.ConfirmedBy}})
+			Source: ev.Source, URL: url, Detail: detail})
+	}
+	return out
+}
+
+func (s *stablecoinService) bqSupplyEvents(ctx context.Context, want map[string]bool, now time.Time) []StableEvent {
+	fromDay := now.UTC().Add(-stableEventsLookback).Format(time.DateOnly)
+	evs, err := s.store.stableSupplyEvents(ctx, "all", fromDay, 100)
+	if err != nil {
+		slog.Warn("stablecoin events: bigquery supply events", "error", err)
+		return nil
+	}
+	var out []StableEvent
+	for _, ev := range evs {
+		if !want[ev.Asset] {
+			continue
+		}
+		def, ok := stableAssetByID(ev.Asset)
+		if !ok {
+			continue
+		}
+		threshold, unit := 100e6, "$"
+		if def.Numeraire == "EUR" {
+			threshold, unit = 10e6, "€"
+		}
+		if ev.AmountNative < threshold {
+			continue
+		}
+		out = append(out, StableEvent{
+			TS:       ev.TS,
+			Asset:    ev.Asset,
+			Kind:     "supply_move",
+			Severity: stableStateInfo,
+			Title:    fmt.Sprintf("%s on %s: %s %s%.1fM", def.Symbol, stableChainName(ev.Chain), ev.Kind, unit, ev.AmountNative/1e6),
+			Source:   "bigquery",
+			URL:      ev.ExplorerURL,
+			Detail: map[string]any{
+				"chain":         ev.Chain,
+				"kind":          ev.Kind,
+				"amount_native": ev.AmountNative,
+				"tx_hash":       ev.TxHash,
+			},
+		})
 	}
 	return out
 }

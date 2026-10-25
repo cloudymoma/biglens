@@ -40,6 +40,7 @@ func stablecoinRoutes(h *APIHandler) []stablecoinRoute {
 		{Pattern: "/api/opendata/stablecoin/reserves", Handler: h.StablecoinReserves},
 		{Pattern: "/api/opendata/stablecoin/chains", Handler: h.StablecoinChains},
 		{Pattern: "/api/opendata/stablecoin/controls", Handler: h.StablecoinControls},
+		{Pattern: "/api/opendata/stablecoin/onchain", Handler: h.StablecoinOnchain},
 	}
 }
 
@@ -80,11 +81,18 @@ type StableMetaFacts struct {
 }
 
 type StableMetaBigQuery struct {
-	Jobs             bool   `json:"jobs"`
-	Status           string `json:"status"` // not_in_v1: the opt-in jobs ship in v1.1
-	InitialDays      int    `json:"initial_days"`
-	MonthlyBudgetGiB int64  `json:"monthly_budget_gib"`
-	Tron             bool   `json:"tron"`
+	Jobs                  bool                   `json:"jobs"`
+	DataAvailable         bool                   `json:"data_available"`
+	Status                string                 `json:"status"`
+	InitialDays           int                    `json:"initial_days"`
+	MonthlyBudgetGiB      int64                  `json:"monthly_budget_gib"`
+	MonthBilledGiB        float64                `json:"month_billed_gib"`
+	ReservedGiB           float64                `json:"reserved_gib"`
+	RemainingGiB          float64                `json:"remaining_gib"`
+	Tron                  bool                   `json:"tron"`
+	Statuses              map[string]BtcBQStatus `json:"statuses,omitempty"`
+	StoppedJobs           []string               `json:"stopped_jobs,omitempty"`
+	AggregateExposureNote string                 `json:"aggregate_exposure_note,omitempty"`
 }
 
 type StableMeta struct {
@@ -124,8 +132,9 @@ func (s *stablecoinService) buildMeta() StableMeta {
 		}
 		m.Facts.AssetStatus[a.ID] = status
 	}
-	m.BigQuery = StableMetaBigQuery{Jobs: s.settings.Jobs, Status: "not_in_v1", InitialDays: s.settings.InitialDays,
-		MonthlyBudgetGiB: s.settings.BudgetBytes >> 30, Tron: s.settings.Tron}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	m.BigQuery = s.buildMetaBigQuery(ctx)
 	m.DataHealth = newStableDataHealth()
 	if state := s.snapshot(); state != nil {
 		for _, def := range stableCoreAssets {

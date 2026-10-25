@@ -48,8 +48,8 @@ func TestStablecoinRoutesDisabled404(t *testing.T) {
 	off := false
 	h := &APIHandler{cache: NewCache(time.Minute), stable: newStablecoinService(&Config{Stablecoin: StablecoinConfig{Enabled: &off}})}
 	routes := stablecoinRoutes(h)
-	if len(routes) != 8 {
-		t.Fatalf("routes = %d, want meta, live, overview, supply, peg, reserves, chains and controls", len(routes))
+	if len(routes) != 9 {
+		t.Fatalf("routes = %d, want meta, live, overview, supply, peg, reserves, chains, controls and onchain", len(routes))
 	}
 	mux := http.NewServeMux()
 	registerStablecoinRoutes(mux, h, func(f http.HandlerFunc) http.Handler { return f })

@@ -24,6 +24,7 @@ func main() {
 	force := flag.Bool("force", false, "bypass the minimum interval lock for --bitcoin-utxo-baseline (never bypasses budget)")
 	btcBaseline := flag.Bool("bitcoin-utxo-baseline", false, "build the Bitcoin UTXO baseline from BigQuery (dry run unless --yes), then exit")
 	btcResume := flag.String("bitcoin-bq-resume", "", "clear the stop flag for a Bitcoin BigQuery job (btc_onchain or btc_coinage) and exit")
+	stableResume := flag.String("stablecoin-bq-resume", "", "clear the stop flag for a Stablecoin BigQuery job (stable_eth or stable_tron) and exit")
 	stableVerify := flag.Bool("stablecoin-verify", false, "check every enabled stablecoin source against its live endpoint, print a pass/fail table and exit (non-zero on any failure)")
 	flag.Parse()
 
@@ -37,6 +38,9 @@ func main() {
 
 	if *btcResume != "" {
 		os.Exit(runBtcResumeCLI(context.Background(), cfg, *btcResume))
+	}
+	if *stableResume != "" {
+		os.Exit(runStableResumeCLI(context.Background(), cfg, *stableResume))
 	}
 	if *stableVerify {
 		// Public HTTPS and RPC reads only: no BigQuery client is created.
@@ -173,6 +177,9 @@ func main() {
 		go runStablePegSampler(ctx, api.stable.peg, api.stable.health)
 		go runStableControlsSampler(ctx, api.stable.controls, api.stable.health)
 		go runStableSignalWatchdog(ctx, api.stable)
+		if bqJobs := stablecoinSyncJobs(api.stable.settings, rstore, bq); len(bqJobs) > 0 {
+			go runAddressRiskSync(ctx, time.Hour, bqJobs...)
+		}
 	}
 
 	mux := http.NewServeMux()
