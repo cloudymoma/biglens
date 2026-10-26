@@ -116,3 +116,87 @@ export const computeEurMarketStats = (
     nativeSub: allHaveNative ? `${eur.length} coins` : `${eurWithNative.length} of ${eur.length} coins have native supply`,
   };
 };
+
+// fmtBytesGiB formats a byte count in GiB ("1.00 GiB") or "—" when missing.
+export const fmtBytesGiB = (bytes: number | null | undefined, decimals = 2): string => {
+  if (missing(bytes)) return DASH;
+  return `${(bytes / 1024 ** 3).toFixed(decimals)} GiB`;
+};
+
+const fmtRelMinutes = (diffMin: number): string => {
+  if (diffMin === 0) return 'now';
+  const abs = Math.abs(diffMin);
+  const body =
+    abs < 60
+      ? `${abs}m`
+      : abs % 60 === 0
+        ? `${Math.floor(abs / 60)}h`
+        : `${Math.floor(abs / 60)}h ${abs % 60}m`;
+  return diffMin > 0 ? `in ${body}` : `${body} ago`;
+};
+
+// fmtNextCheckUTC formats next_check_at in UTC alongside its relative time
+// ("2026-10-19 14:00 UTC (in 39m)"), or "—" when null/missing.
+export const fmtNextCheckUTC = (nextCheckIso: string | null | undefined, nowIso?: string | null): string => {
+  const target = parse(nextCheckIso);
+  if (!target) return DASH;
+  const dt = fmtDateTime(nextCheckIso);
+  const now = nowIso ? parse(nowIso) : new Date();
+  if (!now) return dt;
+  const diffMin = Math.round((target.getTime() - now.getTime()) / 60_000);
+  return `${dt} (${fmtRelMinutes(diffMin)})`;
+};
+
+// fmtLastRunUTC formats a job's last run (UTC time, trigger, result, GiB billed)
+// or "—" when the job has not run yet.
+export const fmtLastRunUTC = (
+  status:
+    | {
+        last_run_at?: string | null;
+        last_run_trigger?: string | null;
+        last_run_result?: string | null;
+        last_run_bytes_billed?: number | null;
+      }
+    | null
+    | undefined,
+): string => {
+  if (!status || !status.last_run_at) return DASH;
+  const dt = fmtDateTime(status.last_run_at);
+  if (dt === DASH) return DASH;
+  const trigger = status.last_run_trigger || DASH;
+  const result = status.last_run_result || DASH;
+  const billed = fmtBytesGiB(status.last_run_bytes_billed);
+  return `${dt} · ${trigger} · ${result} · ${billed}`;
+};
+
+// mapStableBQError maps HTTP 403, 409 and 429 from /bigquery/estimate and
+// /bigquery/run to plain operator messages.
+export const mapStableBQError = (status: number | undefined, serverMessage?: string): string => {
+  const msg = (serverMessage ?? '').trim();
+  if (status === 403) {
+    return 'BigQuery actions are restricted to this computer (loopback 127.0.0.1 / ::1).';
+  }
+  if (status === 429) {
+    return msg
+      ? `Rate limited (at most one manual run every 5 minutes): ${msg}`
+      : 'Rate limited: at most one manual run per job every 5 minutes.';
+  }
+  if (status === 409) {
+    const lower = msg.toLowerCase();
+    if (lower.includes('estimate changed')) {
+      return 'The dry-run estimate changed by more than 10%. Click "Run now" again to review the updated estimate.';
+    }
+    if (lower.includes('already running')) {
+      return 'This job is already running. Wait for the current run to finish.';
+    }
+    if (lower.includes('over_budget')) {
+      return 'Refused: the estimated scan exceeds the remaining monthly BigQuery budget.';
+    }
+    if (lower.includes('nothing to do')) {
+      return 'Already up to date through yesterday UTC.';
+    }
+    return msg || 'Conflict: this BigQuery job cannot be started right now.';
+  }
+  return msg || 'BigQuery request failed.';
+};
+

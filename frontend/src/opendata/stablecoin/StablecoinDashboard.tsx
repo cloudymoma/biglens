@@ -11,7 +11,11 @@ import ControlsTab from './ControlsTab';
 import OverviewTab from './OverviewTab';
 import PegTab from './PegTab';
 import ReservesTab from './ReservesTab';
-import { StableBigQueryStatusChip, StableBigQuerySwitch } from './StableBigQueryLocked';
+import {
+  StableBigQueryJobsPanel,
+  StableBigQueryStatusChip,
+  StableBigQuerySwitch,
+} from './StableBigQueryLocked';
 import StablecoinTicker from './StablecoinTicker';
 import { cx } from './styles';
 import SupplyTab from './SupplyTab';
@@ -69,6 +73,7 @@ export default function StablecoinDashboard() {
     [view.tab]: true,
   }));
   const [refreshTick, setRefreshTick] = useState(0);
+  const [jobsPanelOpen, setJobsPanelOpen] = useState(false);
 
   // Deep links (§7.3): the view lives in the query string, written with
   // replaceState whenever it changes (an external-system sync, no state set).
@@ -82,10 +87,19 @@ export default function StablecoinDashboard() {
   }, [view]);
 
   // The ticker polls /live every 60 s; usePolling skips runs while the
-  // browser tab is hidden (§7.1).
+  // browser tab is hidden (§7.1). While a BigQuery job is running, /meta
+  // polls every 5 s until running becomes false.
   const livePoll = usePolling(fetchStableLive, 60_000, `stable-live-${refreshTick}`);
   const liveWarm = `${livePoll.data && !livePoll.data.warming_up ? 's1' : 's0'}-${livePoll.data && !livePoll.data.peg_warming_up ? 'p1' : 'p0'}`;
   const metaPoll = usePolling(fetchStableMeta, 60_000, `stable-meta-${refreshTick}-${liveWarm}`);
+  const metaBqRunning = Object.values(metaPoll.data?.bigquery.statuses ?? {}).some(s => Boolean(s.running));
+  useEffect(() => {
+    if (!metaBqRunning) return;
+    const id = window.setInterval(() => {
+      setRefreshTick(t => t + 1);
+    }, 5_000);
+    return () => window.clearInterval(id);
+  }, [metaBqRunning]);
   const [overviewRange, setOverviewRange] = useState<StableRange>(() => effectiveRange('overview', view.range) ?? '90d');
   const overviewPoll = usePolling(
     () => fetchStableOverview(overviewRange),
@@ -174,8 +188,15 @@ export default function StablecoinDashboard() {
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2.5">
-              <StableBigQueryStatusChip bigquery={metaPoll.data?.bigquery} />
-              <StableBigQuerySwitch control={bqControl} />
+              <StableBigQueryStatusChip
+                bigquery={metaPoll.data?.bigquery}
+                open={jobsPanelOpen}
+                onToggle={() => setJobsPanelOpen(o => !o)}
+              />
+              <StableBigQuerySwitch
+                control={bqControl}
+                onOpenJobs={() => setJobsPanelOpen(true)}
+              />
               <SegmentedControl
                 label="Asset"
                 options={ASSET_CHOICES}
@@ -219,6 +240,15 @@ export default function StablecoinDashboard() {
 
           {metaPoll.error && !metaPoll.data && (
             <ErrorNote message={`${metaPoll.error}. If this persists, check that stablecoin.enabled is true in conf.yaml.`} />
+          )}
+
+          {jobsPanelOpen && (
+            <StableBigQueryJobsPanel
+              bigquery={metaPoll.data?.bigquery}
+              asOf={metaPoll.data?.as_of || updated}
+              onClose={() => setJobsPanelOpen(false)}
+              onRefreshMeta={() => setRefreshTick(t => t + 1)}
+            />
           )}
 
           <StablecoinTicker live={livePoll.data} loading={livePoll.loading} />

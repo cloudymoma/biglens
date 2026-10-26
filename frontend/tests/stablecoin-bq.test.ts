@@ -53,3 +53,122 @@ test('StablecoinDashboard, ChainsTab and ControlsTab wire BigQuery switch and on
     'ControlsTab change log must display tx_hash when present on BigQuery-sourced control events',
   );
 });
+
+test('M8: status chip is an accessible button with aria-expanded that opens the BigQuery jobs panel, and disabled switch shows visible text + button', () => {
+  const dashSrc = readFileSync(new URL('../src/opendata/stablecoin/StablecoinDashboard.tsx', import.meta.url), 'utf8');
+  const lockedSrc = readFileSync(new URL('../src/opendata/stablecoin/StableBigQueryLocked.tsx', import.meta.url), 'utf8');
+
+  // Chip is a real <button> with aria-expanded that opens the jobs panel.
+  assert.ok(
+    lockedSrc.includes('aria-expanded={open}') &&
+      lockedSrc.includes('StableBigQueryJobsPanel') &&
+      dashSrc.includes('StableBigQueryJobsPanel'),
+    'StableBigQueryStatusChip must be a real <button> with aria-expanded that toggles StableBigQueryJobsPanel',
+  );
+
+  // Disabled switch shows visible reason text and a button that opens the jobs panel.
+  assert.ok(
+    lockedSrc.includes('No on-chain data yet: run a job once, or turn on the schedule.') &&
+      lockedSrc.includes('onOpenJobs'),
+    'Disabled Show BigQuery panels switch must render visible explanation text and a button to open the jobs panel',
+  );
+
+  // Jobs panel includes schedule on/off with conf.yaml snippet + copy button, budget bar, 00:00 UTC note, and native <dialog> confirm modal.
+  assert.ok(
+    lockedSrc.includes('on (hourly)') &&
+      lockedSrc.includes('off: set') &&
+      lockedSrc.includes('stablecoin.bigquery.jobs: true') &&
+      lockedSrc.includes('New day available after 00:00 UTC') &&
+      lockedSrc.includes('Budget this month:') &&
+      lockedSrc.includes('<dialog') &&
+      lockedSrc.includes('aria-live'),
+    'StableBigQueryJobsPanel must render schedule status, copyable conf.yaml snippet, budget bar, 00:00 UTC note, native <dialog>, and aria-live status',
+  );
+
+  // Fast 5s polling while any job is running.
+  assert.ok(
+    dashSrc.includes('5_000') && dashSrc.includes('.running'),
+    'StablecoinDashboard must poll /meta every 5 s while a BigQuery job is running',
+  );
+});
+
+test('M8: confirm flow calls estimate then run with X-BigLens-Action: stablecoin-bq, times are UTC, and missing values render —', async () => {
+  const {
+    fmtBytesGiB,
+    fmtNextCheckUTC,
+    fmtLastRunUTC,
+    mapStableBQError,
+  } = await import('../src/opendata/stablecoin/format.ts');
+  const {
+    estimateStableBQJob,
+    runStableBQJob,
+  } = await import('../src/opendata/stablecoin/api.ts');
+
+  // Missing values render "—".
+  assert.equal(fmtBytesGiB(null), '—');
+  assert.equal(fmtBytesGiB(undefined), '—');
+  assert.equal(fmtBytesGiB(Number.NaN), '—');
+  assert.equal(fmtBytesGiB(1073741824), '1.00 GiB');
+  assert.equal(fmtNextCheckUTC(null, '2026-10-19T13:21:00Z'), '—');
+  assert.equal(fmtNextCheckUTC(undefined, '2026-10-19T13:21:00Z'), '—');
+  assert.equal(fmtLastRunUTC(null), '—');
+  assert.equal(fmtLastRunUTC({}), '—');
+
+  // Times are UTC.
+  assert.equal(
+    fmtNextCheckUTC('2026-10-19T14:00:00Z', '2026-10-19T13:21:00Z'),
+    '2026-10-19 14:00 UTC (in 39m)',
+  );
+  assert.equal(
+    fmtLastRunUTC({
+      last_run_at: '2026-10-19T13:21:00Z',
+      last_run_trigger: 'manual',
+      last_run_result: 'ok',
+      last_run_bytes_billed: 943718400,
+    }),
+    '2026-10-19 13:21 UTC · manual · ok · 0.88 GiB',
+  );
+
+  // Plain error mapping for 403, 409, 429.
+  assert.match(mapStableBQError(403, ''), /this computer|loopback|127\.0\.0\.1/i);
+  assert.match(mapStableBQError(429, 'rate limited: wait 180s'), /5 minutes|wait 180s/i);
+  assert.match(mapStableBQError(409, 'estimate changed by more than 10%'), /estimate changed/i);
+
+  // Confirm flow calls estimate first, then run with confirmed_estimate_bytes and X-BigLens-Action: stablecoin-bq.
+  const calls: { url: string; body: unknown; headers: Record<string, string> }[] = [];
+  const fakePost = async <T>(url: string, body: unknown, config?: { headers?: Record<string, string> }): Promise<{ data: T }> => {
+    calls.push({ url, body, headers: config?.headers ?? {} });
+    if (url.includes('/bigquery/estimate')) {
+      return {
+        data: {
+          job: 'stable_eth',
+          window_from: '2026-10-18',
+          window_to: '2026-10-18',
+          estimated_bytes: 1048576000,
+          estimated_usd: 0.00596,
+          pricing_note: 'Estimated at $6.25/TiB; BigQuery bills actual bytes scanned',
+          budget_used_bytes: 0,
+          budget_limit_bytes: 549755813888,
+          fits_budget: true,
+          nothing_to_do: false,
+        } as T,
+      };
+    }
+    return { data: { status: 'started', job: 'stable_eth' } as T };
+  };
+
+  const est = await estimateStableBQJob('stable_eth', fakePost);
+  assert.equal(est.estimated_bytes, 1048576000);
+  const runRes = await runStableBQJob('stable_eth', est.estimated_bytes, fakePost);
+  assert.equal(runRes.status, 'started');
+
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].url, '/api/opendata/stablecoin/bigquery/estimate?job=stable_eth');
+  assert.equal(calls[0].headers['X-BigLens-Action'], 'stablecoin-bq');
+  assert.equal(calls[0].headers['Content-Type'], 'application/json');
+  assert.equal(calls[1].url, '/api/opendata/stablecoin/bigquery/run?job=stable_eth');
+  assert.deepEqual(calls[1].body, { confirmed_estimate_bytes: 1048576000 });
+  assert.equal(calls[1].headers['X-BigLens-Action'], 'stablecoin-bq');
+  assert.equal(calls[1].headers['Content-Type'], 'application/json');
+});
+

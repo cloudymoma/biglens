@@ -1,6 +1,7 @@
 import axios from 'axios';
 import type { StableAsset, StableRange } from './deeplink';
 import type {
+  StableBQEstimateResponse,
   StableChains,
   StableControls,
   StableLive,
@@ -12,9 +13,22 @@ import type {
   StableSupply,
 } from './types';
 
-// Every endpoint is served from BigLens' own samples and SQLite; none calls an
-// upstream per request (stablecoin.md §9).
+// Every GET endpoint is served from BigLens' own samples and SQLite; none calls
+// an upstream per request (stablecoin.md §9).
 const BASE = '/api/opendata/stablecoin';
+
+export const STABLE_BQ_HEADERS = {
+  'Content-Type': 'application/json',
+  'X-BigLens-Action': 'stablecoin-bq',
+} as const;
+
+export type StableBQPostFn = <T>(
+  url: string,
+  body: unknown,
+  config?: { headers?: Record<string, string> },
+) => Promise<{ data: T }>;
+
+const defaultPost: StableBQPostFn = (url, body, config) => axios.post(url, body, config);
 
 export const fetchStableMeta = async (): Promise<StableMeta> => {
   const { data } = await axios.get<StableMeta>(`${BASE}/meta`);
@@ -60,3 +74,29 @@ export const fetchStableOnchain = async (asset: StableAsset, days = 90): Promise
   const { data } = await axios.get<StableOnchainResponse>(`${BASE}/onchain`, { params: { asset, days } });
   return data;
 };
+
+export const estimateStableBQJob = async (
+  job: 'stable_eth' | 'stable_tron' | string,
+  post: StableBQPostFn = defaultPost,
+): Promise<StableBQEstimateResponse> => {
+  const { data } = await post<StableBQEstimateResponse>(
+    `${BASE}/bigquery/estimate?job=${encodeURIComponent(job)}`,
+    {},
+    { headers: { ...STABLE_BQ_HEADERS } },
+  );
+  return data;
+};
+
+export const runStableBQJob = async (
+  job: 'stable_eth' | 'stable_tron' | string,
+  confirmedEstimateBytes: number,
+  post: StableBQPostFn = defaultPost,
+): Promise<{ status: string; job: string }> => {
+  const { data } = await post<{ status: string; job: string }>(
+    `${BASE}/bigquery/run?job=${encodeURIComponent(job)}`,
+    { confirmed_estimate_bytes: confirmedEstimateBytes },
+    { headers: { ...STABLE_BQ_HEADERS } },
+  );
+  return data;
+};
+

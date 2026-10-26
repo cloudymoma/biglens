@@ -68,6 +68,8 @@ export interface StableDataHealth {
 export interface StableBQJobStatus {
   job: string;
   jobs: boolean;
+  schedule_enabled?: boolean;
+  running?: boolean;
   state: 'ready' | 'cold_start' | 'retrying' | 'budget_paused' | 'stopped' | 'off' | string;
   synced_through?: string;
   coverage_from?: string;
@@ -75,6 +77,12 @@ export interface StableBQJobStatus {
   failures?: number;
   next_run_after?: string;
   stop_reason?: string;
+  last_run_at?: string;
+  last_run_trigger?: 'schedule' | 'manual' | string;
+  last_run_result?: 'ok' | 'no_new_day' | 'error' | 'budget_paused' | 'stopped' | string;
+  last_run_bytes_billed?: number | null;
+  next_check_at?: string | null;
+  next_new_day_at?: string;
 }
 
 export interface StableMetaBigQuery {
@@ -86,10 +94,25 @@ export interface StableMetaBigQuery {
   month_billed_gib?: number;
   reserved_gib?: number;
   remaining_gib?: number;
+  budget_used_bytes?: number;
+  budget_limit_bytes?: number;
   tron: boolean;
   statuses?: Record<string, StableBQJobStatus>;
   stopped_jobs?: string[];
   aggregate_exposure_note?: string;
+}
+
+export interface StableBQEstimateResponse {
+  job: string;
+  window_from?: string;
+  window_to?: string;
+  estimated_bytes: number;
+  estimated_usd: number;
+  pricing_note: string;
+  budget_used_bytes: number;
+  budget_limit_bytes: number;
+  fits_budget: boolean;
+  nothing_to_do: boolean;
 }
 
 export interface StableMeta {
