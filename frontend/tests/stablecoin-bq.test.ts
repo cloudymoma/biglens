@@ -172,3 +172,20 @@ test('M8: confirm flow calls estimate then run with X-BigLens-Action: stablecoin
   assert.equal(calls[1].headers['Content-Type'], 'application/json');
 });
 
+test('M8: README Stablecoins section documents the BigQuery jobs panel, Run now, cost note, and loopback-only rule', () => {
+  const readmeSrc = readFileSync(new URL('../../README.md', import.meta.url), 'utf8');
+  const stableIdx = readmeSrc.indexOf('### Stablecoins');
+  const nextSectionIdx = readmeSrc.indexOf('### Crypto Pulse', stableIdx);
+  const stableSection = readmeSrc.slice(stableIdx, nextSectionIdx);
+
+  assert.ok(
+    stableSection.includes('BigQuery jobs') &&
+      stableSection.includes('Run now') &&
+      stableSection.includes('$6.25/TiB') &&
+      stableSection.includes('127.0.0.1') &&
+      stableSection.includes('X-BigLens-Action: stablecoin-bq'),
+    'README Stablecoins section must document the BigQuery jobs panel, Run now flow, $6.25/TiB cost note, and loopback-only rule',
+  );
+});
+
+

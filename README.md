@@ -525,14 +525,53 @@ S7 (reserve mix) and S9 (freeze activity) arrive in v1.1.
 
 #### Costs
 
-**$0 by default.** Every source is a keyless public API or an RPC read over the
+**$0 by default.** Every core source is a keyless public API or an RPC read over the
 endpoints already configured for Payment Check, and the dashboard runs no
-BigQuery jobs: `stablecoin.bigquery.jobs` stays `false`, and the opt-in activity
-jobs are planned for v1.1. The only BigQuery-side change is one extra contract
-(EURC) in the existing Address Risk freeze sync, which a dry-run measured at 0
-extra bytes. SQLite growth is bounded by the daily pruner: venue quotes and
-consensus inputs are kept 30 days, peg samples and Uniswap readings 180 days, and
-supply snapshots 180 days; daily tables are kept.
+scheduled BigQuery jobs unless opted in (`stablecoin.bigquery.jobs` defaults to `false`).
+The **Show BigQuery panels** switch in the header is also off by default (`localStorage`)
+and reads pre-synced SQLite tables only (`GET /api/opendata/stablecoin/onchain`). When no
+on-chain rows exist yet, the disabled switch displays *"No on-chain data yet: run a job once,
+or turn on the schedule"* alongside a button that opens the **BigQuery jobs** panel.
+The only default BigQuery-side change is one extra contract (EURC) in the existing Address Risk
+freeze sync, which a dry-run measured at 0 extra bytes. SQLite growth is bounded by the daily
+pruner: venue quotes and consensus inputs are kept 30 days, peg samples and Uniswap readings
+180 days, and supply snapshots 180 days; daily tables are kept.
+
+#### BigQuery jobs panel & "Run now"
+
+Clicking the BigQuery status chip in the header opens the **BigQuery jobs** panel with one row
+per job (`stable_eth` and `stable_tron`):
+
+- **Schedule & status** — shows whether the hourly schedule is `on (hourly)` or
+  `off: set stablecoin.bigquery.jobs: true in conf.yaml` (with a copyable snippet), the job's
+  state, the UTC date synced through, the last run's UTC timestamp, trigger (`schedule` or
+  `manual`), result (`ok`, `no_new_day`, `error`, `budget_paused` or `stopped`) and GiB billed,
+  the next scheduled check (UTC + relative time), when the next finished day becomes available
+  (`after 00:00 UTC`), and the current month's budget bar (`X / 512 GiB`, settled + open
+  reservations).
+- **"Run now" (works even when the schedule is off)** — clicking **Run now** on `stable_eth` or
+  `stable_tron` first runs a free dry-run (`POST /api/opendata/stablecoin/bigquery/estimate?job=…`)
+  and opens a confirmation `<dialog>` showing the UTC day window (`window_from` → `window_to`),
+  the estimated scan size in GiB and approximate cost, and monthly budget usage before and after
+  the run. Nothing executes until you click **Confirm & run now**
+  (`POST /api/opendata/stablecoin/bigquery/run?job=…` with `{"confirmed_estimate_bytes": N}`).
+  While a run is in progress, the panel shows a spinner and polls `/meta` every 5 s until the
+  run finishes.
+- **Cost note & safeguards** — dry-run estimates are shown at **$6.25/TiB**, while BigQuery
+  bills the actual bytes scanned. Manual runs share the same monthly budget ledger
+  (`stablecoin.bigquery.monthly_budget_gib`, default `512` GiB), exact dry-run byte reservation,
+  silent-zero / TRON bit-63 overflow / supply-event reconciliation guards, and 4-billed-failure
+  circuit breaker (`./biglens-server --stablecoin-bq-resume <job>`) as scheduled runs. If the
+  fresh dry-run estimate grows by more than 10% between preview and confirmation, the run is
+  refused with `409 Conflict`. Each job is single-flight (`409` if already running) and rate-limited
+  to at most one manual run every 5 minutes (`429 Too Many Requests`).
+- **Loopback-only rule** — because the server listens on all network interfaces with no login,
+  both `POST /api/opendata/stablecoin/bigquery/estimate` and
+  `POST /api/opendata/stablecoin/bigquery/run` accept requests **only from loopback**
+  (`127.0.0.1` or `::1` checked directly against `RemoteAddr`, ignoring `X-Forwarded-For`,
+  returning `403 Forbidden` otherwise) and require `Content-Type: application/json` plus the
+  custom header `X-BigLens-Action: stablecoin-bq` (`400 Bad Request` otherwise). Other devices
+  on your network and other websites cannot trigger BigQuery spend.
 
 #### Source verification
 
