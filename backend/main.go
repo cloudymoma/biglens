@@ -177,8 +177,25 @@ func main() {
 		go runStablePegSampler(ctx, api.stable.peg, api.stable.health)
 		go runStableControlsSampler(ctx, api.stable.controls, api.stable.health)
 		go runStableSignalWatchdog(ctx, api.stable)
-		if bqJobs := stablecoinSyncJobs(api.stable.settings, rstore, bq); len(bqJobs) > 0 {
-			go runAddressRiskSync(ctx, time.Hour, bqJobs...)
+		if rstore != nil && bq != nil {
+			api.stable.bqRunner = newStableBQRunner(
+				api.stable.settings,
+				rstore,
+				bqStableEthSource{client: bq.client},
+				bqStableTronSource{client: bq.client},
+				time.Now,
+			)
+			api.stable.bqRunner.recoverFn = func(rctx context.Context) {
+				tctx, cancel := context.WithTimeout(context.WithoutCancel(rctx), 30*time.Second)
+				defer cancel()
+				lookup := bqLookupJobBytes(tctx, bq.client)
+				if err := api.stable.bqRunner.budget.recoverStale(tctx, time.Now().UTC(), lookup); err != nil {
+					slog.Warn("stablecoin bigquery recover stale reservations", "error", err)
+				}
+			}
+			if bqJobs := api.stable.bqRunner.scheduledJobs(); len(bqJobs) > 0 {
+				go runAddressRiskSync(ctx, time.Hour, bqJobs...)
+			}
 		}
 	}
 

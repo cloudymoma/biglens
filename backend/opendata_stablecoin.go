@@ -27,6 +27,8 @@ type stablecoinService struct {
 	gas *stableGasLastGood
 	// signals runs the §6 signal policies after every sample (wireSignals).
 	signals *stableSignalEngine
+	// bqRunner holds the BigQuery syncers for scheduled and manual runs.
+	bqRunner *stableBQRunner
 }
 
 func newStablecoinService(cfg *Config) *stablecoinService {

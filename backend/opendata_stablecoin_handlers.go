@@ -41,6 +41,8 @@ func stablecoinRoutes(h *APIHandler) []stablecoinRoute {
 		{Pattern: "/api/opendata/stablecoin/chains", Handler: h.StablecoinChains},
 		{Pattern: "/api/opendata/stablecoin/controls", Handler: h.StablecoinControls},
 		{Pattern: "/api/opendata/stablecoin/onchain", Handler: h.StablecoinOnchain},
+		{Pattern: "/api/opendata/stablecoin/bigquery/estimate", Handler: h.StablecoinBQEstimate},
+		{Pattern: "/api/opendata/stablecoin/bigquery/run", Handler: h.StablecoinBQRun},
 	}
 }
 
@@ -81,18 +83,20 @@ type StableMetaFacts struct {
 }
 
 type StableMetaBigQuery struct {
-	Jobs                  bool                   `json:"jobs"`
-	DataAvailable         bool                   `json:"data_available"`
-	Status                string                 `json:"status"`
-	InitialDays           int                    `json:"initial_days"`
-	MonthlyBudgetGiB      int64                  `json:"monthly_budget_gib"`
-	MonthBilledGiB        float64                `json:"month_billed_gib"`
-	ReservedGiB           float64                `json:"reserved_gib"`
-	RemainingGiB          float64                `json:"remaining_gib"`
-	Tron                  bool                   `json:"tron"`
-	Statuses              map[string]BtcBQStatus `json:"statuses,omitempty"`
-	StoppedJobs           []string               `json:"stopped_jobs,omitempty"`
-	AggregateExposureNote string                 `json:"aggregate_exposure_note,omitempty"`
+	Jobs                  bool                         `json:"jobs"`
+	DataAvailable         bool                         `json:"data_available"`
+	Status                string                       `json:"status"`
+	InitialDays           int                          `json:"initial_days"`
+	MonthlyBudgetGiB      int64                        `json:"monthly_budget_gib"`
+	MonthBilledGiB        float64                      `json:"month_billed_gib"`
+	ReservedGiB           float64                      `json:"reserved_gib"`
+	RemainingGiB          float64                      `json:"remaining_gib"`
+	BudgetUsedBytes       int64                        `json:"budget_used_bytes"`
+	BudgetLimitBytes      int64                        `json:"budget_limit_bytes"`
+	Tron                  bool                         `json:"tron"`
+	Statuses              map[string]StableBQJobStatus `json:"statuses,omitempty"`
+	StoppedJobs           []string                     `json:"stopped_jobs,omitempty"`
+	AggregateExposureNote string                       `json:"aggregate_exposure_note,omitempty"`
 }
 
 type StableMeta struct {
@@ -150,6 +154,11 @@ func (h *APIHandler) StablecoinMeta(w http.ResponseWriter, r *http.Request) {
 	}
 	v, _ := h.cachedFetch("stablecoin:meta", stableMetaTTL, func() (any, error) {
 		res := h.stable.buildMeta()
+		for _, st := range res.BigQuery.Statuses {
+			if st.Running {
+				return res, errStableWarmingUp
+			}
+		}
 		if res.DataHealth.State == "unknown" || h.stable.pegLatest() == nil {
 			return res, errStableWarmingUp
 		}

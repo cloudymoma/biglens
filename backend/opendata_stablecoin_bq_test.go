@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -89,28 +92,67 @@ func TestStableSQLResultTypesMatchStructs(t *testing.T) {
 }
 
 type fakeStableEthSource struct {
-	ready     bool
-	transfers []stableEthTransferAggRow
-	logs      []stableEthLogRow
-	billedA   int64
-	billedB   int64
-	errA      error
-	errB      error
+	mu          sync.Mutex
+	ready       bool
+	transfers   []stableEthTransferAggRow
+	logs        []stableEthLogRow
+	dryA        int64
+	dryB        int64
+	billedA     int64
+	billedB     int64
+	errA        error
+	errB        error
+	readyCalls  int
+	dryRunCalls int
+	fetchCalls  int
+	blockFetch  chan struct{}
+	fetchHit    chan struct{}
 }
 
 func (f *fakeStableEthSource) Ready(_ context.Context, _ civil.Date) (bool, error) {
+	f.mu.Lock()
+	f.readyCalls++
+	f.mu.Unlock()
 	return f.ready, nil
 }
 func (f *fakeStableEthSource) DryRunTransfers(_ context.Context, _, _ civil.Date) (int64, error) {
+	f.mu.Lock()
+	f.dryRunCalls++
+	d := f.dryA
+	f.mu.Unlock()
+	if d > 0 {
+		return d, nil
+	}
 	return 1 << 30, nil
 }
 func (f *fakeStableEthSource) DryRunLogs(_ context.Context, _, _ civil.Date) (int64, error) {
+	f.mu.Lock()
+	f.dryRunCalls++
+	d := f.dryB
+	f.mu.Unlock()
+	if d > 0 {
+		return d, nil
+	}
 	return 1 << 30, nil
 }
 func (f *fakeStableEthSource) FetchTransfers(_ context.Context, _, _ civil.Date, _ int64) ([]stableEthTransferAggRow, int64, error) {
+	f.mu.Lock()
+	f.fetchCalls++
+	hit := f.fetchHit
+	blk := f.blockFetch
+	f.mu.Unlock()
+	if hit != nil {
+		close(hit)
+	}
+	if blk != nil {
+		<-blk
+	}
 	return f.transfers, f.billedA, f.errA
 }
 func (f *fakeStableEthSource) FetchLogs(_ context.Context, _, _ civil.Date, _ int64) ([]stableEthLogRow, int64, error) {
+	f.mu.Lock()
+	f.fetchCalls++
+	f.mu.Unlock()
 	return f.logs, f.billedB, f.errB
 }
 
@@ -367,5 +409,221 @@ func TestStableBQJobsDisabledByDefaultAndOnchainHandler(t *testing.T) {
 	}
 	if bad := stableGet(t, th.StablecoinOnchain, "/api/opendata/stablecoin/onchain?asset=doge"); bad.Code != http.StatusBadRequest {
 		t.Errorf("/onchain invalid asset = %d, want 400", bad.Code)
+	}
+}
+
+func stableBQPost(t *testing.T, fn http.HandlerFunc, target, remoteAddr, contentType, actionHeader, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	var rd *bytes.Reader
+	if body != "" {
+		rd = bytes.NewReader([]byte(body))
+	} else {
+		rd = bytes.NewReader(nil)
+	}
+	req := httptest.NewRequest(http.MethodPost, target, rd)
+	req.RemoteAddr = remoteAddr
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	if actionHeader != "" {
+		req.Header.Set("X-BigLens-Action", actionHeader)
+	}
+	rec := httptest.NewRecorder()
+	fn(rec, req)
+	return rec
+}
+
+func TestStableBQEstimateRunAndAbuseGuards(t *testing.T) {
+	ctx := context.Background()
+	clock := time.Date(2026, 10, 19, 13, 21, 0, 0, time.UTC)
+	th, _, _ := newStablePegTestHandler(t, StablecoinConfig{}, &clock)
+
+	// Seed cursor to 2026-10-17 so the next window is a single day [2026-10-18, 2026-10-19).
+	if err := ensureSyncRow(ctx, th.stable.store.db, stableEthJobID); err != nil {
+		t.Fatal(err)
+	}
+	if err := updateSyncWatermarksTx(ctx, th.stable.store.db, stableEthJobID, "2026-07-21", "2026-10-17", 10, clock); err != nil {
+		t.Fatal(err)
+	}
+
+	issueHex := "0x" + strings.Repeat("0", 50) + "038d7ea4c68000"
+	ethSrc := &fakeStableEthSource{
+		ready:   true,
+		dryA:    600 << 20,
+		dryB:    400 << 20,
+		billedA: 500 << 20,
+		billedB: 400 << 20,
+		transfers: []stableEthTransferAggRow{
+			{
+				Day: "2026-10-18", Token: usdtContract, Transfers: 150_000, ZeroValue: 1200,
+				VolumeRaw: "5000000000000000", Senders: 40_000, Receivers: 45_000,
+				Ge1MCount: 120, Ge1MVolumeRaw: "2000000000000000", MintedRaw: "0", BurnedRaw: "0",
+			},
+			{
+				Day: "2026-10-18", Token: usdcContract, Transfers: 90_000, ZeroValue: 500,
+				VolumeRaw: "3000000000000000", Senders: 25_000, Receivers: 28_000,
+				Ge1MCount: 80, Ge1MVolumeRaw: "1200000000000000", MintedRaw: "200000000000000", BurnedRaw: "100000000000000",
+			},
+			{
+				Day: "2026-10-18", Token: eurcContract, Transfers: 500, ZeroValue: 2,
+				VolumeRaw: "20000000000000", Senders: 180, Receivers: 210,
+				Ge1MCount: 2, Ge1MVolumeRaw: "5000000000000", MintedRaw: "1000000000000", BurnedRaw: "0",
+			},
+		},
+		logs: []stableEthLogRow{
+			{
+				Day: "2026-10-18", TxHash: "0x626a2bebdd028485d5def5b6b2a67fcb602db2530b4e949bc1ac776f89b0d317",
+				LogIndex: 1, BlockNumber: 21000001, TS: "2026-10-18T14:00:00Z",
+				Address: usdtContract, Topic0: topicUSDTIssue, Data: issueHex,
+			},
+		},
+	}
+	tronSrc := &fakeStableTronSource{ready: true}
+	th.stable.bqRunner = newStableBQRunner(th.stable.settings, th.stable.store, ethSrc, tronSrc, func() time.Time { return clock })
+
+	// 1. Abuse guards: non-loopback -> 403 (even with X-Forwarded-For), missing header or content-type -> 400.
+	reqNonLoop := httptest.NewRequest(http.MethodPost, "/api/opendata/stablecoin/bigquery/estimate?job=stable_eth", nil)
+	reqNonLoop.RemoteAddr = "192.168.1.25:54321"
+	reqNonLoop.Header.Set("X-Forwarded-For", "127.0.0.1")
+	reqNonLoop.Header.Set("Content-Type", "application/json")
+	reqNonLoop.Header.Set("X-BigLens-Action", "stablecoin-bq")
+	recNonLoop := httptest.NewRecorder()
+	th.StablecoinBQEstimate(recNonLoop, reqNonLoop)
+	if recNonLoop.Code != http.StatusForbidden {
+		t.Fatalf("non-loopback estimate = %d, want 403", recNonLoop.Code)
+	}
+	if rec := stableBQPost(t, th.StablecoinBQEstimate, "/api/opendata/stablecoin/bigquery/estimate?job=stable_eth", "127.0.0.1:1234", "application/json", "", ""); rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing action header = %d, want 400", rec.Code)
+	}
+	if rec := stableBQPost(t, th.StablecoinBQEstimate, "/api/opendata/stablecoin/bigquery/estimate?job=stable_eth", "[::1]:1234", "text/plain", "stablecoin-bq", ""); rec.Code != http.StatusBadRequest {
+		t.Fatalf("wrong content-type = %d, want 400", rec.Code)
+	}
+	if rec := stableBQPost(t, th.StablecoinBQEstimate, "/api/opendata/stablecoin/bigquery/estimate?job=invalid", "127.0.0.1:1234", "application/json", "stablecoin-bq", ""); rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid job = %d, want 400", rec.Code)
+	}
+
+	// 2. Schedule off: next_check_at is null, next_new_day_at is next 00:00 UTC.
+	meta0 := decodeStable[StableMeta](t, stableGet(t, th.StablecoinMeta, "/api/opendata/stablecoin/meta"))
+	ethSt0 := meta0.BigQuery.Statuses[stableEthJobID]
+	if ethSt0.ScheduleEnabled {
+		t.Errorf("schedule_enabled = true, want false when jobs=false")
+	}
+	if ethSt0.NextCheckAt != nil {
+		t.Errorf("next_check_at with schedule off = %v, want nil", *ethSt0.NextCheckAt)
+	}
+	if ethSt0.NextNewDayAt != "2026-10-20T00:00:00Z" {
+		t.Errorf("next_new_day_at = %q, want 2026-10-20T00:00:00Z", ethSt0.NextNewDayAt)
+	}
+
+	// 3. Estimate path makes ONLY dry-run calls (zero Ready and zero Fetch calls).
+	recEst := stableBQPost(t, th.StablecoinBQEstimate, "/api/opendata/stablecoin/bigquery/estimate?job=stable_eth", "127.0.0.1:1234", "application/json", "stablecoin-bq", "{}")
+	if recEst.Code != http.StatusOK {
+		t.Fatalf("estimate status = %d (%s), want 200", recEst.Code, recEst.Body.String())
+	}
+	est := decodeStable[StableBQEstimateResponse](t, recEst)
+	wantEstBytes := int64((600 + 400) << 20)
+	if est.WindowFrom != "2026-10-18" || est.WindowTo != "2026-10-18" || est.EstimatedBytes != wantEstBytes || !est.FitsBudget || est.NothingToDo {
+		t.Fatalf("estimate = %+v, want window 2026-10-18..2026-10-18, bytes=%d, fits_budget=true, nothing_to_do=false", est, wantEstBytes)
+	}
+	if ethSrc.readyCalls != 0 || ethSrc.fetchCalls != 0 || ethSrc.dryRunCalls != 2 {
+		t.Fatalf("estimate source calls: ready=%d fetch=%d dryRun=%d, want 0, 0, 2", ethSrc.readyCalls, ethSrc.fetchCalls, ethSrc.dryRunCalls)
+	}
+
+	// 4. "Estimate changed" (> +10%) gets 409 and runs nothing.
+	recChanged := stableBQPost(t, th.StablecoinBQRun, "/api/opendata/stablecoin/bigquery/run?job=stable_eth", "127.0.0.1:1234", "application/json", "stablecoin-bq", `{"confirmed_estimate_bytes": 500000000}`)
+	if recChanged.Code != http.StatusConflict || !strings.Contains(recChanged.Body.String(), "estimate changed") {
+		t.Fatalf("estimate changed run = %d (%s), want 409 estimate changed", recChanged.Code, recChanged.Body.String())
+	}
+	if ethSrc.fetchCalls != 0 {
+		t.Fatalf("fetchCalls after 409 estimate changed = %d, want 0", ethSrc.fetchCalls)
+	}
+
+	// 5. Stopped job gets 409 with stop reason and runs nothing.
+	flags := newStableStopFlags(th.stable.store)
+	if err := flags.stop(ctx, stableEthJobID, "stopped after 4 billed failures"); err != nil {
+		t.Fatal(err)
+	}
+	recStopped := stableBQPost(t, th.StablecoinBQRun, "/api/opendata/stablecoin/bigquery/run?job=stable_eth", "127.0.0.1:1234", "application/json", "stablecoin-bq", `{"confirmed_estimate_bytes": 1048576000}`)
+	if recStopped.Code != http.StatusConflict || !strings.Contains(recStopped.Body.String(), "stopped after 4 billed failures") {
+		t.Fatalf("stopped job run = %d (%s), want 409 with stop reason", recStopped.Code, recStopped.Body.String())
+	}
+	if err := stableResumeJob(ctx, th.stable.store, stableEthJobID); err != nil {
+		t.Fatal(err)
+	}
+
+	// 6. Budget refusal: when estimate exceeds budget, run is refused (409) and no query is made.
+	ethSrc.dryA = 600 << 30 // 600 GiB > 512 GiB default budget
+	recOver := stableBQPost(t, th.StablecoinBQRun, "/api/opendata/stablecoin/bigquery/run?job=stable_eth", "127.0.0.1:1234", "application/json", "stablecoin-bq", `{"confirmed_estimate_bytes": 650000000000}`)
+	if recOver.Code != http.StatusConflict {
+		t.Fatalf("over-budget run = %d (%s), want 409", recOver.Code, recOver.Body.String())
+	}
+	if ethSrc.fetchCalls != 0 {
+		t.Fatalf("fetchCalls on over-budget run = %d, want 0", ethSrc.fetchCalls)
+	}
+	ethSrc.dryA = 600 << 20
+	_ = th.stable.store.setSyncError(ctx, stableEthJobID, "")
+
+	// 7. Manual run works with schedule off; concurrent second run gets 409; run within 5 min gets 429; status updates after completion.
+	ethSrc.blockFetch = make(chan struct{})
+	ethSrc.fetchHit = make(chan struct{})
+	recRun := stableBQPost(t, th.StablecoinBQRun, "/api/opendata/stablecoin/bigquery/run?job=stable_eth", "127.0.0.1:1234", "application/json", "stablecoin-bq", `{"confirmed_estimate_bytes": 1048576000}`)
+	if recRun.Code != http.StatusAccepted {
+		t.Fatalf("manual run status = %d (%s), want 202", recRun.Code, recRun.Body.String())
+	}
+	<-ethSrc.fetchHit
+
+	// While in flight: /meta reports running=true, and a second concurrent run gets 409.
+	metaRunning := decodeStable[StableMeta](t, stableGet(t, th.StablecoinMeta, "/api/opendata/stablecoin/meta"))
+	if !metaRunning.BigQuery.Statuses[stableEthJobID].Running {
+		t.Errorf("/meta while in flight: Running = false, want true")
+	}
+	recConcurrent := stableBQPost(t, th.StablecoinBQRun, "/api/opendata/stablecoin/bigquery/run?job=stable_eth", "127.0.0.1:1234", "application/json", "stablecoin-bq", `{"confirmed_estimate_bytes": 1048576000}`)
+	if recConcurrent.Code != http.StatusConflict {
+		t.Fatalf("concurrent run = %d, want 409", recConcurrent.Code)
+	}
+
+	close(ethSrc.blockFetch)
+	th.stable.bqRunner.Wait()
+
+	// Within 5 minutes: gets 429.
+	clock = clock.Add(2 * time.Minute)
+	recRateLimit := stableBQPost(t, th.StablecoinBQRun, "/api/opendata/stablecoin/bigquery/run?job=stable_eth", "127.0.0.1:1234", "application/json", "stablecoin-bq", `{"confirmed_estimate_bytes": 1048576000}`)
+	if recRateLimit.Code != http.StatusTooManyRequests {
+		t.Fatalf("run within 5m = %d, want 429", recRateLimit.Code)
+	}
+
+	// Status fields after manual run completion.
+	metaDone := decodeStable[StableMeta](t, stableGet(t, th.StablecoinMeta, "/api/opendata/stablecoin/meta"))
+	stDone := metaDone.BigQuery.Statuses[stableEthJobID]
+	wantBilled := int64(900 << 20)
+	if stDone.Running || stDone.SyncedThrough != "2026-10-18" || stDone.LastRunTrigger != "manual" || stDone.LastRunResult != "ok" {
+		t.Fatalf("status after manual run = %+v, want running=false, synced_through=2026-10-18, trigger=manual, result=ok", stDone)
+	}
+	if stDone.LastRunBytesBilled == nil || *stDone.LastRunBytesBilled != wantBilled {
+		t.Fatalf("LastRunBytesBilled = %v, want %d", stDone.LastRunBytesBilled, wantBilled)
+	}
+	if metaDone.BigQuery.BudgetUsedBytes != wantBilled || metaDone.BigQuery.BudgetLimitBytes != 512<<30 {
+		t.Fatalf("budget_used_bytes=%d budget_limit_bytes=%d, want %d and %d",
+			metaDone.BigQuery.BudgetUsedBytes, metaDone.BigQuery.BudgetLimitBytes, wantBilled, int64(512<<30))
+	}
+
+	// Now synced through yesterday (2026-10-18): estimate reports nothing_to_do=true.
+	recEstDone := stableBQPost(t, th.StablecoinBQEstimate, "/api/opendata/stablecoin/bigquery/estimate?job=stable_eth", "127.0.0.1:1234", "application/json", "stablecoin-bq", "{}")
+	estDone := decodeStable[StableBQEstimateResponse](t, recEstDone)
+	if !estDone.NothingToDo {
+		t.Errorf("estimate after catching up through yesterday: NothingToDo = false, want true")
+	}
+
+	// 8. Schedule on: next_check_at equals last tick + 1 h.
+	th.stable.settings.Jobs = true
+	th.stable.bqRunner.settings.Jobs = true
+	tickTime := time.Date(2026, 10, 19, 14, 0, 0, 0, time.UTC)
+	clock = tickTime
+	th.stable.bqRunner.recordLoopTick(tickTime)
+	th.cache = NewCache(time.Minute)
+	metaSched := decodeStable[StableMeta](t, stableGet(t, th.StablecoinMeta, "/api/opendata/stablecoin/meta"))
+	stSched := metaSched.BigQuery.Statuses[stableEthJobID]
+	if !stSched.ScheduleEnabled || stSched.NextCheckAt == nil || *stSched.NextCheckAt != "2026-10-19T15:00:00Z" {
+		t.Fatalf("schedule on status = %+v, want ScheduleEnabled=true and NextCheckAt=2026-10-19T15:00:00Z", stSched)
 	}
 }

@@ -189,6 +189,7 @@ type dailyBQSyncer struct {
 	name             string
 	hardCapBytes     int64
 	dryRunSizedCap   bool
+	exactDryRunCap   bool
 	maxWindowDays    int
 	chunkCatchUp     bool
 	minWindowDays    int
@@ -331,11 +332,11 @@ func (s *dailyBQSyncer) sync(ctx context.Context) (stablecoinRun, bool) {
 	}
 
 	var est int64
-	needDryRun := newFrom != "" || s.dryRunSizedCap || s.budget != nil
+	needDryRun := newFrom != "" || s.dryRunSizedCap || s.exactDryRunCap || s.budget != nil
 	if needDryRun {
 		dEst, dErr := s.job.DryRun(ctx, start, end)
 		if dErr != nil {
-			if s.dryRunSizedCap || s.budget != nil {
+			if s.dryRunSizedCap || s.exactDryRunCap || s.budget != nil {
 				slog.Warn(tag+" dry run", "source", sourceID, "error", dErr)
 				s.applyUnbilledBackoff(now)
 				return stablecoinRun{start: start, end: end, errCode: bqErrCode(dErr)}, true
@@ -357,7 +358,15 @@ func (s *dailyBQSyncer) sync(ctx context.Context) (stablecoinRun, bool) {
 	if s.hardCapBytes > 0 && est > s.hardCapBytes {
 		return stablecoinRun{start: start, end: end, errCode: "over_budget"}, true
 	}
-	if s.dryRunSizedCap {
+	if s.exactDryRunCap {
+		maxBytes = est
+		if maxBytes <= 0 {
+			maxBytes = 1 << 20
+		}
+		if s.hardCapBytes > 0 && maxBytes > s.hardCapBytes {
+			maxBytes = s.hardCapBytes
+		}
+	} else if s.dryRunSizedCap {
 		sized := int64(math.Ceil(float64(est) * 1.25))
 		if sized < 1<<30 {
 			sized = 1 << 30
@@ -501,11 +510,15 @@ func formatSyncStopMessage(sourceID string, recs []syncFailureRecord, within tim
 		msgs = append(msgs, r.Message)
 	}
 	summary := strings.Join(msgs, "; ")
+	resumeFlag := "--bitcoin-bq-resume"
+	if strings.HasPrefix(sourceID, "stable_") {
+		resumeFlag = "--stablecoin-bq-resume"
+	}
 	if within > 0 && len(recs) >= 2 {
 		span := recs[len(recs)-1].At.Sub(recs[0].At).Round(time.Minute)
-		return fmt.Sprintf("stopped after %d billed failures in %s (%s) — investigate, then run --bitcoin-bq-resume %s",
-			len(recs), span, summary, sourceID)
+		return fmt.Sprintf("stopped after %d billed failures in %s (%s) — investigate, then run %s %s",
+			len(recs), span, summary, resumeFlag, sourceID)
 	}
-	return fmt.Sprintf("stopped after %d consecutive billed failures (%s) — investigate, then run --bitcoin-bq-resume %s",
-		len(recs), summary, sourceID)
+	return fmt.Sprintf("stopped after %d consecutive billed failures (%s) — investigate, then run %s %s",
+		len(recs), summary, resumeFlag, sourceID)
 }

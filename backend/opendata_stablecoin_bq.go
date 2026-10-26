@@ -5,12 +5,16 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
+	"math"
 	"math/big"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"cloud.google.com/go/bigquery"
@@ -25,7 +29,12 @@ const (
 	stableEthUSDTMinDailyTransfers  = 10_000
 	stableTronUSDTMinDailyTransfers = 100_000
 
-	stableOnchainTTL = 5 * time.Minute
+	stableOnchainTTL      = 5 * time.Minute
+	stableManualCooldown  = 5 * time.Minute
+	stableScheduleCadence = time.Hour
+
+	stableBQActionHeader = "X-BigLens-Action"
+	stableBQActionValue  = "stablecoin-bq"
 
 	stableOnchainCoverageNote = "On-chain transfer rollups, large transfers (top 20 per day) and supply events cover Ethereum (USDT, USDC, EURC) and TRON (USDT) settled UTC days via opt-in BigQuery jobs. Ordinary transfer counts and volume exclude mint/burn transfers from or to the zero address."
 
@@ -1165,28 +1174,108 @@ func runStableResumeCLI(ctx context.Context, cfg *Config, job string) int {
 	return 0
 }
 
-func stableJobStatus(ctx context.Context, store *riskStore, settings stableSettings, flags *stableStopFlags, now time.Time, job string) BtcBQStatus {
-	jobOn := settings.Jobs && (job != stableTronJobID || settings.Tron)
+// StableBQJobStatus describes the state, schedule, and last-run history of a
+// Stablecoin BigQuery job (`stable_eth` or `stable_tron`).
+type StableBQJobStatus struct {
+	Job                string  `json:"job"`
+	Jobs               bool    `json:"jobs"`
+	ScheduleEnabled    bool    `json:"schedule_enabled"`
+	Running            bool    `json:"running"`
+	State              string  `json:"state"` // off | cold_start | ready | retrying | stopped | budget_paused
+	SyncedThrough      string  `json:"synced_through"`
+	CoverageFrom       string  `json:"coverage_from"`
+	LastError          string  `json:"last_error,omitempty"`
+	Failures           int     `json:"failures,omitempty"`
+	StopReason         string  `json:"stop_reason,omitempty"`
+	NextRunAfter       string  `json:"next_run_after,omitempty"`
+	LastRunAt          string  `json:"last_run_at,omitempty"`
+	LastRunTrigger     string  `json:"last_run_trigger,omitempty"`      // schedule | manual
+	LastRunResult      string  `json:"last_run_result,omitempty"`       // ok | no_new_day | error | budget_paused | stopped
+	LastRunBytesBilled *int64  `json:"last_run_bytes_billed,omitempty"` // present after a run
+	NextCheckAt        *string `json:"next_check_at"`                   // null when schedule is off
+	NextNewDayAt       string  `json:"next_new_day_at"`                 // next 00:00 UTC
+}
+
+type stableJobLastRun struct {
+	At          string `json:"at"`
+	Trigger     string `json:"trigger"`
+	Result      string `json:"result"`
+	BytesBilled int64  `json:"bytes_billed"`
+}
+
+type StableBQEstimateResponse struct {
+	Job              string  `json:"job"`
+	WindowFrom       string  `json:"window_from"`
+	WindowTo         string  `json:"window_to"`
+	EstimatedBytes   int64   `json:"estimated_bytes"`
+	EstimatedUSD     float64 `json:"estimated_usd"`
+	PricingNote      string  `json:"pricing_note"`
+	BudgetUsedBytes  int64   `json:"budget_used_bytes"`
+	BudgetLimitBytes int64   `json:"budget_limit_bytes"`
+	FitsBudget       bool    `json:"fits_budget"`
+	NothingToDo      bool    `json:"nothing_to_do"`
+}
+
+func stableJobScheduleEnabled(settings stableSettings, job string) bool {
+	return settings.Jobs && (job != stableTronJobID || settings.Tron)
+}
+
+func stableNextNewDayAt(now time.Time) string {
+	today := civil.DateOf(now.UTC())
+	return dayStart(today.AddDays(1)).UTC().Format(time.RFC3339)
+}
+
+func stableJobStatus(ctx context.Context, store *riskStore, settings stableSettings, flags *stableStopFlags, runner *stableBQRunner, now time.Time, job string) StableBQJobStatus {
+	now = now.UTC()
+	jobOn := stableJobScheduleEnabled(settings, job)
+	nextNewDay := stableNextNewDayAt(now)
+	var nextCheck *string
+	if jobOn {
+		tCheck := now.Add(stableScheduleCadence)
+		if runner != nil {
+			if lt := runner.loopTickAt(); !lt.IsZero() {
+				tCheck = lt.Add(stableScheduleCadence)
+			}
+		}
+		s := tCheck.UTC().Format(time.RFC3339)
+		nextCheck = &s
+	}
+	out := StableBQJobStatus{
+		Job:             job,
+		Jobs:            jobOn,
+		ScheduleEnabled: jobOn,
+		State:           "off",
+		NextCheckAt:     nextCheck,
+		NextNewDayAt:    nextNewDay,
+	}
+	if runner != nil {
+		out.Running = runner.isRunning(job)
+	}
 	if store == nil {
-		return BtcBQStatus{Job: job, Jobs: jobOn, State: "off"}
+		return out
 	}
 	st, err := store.getSyncState(ctx, job)
 	if err != nil {
-		return BtcBQStatus{Job: job, Jobs: jobOn, State: "off"}
+		return out
 	}
-	out := BtcBQStatus{
-		Job:           job,
-		Jobs:          jobOn,
-		SyncedThrough: st.Cursor,
-		CoverageFrom:  st.CoverageFrom,
-		LastError:     st.LastError,
+	out.SyncedThrough = st.Cursor
+	out.CoverageFrom = st.CoverageFrom
+	out.LastError = st.LastError
+
+	if lr, ok := loadStableLastRun(ctx, store, runner, job); ok {
+		out.LastRunAt = lr.At
+		out.LastRunTrigger = lr.Trigger
+		out.LastRunResult = lr.Result
+		b := lr.BytesBilled
+		out.LastRunBytesBilled = &b
 	}
+
 	reason, stopped, _ := flags.stopped(ctx, job)
 	recs, _ := flags.failures(ctx, job)
 	pol := stableJobFailurePolicy()
 	var activeRecs []syncFailureRecord
 	if pol.within > 0 {
-		cutoff := now.UTC().Add(-pol.within)
+		cutoff := now.Add(-pol.within)
 		for _, f := range recs {
 			if !f.At.Before(cutoff) {
 				activeRecs = append(activeRecs, f)
@@ -1200,8 +1289,6 @@ func stableJobStatus(ctx context.Context, store *riskStore, settings stableSetti
 		out.State = "stopped"
 		out.StopReason = reason
 		out.Failures = len(activeRecs)
-	case !jobOn:
-		out.State = "off"
 	case st.LastError == "over_budget":
 		out.State = "budget_paused"
 	case len(activeRecs) > 0:
@@ -1215,41 +1302,86 @@ func stableJobStatus(ctx context.Context, store *riskStore, settings stableSetti
 		if idx >= 0 {
 			out.NextRunAfter = last.At.Add(pol.backoff[idx]).UTC().Format(time.RFC3339)
 		}
-	case st.Cursor == "":
-		out.State = "cold_start"
-	default:
+	case st.Cursor != "":
 		out.State = "ready"
+	case !jobOn:
+		out.State = "off"
+	default:
+		out.State = "cold_start"
 	}
 	return out
 }
 
-func stablecoinSyncJobs(settings stableSettings, store *riskStore, client *BQClient) []func(context.Context) {
-	if !settings.Enabled || !settings.Jobs || store == nil || client == nil {
+func loadStableLastRun(ctx context.Context, store *riskStore, runner *stableBQRunner, job string) (stableJobLastRun, bool) {
+	if runner != nil {
+		if lr, ok := runner.getLastRun(job); ok {
+			return lr, true
+		}
+	}
+	if store == nil {
+		return stableJobLastRun{}, false
+	}
+	raw, ok, err := store.getStableKV(ctx, "last_run:"+job)
+	if err != nil || !ok || raw == "" {
+		return stableJobLastRun{}, false
+	}
+	var lr stableJobLastRun
+	if err := json.Unmarshal([]byte(raw), &lr); err != nil || lr.At == "" {
+		return stableJobLastRun{}, false
+	}
+	return lr, true
+}
+
+// stableBQRunner owns the `stable_eth` and `stable_tron` syncers for both
+// scheduled hourly ticks and manual one-off runs. Syncers are built even when
+// the schedule is off (`stablecoin.bigquery.jobs: false`).
+type stableBQRunner struct {
+	mu           sync.Mutex
+	settings     stableSettings
+	store        *riskStore
+	budget       *btcBudget
+	flags        *stableStopFlags
+	now          func() time.Time
+	syncers      map[string]*dailyBQSyncer
+	running      map[string]bool
+	lastManualAt map[string]time.Time
+	lastLoopTick time.Time
+	lastRun      map[string]stableJobLastRun
+	recoverFn    func(context.Context)
+	wg           sync.WaitGroup
+}
+
+func newStableBQRunner(settings stableSettings, store *riskStore, ethSrc stableEthSource, tronSrc stableTronSource, now func() time.Time) *stableBQRunner {
+	if store == nil {
 		return nil
+	}
+	if now == nil {
+		now = time.Now
 	}
 	budget := newBqBudget(store, bqBudgetConfig{
 		TablePrefix: bqPrefixStable,
 		BudgetBytes: settings.BudgetBytes,
-	}, time.Now)
+	}, now)
 	flags := newStableStopFlags(store)
 
-	recoverStaleOnce := func(ctx context.Context) {
-		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-		defer cancel()
-		lookup := bqLookupJobBytes(rctx, client.client)
-		if err := budget.recoverStale(rctx, time.Now().UTC(), lookup); err != nil {
-			slog.Warn("stablecoin bigquery recover stale reservations", "error", err)
-		}
+	ethJob := &stableEthJob{
+		store:            store,
+		src:              ethSrc,
+		minUSDTTransfers: stableEthUSDTMinDailyTransfers,
 	}
-
+	tronJob := &stableTronJob{
+		store:        store,
+		src:          tronSrc,
+		minTransfers: stableTronUSDTMinDailyTransfers,
+	}
 	ethSyncer := &dailyBQSyncer{
 		store:          store,
-		job:            newStableEthJob(store, client),
-		now:            time.Now,
+		job:            ethJob,
+		now:            now,
 		initialDays:    settings.InitialDays,
 		name:           stableEthJobID,
 		hardCapBytes:   128 << 30,
-		dryRunSizedCap: true,
+		exactDryRunCap: true,
 		maxWindowDays:  31,
 		chunkCatchUp:   true,
 		timeout:        10 * time.Minute,
@@ -1258,42 +1390,316 @@ func stablecoinSyncJobs(settings stableSettings, store *riskStore, client *BQCli
 		failurePolicy:  stableJobFailurePolicy(),
 		stopFlags:      flags,
 	}
-	out := []func(context.Context){recoverStaleOnce, ethSyncer.syncOnce}
+	tronSyncer := &dailyBQSyncer{
+		store:          store,
+		job:            tronJob,
+		now:            now,
+		initialDays:    settings.InitialDays,
+		name:           stableTronJobID,
+		hardCapBytes:   128 << 30,
+		exactDryRunCap: true,
+		maxWindowDays:  31,
+		chunkCatchUp:   true,
+		timeout:        10 * time.Minute,
+		prune:          func(context.Context, civil.Date) error { return nil },
+		budget:         budget,
+		failurePolicy:  stableJobFailurePolicy(),
+		stopFlags:      flags,
+	}
+	return &stableBQRunner{
+		settings:     settings,
+		store:        store,
+		budget:       budget,
+		flags:        flags,
+		now:          now,
+		syncers:      map[string]*dailyBQSyncer{stableEthJobID: ethSyncer, stableTronJobID: tronSyncer},
+		running:      map[string]bool{},
+		lastManualAt: map[string]time.Time{},
+		lastRun:      map[string]stableJobLastRun{},
+	}
+}
 
-	if settings.Tron {
-		tronSyncer := &dailyBQSyncer{
-			store:          store,
-			job:            newStableTronJob(store, client),
-			now:            time.Now,
-			initialDays:    settings.InitialDays,
-			name:           stableTronJobID,
-			hardCapBytes:   128 << 30,
-			dryRunSizedCap: true,
-			maxWindowDays:  31,
-			chunkCatchUp:   true,
-			timeout:        10 * time.Minute,
-			prune:          func(context.Context, civil.Date) error { return nil },
-			budget:         budget,
-			failurePolicy:  stableJobFailurePolicy(),
-			stopFlags:      flags,
+func (r *stableBQRunner) Wait() {
+	if r == nil {
+		return
+	}
+	r.wg.Wait()
+}
+
+func (r *stableBQRunner) isRunning(job string) bool {
+	if r == nil {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.running[job]
+}
+
+func (r *stableBQRunner) loopTickAt() time.Time {
+	if r == nil {
+		return time.Time{}
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.lastLoopTick
+}
+
+func (r *stableBQRunner) recordLoopTick(t time.Time) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.lastLoopTick = t.UTC()
+	r.mu.Unlock()
+}
+
+func (r *stableBQRunner) getLastRun(job string) (stableJobLastRun, bool) {
+	if r == nil {
+		return stableJobLastRun{}, false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	lr, ok := r.lastRun[job]
+	return lr, ok
+}
+
+func (r *stableBQRunner) recordLastRun(ctx context.Context, job string, lr stableJobLastRun) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.lastRun[job] = lr
+	r.mu.Unlock()
+	if r.store != nil {
+		if b, err := json.Marshal(lr); err == nil {
+			_ = r.store.setStableKV(ctx, "last_run:"+job, string(b))
 		}
-		out = append(out, tronSyncer.syncOnce)
+	}
+}
+
+func (r *stableBQRunner) executeSync(ctx context.Context, job, trigger string) {
+	if r == nil {
+		return
+	}
+	syncer, ok := r.syncers[job]
+	if !ok || syncer == nil {
+		return
+	}
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.Error(job+" sync panic", "source", job, "panic", rec)
+			_ = r.store.setSyncError(context.Background(), job, "panic")
+			r.recordLastRun(context.Background(), job, stableJobLastRun{
+				At:      r.now().UTC().Format(time.RFC3339),
+				Trigger: trigger,
+				Result:  "error",
+			})
+		}
+	}()
+	if _, stopped, _ := r.flags.stopped(ctx, job); stopped {
+		r.recordLastRun(ctx, job, stableJobLastRun{
+			At:      r.now().UTC().Format(time.RFC3339),
+			Trigger: trigger,
+			Result:  "stopped",
+		})
+		return
+	}
+	if trigger == "manual" {
+		syncer.retryAfter = time.Time{}
+	}
+	t0 := r.now()
+	timeout := syncer.timeout
+	if timeout <= 0 {
+		timeout = stablecoinSyncTimeout
+	}
+	tctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	run, didWork := syncer.sync(tctx)
+	bctx, bCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer bCancel()
+
+	if didWork && run.errCode != "" {
+		if err := r.store.setSyncError(bctx, job, run.errCode); err != nil {
+			slog.Error(job+" sync state", "source", job, "error", err)
+		}
+	}
+	_, stoppedNow, _ := r.flags.stopped(bctx, job)
+	var result string
+	switch {
+	case stoppedNow || strings.HasPrefix(run.errCode, "stopped"):
+		result = "stopped"
+	case run.errCode == "over_budget":
+		result = "budget_paused"
+	case run.errCode != "":
+		result = "error"
+	case !didWork:
+		result = "no_new_day"
+	default:
+		result = "ok"
+	}
+	r.recordLastRun(bctx, job, stableJobLastRun{
+		At:          r.now().UTC().Format(time.RFC3339),
+		Trigger:     trigger,
+		Result:      result,
+		BytesBilled: run.billed,
+	})
+	if didWork {
+		slog.Info(job+" sync",
+			"source", job,
+			"trigger", trigger,
+			"window_start", run.start.String(),
+			"window_end", run.end.String(),
+			"rows", run.rows,
+			"bytes_billed", run.billed,
+			"duration", r.now().Sub(t0).String(),
+			"error", run.errCode,
+		)
+	}
+}
+
+func (r *stableBQRunner) runScheduled(ctx context.Context, job string) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	if r.running[job] {
+		r.mu.Unlock()
+		return
+	}
+	r.running[job] = true
+	r.mu.Unlock()
+	defer func() {
+		r.mu.Lock()
+		r.running[job] = false
+		r.mu.Unlock()
+	}()
+	r.executeSync(ctx, job, "schedule")
+}
+
+func (r *stableBQRunner) scheduledJobs() []func(context.Context) {
+	if r == nil || !r.settings.Enabled || !r.settings.Jobs || r.store == nil {
+		return nil
+	}
+	tickFn := func(ctx context.Context) {
+		r.recordLoopTick(r.now().UTC())
+		if r.recoverFn != nil {
+			r.recoverFn(ctx)
+		}
+	}
+	out := []func(context.Context){
+		tickFn,
+		func(ctx context.Context) { r.runScheduled(ctx, stableEthJobID) },
+	}
+	if r.settings.Tron {
+		out = append(out, func(ctx context.Context) { r.runScheduled(ctx, stableTronJobID) })
 	}
 	return out
 }
 
-// --- /onchain handler ---
+// estimate dry-runs the exact window that `job` would fetch next without
+// starting any billed query (no Ready and no Run calls).
+func (r *stableBQRunner) estimate(ctx context.Context, job string) (StableBQEstimateResponse, error) {
+	if r == nil || r.store == nil {
+		return StableBQEstimateResponse{}, fmt.Errorf("runner unavailable")
+	}
+	syncer, ok := r.syncers[job]
+	if !ok || syncer == nil || syncer.job == nil {
+		return StableBQEstimateResponse{}, fmt.Errorf("unknown job %q", job)
+	}
+	now := r.now().UTC()
+	today := civil.DateOf(now)
+	candEnd := today
+	if now.Before(dayStart(today).Add(stablecoinFinality)) {
+		candEnd = today.AddDays(-1)
+	}
+	st, err := r.store.getSyncState(ctx, job)
+	if err != nil {
+		return StableBQEstimateResponse{}, err
+	}
+	var start civil.Date
+	if st.Cursor == "" {
+		start = today.AddDays(-r.settings.InitialDays)
+	} else {
+		cur, err := civil.ParseDate(st.Cursor)
+		if err != nil {
+			return StableBQEstimateResponse{}, fmt.Errorf("bad cursor %q", st.Cursor)
+		}
+		start = cur.AddDays(1)
+	}
+	bSt, err := r.budget.status(ctx, now)
+	if err != nil {
+		return StableBQEstimateResponse{}, err
+	}
+	budgetUsed := bSt.SettledBytes + bSt.ReservedBytes
+	budgetLimit := bSt.BudgetBytes
+
+	out := StableBQEstimateResponse{
+		Job:              job,
+		PricingNote:      "Estimated at $6.25/TiB; BigQuery bills actual bytes scanned",
+		BudgetUsedBytes:  budgetUsed,
+		BudgetLimitBytes: budgetLimit,
+	}
+	if !start.Before(candEnd) {
+		out.FitsBudget = true
+		out.NothingToDo = true
+		return out, nil
+	}
+	end := candEnd
+	maxWin := syncer.maxWindowDays
+	if maxWin <= 0 {
+		maxWin = stablecoinMaxWindowDays
+	}
+	if end.DaysSince(start) > maxWin {
+		end = start.AddDays(maxWin)
+	}
+	estBytes, err := syncer.job.DryRun(ctx, start, end)
+	if err != nil {
+		return StableBQEstimateResponse{}, err
+	}
+	fitsHardCap := syncer.hardCapBytes <= 0 || estBytes <= syncer.hardCapBytes
+	out.WindowFrom = start.String()
+	out.WindowTo = end.AddDays(-1).String()
+	out.EstimatedBytes = estBytes
+	out.EstimatedUSD = bytesToUSD(estBytes)
+	out.FitsBudget = fitsHardCap && estBytes <= bSt.RemainingBytes
+	return out, nil
+}
+
+func stablecoinSyncJobs(settings stableSettings, store *riskStore, client *BQClient) []func(context.Context) {
+	if !settings.Enabled || !settings.Jobs || store == nil || client == nil {
+		return nil
+	}
+	runner := newStableBQRunner(
+		settings,
+		store,
+		bqStableEthSource{client: client.client},
+		bqStableTronSource{client: client.client},
+		time.Now,
+	)
+	runner.recoverFn = func(ctx context.Context) {
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		lookup := bqLookupJobBytes(rctx, client.client)
+		if err := runner.budget.recoverStale(rctx, runner.now().UTC(), lookup); err != nil {
+			slog.Warn("stablecoin bigquery recover stale reservations", "error", err)
+		}
+	}
+	return runner.scheduledJobs()
+}
+
+// --- /onchain, /bigquery/estimate, and /bigquery/run handlers ---
 
 type StableOnchainResponse struct {
-	AsOf           string                 `json:"as_of"`
-	Asset          string                 `json:"asset"`
-	Days           int                    `json:"days"`
-	DataAvailable  bool                   `json:"data_available"`
-	Statuses       map[string]BtcBQStatus `json:"statuses"`
-	Daily          []StableOnchainDay     `json:"daily"`
-	LargeTransfers []StableLargeTransfer  `json:"large_transfers"`
-	SupplyEvents   []StableSupplyEvent    `json:"supply_events"`
-	CoverageNote   string                 `json:"coverage_note"`
+	AsOf           string                       `json:"as_of"`
+	Asset          string                       `json:"asset"`
+	Days           int                          `json:"days"`
+	DataAvailable  bool                         `json:"data_available"`
+	Statuses       map[string]StableBQJobStatus `json:"statuses"`
+	Daily          []StableOnchainDay           `json:"daily"`
+	LargeTransfers []StableLargeTransfer        `json:"large_transfers"`
+	SupplyEvents   []StableSupplyEvent          `json:"supply_events"`
+	CoverageNote   string                       `json:"coverage_note"`
 }
 
 func (s *stablecoinService) buildMetaBigQuery(ctx context.Context) StableMetaBigQuery {
@@ -1303,8 +1709,9 @@ func (s *stablecoinService) buildMetaBigQuery(ctx context.Context) StableMetaBig
 		Status:                "off",
 		InitialDays:           s.settings.InitialDays,
 		MonthlyBudgetGiB:      s.settings.BudgetBytes >> 30,
+		BudgetLimitBytes:      s.settings.BudgetBytes,
 		Tron:                  s.settings.Tron,
-		Statuses:              map[string]BtcBQStatus{},
+		Statuses:              map[string]StableBQJobStatus{},
 		StoppedJobs:           []string{},
 		AggregateExposureNote: stableAggregateExposureNote,
 	}
@@ -1322,10 +1729,12 @@ func (s *stablecoinService) buildMetaBigQuery(ctx context.Context) StableMetaBig
 		bq.MonthBilledGiB = st.MonthBilledGiB
 		bq.ReservedGiB = st.ReservedGiB
 		bq.RemainingGiB = float64(st.RemainingBytes) / float64(1<<30)
+		bq.BudgetUsedBytes = st.SettledBytes + st.ReservedBytes
+		bq.BudgetLimitBytes = st.BudgetBytes
 	}
 	flags := newStableStopFlags(s.store)
 	for _, jobID := range []string{stableEthJobID, stableTronJobID} {
-		jst := stableJobStatus(ctx, s.store, s.settings, flags, now, jobID)
+		jst := stableJobStatus(ctx, s.store, s.settings, flags, s.bqRunner, now, jobID)
 		bq.Statuses[jobID] = jst
 		if jst.State == "stopped" {
 			bq.StoppedJobs = append(bq.StoppedJobs, jobID)
@@ -1357,7 +1766,7 @@ func (s *stablecoinService) buildOnchain(ctx context.Context, asset string, days
 		AsOf:           stableFmt(now),
 		Asset:          asset,
 		Days:           days,
-		Statuses:       map[string]BtcBQStatus{},
+		Statuses:       map[string]StableBQJobStatus{},
 		Daily:          []StableOnchainDay{},
 		LargeTransfers: []StableLargeTransfer{},
 		SupplyEvents:   []StableSupplyEvent{},
@@ -1368,7 +1777,7 @@ func (s *stablecoinService) buildOnchain(ctx context.Context, asset string, days
 	}
 	flags := newStableStopFlags(s.store)
 	for _, jobID := range []string{stableEthJobID, stableTronJobID} {
-		out.Statuses[jobID] = stableJobStatus(ctx, s.store, s.settings, flags, now, jobID)
+		out.Statuses[jobID] = stableJobStatus(ctx, s.store, s.settings, flags, s.bqRunner, now, jobID)
 	}
 	daily, err := s.store.stableOnchainDaily(ctx, asset, fromDay)
 	if err != nil {
@@ -1444,11 +1853,196 @@ func (h *APIHandler) StablecoinOnchain(w http.ResponseWriter, r *http.Request) {
 			days = min(max(n, 7), 730)
 		}
 	}
-	key := fmt.Sprintf("stablecoin:onchain:%s:%d", asset, days)
+	var cursorTag string
+	if h.stable.store != nil {
+		stEth, _ := h.stable.store.getSyncState(r.Context(), stableEthJobID)
+		stTron, _ := h.stable.store.getSyncState(r.Context(), stableTronJobID)
+		cursorTag = stEth.Cursor + ":" + stTron.Cursor
+	}
+	key := fmt.Sprintf("stablecoin:onchain:%s:%d:%s", asset, days, cursorTag)
 	v, _ := h.cachedFetch(key, stableOnchainTTL, func() (any, error) {
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 10*time.Second)
 		defer cancel()
 		return h.stable.buildOnchain(ctx, asset, days), nil
 	})
 	writeJSON(w, v)
+}
+
+func isLoopbackRemoteAddr(remoteAddr string) bool {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(remoteAddr))
+	if err != nil {
+		host = strings.TrimSpace(remoteAddr)
+	}
+	host = strings.TrimPrefix(strings.TrimSuffix(host, "]"), "[")
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+func checkStableBQPostGuards(w http.ResponseWriter, r *http.Request) (string, bool) {
+	if r.Method != http.MethodPost {
+		writeError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return "", false
+	}
+	// Loopback only from RemoteAddr; ignore X-Forwarded-For / X-Real-IP.
+	if !isLoopbackRemoteAddr(r.RemoteAddr) {
+		writeError(w, "forbidden: BigQuery actions are restricted to loopback requests (127.0.0.1 / ::1)", http.StatusForbidden)
+		return "", false
+	}
+	ct := strings.ToLower(strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0]))
+	if ct != "application/json" || r.Header.Get(stableBQActionHeader) != stableBQActionValue {
+		writeError(w, "missing required Content-Type: application/json or X-BigLens-Action: stablecoin-bq header", http.StatusBadRequest)
+		return "", false
+	}
+	job := strings.TrimSpace(r.URL.Query().Get("job"))
+	if job != stableEthJobID && job != stableTronJobID {
+		writeError(w, "invalid job (expected stable_eth or stable_tron)", http.StatusBadRequest)
+		return "", false
+	}
+	return job, true
+}
+
+func (h *APIHandler) StablecoinBQEstimate(w http.ResponseWriter, r *http.Request) {
+	if !h.stableAvailable(w) {
+		return
+	}
+	job, ok := checkStableBQPostGuards(w, r)
+	if !ok {
+		return
+	}
+	runner := h.stable.bqRunner
+	if runner == nil {
+		writeError(w, "BigQuery runner unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	est, err := runner.estimate(ctx, job)
+	if err != nil {
+		slog.Warn("stablecoin bigquery estimate failed", "job", job, "error", err)
+		writeError(w, "dry-run estimate failed", http.StatusBadGateway)
+		return
+	}
+	writeJSON(w, est)
+}
+
+func (h *APIHandler) StablecoinBQRun(w http.ResponseWriter, r *http.Request) {
+	if !h.stableAvailable(w) {
+		return
+	}
+	job, ok := checkStableBQPostGuards(w, r)
+	if !ok {
+		return
+	}
+	runner := h.stable.bqRunner
+	if runner == nil {
+		writeError(w, "BigQuery runner unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	var req struct {
+		ConfirmedEstimateBytes *int64 `json:"confirmed_estimate_bytes"`
+	}
+	if r.Body == nil {
+		writeError(w, "missing request body", http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req); err != nil || req.ConfirmedEstimateBytes == nil || *req.ConfirmedEstimateBytes < 0 {
+		writeError(w, "invalid or missing confirmed_estimate_bytes", http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	if reason, stopped, _ := runner.flags.stopped(ctx, job); stopped {
+		if reason == "" {
+			reason = fmt.Sprintf("job %s is stopped — resume with ./biglens-server --stablecoin-bq-resume %s", job, job)
+		}
+		writeError(w, reason, http.StatusConflict)
+		return
+	}
+
+	now := runner.now().UTC()
+	runner.mu.Lock()
+	if runner.running[job] {
+		runner.mu.Unlock()
+		writeError(w, "job is already running", http.StatusConflict)
+		return
+	}
+	if lastAt, exists := runner.lastManualAt[job]; exists && now.Sub(lastAt) < stableManualCooldown {
+		waitSec := int(math.Ceil((stableManualCooldown - now.Sub(lastAt)).Seconds()))
+		runner.mu.Unlock()
+		writeError(w, fmt.Sprintf("rate limited: wait %ds before starting another manual run of %s", waitSec, job), http.StatusTooManyRequests)
+		return
+	}
+	runner.running[job] = true
+	runner.mu.Unlock()
+
+	abortRunning := func() {
+		runner.mu.Lock()
+		runner.running[job] = false
+		runner.mu.Unlock()
+	}
+
+	est, err := runner.estimate(ctx, job)
+	if err != nil {
+		abortRunning()
+		slog.Warn("stablecoin bigquery run preflight estimate failed", "job", job, "error", err)
+		writeError(w, "dry-run estimate failed", http.StatusBadGateway)
+		return
+	}
+	if est.NothingToDo {
+		abortRunning()
+		writeError(w, "nothing to do: already synced through yesterday", http.StatusConflict)
+		return
+	}
+	maxAllowed := int64(math.Floor(float64(*req.ConfirmedEstimateBytes) * 1.10))
+	if est.EstimatedBytes > maxAllowed {
+		abortRunning()
+		writeError(w, "estimate changed by more than 10%; please run estimate again", http.StatusConflict)
+		return
+	}
+	if !est.FitsBudget {
+		_ = runner.store.setSyncError(ctx, job, "over_budget")
+		runner.recordLastRun(ctx, job, stableJobLastRun{
+			At:          now.Format(time.RFC3339),
+			Trigger:     "manual",
+			Result:      "budget_paused",
+			BytesBilled: 0,
+		})
+		abortRunning()
+		if h.cache != nil {
+			h.cache.Delete("stablecoin:meta")
+		}
+		writeError(w, "over_budget: estimated run exceeds remaining monthly budget", http.StatusConflict)
+		return
+	}
+
+	runner.mu.Lock()
+	runner.lastManualAt[job] = now
+	runner.mu.Unlock()
+	if h.cache != nil {
+		h.cache.Delete("stablecoin:meta")
+	}
+
+	runner.wg.Add(1)
+	go func() {
+		defer runner.wg.Done()
+		defer func() {
+			runner.mu.Lock()
+			runner.running[job] = false
+			runner.mu.Unlock()
+			if h.cache != nil {
+				h.cache.Delete("stablecoin:meta")
+			}
+		}()
+		runner.executeSync(context.Background(), job, "manual")
+	}()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"status": "started",
+		"job":    job,
+	})
 }
