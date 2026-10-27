@@ -1381,7 +1381,7 @@ func newStableBQRunner(settings stableSettings, store *riskStore, ethSrc stableE
 		initialDays:    settings.InitialDays,
 		name:           stableEthJobID,
 		hardCapBytes:   128 << 30,
-		exactDryRunCap: true,
+		dryRunSizedCap: true,
 		maxWindowDays:  31,
 		chunkCatchUp:   true,
 		timeout:        10 * time.Minute,
@@ -1397,7 +1397,7 @@ func newStableBQRunner(settings stableSettings, store *riskStore, ethSrc stableE
 		initialDays:    settings.InitialDays,
 		name:           stableTronJobID,
 		hardCapBytes:   128 << 30,
-		exactDryRunCap: true,
+		dryRunSizedCap: true,
 		maxWindowDays:  31,
 		chunkCatchUp:   true,
 		timeout:        10 * time.Minute,
@@ -1636,7 +1636,7 @@ func (r *stableBQRunner) estimate(ctx context.Context, job string) (StableBQEsti
 
 	out := StableBQEstimateResponse{
 		Job:              job,
-		PricingNote:      "Estimated at $6.25/TiB; BigQuery bills actual bytes scanned",
+		PricingNote:      "Estimated at $6.25/TiB; BigQuery bills actual bytes scanned.",
 		BudgetUsedBytes:  budgetUsed,
 		BudgetLimitBytes: budgetLimit,
 	}

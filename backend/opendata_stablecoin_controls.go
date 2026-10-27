@@ -465,6 +465,8 @@ type stableControlsSampler struct {
 	onFetch  func(provider string, took time.Duration, code string)
 
 	firstDelay time.Duration // before the first sample after boot
+	// waitFirst overrides the firstDelay timer in tests; nil uses time.NewTimer.
+	waitFirst func(ctx context.Context, d time.Duration) error
 	// gas reads the gas-live cache into the transfer-cost copy (§8.3); it
 	// runs on every controls run, also with rpc_controls off.
 	gas func(now time.Time)
@@ -669,12 +671,18 @@ func runStableControlsOnce(ctx context.Context, c *stableControlsSampler, h *sta
 // the loop continues.
 func runStableControlsSampler(ctx context.Context, c *stableControlsSampler, h *stableHealth) {
 	if c.firstDelay > 0 {
-		wait := time.NewTimer(c.firstDelay)
-		select {
-		case <-ctx.Done():
-			wait.Stop()
-			return
-		case <-wait.C:
+		if c.waitFirst != nil {
+			if err := c.waitFirst(ctx, c.firstDelay); err != nil {
+				return
+			}
+		} else {
+			wait := time.NewTimer(c.firstDelay)
+			select {
+			case <-ctx.Done():
+				wait.Stop()
+				return
+			case <-wait.C:
+			}
 		}
 	}
 	t := time.NewTicker(stableControlsTick)

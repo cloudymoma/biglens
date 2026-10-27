@@ -189,7 +189,6 @@ type dailyBQSyncer struct {
 	name             string
 	hardCapBytes     int64
 	dryRunSizedCap   bool
-	exactDryRunCap   bool
 	maxWindowDays    int
 	chunkCatchUp     bool
 	minWindowDays    int
@@ -332,11 +331,11 @@ func (s *dailyBQSyncer) sync(ctx context.Context) (stablecoinRun, bool) {
 	}
 
 	var est int64
-	needDryRun := newFrom != "" || s.dryRunSizedCap || s.exactDryRunCap || s.budget != nil
+	needDryRun := newFrom != "" || s.dryRunSizedCap || s.budget != nil
 	if needDryRun {
 		dEst, dErr := s.job.DryRun(ctx, start, end)
 		if dErr != nil {
-			if s.dryRunSizedCap || s.exactDryRunCap || s.budget != nil {
+			if s.dryRunSizedCap || s.budget != nil {
 				slog.Warn(tag+" dry run", "source", sourceID, "error", dErr)
 				s.applyUnbilledBackoff(now)
 				return stablecoinRun{start: start, end: end, errCode: bqErrCode(dErr)}, true
@@ -358,15 +357,7 @@ func (s *dailyBQSyncer) sync(ctx context.Context) (stablecoinRun, bool) {
 	if s.hardCapBytes > 0 && est > s.hardCapBytes {
 		return stablecoinRun{start: start, end: end, errCode: "over_budget"}, true
 	}
-	if s.exactDryRunCap {
-		maxBytes = est
-		if maxBytes <= 0 {
-			maxBytes = 1 << 20
-		}
-		if s.hardCapBytes > 0 && maxBytes > s.hardCapBytes {
-			maxBytes = s.hardCapBytes
-		}
-	} else if s.dryRunSizedCap {
+	if s.dryRunSizedCap {
 		sized := int64(math.Ceil(float64(est) * 1.25))
 		if sized < 1<<30 {
 			sized = 1 << 30

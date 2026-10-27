@@ -667,8 +667,10 @@ export function StableBigQueryJobsPanel({
             )}
 
             <p className={`text-[11px] leading-relaxed ${cx.muted}`}>
-              {pendingEst.pricing_note ||
-                'Estimated at $6.25/TiB; BigQuery bills the actual bytes scanned.'}{' '}
+              {(
+                pendingEst.pricing_note ||
+                'Estimated at $6.25/TiB; BigQuery bills actual bytes scanned.'
+              ).replace(/\.?$/, '.')}{' '}
               If the fresh dry-run estimate grows by more than 10% before confirmation, the run is refused.
             </p>
 
