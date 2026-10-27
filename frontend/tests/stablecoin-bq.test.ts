@@ -81,7 +81,9 @@ test('M8: status chip is an accessible button with aria-expanded that opens the 
       lockedSrc.includes('New day available after 00:00 UTC') &&
       lockedSrc.includes('Budget this month:') &&
       lockedSrc.includes('<dialog') &&
-      lockedSrc.includes('aria-live'),
+      lockedSrc.includes('aria-live') &&
+      lockedSrc.includes('BigQuery bills actual bytes scanned.') &&
+      lockedSrc.includes('If the fresh dry-run estimate grows by more than 10% before confirmation, the run is refused.'),
     'StableBigQueryJobsPanel must render schedule status, copyable conf.yaml snippet, budget bar, 00:00 UTC note, native <dialog>, and aria-live status',
   );
 
@@ -146,7 +148,7 @@ test('M8: confirm flow calls estimate then run with X-BigLens-Action: stablecoin
           window_to: '2026-10-18',
           estimated_bytes: 1048576000,
           estimated_usd: 0.00596,
-          pricing_note: 'Estimated at $6.25/TiB; BigQuery bills actual bytes scanned',
+          pricing_note: 'Estimated at $6.25/TiB; BigQuery bills actual bytes scanned.',
           budget_used_bytes: 0,
           budget_limit_bytes: 549755813888,
           fits_budget: true,

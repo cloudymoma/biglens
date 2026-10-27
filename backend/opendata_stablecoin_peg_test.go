@@ -3,8 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"log"
 	"log/slog"
 	"math"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -301,11 +303,37 @@ func TestStablePegPersistFailure(t *testing.T) {
 	}
 }
 
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func (b *syncBuffer) Reset() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.buf.Reset()
+}
+
 func TestStableECBRateLogsErrorAndUnknownProviderWarns(t *testing.T) {
-	var buf bytes.Buffer
+	var buf syncBuffer
 	orig := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
-	defer slog.SetDefault(orig)
+	t.Cleanup(func() {
+		slog.SetDefault(orig)
+		log.SetOutput(os.Stderr)
+	})
 
 	_ = (StablecoinConfig{Providers: map[string]bool{"coinbse": false}}).settings()
 	if !strings.Contains(buf.String(), "unknown provider") || !strings.Contains(buf.String(), "coinbse") {

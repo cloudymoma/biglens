@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -92,21 +93,23 @@ func TestStableSQLResultTypesMatchStructs(t *testing.T) {
 }
 
 type fakeStableEthSource struct {
-	mu          sync.Mutex
-	ready       bool
-	transfers   []stableEthTransferAggRow
-	logs        []stableEthLogRow
-	dryA        int64
-	dryB        int64
-	billedA     int64
-	billedB     int64
-	errA        error
-	errB        error
-	readyCalls  int
-	dryRunCalls int
-	fetchCalls  int
-	blockFetch  chan struct{}
-	fetchHit    chan struct{}
+	mu            sync.Mutex
+	ready         bool
+	transfers     []stableEthTransferAggRow
+	logs          []stableEthLogRow
+	dryA          int64
+	dryB          int64
+	billedA       int64
+	billedB       int64
+	errA          error
+	errB          error
+	readyCalls    int
+	dryRunCalls   int
+	fetchCalls    int
+	lastMaxBytesA int64
+	lastMaxBytesB int64
+	blockFetch    chan struct{}
+	fetchHit      chan struct{}
 }
 
 func (f *fakeStableEthSource) Ready(_ context.Context, _ civil.Date) (bool, error) {
@@ -135,9 +138,10 @@ func (f *fakeStableEthSource) DryRunLogs(_ context.Context, _, _ civil.Date) (in
 	}
 	return 1 << 30, nil
 }
-func (f *fakeStableEthSource) FetchTransfers(_ context.Context, _, _ civil.Date, _ int64) ([]stableEthTransferAggRow, int64, error) {
+func (f *fakeStableEthSource) FetchTransfers(_ context.Context, _, _ civil.Date, maxBytes int64) ([]stableEthTransferAggRow, int64, error) {
 	f.mu.Lock()
 	f.fetchCalls++
+	f.lastMaxBytesA = maxBytes
 	hit := f.fetchHit
 	blk := f.blockFetch
 	f.mu.Unlock()
@@ -149,9 +153,10 @@ func (f *fakeStableEthSource) FetchTransfers(_ context.Context, _, _ civil.Date,
 	}
 	return f.transfers, f.billedA, f.errA
 }
-func (f *fakeStableEthSource) FetchLogs(_ context.Context, _, _ civil.Date, _ int64) ([]stableEthLogRow, int64, error) {
+func (f *fakeStableEthSource) FetchLogs(_ context.Context, _, _ civil.Date, maxBytes int64) ([]stableEthLogRow, int64, error) {
 	f.mu.Lock()
 	f.fetchCalls++
+	f.lastMaxBytesB = maxBytes
 	f.mu.Unlock()
 	return f.logs, f.billedB, f.errB
 }
@@ -251,26 +256,38 @@ func TestStableEthJobAndSilentZeroGuard(t *testing.T) {
 }
 
 type fakeStableTronSource struct {
-	ready     bool
-	transfers []stableTronTransferAggRow
-	logs      []stableTronLogRow
-	billedA   int64
-	billedB   int64
+	ready         bool
+	transfers     []stableTronTransferAggRow
+	logs          []stableTronLogRow
+	dryA          int64
+	dryB          int64
+	billedA       int64
+	billedB       int64
+	lastMaxBytesA int64
+	lastMaxBytesB int64
 }
 
 func (f *fakeStableTronSource) Ready(_ context.Context, _ civil.Date) (bool, error) {
 	return f.ready, nil
 }
 func (f *fakeStableTronSource) DryRunTransfers(_ context.Context, _, _ civil.Date) (int64, error) {
+	if f.dryA > 0 {
+		return f.dryA, nil
+	}
 	return 1 << 30, nil
 }
 func (f *fakeStableTronSource) DryRunEvents(_ context.Context, _, _ civil.Date) (int64, error) {
+	if f.dryB > 0 {
+		return f.dryB, nil
+	}
 	return 1 << 30, nil
 }
-func (f *fakeStableTronSource) FetchTransfers(_ context.Context, _, _ civil.Date, _ int64) ([]stableTronTransferAggRow, int64, error) {
+func (f *fakeStableTronSource) FetchTransfers(_ context.Context, _, _ civil.Date, maxBytes int64) ([]stableTronTransferAggRow, int64, error) {
+	f.lastMaxBytesA = maxBytes
 	return f.transfers, f.billedA, nil
 }
-func (f *fakeStableTronSource) FetchEvents(_ context.Context, _, _ civil.Date, _ int64) ([]stableTronLogRow, int64, error) {
+func (f *fakeStableTronSource) FetchEvents(_ context.Context, _, _ civil.Date, maxBytes int64) ([]stableTronLogRow, int64, error) {
+	f.lastMaxBytesB = maxBytes
 	return f.logs, f.billedB, nil
 }
 
@@ -525,6 +542,9 @@ func TestStableBQEstimateRunAndAbuseGuards(t *testing.T) {
 	if est.WindowFrom != "2026-10-18" || est.WindowTo != "2026-10-18" || est.EstimatedBytes != wantEstBytes || !est.FitsBudget || est.NothingToDo {
 		t.Fatalf("estimate = %+v, want window 2026-10-18..2026-10-18, bytes=%d, fits_budget=true, nothing_to_do=false", est, wantEstBytes)
 	}
+	if est.PricingNote != "Estimated at $6.25/TiB; BigQuery bills actual bytes scanned." {
+		t.Errorf("PricingNote = %q, want trailing period", est.PricingNote)
+	}
 	if ethSrc.readyCalls != 0 || ethSrc.fetchCalls != 0 || ethSrc.dryRunCalls != 2 {
 		t.Fatalf("estimate source calls: ready=%d fetch=%d dryRun=%d, want 0, 0, 2", ethSrc.readyCalls, ethSrc.fetchCalls, ethSrc.dryRunCalls)
 	}
@@ -625,5 +645,79 @@ func TestStableBQEstimateRunAndAbuseGuards(t *testing.T) {
 	stSched := metaSched.BigQuery.Statuses[stableEthJobID]
 	if !stSched.ScheduleEnabled || stSched.NextCheckAt == nil || *stSched.NextCheckAt != "2026-10-19T15:00:00Z" {
 		t.Fatalf("schedule on status = %+v, want ScheduleEnabled=true and NextCheckAt=2026-10-19T15:00:00Z", stSched)
+	}
+}
+
+func TestStableBQSyncersUseDryRunSizedCap(t *testing.T) {
+	ctx := context.Background()
+	store := newTestRiskStore(t)
+	now := time.Date(2026, 10, 19, 13, 21, 0, 0, time.UTC)
+
+	const estTotal int64 = 3_456_789_012
+	wantMin := int64(math.Ceil(float64(estTotal) * 1.25))
+
+	ethSrc := &fakeStableEthSource{
+		ready:   true,
+		dryA:    3_000_000_000,
+		dryB:    456_789_012,
+		billedA: 2_800_000_000,
+		billedB: 400_000_000,
+		transfers: []stableEthTransferAggRow{
+			{Day: "2026-10-18", Token: usdtContract, Transfers: 150_000, VolumeRaw: "1000000000000"},
+			{Day: "2026-10-18", Token: usdcContract, Transfers: 90_000, VolumeRaw: "1000000000000"},
+			{Day: "2026-10-18", Token: eurcContract, Transfers: 500, VolumeRaw: "1000000000"},
+		},
+	}
+	tronSrc := &fakeStableTronSource{
+		ready:   true,
+		dryA:    3_000_000_000,
+		dryB:    456_789_012,
+		billedA: 2_800_000_000,
+		billedB: 400_000_000,
+		transfers: []stableTronTransferAggRow{
+			{Day: "2026-10-18", Transfers: 1_800_000, VolumeRaw: "1000000000000"},
+		},
+	}
+
+	for _, jobID := range []string{stableEthJobID, stableTronJobID} {
+		if err := ensureSyncRow(ctx, store.db, jobID); err != nil {
+			t.Fatal(err)
+		}
+		if err := updateSyncWatermarksTx(ctx, store.db, jobID, "2026-07-21", "2026-10-17", 10, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	settings := (StablecoinConfig{BigQuery: StablecoinBigQueryConfig{Jobs: true}}).settings()
+	runner := newStableBQRunner(settings, store, ethSrc, tronSrc, func() time.Time { return now })
+	runner.executeSync(ctx, stableEthJobID, "scheduled")
+	runner.executeSync(ctx, stableTronJobID, "scheduled")
+
+	for _, tc := range []struct {
+		job  string
+		gotA int64
+		gotB int64
+	}{
+		{stableEthJobID, ethSrc.lastMaxBytesA, ethSrc.lastMaxBytesB},
+		{stableTronJobID, tronSrc.lastMaxBytesA, tronSrc.lastMaxBytesB},
+	} {
+		if tc.gotA < wantMin || tc.gotA < 1<<30 {
+			t.Errorf("%s query maxBytes = %d, want >= %d (est*1.25) and >= %d (1 GiB)",
+				tc.job, tc.gotA, wantMin, int64(1<<30))
+		}
+		wantRem := tc.gotA - 2_800_000_000
+		if tc.gotB != wantRem {
+			t.Errorf("%s second query maxBytes = %d, want remaining cap %d", tc.job, tc.gotB, wantRem)
+		}
+	}
+
+	// Small dry-run estimate (< 1 GiB) still gets at least the 1 GiB floor.
+	ethSrc.dryA, ethSrc.dryB = 200<<20, 100<<20
+	ethSrc.billedA, ethSrc.billedB = 150<<20, 50<<20
+	now2 := now.Add(24 * time.Hour)
+	runner2 := newStableBQRunner(settings, store, ethSrc, tronSrc, func() time.Time { return now2 })
+	runner2.executeSync(ctx, stableEthJobID, "scheduled")
+	if ethSrc.lastMaxBytesA != 1<<30 {
+		t.Errorf("small dry-run maxBytes = %d, want 1 GiB floor (%d)", ethSrc.lastMaxBytesA, int64(1<<30))
 	}
 }

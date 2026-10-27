@@ -92,9 +92,18 @@ func stableVerifyRPCStub(t *testing.T, symbols map[string]string, solDecimals in
 		fmt.Fprintf(w, `{"result":{"result":true},"constant_result":["%s"]}`, res)
 	}))
 	t.Cleanup(tron.Close)
-	orig, origLim := tronGridBaseURL, tronGridLimiter
+	orig, origLim, origSleep := tronGridBaseURL, tronGridLimiter, stableTronSleep
 	tronGridBaseURL, tronGridLimiter = tron.URL, rateLimiterUnlimited()
-	t.Cleanup(func() { tronGridBaseURL, tronGridLimiter = orig, origLim })
+	stableTronSleep = func(context.Context, time.Duration) error { return nil }
+	stableTronPacer.mu.Lock()
+	stableTronPacer.last = time.Time{}
+	stableTronPacer.mu.Unlock()
+	t.Cleanup(func() {
+		tronGridBaseURL, tronGridLimiter, stableTronSleep = orig, origLim, origSleep
+		stableTronPacer.mu.Lock()
+		stableTronPacer.last = time.Time{}
+		stableTronPacer.mu.Unlock()
+	})
 	return func(network string) []string {
 		if network == "sol" {
 			return []string{sol.URL}

@@ -88,17 +88,38 @@ func TestStableControlsFirstDelay(t *testing.T) {
 	if c.firstDelay != stableControlsFirstDelay {
 		t.Errorf("sampler first delay = %v", c.firstDelay)
 	}
-	c.firstDelay = 300 * time.Millisecond
+	waiting := make(chan time.Duration, 1)
+	release := make(chan struct{})
+	saved := make(chan struct{}, 1)
+	c.waitFirst = func(ctx context.Context, d time.Duration) error {
+		waiting <- d
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-release:
+			return nil
+		}
+	}
+	c.onSaved = func(context.Context) {
+		select {
+		case saved <- struct{}{}:
+		default:
+		}
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { runStableControlsSampler(ctx, c, h); close(done) }()
-	time.Sleep(100 * time.Millisecond)
+	if gotDelay := <-waiting; gotDelay != 2*time.Minute {
+		t.Errorf("waitFirst duration = %v, want 2m", gotDelay)
+	}
 	if s := h.sampler("controls"); s.LastRun != "" {
 		t.Errorf("controls ran before the first delay: %+v", s)
 	}
-	deadline := time.Now().Add(10 * time.Second)
+	close(release)
+	<-saved
+	deadline := time.Now().Add(5 * time.Second)
 	for h.sampler("controls").LastRun == "" && time.Now().Before(deadline) {
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 	}
 	if h.sampler("controls").LastRun == "" {
 		t.Error("controls never ran after the first delay")

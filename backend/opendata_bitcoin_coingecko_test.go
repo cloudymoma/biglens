@@ -148,14 +148,15 @@ type lazyDerivativesStream struct {
 func (s *lazyDerivativesStream) Read(p []byte) (int, error) {
 	for len(s.buf) == 0 {
 		if s.oversize {
-			// Emit > 32 MiB of valid JSON whitespace/elements.
+			// Emit > 32 MiB of valid JSON whitespace/elements so byteCountReader
+			// trips without spending 20+ seconds decoding 195k structs under -race.
 			if s.idx == 0 {
-				s.buf = append(s.buf, '[')
+				s.buf = append(s.buf, `[`...)
+				s.buf = append(s.buf, `{"market":"Binance (Futures)","symbol":"ETHUSDT","index_id":"ETH","price":"2640.0","contract_type":"perpetual","open_interest":1000,"converted_volume":{"usd":"1000"}},`...)
 			}
 			s.idx++
-			chunk := `{"market":"Binance (Futures)","symbol":"ETHUSDT","index_id":"ETH","price":"2640.0","contract_type":"perpetual","open_interest":1000,"converted_volume":{"usd":"1000"}},`
-			for i := 0; i < 256; i++ {
-				s.buf = append(s.buf, chunk...)
+			for i := 0; i < 64*1024; i++ {
+				s.buf = append(s.buf, ' ')
 			}
 			continue
 		}
