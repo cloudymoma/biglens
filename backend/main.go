@@ -137,8 +137,11 @@ func main() {
 			api.btc.starter = newBtcBaselineRunner(rstore, api.btc.settings, bqBaselineSource{bq: bq}, time.Now)
 		}
 		go runAddressRiskSync(ctx, time.Hour, api.btc.prices.syncOnce, mktSnap.syncOnce, api.btc.nodes.hourlyTick)
-		if bqJobs := bitcoinSyncJobs(api.btc.settings, rstore, bq, api.btc.prices); len(bqJobs) > 0 {
-			go runAddressRiskSync(ctx, time.Hour, bqJobs...)
+		if rstore != nil && bq != nil {
+			api.btc.bqRunner = newBtcBQRunnerFromClient(api.btc.settings, rstore, bq, api.btc.prices)
+			if bqJobs := api.btc.bqRunner.scheduledJobs(); len(bqJobs) > 0 {
+				go runAddressRiskSync(ctx, time.Hour, bqJobs...)
+			}
 		}
 	}
 	gasCfg := cfg.CryptoGas.withDefaults()

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"math"
 	"os"
 	"strconv"
@@ -14,7 +13,6 @@ import (
 	"time"
 
 	"cloud.google.com/go/bigquery"
-	"cloud.google.com/go/civil"
 	"google.golang.org/api/iterator"
 )
 
@@ -689,25 +687,31 @@ func newBtcReadStore(store *riskStore, settings btcSettings, now func() time.Tim
 }
 
 func (r *btcReadStoreImpl) jobStatus(ctx context.Context, job string) (BtcBQStatus, error) {
-	jobOn := r.settings.Jobs
-	if job == btcCoinageJobID && !r.settings.CoinAgeEnabled {
-		jobOn = false
-	}
+	now := r.now().UTC()
+	jobOn := btcJobScheduleEnabled(r.settings, job)
 	st, err := r.store.getSyncState(ctx, job)
 	if err != nil {
-		return BtcBQStatus{Job: job, Jobs: jobOn, State: "off"}, err
+		return BtcBQStatus{Job: job, Jobs: jobOn, ScheduleEnabled: jobOn, State: "off", NextNewDayAt: btcNextNewDayAt(now)}, err
 	}
 	out := BtcBQStatus{
-		Job:           job,
-		Jobs:          jobOn,
-		SyncedThrough: st.Cursor,
-		CoverageFrom:  st.CoverageFrom,
-		LastError:     st.LastError,
+		Job:             job,
+		Jobs:            jobOn,
+		ScheduleEnabled: jobOn,
+		SyncedThrough:   st.Cursor,
+		CoverageFrom:    st.CoverageFrom,
+		LastError:       st.LastError,
+		NextNewDayAt:    btcNextNewDayAt(now),
+	}
+	if jobOn {
+		s := btcNextCheckAt(job, r.settings, st.Cursor, now, time.Time{}).Format(time.RFC3339)
+		out.NextCheckAt = &s
+	}
+	if lr, ok := loadBtcLastRun(ctx, r.store, job); ok {
+		applyBtcLastRun(&out, lr)
 	}
 	reason, stopped, _ := r.flags.stopped(ctx, job)
 	recs, _ := r.flags.failures(ctx, job)
 	pol := btcJobFailurePolicy(job)
-	now := r.now().UTC()
 	var activeRecs []syncFailureRecord
 	if pol.within > 0 {
 		cutoff := now.Add(-pol.within)
@@ -720,13 +724,13 @@ func (r *btcReadStoreImpl) jobStatus(ctx context.Context, job string) (BtcBQStat
 		activeRecs = recs
 	}
 
+	// Manual runs work with the schedule off, so synced data reads "ready"
+	// (and budget pauses or retries stay visible) whatever the schedule.
 	switch {
 	case stopped:
 		out.State = "stopped"
 		out.StopReason = reason
 		out.Failures = len(activeRecs)
-	case !jobOn:
-		out.State = "off"
 	case st.LastError == "over_budget":
 		out.State = "budget_paused"
 	case len(activeRecs) > 0:
@@ -740,10 +744,12 @@ func (r *btcReadStoreImpl) jobStatus(ctx context.Context, job string) (BtcBQStat
 		if idx >= 0 {
 			out.NextRunAfter = last.At.Add(pol.backoff[idx]).UTC().Format(time.RFC3339)
 		}
-	case st.Cursor == "":
-		out.State = "cold_start"
-	default:
+	case st.Cursor != "":
 		out.State = "ready"
+	case !jobOn:
+		out.State = "off"
+	default:
+		out.State = "cold_start"
 	}
 	return out, nil
 }
@@ -937,47 +943,6 @@ ORDER BY spend_day DESC, sats DESC`, from, to)
 	return out, rows.Err()
 }
 
-// btcJobs holds the operator-enabled Bitcoin BigQuery job runners. It is never
-// constructed when bitcoin.bigquery.jobs is false.
-type btcJobs struct {
-	settings  btcSettings
-	store     *riskStore
-	bq        *BQClient
-	budget    *btcBudget
-	flags     *btcStopFlags
-	now       func() time.Time
-	jobLookup func(jobID string) (int64, bool, error)
-}
-
-func newBitcoinJobs(settings btcSettings, store *riskStore, client *BQClient) *btcJobs {
-	if !settings.Enabled || !settings.Jobs || store == nil || client == nil {
-		return nil
-	}
-	return &btcJobs{
-		settings: settings,
-		store:    store,
-		bq:       client,
-		budget:   newBtcBudget(store, settings, time.Now),
-		flags:    newBtcStopFlags(store),
-		now:      time.Now,
-	}
-}
-
-func (j *btcJobs) recoverStaleOnce(ctx context.Context) {
-	if j == nil || j.budget == nil {
-		return
-	}
-	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
-	defer cancel()
-	lookup := j.jobLookup
-	if lookup == nil && j.bq != nil {
-		lookup = bqLookupJobBytes(rctx, j.bq.client)
-	}
-	if err := j.budget.recoverStale(rctx, j.now().UTC(), lookup); err != nil {
-		slog.Warn("bitcoin bigquery recover stale reservations", "error", err)
-	}
-}
-
 // bqLookupJobBytes queries BigQuery job metadata (jobs.get, 0 bytes billed) to
 // recover actual TotalBytesBilled for one or more comma-separated job IDs attached
 // to a stale reservation.
@@ -1018,74 +983,16 @@ func bqLookupJobBytes(ctx context.Context, client *bigquery.Client) func(jobID s
 
 // bitcoinSyncJobs returns the background BigQuery sync functions for Bitcoin.
 // When bitcoin.bigquery.jobs is false (the default) or store/client is nil, it
-// returns nil without constructing any syncers or touching BigQuery.
+// returns nil and nothing is scheduled; manual runs go through btcBQRunner.
 func bitcoinSyncJobs(settings btcSettings, store *riskStore, client *BQClient, prices ...*btcPriceSyncer) []func(context.Context) {
-	jobs := newBitcoinJobs(settings, store, client)
-	if jobs == nil {
+	if !settings.Enabled || !settings.Jobs || store == nil || client == nil {
 		return nil
 	}
 	var priceSyncer *btcPriceSyncer
 	if len(prices) > 0 {
 		priceSyncer = prices[0]
 	}
-	maint := newBtcHolderMaintenance(store, priceSyncer, jobs.now)
-
-	expGiB, warn := btcFeasibility(settings, btcEstRollup1dBytes, btcEstCoinAgeRunBytes)
-	if warn != "" {
-		slog.Warn("bitcoin bigquery feasibility", "warning", warn, "expected_gib", expGiB)
-	} else {
-		slog.Info("bitcoin bigquery jobs enabled",
-			"initial_days", settings.InitialDays,
-			"cadence_days", settings.CadenceDays,
-			"expected_month_gib", expGiB,
-			"budget_gib", float64(settings.BudgetBytes)/float64(1<<30),
-		)
-	}
-
-	rollupSyncer := &dailyBQSyncer{
-		store:          store,
-		job:            newBtcOnchainJob(store, client),
-		now:            jobs.now,
-		initialDays:    settings.InitialDays,
-		name:           btcOnchainJobID,
-		hardCapBytes:   256 << 30,
-		dryRunSizedCap: true,
-		maxWindowDays:  31,
-		chunkCatchUp:   true,
-		timeout:        10 * time.Minute,
-		prune:          func(context.Context, civil.Date) error { return nil },
-		budget:         jobs.budget,
-		failurePolicy:  btcJobFailurePolicy(btcOnchainJobID),
-		stopFlags:      jobs.flags,
-	}
-	out := []func(context.Context){jobs.recoverStaleOnce, rollupSyncer.syncOnce}
-
-	if settings.CoinAgeEnabled {
-		retentionDays := settings.CoinAgeInitialDays + 30
-		stateAsOf := func() string {
-			v, _ := store.getBtcUTXOStateAsOf(context.Background())
-			return v
-		}
-		coinAgeSyncer := &dailyBQSyncer{
-			store:          store,
-			job:            newBtcCoinAgeJob(store, client, settings, maint.runOnce),
-			now:            jobs.now,
-			initialDays:    settings.CoinAgeInitialDays,
-			name:           btcCoinageJobID,
-			hardCapBytes:   256 << 30,
-			dryRunSizedCap: true,
-			maxWindowDays:  731,
-			minWindowDays:  settings.CadenceDays,
-			timeout:        30 * time.Minute,
-			prune:          pruneBtcCoinAge(store, retentionDays, stateAsOf),
-			budget:         jobs.budget,
-			failurePolicy:  btcJobFailurePolicy(btcCoinageJobID),
-			stopFlags:      jobs.flags,
-		}
-		out = append(out, coinAgeSyncer.syncOnce)
-	}
-	out = append(out, maint.runOnce)
-	return out
+	return newBtcBQRunnerFromClient(settings, store, client, priceSyncer).scheduledJobs()
 }
 
 func btcApplyQueryLabels(q *bigquery.Query, jobLabel string) {

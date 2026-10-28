@@ -240,15 +240,6 @@ type btcOnchainJob struct {
 	minInputs int64
 }
 
-func newBtcOnchainJob(store *riskStore, bq *BQClient) *btcOnchainJob {
-	return &btcOnchainJob{
-		store:     store,
-		src:       bqRollupSource{bq: bq},
-		minTxs:    btcRollupMinDailyTxs,
-		minInputs: btcRollupMinDailyInputs,
-	}
-}
-
 func (j *btcOnchainJob) ID() string { return btcOnchainJobID }
 
 // Ready probes transactions at end + 6h so forward-dated blocks straddling

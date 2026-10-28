@@ -86,18 +86,21 @@ type BtcMetaCosts struct {
 }
 
 type BtcMetaBigQuery struct {
-	Jobs           bool                   `json:"jobs"`
-	DataAvailable  bool                   `json:"data_available"`
-	Project        string                 `json:"project"`
-	CadenceDays    int                    `json:"cadence_days"`
-	BudgetGiB      float64                `json:"budget_gib"`
-	MonthBilledGiB float64                `json:"month_billed_gib"`
-	ReservedGiB    float64                `json:"reserved_gib"`
-	BudgetWarning  string                 `json:"budget_warning,omitempty"`
-	BaselineUI     bool                   `json:"baseline_ui"`
-	StoppedJobs    []string               `json:"stopped_jobs,omitempty"`
-	Statuses       map[string]BtcBQStatus `json:"statuses"`
-	Costs          BtcMetaCosts           `json:"costs"`
+	Jobs             bool                   `json:"jobs"`
+	DataAvailable    bool                   `json:"data_available"`
+	Project          string                 `json:"project"`
+	CadenceDays      int                    `json:"cadence_days"`
+	BudgetGiB        float64                `json:"budget_gib"`
+	MonthBilledGiB   float64                `json:"month_billed_gib"`
+	ReservedGiB      float64                `json:"reserved_gib"`
+	BudgetUsedBytes  int64                  `json:"budget_used_bytes"`
+	BudgetLimitBytes int64                  `json:"budget_limit_bytes"`
+	BudgetWarning    string                 `json:"budget_warning,omitempty"`
+	BaselineUI       bool                   `json:"baseline_ui"`
+	StoppedJobs      []string               `json:"stopped_jobs,omitempty"`
+	Statuses         map[string]BtcBQStatus `json:"statuses"`
+	Baseline         BtcBaselineStatus      `json:"baseline"`
+	Costs            BtcMetaCosts           `json:"costs"`
 }
 
 type BtcMetaData struct {
@@ -127,6 +130,8 @@ func bitcoinRoutes(h *APIHandler) []bitcoinRoute {
 		{Pattern: "/api/opendata/bitcoin/onchain", Handler: h.BitcoinOnchain, Gzip: true},
 		{Pattern: "/api/opendata/bitcoin/onchain/holders", Handler: h.BitcoinOnchainHolders, Gzip: true},
 		{Pattern: "/api/opendata/bitcoin/onchain/baseline", Handler: h.BitcoinBaseline, Gzip: false},
+		{Pattern: "/api/opendata/bitcoin/bigquery/estimate", Handler: h.BitcoinBQEstimate, Gzip: false},
+		{Pattern: "/api/opendata/bitcoin/bigquery/run", Handler: h.BitcoinBQRun, Gzip: false},
 	}
 }
 
@@ -216,15 +221,22 @@ func (h *APIHandler) BitcoinMeta(w http.ResponseWriter, r *http.Request) {
 		"btc_onchain": {Job: "btc_onchain", Jobs: s.settings.Jobs, State: "off"},
 		"btc_coinage": {Job: "btc_coinage", Jobs: s.settings.Jobs, State: "off"},
 	}
+	baseline := BtcBaselineStatus{
+		AllowUI:         s.settings.BaselineAllowUI,
+		MinIntervalDays: int(s.settings.BaselineMinInterval.Hours() / 24),
+		CLICommand:      "./biglens-server --bitcoin-utxo-baseline",
+	}
 	var dataAvailable bool
 	var monthBilledGiB, reservedGiB float64
+	var budgetUsedBytes int64
+	budgetLimitBytes := s.settings.BudgetBytes
 	var budgetWarning string
 	var stoppedJobs []string
 
 	if s.read != nil {
 		ctx := r.Context()
 		for _, jobID := range []string{"btc_onchain", "btc_coinage"} {
-			if st, err := s.read.jobStatus(ctx, jobID); err == nil {
+			if st, err := s.jobStatus(ctx, jobID); err == nil {
 				statuses[jobID] = st
 				if st.SyncedThrough != "" {
 					dataAvailable = true
@@ -234,12 +246,17 @@ func (h *APIHandler) BitcoinMeta(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		if bs, err := s.read.baselineStatus(ctx); err == nil && bs.Available {
-			dataAvailable = true
+		if bs, err := s.read.baselineStatus(ctx); err == nil {
+			baseline = bs
+			if bs.Available {
+				dataAvailable = true
+			}
 		}
 		if b, err := s.read.budget(ctx, s.now().UTC()); err == nil {
 			monthBilledGiB = b.MonthBilledGiB
 			reservedGiB = b.ReservedGiB
+			budgetUsedBytes = b.SettledBytes + b.ReservedBytes
+			budgetLimitBytes = b.BudgetBytes
 			budgetWarning = b.Warning
 		}
 	}
@@ -247,17 +264,20 @@ func (h *APIHandler) BitcoinMeta(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, BtcMetaData{
 		Providers: providers,
 		BigQuery: BtcMetaBigQuery{
-			Jobs:           s.settings.Jobs,
-			DataAvailable:  dataAvailable,
-			Project:        s.projectID,
-			CadenceDays:    s.settings.CadenceDays,
-			BudgetGiB:      budgetGiB,
-			MonthBilledGiB: monthBilledGiB,
-			ReservedGiB:    reservedGiB,
-			BudgetWarning:  budgetWarning,
-			BaselineUI:     s.settings.BaselineAllowUI,
-			StoppedJobs:    stoppedJobs,
-			Statuses:       statuses,
+			Jobs:             s.settings.Jobs,
+			DataAvailable:    dataAvailable,
+			Project:          s.projectID,
+			CadenceDays:      s.settings.CadenceDays,
+			BudgetGiB:        budgetGiB,
+			MonthBilledGiB:   monthBilledGiB,
+			ReservedGiB:      reservedGiB,
+			BudgetUsedBytes:  budgetUsedBytes,
+			BudgetLimitBytes: budgetLimitBytes,
+			BudgetWarning:    budgetWarning,
+			BaselineUI:       s.settings.BaselineAllowUI,
+			StoppedJobs:      stoppedJobs,
+			Statuses:         statuses,
+			Baseline:         baseline,
 			Costs: BtcMetaCosts{
 				FirstDayUSD:     1.49,
 				SteadyMonthUSD:  2.88,
@@ -621,7 +641,7 @@ func (h *APIHandler) BitcoinOnchain(w http.ResponseWriter, r *http.Request) {
 
 	if s.read != nil {
 		ctx := r.Context()
-		if st, err := s.read.jobStatus(ctx, btcOnchainJobID); err == nil {
+		if st, err := s.jobStatus(ctx, btcOnchainJobID); err == nil {
 			status = st
 		}
 		if loaded, err := s.read.onchainDays(ctx, from, to); err == nil && len(loaded) > 0 {
@@ -768,10 +788,10 @@ func (h *APIHandler) BitcoinOnchainHolders(w http.ResponseWriter, r *http.Reques
 
 	if s.read != nil {
 		ctx := r.Context()
-		if st, err := s.read.jobStatus(ctx, btcCoinageJobID); err == nil {
+		if st, err := s.jobStatus(ctx, btcCoinageJobID); err == nil {
 			coinageStatus = st
 		}
-		if st, err := s.read.jobStatus(ctx, btcOnchainJobID); err == nil {
+		if st, err := s.jobStatus(ctx, btcOnchainJobID); err == nil {
 			onchainStatus = st
 		}
 		if bs, err := s.read.baselineStatus(ctx); err == nil {

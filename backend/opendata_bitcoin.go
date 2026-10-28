@@ -57,15 +57,23 @@ var btcHTTPClient = &http.Client{
 
 // BtcBQStatus describes the state of a Bitcoin BigQuery job.
 type BtcBQStatus struct {
-	Job           string `json:"job"`   // btc_onchain | btc_coinage | btc_utxo_baseline
-	Jobs          bool   `json:"jobs"`  // operator setting
-	State         string `json:"state"` // off | cold_start | ready | retrying | stopped | budget_paused
-	SyncedThrough string `json:"synced_through"`
-	CoverageFrom  string `json:"coverage_from"`
-	LastError     string `json:"last_error,omitempty"`
-	Failures      int    `json:"failures,omitempty"`
-	StopReason    string `json:"stop_reason,omitempty"`
-	NextRunAfter  string `json:"next_run_after,omitempty"`
+	Job                string  `json:"job"`  // btc_onchain | btc_coinage | btc_utxo_baseline
+	Jobs               bool    `json:"jobs"` // operator setting
+	ScheduleEnabled    bool    `json:"schedule_enabled"`
+	Running            bool    `json:"running"`
+	State              string  `json:"state"` // off | cold_start | ready | retrying | stopped | budget_paused
+	SyncedThrough      string  `json:"synced_through"`
+	CoverageFrom       string  `json:"coverage_from"`
+	LastError          string  `json:"last_error,omitempty"`
+	Failures           int     `json:"failures,omitempty"`
+	StopReason         string  `json:"stop_reason,omitempty"`
+	NextRunAfter       string  `json:"next_run_after,omitempty"`
+	LastRunAt          string  `json:"last_run_at,omitempty"`
+	LastRunTrigger     string  `json:"last_run_trigger,omitempty"`      // schedule | manual
+	LastRunResult      string  `json:"last_run_result,omitempty"`       // ok | no_new_day | error | budget_paused | stopped
+	LastRunBytesBilled *int64  `json:"last_run_bytes_billed,omitempty"` // present after a run
+	NextCheckAt        *string `json:"next_check_at"`                   // null when the schedule is off
+	NextNewDayAt       string  `json:"next_new_day_at"`                 // next ≈ 06:30 UTC settle time
 }
 
 // BtcBaselineStatus reports the current UTXO baseline generation and handoff state.
@@ -314,6 +322,8 @@ type bitcoinService struct {
 	binance   *binanceAdapter
 	nodes     *btcNodesSyncer
 	starter   btcBaselineStarter
+	// bqRunner holds the BigQuery syncers for scheduled and manual runs.
+	bqRunner  *btcBQRunner
 	projectID string
 	now       func() time.Time
 }

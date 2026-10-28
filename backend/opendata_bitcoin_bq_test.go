@@ -206,35 +206,33 @@ func TestBitcoinSyncJobsRecoversStaleReservations(t *testing.T) {
 	settings.Jobs = true
 	settings.BudgetBytes = 1000 << 30
 	t0 := time.Date(2026, 10, 17, 10, 0, 0, 0, time.UTC)
+	clock := t0
 
-	jobs := newBitcoinJobs(settings, store, &BQClient{})
-	if jobs == nil {
-		t.Fatal("expected non-nil btcJobs when Jobs=true")
+	runner := newBtcBQRunner(settings, store, &fakeBtcRunnerRollupSource{}, &fakeBtcRunnerCoinAgeSource{}, nil, func() time.Time { return clock })
+	if runner == nil {
+		t.Fatal("expected non-nil runner when Jobs=true")
 	}
-	jobs.now = func() time.Time { return t0 }
-	jobs.budget.now = jobs.now
 
 	// 1. Reservation with an attached BigQuery job ID (process crashed mid-query).
-	idWithJob, err := jobs.budget.reserve(ctx, btcCoinageJobID, 125<<30)
+	idWithJob, err := runner.budget.reserve(ctx, btcCoinageJobID, 125<<30)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := jobs.budget.attachJob(ctx, idWithJob, "bq-job-crashed-1"); err != nil {
+	if err := runner.budget.attachJob(ctx, idWithJob, "bq-job-crashed-1"); err != nil {
 		t.Fatal(err)
 	}
 	// 2. Reservation without a BigQuery job ID (process crashed before attachJob).
-	if _, err := jobs.budget.reserve(ctx, btcOnchainJobID, 2<<30); err != nil {
+	if _, err := runner.budget.reserve(ctx, btcOnchainJobID, 2<<30); err != nil {
 		t.Fatal(err)
 	}
 
 	// Advance 2 hours past TTL expiry.
 	later := t0.Add(2 * time.Hour)
-	jobs.now = func() time.Time { return later }
-	jobs.budget.now = jobs.now
+	clock = later
 
-	// Even before recoverStaleOnce runs, a reservation with an attached bq_job_id
+	// Even before recovery runs, a reservation with an attached bq_job_id
 	// must NOT vanish from ReservedBytes when its TTL expires.
-	preSt, err := jobs.budget.status(ctx, later)
+	preSt, err := runner.budget.status(ctx, later)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,24 +241,28 @@ func TestBitcoinSyncJobsRecoversStaleReservations(t *testing.T) {
 			preSt.ReservedBytes, int64(125<<30))
 	}
 
-	// Wire jobLookup and run the production recovery step exposed by bitcoinSyncJobs.
-	jobs.jobLookup = func(jobID string) (int64, bool, error) {
+	// Wire jobLookup and run the production recovery step: the first function
+	// of the hourly loop records the tick and recovers stale reservations.
+	runner.jobLookup = func(jobID string) (int64, bool, error) {
 		if jobID == "bq-job-crashed-1" {
 			return 95 << 30, true, nil
 		}
 		return 0, false, nil
 	}
-	jobs.recoverStaleOnce(ctx)
+	runner.scheduledJobs()[0](ctx)
 
-	postSt, err := jobs.budget.status(ctx, later)
+	postSt, err := runner.budget.status(ctx, later)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if postSt.ReservedBytes != 0 {
-		t.Errorf("ReservedBytes after recoverStaleOnce = %d, want 0", postSt.ReservedBytes)
+		t.Errorf("ReservedBytes after recovery = %d, want 0", postSt.ReservedBytes)
 	}
 	if postSt.SettledBytes != 97<<30 {
-		t.Errorf("SettledBytes after recoverStaleOnce = %d, want %d (95 GiB + 2 GiB)", postSt.SettledBytes, int64(97<<30))
+		t.Errorf("SettledBytes after recovery = %d, want %d (95 GiB + 2 GiB)", postSt.SettledBytes, int64(97<<30))
+	}
+	if !runner.loopTickAt().Equal(later) {
+		t.Errorf("loop tick = %v, want %v (next_check_at is derived from it)", runner.loopTickAt(), later)
 	}
 }
 
@@ -288,15 +290,23 @@ func TestBtcFeasibilityDefaultsOK(t *testing.T) {
 	}
 }
 
-func TestNewBitcoinJobsDisabled(t *testing.T) {
+func TestBtcBQRunnerBuiltWithScheduleOff(t *testing.T) {
 	store := newTestRiskStore(t)
 	s := (BitcoinConfig{}).settings() // Jobs defaults to false
-	if jobs := newBitcoinJobs(s, store, &BQClient{}); jobs != nil {
-		t.Fatalf("newBitcoinJobs with Jobs=false returned non-nil: %+v", jobs)
+	runner := newBtcBQRunner(s, store, &fakeBtcRunnerRollupSource{}, &fakeBtcRunnerCoinAgeSource{}, nil, nil)
+	// Run now works with the schedule off, so both syncers must exist...
+	if runner == nil || runner.syncers[btcOnchainJobID] == nil || runner.syncers[btcCoinageJobID] == nil {
+		t.Fatalf("schedule off: runner = %+v, want btc_onchain and btc_coinage syncers for manual runs", runner)
 	}
-	s.Jobs = true
-	if jobs := newBitcoinJobs(s, nil, &BQClient{}); jobs != nil {
-		t.Fatalf("newBitcoinJobs with nil store returned non-nil: %+v", jobs)
+	// ...but nothing may be scheduled.
+	if fns := runner.scheduledJobs(); len(fns) != 0 {
+		t.Fatalf("scheduledJobs with jobs=false returned %d funcs, want 0", len(fns))
+	}
+	if r := newBtcBQRunner(s, nil, &fakeBtcRunnerRollupSource{}, &fakeBtcRunnerCoinAgeSource{}, nil, nil); r != nil {
+		t.Fatalf("newBtcBQRunner with nil store returned non-nil: %+v", r)
+	}
+	if r := newBtcBQRunnerFromClient(s, store, nil, nil); r != nil {
+		t.Fatalf("newBtcBQRunnerFromClient with nil client returned non-nil: %+v", r)
 	}
 }
 
@@ -352,21 +362,32 @@ func TestBtcJobStatusStates(t *testing.T) {
 	store := newTestRiskStore(t)
 	now := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
 
-	// 1. jobs: false -> "off"
+	// 1. jobs: false -> "off"; no schedule, so no next check.
 	sOff := (BitcoinConfig{}).settings()
 	rsOff := newBtcReadStore(store, sOff, func() time.Time { return now })
 	st, err := rsOff.jobStatus(ctx, btcOnchainJobID)
 	if err != nil || st.State != "off" {
 		t.Fatalf("jobs=false state = %+v, %v; want off", st, err)
 	}
+	if st.ScheduleEnabled || st.NextCheckAt != nil {
+		t.Errorf("jobs=false schedule_enabled=%v next_check_at=%v, want false and nil", st.ScheduleEnabled, st.NextCheckAt)
+	}
+	// A UTC day settles at 06:30 UTC (6h block-timestamp slack + finality): at
+	// 12:00 today's settle has passed, so the next one is tomorrow.
+	if st.NextNewDayAt != "2026-10-18T06:30:00Z" {
+		t.Errorf("next_new_day_at = %q, want 2026-10-18T06:30:00Z", st.NextNewDayAt)
+	}
 
-	// 2. jobs: true, no cursor -> "cold_start"
+	// 2. jobs: true, no cursor -> "cold_start", next check one hour out.
 	sOn := sOff
 	sOn.Jobs = true
 	rs := newBtcReadStore(store, sOn, func() time.Time { return now })
 	st, _ = rs.jobStatus(ctx, btcOnchainJobID)
 	if st.State != "cold_start" {
 		t.Errorf("no-cursor state = %q, want cold_start", st.State)
+	}
+	if !st.ScheduleEnabled || st.NextCheckAt == nil || *st.NextCheckAt != "2026-10-17T13:00:00Z" {
+		t.Errorf("jobs=true schedule_enabled=%v next_check_at=%v, want true and 2026-10-17T13:00:00Z", st.ScheduleEnabled, st.NextCheckAt)
 	}
 
 	// 3. cursor set -> "ready"
@@ -376,6 +397,10 @@ func TestBtcJobStatusStates(t *testing.T) {
 	st, _ = rs.jobStatus(ctx, btcOnchainJobID)
 	if st.State != "ready" || st.SyncedThrough != "2026-10-16" {
 		t.Errorf("ready state = %+v, want ready thru 2026-10-16", st)
+	}
+	// Data from a manual run with the schedule off also reads "ready".
+	if st, _ = rsOff.jobStatus(ctx, btcOnchainJobID); st.State != "ready" || st.ScheduleEnabled {
+		t.Errorf("jobs=false with cursor = %+v, want ready with schedule_enabled=false", st)
 	}
 
 	// 4. billed failure recorded -> "retrying" with Failures=1 and NextRunAfter=+3h

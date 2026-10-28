@@ -199,21 +199,6 @@ type btcCoinAgeJob struct {
 	onChange     func(context.Context)
 }
 
-func newBtcCoinAgeJob(store *riskStore, bq *BQClient, settings btcSettings, onChange func(context.Context)) *btcCoinAgeJob {
-	return &btcCoinAgeJob{
-		store: store,
-		src: bqCoinAgeSource{
-			bq:           bq,
-			whaleMinSats: settings.WhaleMinSats,
-			whalesPerDay: settings.WhalesPerDay,
-		},
-		minInputs:    btcCoinAgeMinDailyInputs,
-		whaleMinSats: settings.WhaleMinSats,
-		whalesPerDay: settings.WhalesPerDay,
-		onChange:     onChange,
-	}
-}
-
 func (j *btcCoinAgeJob) ID() string { return btcCoinageJobID }
 
 func (j *btcCoinAgeJob) Ready(ctx context.Context, end civil.Date) (bool, error) {

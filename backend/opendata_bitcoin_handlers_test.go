@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"cloud.google.com/go/civil"
 )
 
 type panicBaselineStarter struct {
@@ -278,6 +280,56 @@ func stubAllBtcUpstreams(t *testing.T, url string) {
 	btcDBIPBaseURL = url
 }
 
+// btcBQActionRoute reports the POST-only BigQuery action routes (the loopback-
+// and header-guarded estimate/run pair); every other Bitcoin route serves GET.
+func btcBQActionRoute(pattern string) bool {
+	return strings.HasPrefix(pattern, "/api/opendata/bitcoin/bigquery/")
+}
+
+// panicBtcQuerySource fails the test on any BigQuery call (Job A and Job B).
+type panicBtcQuerySource struct {
+	t *testing.T
+}
+
+func (p panicBtcQuerySource) fail(call string) {
+	p.t.Fatalf("unexpected BigQuery %s call from HTTP handler", call)
+}
+
+func (p panicBtcQuerySource) ReadyAt(context.Context, time.Time) (bool, error) {
+	p.fail("ReadyAt")
+	return false, errors.New("forbidden")
+}
+
+func (p panicBtcQuerySource) DryRunBlocks(context.Context, civil.Date, civil.Date) (int64, error) {
+	p.fail("DryRunBlocks")
+	return 0, errors.New("forbidden")
+}
+
+func (p panicBtcQuerySource) DryRunRollup(context.Context, civil.Date, civil.Date) (int64, error) {
+	p.fail("DryRunRollup")
+	return 0, errors.New("forbidden")
+}
+
+func (p panicBtcQuerySource) FetchBlocks(context.Context, civil.Date, civil.Date, int64) ([]btcBlockRow, int64, error) {
+	p.fail("FetchBlocks")
+	return nil, 0, errors.New("forbidden")
+}
+
+func (p panicBtcQuerySource) FetchRollup(context.Context, civil.Date, civil.Date, int64) ([]btcRollupRawRow, int64, error) {
+	p.fail("FetchRollup")
+	return nil, 0, errors.New("forbidden")
+}
+
+func (p panicBtcQuerySource) DryRunCoinAge(context.Context, civil.Date, civil.Date) (int64, error) {
+	p.fail("DryRunCoinAge")
+	return 0, errors.New("forbidden")
+}
+
+func (p panicBtcQuerySource) FetchCoinAge(context.Context, civil.Date, civil.Date, int64) ([]btcCoinAgeRawRow, int64, error) {
+	p.fail("FetchCoinAge")
+	return nil, 0, errors.New("forbidden")
+}
+
 func TestBitcoinHandlersNeverQueryBigQuery(t *testing.T) {
 	failSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
@@ -294,8 +346,12 @@ func TestBitcoinHandlersNeverQueryBigQuery(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, rt.Pattern, nil)
 			rec := httptest.NewRecorder()
 			rt.Handler(rec, req)
-			if rec.Code != http.StatusOK {
-				t.Errorf("GET %s status = %d, want 200", rt.Pattern, rec.Code)
+			want := http.StatusOK
+			if btcBQActionRoute(rt.Pattern) {
+				want = http.StatusMethodNotAllowed
+			}
+			if rec.Code != want {
+				t.Errorf("GET %s status = %d, want %d", rt.Pattern, rec.Code, want)
 			}
 		})
 	}
@@ -311,14 +367,22 @@ func TestBitcoinHandlersCannotStartJobs(t *testing.T) {
 	h := newTestBitcoinHandler(t)
 	h.bq = nil
 	h.btc.starter = panicBaselineStarter{t: t}
+	src := panicBtcQuerySource{t: t}
+	h.btc.bqRunner = newBtcBQRunner(h.btc.settings, openTestRiskStore(t), src, src, nil, h.btc.now)
 
+	// GET can never start a job: read routes answer 200, and the BigQuery
+	// action routes reject the method before touching the runner.
 	for _, rt := range bitcoinRoutes(h) {
 		t.Run("GET "+rt.Pattern, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, rt.Pattern, nil)
 			rec := httptest.NewRecorder()
 			rt.Handler(rec, req)
-			if rec.Code != http.StatusOK {
-				t.Errorf("GET %s status = %d", rt.Pattern, rec.Code)
+			want := http.StatusOK
+			if btcBQActionRoute(rt.Pattern) {
+				want = http.StatusMethodNotAllowed
+			}
+			if rec.Code != want {
+				t.Errorf("GET %s status = %d, want %d", rt.Pattern, rec.Code, want)
 			}
 		})
 	}
@@ -329,6 +393,35 @@ func TestBitcoinHandlersCannotStartJobs(t *testing.T) {
 	h.BitcoinBaseline(postRec, postReq)
 	if postRec.Code != http.StatusForbidden {
 		t.Errorf("POST /onchain/baseline with allow_ui:false = %d, want 403", postRec.Code)
+	}
+
+	// BigQuery actions from another device (even claiming loopback through
+	// X-Forwarded-For), or without the custom header, never reach a query source.
+	for _, tc := range []struct {
+		target string
+		fn     http.HandlerFunc
+	}{
+		{"/api/opendata/bitcoin/bigquery/estimate?job=btc_onchain", h.BitcoinBQEstimate},
+		{"/api/opendata/bitcoin/bigquery/run?job=btc_coinage", h.BitcoinBQRun},
+	} {
+		lan := httptest.NewRequest(http.MethodPost, tc.target, strings.NewReader(`{"confirmed_estimate_bytes": 1}`))
+		lan.RemoteAddr = "192.168.1.25:54321"
+		lan.Header.Set("X-Forwarded-For", "127.0.0.1")
+		lan.Header.Set("Content-Type", "application/json")
+		lan.Header.Set("X-BigLens-Action", "bitcoin-bq")
+		lanRec := httptest.NewRecorder()
+		tc.fn(lanRec, lan)
+		if lanRec.Code != http.StatusForbidden {
+			t.Errorf("POST %s from LAN = %d, want 403", tc.target, lanRec.Code)
+		}
+		bare := httptest.NewRequest(http.MethodPost, tc.target, strings.NewReader(`{"confirmed_estimate_bytes": 1}`))
+		bare.RemoteAddr = "127.0.0.1:1234"
+		bare.Header.Set("Content-Type", "application/json")
+		bareRec := httptest.NewRecorder()
+		tc.fn(bareRec, bare)
+		if bareRec.Code != http.StatusBadRequest {
+			t.Errorf("POST %s without X-BigLens-Action = %d, want 400", tc.target, bareRec.Code)
+		}
 	}
 }
 
