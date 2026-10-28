@@ -383,11 +383,16 @@ All 14 public providers are keyless and can be toggled individually under
 #### BigQuery controls, budget reservations & CLI commands
 
 - **Strict separation of display vs. spending.** `bitcoin.bigquery.jobs`
-  defaults to `false` in `conf.yaml`. HTTP handlers hold only a read-only SQLite
-  interface (`btcReadStore`) and never construct or trigger BigQuery jobs. The
+  defaults to `false` in `conf.yaml`. GET handlers hold only a read-only SQLite
+  interface (`btcReadStore`) and never construct or trigger BigQuery jobs; the
+  only HTTP path that can start a query is the loopback-only **Run now** flow
+  below (free dry-run preview, then explicit confirmation). The
   **BigQuery Panels** switch in the dashboard header is a browser-local display
   preference (`localStorage`): toggling it shows or hides panels backed by
-  local SQLite tables (`$0` read cost) and can never start a query.
+  local SQLite tables (`$0` read cost) and can never start a query. While no
+  on-chain rows exist, the disabled switch displays *"No on-chain data yet: run a
+  job once, or turn on the schedule"* next to a button that opens the
+  **BigQuery jobs** panel.
 - **Measured costs & shared monthly budget.** All three Bitcoin BigQuery jobs
   share `bitcoin.bigquery.monthly_budget_gib` (default `2048` GiB ≈ `$12.50/month`
   at `$6.25/TiB`):
@@ -448,6 +453,65 @@ All 14 public providers are keyless and can be toggled individually under
   for $c \ge T_0$), reconstructs backward and rolls forward through
   $\min(\text{coinage\_cursor}, \text{rollup\_cursor})$, clears `baseline_pending`,
   and prunes older generations.
+
+#### BigQuery jobs panel & "Run now"
+
+Clicking the BigQuery status chip in the header opens the **BigQuery jobs** panel
+with one row per job:
+
+- **`btc_onchain` and `btc_coinage`: schedule & status.** Each row shows whether
+  the schedule is `on (hourly)` (`btc_coinage`: `on (every 7 days)`) or
+  `off: set bitcoin.bigquery.jobs: true in conf.yaml` (or
+  `coin_age.enabled: true`) with a copyable snippet, the job's state, the UTC date
+  synced through, the last run's UTC timestamp, trigger (`schedule` or `manual`),
+  result (`ok`, `no_new_day`, `error`, `budget_paused` or `stopped`) and GiB
+  billed, and the next scheduled check (UTC + relative time; for `btc_coinage`,
+  the first hourly tick after the next 7-day window settles). A UTC day becomes
+  fetchable **after ≈ 06:30 UTC** the next day (the 6-hour timestamp-inversion
+  slack plus a 30-minute finality margin), so before then `no_new_day` is the
+  normal answer. A budget bar shows the current month's usage
+  (`X / 2048 GiB`, settled + open reservations).
+- **`btc_utxo_baseline`: status only.** The baseline row shows its state
+  (available generation, handoff pending, building, or not built), as-of date,
+  last build, the next allowed build (30-day lock), the ~687 GiB (~`$4.20`) cost
+  per run, and its CLI commands. It never runs from the panel: build it from the
+  operator shell (above) or, with `utxo_baseline.allow_ui: true`, from the
+  Holders & Flows tab.
+- **"Run now" (works even when the schedule is off)**: clicking **Run now** on
+  `btc_onchain` or `btc_coinage` first runs a free dry-run
+  (`POST /api/opendata/bitcoin/bigquery/estimate?job=…`) and opens a confirmation
+  `<dialog>` showing the UTC day window (`window_from` → `window_to`), the
+  estimated scan size in GiB and approximate cost, the budget reservation held
+  while the run is in flight (`1.25×` the estimate, at least 1 GiB), and monthly
+  budget usage before and after the run. Nothing executes until you click
+  **Confirm & run now** (`POST /api/opendata/bitcoin/bigquery/run?job=…` with
+  `{"confirmed_estimate_bytes": N}`). A manual run fetches every settled day not
+  yet synced (`btc_onchain` in 31-day chunks). For `btc_coinage` that means it
+  does not wait for `cadence_days`: each coin-age run scans about the same
+  ~100 GiB however short its window, which the dialog shows before you confirm,
+  and the schedule keeps its weekly cadence. While a run is in progress, the
+  panel shows a spinner and polls `/meta` every 5 s; when it finishes, every tab
+  reloads.
+- **Cost note & safeguards**: dry-run estimates are shown at **$6.25/TiB**, while
+  BigQuery bills the actual bytes scanned. Manual runs share the scheduled runs'
+  monthly budget ledger (`bitcoin.bigquery.monthly_budget_gib`, default
+  `2048` GiB), cross-process reservations, 256 GiB per-run hard caps, post-scan
+  guards, and cost-tiered circuit breakers
+  (`./biglens-server --bitcoin-bq-resume <job>`). A run is refused with
+  `409 Conflict` when its reservation exceeds the remaining budget, when the job
+  is stopped or already running, when there is no new settled day to fetch, or
+  when the fresh dry-run estimate grew by more than 10% since the preview. Each
+  job is single-flight and rate-limited to at most one manual run every 5 minutes
+  (`429 Too Many Requests`).
+- **Loopback-only rule**: because the server listens on all network interfaces
+  with no login, both `POST /api/opendata/bitcoin/bigquery/estimate` and
+  `POST /api/opendata/bitcoin/bigquery/run` accept requests **only from loopback**
+  (`127.0.0.1` or `::1` checked directly against `RemoteAddr`, ignoring
+  `X-Forwarded-For`, returning `403 Forbidden` otherwise) and require
+  `Content-Type: application/json` plus the custom header
+  `X-BigLens-Action: bitcoin-bq` (`400 Bad Request` otherwise); cross-site browser
+  requests are also rejected by the routes' cross-origin protection. Other devices
+  on your network and other websites cannot trigger BigQuery spend.
 
 ### Stablecoins
 

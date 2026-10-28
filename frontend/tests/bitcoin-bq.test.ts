@@ -142,3 +142,20 @@ test('confirm flow calls estimate then run with X-BigLens-Action: bitcoin-bq, ti
   assert.equal(calls[1].headers['Content-Type'], 'application/json');
 });
 
+test('README Bitcoin section documents the BigQuery jobs panel, Run now, cost note, and loopback-only rule', () => {
+  const readmeSrc = readFileSync(new URL('../../README.md', import.meta.url), 'utf8');
+  const btcIdx = readmeSrc.indexOf('### Bitcoin');
+  const nextSectionIdx = readmeSrc.indexOf('### Stablecoins', btcIdx);
+  const btcSection = readmeSrc.slice(btcIdx, nextSectionIdx);
+
+  assert.ok(
+    btcSection.includes('BigQuery jobs') &&
+      btcSection.includes('Run now') &&
+      btcSection.includes('$6.25/TiB') &&
+      btcSection.includes('127.0.0.1') &&
+      btcSection.includes('X-BigLens-Action: bitcoin-bq'),
+    'README Bitcoin section must document the BigQuery jobs panel, Run now flow, $6.25/TiB cost note, and loopback-only rule',
+  );
+});
+
+
