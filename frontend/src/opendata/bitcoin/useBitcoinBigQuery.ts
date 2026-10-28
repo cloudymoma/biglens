@@ -34,7 +34,7 @@ export function useBitcoinBigQuery(meta: BtcMetaData | null): BitcoinBigQueryCon
   const steadyMonth = meta?.bigquery.costs.steady_month_usd ?? 2.88;
   const reason = available
     ? ''
-    : `Operator opt-in required: set bitcoin.bigquery.jobs: true in conf.yaml (≈ $${firstDay.toFixed(2)} first day, ≈ $${steadyMonth.toFixed(2)}/month).`;
+    : `No on-chain data yet: run a job from the BigQuery jobs panel, or set bitcoin.bigquery.jobs: true in conf.yaml (≈ $${firstDay.toFixed(2)} first day, ≈ $${steadyMonth.toFixed(2)}/month).`;
 
   const toggle = useCallback(() => {
     if (!available) return;

@@ -1,25 +1,31 @@
-import { AlertTriangle, CheckCircle2, Clock, PauseCircle, Terminal, XCircle } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronDown, Clock, Loader2, PauseCircle, Terminal, XCircle } from 'lucide-react';
 import type { BtcBQStatus, BtcMetaBigQuery } from './types';
 
 export default function BigQueryStatusChip({
   bigquery,
   job = 'btc_onchain',
+  open = false,
+  onToggle,
 }: {
   bigquery?: BtcMetaBigQuery | null;
   job?: string;
+  open?: boolean;
+  onToggle?: () => void;
 }) {
   if (!bigquery) return null;
 
   const allStatuses = Object.values(bigquery.statuses ?? {});
+  const runningStatus = allStatuses.find(s => s.running);
   const stoppedStatus = allStatuses.find(s => s.state === 'stopped');
   const retryingStatus = allStatuses.find(s => s.state === 'retrying' || s.state === 'budget_paused');
   const status: BtcBQStatus | undefined =
+    runningStatus ??
     stoppedStatus ??
     retryingStatus ??
     bigquery.statuses?.[job] ??
     bigquery.statuses?.rollup ??
     allStatuses[0];
-  const state = status?.state ?? (bigquery.jobs ? 'cold_start' : 'off');
+  const state = runningStatus ? 'running' : (status?.state ?? (bigquery.jobs ? 'cold_start' : 'off'));
   const stoppedJobs =
     bigquery.stopped_jobs && bigquery.stopped_jobs.length > 0
       ? bigquery.stopped_jobs
@@ -35,6 +41,11 @@ export default function BigQueryStatusChip({
     string,
     { label: string; cls: string; icon: typeof CheckCircle2 }
   > = {
+    running: {
+      label: 'BQ Running',
+      cls: 'border-sky-500/30 bg-sky-500/10 text-sky-300',
+      icon: Loader2,
+    },
     ready: {
       label: 'BQ Ready',
       cls: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300',
@@ -73,16 +84,24 @@ export default function BigQueryStatusChip({
 
   return (
     <div className="flex flex-wrap items-center gap-2 text-xs">
-      <span
-        title={status?.stop_reason || status?.last_error || `Job ${stoppedJob}: ${state}`}
-        className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 font-medium ${meta.cls}`}
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls="btc-bq-jobs-panel"
+        onClick={onToggle}
+        title={status?.stop_reason || status?.last_error || `Job ${stoppedJob}: ${state} — open the BigQuery jobs panel`}
+        className={`inline-flex cursor-pointer items-center gap-1.5 rounded-full border px-2.5 py-0.5 font-medium transition hover:brightness-125 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/70 ${meta.cls}`}
       >
-        <Icon className="h-3.5 w-3.5" />
+        <Icon
+          className={`h-3.5 w-3.5 ${state === 'running' ? 'animate-spin motion-reduce:animate-none' : ''}`}
+          aria-hidden="true"
+        />
         <span>{meta.label}</span>
         {status?.synced_through && (
           <span className="opacity-80">· thru {status.synced_through}</span>
         )}
-      </span>
+        <ChevronDown className={`h-3 w-3 transition-transform ${open ? 'rotate-180' : ''}`} aria-hidden="true" />
+      </button>
       {stoppedJobs.map(sj => (
         <span
           key={sj}

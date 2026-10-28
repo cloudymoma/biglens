@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { Bitcoin, RefreshCw } from 'lucide-react';
 import { fetchBitcoinLive, fetchBitcoinMeta } from './api';
 import { usePolling } from '../common/usePolling';
 import { useBitcoinBigQuery } from './useBitcoinBigQuery';
 import BitcoinTicker from './BitcoinTicker';
+import BigQueryJobsPanel from './BigQueryJobsPanel';
 import BigQuerySwitch from './BigQuerySwitch';
 import BigQueryStatusChip from './BigQueryStatusChip';
 import SourceBadge from '../common/SourceBadge';
@@ -44,8 +45,25 @@ export default function BitcoinDashboard() {
   });
   const [days, setDays] = useState<number>(90);
   const [refreshTick, setRefreshTick] = useState<number>(0);
+  const [metaTick, setMetaTick] = useState<number>(0);
+  const [jobsPanelOpen, setJobsPanelOpen] = useState(false);
+  const [bqRunning, setBqRunning] = useState(false);
+  const wasBqRunningRef = useRef(false);
 
-  const metaPoll = usePolling(fetchBitcoinMeta, 60_000, `btc-meta-${refreshTick}`);
+  // While a BigQuery job is running, /meta polls every 5 s under the same key
+  // (so the jobs panel keeps its data between polls) until running becomes
+  // false; then every tab reloads once to pick up the new rows.
+  const fetchMeta = useCallback(async () => {
+    const meta = await fetchBitcoinMeta();
+    const running = Object.values(meta.bigquery.statuses ?? {}).some(s => Boolean(s.running));
+    if (wasBqRunningRef.current && !running) {
+      setRefreshTick(t => t + 1);
+    }
+    wasBqRunningRef.current = running;
+    setBqRunning(running);
+    return meta;
+  }, []);
+  const metaPoll = usePolling(fetchMeta, bqRunning ? 5_000 : 60_000, `btc-meta-${refreshTick}-${metaTick}`);
   const livePoll = usePolling(fetchBitcoinLive, 30_000, `btc-live-${refreshTick}`);
 
   const bqControl = useBitcoinBigQuery(metaPoll.data);
@@ -77,8 +95,12 @@ export default function BitcoinDashboard() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">
-          <BigQueryStatusChip bigquery={bigquery} />
-          <BigQuerySwitch control={bqControl} />
+          <BigQueryStatusChip
+            bigquery={bigquery}
+            open={jobsPanelOpen}
+            onToggle={() => setJobsPanelOpen(o => !o)}
+          />
+          <BigQuerySwitch control={bqControl} onOpenJobs={() => setJobsPanelOpen(true)} />
           <div className="inline-flex rounded-lg border border-zinc-800 bg-zinc-900/80 p-0.5 text-xs">
             {WINDOWS.map(w => (
               <button
@@ -106,6 +128,14 @@ export default function BitcoinDashboard() {
           </button>
         </div>
       </div>
+
+      {jobsPanelOpen && (
+        <BigQueryJobsPanel
+          bigquery={bigquery}
+          onClose={() => setJobsPanelOpen(false)}
+          onRefreshMeta={() => setMetaTick(t => t + 1)}
+        />
+      )}
 
       {/* Live Ticker Strip */}
       <BitcoinTicker live={livePoll.data} loading={livePoll.loading} />

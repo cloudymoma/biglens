@@ -2,6 +2,7 @@ import axios from 'axios';
 import type {
   BtcBaselinePlan,
   BtcBaselineStatus,
+  BtcBQEstimateResponse,
   BtcFeesData,
   BtcHoldersData,
   BtcLiveData,
@@ -15,6 +16,21 @@ import type {
   BtcValuationData,
   BtcValuationRange,
 } from './types';
+
+// BigQuery actions are loopback-only on the server and need this custom header
+// (plus JSON), so other devices and other websites cannot trigger spend.
+export const BTC_BQ_HEADERS = {
+  'Content-Type': 'application/json',
+  'X-BigLens-Action': 'bitcoin-bq',
+} as const;
+
+export type BtcBQPostFn = <T>(
+  url: string,
+  body: unknown,
+  config?: { headers?: Record<string, string> },
+) => Promise<{ data: T }>;
+
+const defaultPost: BtcBQPostFn = (url, body, config) => axios.post(url, body, config);
 
 export const fetchBitcoinOverview = async (): Promise<BtcOverviewData> => {
   const { data } = await axios.get<BtcOverviewData>('/api/opendata/bitcoin/overview');
@@ -83,5 +99,33 @@ export const confirmBitcoinBaseline = async (token: string): Promise<BtcBaseline
     action: 'confirm',
     token,
   });
+  return data;
+};
+
+// estimateBitcoinBQJob runs the free dry-run preview of the next window.
+export const estimateBitcoinBQJob = async (
+  job: 'btc_onchain' | 'btc_coinage' | string,
+  post: BtcBQPostFn = defaultPost,
+): Promise<BtcBQEstimateResponse> => {
+  const { data } = await post<BtcBQEstimateResponse>(
+    `/api/opendata/bitcoin/bigquery/estimate?job=${encodeURIComponent(job)}`,
+    {},
+    { headers: { ...BTC_BQ_HEADERS } },
+  );
+  return data;
+};
+
+// runBitcoinBQJob starts a manual run of the previewed window; the server
+// refuses it when a fresh estimate exceeds confirmedEstimateBytes by > 10%.
+export const runBitcoinBQJob = async (
+  job: 'btc_onchain' | 'btc_coinage' | string,
+  confirmedEstimateBytes: number,
+  post: BtcBQPostFn = defaultPost,
+): Promise<{ status: string; job: string }> => {
+  const { data } = await post<{ status: string; job: string }>(
+    `/api/opendata/bitcoin/bigquery/run?job=${encodeURIComponent(job)}`,
+    { confirmed_estimate_bytes: confirmedEstimateBytes },
+    { headers: { ...BTC_BQ_HEADERS } },
+  );
   return data;
 };

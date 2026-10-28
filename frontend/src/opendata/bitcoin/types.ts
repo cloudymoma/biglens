@@ -3,6 +3,8 @@ import type { SourceStatus } from '../common/types';
 export interface BtcBQStatus {
   job: string;
   jobs: boolean;
+  schedule_enabled?: boolean;
+  running?: boolean;
   state: 'off' | 'cold_start' | 'ready' | 'retrying' | 'stopped' | 'budget_paused' | string;
   synced_through: string;
   coverage_from: string;
@@ -10,6 +12,26 @@ export interface BtcBQStatus {
   failures?: number;
   stop_reason?: string;
   next_run_after?: string;
+  last_run_at?: string;
+  last_run_trigger?: 'schedule' | 'manual' | string;
+  last_run_result?: 'ok' | 'no_new_day' | 'error' | 'budget_paused' | 'stopped' | string;
+  last_run_bytes_billed?: number | null;
+  next_check_at?: string | null;
+  next_new_day_at?: string;
+}
+
+export interface BtcBQEstimateResponse {
+  job: string;
+  window_from?: string;
+  window_to?: string;
+  estimated_bytes: number;
+  estimated_usd: number;
+  reserve_bytes: number;
+  pricing_note: string;
+  budget_used_bytes: number;
+  budget_limit_bytes: number;
+  fits_budget: boolean;
+  nothing_to_do: boolean;
 }
 
 export interface BtcBaselineStatus {
@@ -80,10 +102,13 @@ export interface BtcMetaBigQuery {
   budget_gib: number;
   month_billed_gib: number;
   reserved_gib: number;
+  budget_used_bytes?: number;
+  budget_limit_bytes?: number;
   budget_warning?: string;
   baseline_ui: boolean;
   stopped_jobs?: string[];
   statuses: Record<string, BtcBQStatus>;
+  baseline?: BtcBaselineStatus;
   costs: BtcMetaCosts;
 }
 
