@@ -167,7 +167,10 @@ export default function BigQueryJobsPanel({
   const [estimatingJob, setEstimatingJob] = useState<string | null>(null);
   const [confirmingRun, setConfirmingRun] = useState(false);
   const [pendingEst, setPendingEst] = useState<BtcBQEstimateResponse | null>(null);
-  const [nothingToDoByJob, setNothingToDoByJob] = useState<Record<string, boolean>>({});
+  // Maps job ID -> the settledThrough UTC day for which /estimate returned
+  // nothing_to_do, so the "Up to date" state clears automatically once the
+  // next UTC day settles at ~06:30 UTC.
+  const [nothingToDoDayByJob, setNothingToDoDayByJob] = useState<Record<string, string>>({});
   const [liveMessage, setLiveMessage] = useState<string>('');
   const [errorMessage, setErrorMessage] = useState<string>('');
 
@@ -247,7 +250,9 @@ export default function BigQueryJobsPanel({
     try {
       const est = await estimateBitcoinBQJob(job);
       if (est.nothing_to_do) {
-        setNothingToDoByJob(prev => ({ ...prev, [job]: true }));
+        if (settledThrough) {
+          setNothingToDoDayByJob(prev => ({ ...prev, [job]: settledThrough }));
+        }
         setLiveMessage(`${job} is already up to date through the latest settled UTC day.`);
         return;
       }
@@ -357,14 +362,16 @@ export default function BigQueryJobsPanel({
           const st = statuses[jobId];
           const meta = JOB_LABELS[jobId];
           const isCoinage = jobId === 'btc_coinage';
-          const scheduleOn = st?.schedule_enabled ?? Boolean(bigquery.jobs);
+          const coinAgeDisabled = isCoinage && bigquery.coin_age_enabled === false;
+          const scheduleOn = st?.schedule_enabled ?? (Boolean(bigquery.jobs) && !coinAgeDisabled);
           const isRunning = Boolean(st?.running);
           const isStopped = st?.state === 'stopped';
           const syncedThru = st?.synced_through || '';
-          const upToDate =
-            Boolean(nothingToDoByJob[jobId]) || Boolean(settledThrough && syncedThru && syncedThru >= settledThrough);
-          const disableRun = isRunning || isStopped || upToDate || estimatingJob === jobId;
-          const coinAgeDisabled = isCoinage && bigquery.jobs && !scheduleOn;
+          const upToDate = Boolean(
+            settledThrough &&
+              ((syncedThru && syncedThru >= settledThrough) || nothingToDoDayByJob[jobId] === settledThrough),
+          );
+          const disableRun = isRunning || isStopped || coinAgeDisabled || upToDate || estimatingJob === jobId;
 
           return (
             <div key={jobId} className={`${cls.inset} flex flex-col justify-between gap-3`}>
@@ -395,9 +402,11 @@ export default function BigQueryJobsPanel({
                         ? 'Running…'
                         : estimatingJob === jobId
                           ? 'Estimating…'
-                          : upToDate
-                            ? `Up to date through ${syncedThru || settledThrough || 'the latest settled day'}`
-                            : 'Run now'}
+                          : coinAgeDisabled
+                            ? 'Disabled in conf.yaml'
+                            : upToDate
+                              ? `Up to date through ${syncedThru || settledThrough || 'the latest settled day'}`
+                              : 'Run now'}
                     </span>
                   </button>
                 </div>

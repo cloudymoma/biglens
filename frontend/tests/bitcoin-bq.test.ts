@@ -61,6 +61,12 @@ test('Bitcoin jobs panel renders schedule status with conf.yaml snippets, the bu
     panelSrc.includes('btc_utxo_baseline') && panelSrc.includes('Not run from this panel') && panelSrc.includes('--yes'),
     'The UTXO baseline row must show its CLI commands and say it does not run from the panel',
   );
+  assert.ok(
+    panelSrc.includes('nothingToDoDayByJob[jobId] === settledThrough') &&
+      panelSrc.includes('bigquery.coin_age_enabled === false') &&
+      panelSrc.includes('Disabled in conf.yaml'),
+    'BigQueryJobsPanel must tie nothing_to_do to settledThrough so it clears at 06:30 UTC, and disable Run now when coin_age.enabled is false',
+  );
 });
 
 test('confirm flow calls estimate then run with X-BigLens-Action: bitcoin-bq, times are UTC, and missing values render —', async () => {
@@ -102,6 +108,8 @@ test('confirm flow calls estimate then run with X-BigLens-Action: bitcoin-bq, ti
   assert.match(mapBitcoinBQError(409, 'estimate changed by more than 10%'), /estimate changed/i);
   assert.match(mapBitcoinBQError(409, 'nothing to do: already synced through the latest settled UTC day'), /settled/i);
   assert.match(mapBitcoinBQError(409, 'over_budget: estimated run exceeds remaining monthly budget'), /budget/i);
+  assert.match(mapBitcoinBQError(409, 'hard_cap_exceeded: estimated scan exceeds the 256 GiB per-run safety cap'), /256 GiB/i);
+  assert.match(mapBitcoinBQError(409, 'btc_coinage is disabled: set bitcoin.bigquery.coin_age.enabled: true in conf.yaml'), /disabled/i);
 
   // Estimate first, then run with confirmed_estimate_bytes and the bitcoin-bq action header.
   const calls: { url: string; body: unknown; headers: Record<string, string> }[] = [];

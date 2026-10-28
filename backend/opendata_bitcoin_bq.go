@@ -725,15 +725,19 @@ func (r *btcReadStoreImpl) jobStatus(ctx context.Context, job string) (BtcBQStat
 	}
 
 	// Manual runs work with the schedule off, so synced data reads "ready"
-	// (and budget pauses or retries stay visible) whatever the schedule.
+	// even when !jobOn. Schedule-only states (budget_paused, retrying) apply
+	// only while the schedule is enabled, and an over_budget pause from a
+	// previous UTC month clears automatically when the monthly budget resets.
+	sameMonthOverBudget := st.LastError == "over_budget" &&
+		(out.LastRunAt == "" || strings.HasPrefix(out.LastRunAt, now.Format("2006-01")))
 	switch {
 	case stopped:
 		out.State = "stopped"
 		out.StopReason = reason
 		out.Failures = len(activeRecs)
-	case st.LastError == "over_budget":
+	case jobOn && sameMonthOverBudget:
 		out.State = "budget_paused"
-	case len(activeRecs) > 0:
+	case jobOn && len(activeRecs) > 0:
 		out.State = "retrying"
 		out.Failures = len(activeRecs)
 		last := activeRecs[len(activeRecs)-1]
@@ -979,20 +983,6 @@ func bqLookupJobBytes(ctx context.Context, client *bigquery.Client) func(jobID s
 		}
 		return total, true, nil
 	}
-}
-
-// bitcoinSyncJobs returns the background BigQuery sync functions for Bitcoin.
-// When bitcoin.bigquery.jobs is false (the default) or store/client is nil, it
-// returns nil and nothing is scheduled; manual runs go through btcBQRunner.
-func bitcoinSyncJobs(settings btcSettings, store *riskStore, client *BQClient, prices ...*btcPriceSyncer) []func(context.Context) {
-	if !settings.Enabled || !settings.Jobs || store == nil || client == nil {
-		return nil
-	}
-	var priceSyncer *btcPriceSyncer
-	if len(prices) > 0 {
-		priceSyncer = prices[0]
-	}
-	return newBtcBQRunnerFromClient(settings, store, client, priceSyncer).scheduledJobs()
 }
 
 func btcApplyQueryLabels(q *bigquery.Query, jobLabel string) {

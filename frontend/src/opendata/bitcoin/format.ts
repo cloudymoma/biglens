@@ -123,8 +123,17 @@ export const mapBitcoinBQError = (status: number | undefined, serverMessage?: st
     if (lower.includes('already running')) {
       return 'This job is already running. Wait for the current run to finish.';
     }
+    if (lower.includes('hard_cap_exceeded')) {
+      return 'Refused: the estimated scan exceeds the 256 GiB per-run safety cap.';
+    }
     if (lower.includes('over_budget')) {
-      return 'Refused: the run’s budget reservation exceeds the remaining monthly BigQuery budget (or the per-run cap).';
+      return 'Refused: the run’s budget reservation exceeds the remaining monthly BigQuery budget.';
+    }
+    if (lower.includes('gap_too_large')) {
+      return msg || 'Refused: the catch-up window exceeds the maximum allowed span for this job.';
+    }
+    if (lower.includes('disabled')) {
+      return msg || 'This BigQuery job is disabled in conf.yaml.';
     }
     if (lower.includes('nothing to do')) {
       return 'Already up to date through the latest settled UTC day (days settle ≈ 06:30 UTC).';

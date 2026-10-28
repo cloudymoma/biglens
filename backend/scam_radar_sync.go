@@ -178,6 +178,27 @@ func safeEndForJob(ctx context.Context, job dailyJob, now time.Time, start civil
 	return civil.Date{}, false, nil
 }
 
+// dryRunSizedReservation returns the MaximumBytesBilled cap and budget
+// reservation a dryRunSizedCap syncer uses for a dry-run estimate (1.25× the
+// estimate, at least 1 GiB, capped at hardCap when positive).
+func dryRunSizedReservation(est, hardCap int64) int64 {
+	sized := int64(math.Ceil(float64(est) * 1.25))
+	if sized < 1<<30 {
+		sized = 1 << 30
+	}
+	if hardCap > 0 && sized > hardCap {
+		sized = hardCap
+	}
+	return sized
+}
+
+// dailySyncOpts configures per-call overrides for dailyBQSyncer.syncWithOpts so
+// manual runs do not mutate shared fields on the syncer.
+type dailySyncOpts struct {
+	ignoreBackoff   bool
+	ignoreMinWindow bool
+}
+
 type dailyBQSyncer struct {
 	store            *riskStore
 	job              dailyJob
@@ -198,6 +219,46 @@ type dailyBQSyncer struct {
 	failurePolicy    syncFailurePolicy
 	stopFlags        syncStopFlags
 	unbilledFailures int
+}
+
+// startDate computes the inclusive start day and cold-start coverage_from
+// marker for the next sync window from st.Cursor and today.
+func (s *dailyBQSyncer) startDate(st syncState, today civil.Date) (civil.Date, string, error) {
+	if st.Cursor == "" {
+		start := today.AddDays(-s.initialDays)
+		return start, start.String(), nil
+	}
+	cur, err := civil.ParseDate(st.Cursor)
+	if err != nil {
+		return civil.Date{}, "", err
+	}
+	return cur.AddDays(1), "", nil
+}
+
+// resolveWindow validates and clamps the window [start, candEnd) according to
+// the syncer's cadence (minWindowDays), maximum window (maxWindowDays), and
+// chunkCatchUp setting. Both syncWithOpts and dry-run estimate call it so they
+// never drift on window selection or gap-too-large handling.
+func (s *dailyBQSyncer) resolveWindow(start, candEnd civil.Date, newFrom string, opts dailySyncOpts) (end civil.Date, nothingToDo bool, errCode string) {
+	if !start.Before(candEnd) {
+		return civil.Date{}, true, ""
+	}
+	if !opts.ignoreMinWindow && s.minWindowDays > 1 && newFrom == "" && candEnd.DaysSince(start) < s.minWindowDays {
+		return civil.Date{}, true, ""
+	}
+	end = candEnd
+	maxWin := s.maxWindowDays
+	if maxWin <= 0 {
+		maxWin = stablecoinMaxWindowDays
+	}
+	if end.DaysSince(start) > maxWin {
+		if s.chunkCatchUp {
+			end = start.AddDays(maxWin)
+		} else {
+			return end, false, "gap too large"
+		}
+	}
+	return end, false, ""
 }
 
 func (s *dailyBQSyncer) logName() string {
@@ -247,6 +308,10 @@ func (s *dailyBQSyncer) syncOnce(ctx context.Context) {
 }
 
 func (s *dailyBQSyncer) sync(ctx context.Context) (stablecoinRun, bool) {
+	return s.syncWithOpts(ctx, dailySyncOpts{})
+}
+
+func (s *dailyBQSyncer) syncWithOpts(ctx context.Context, opts dailySyncOpts) (stablecoinRun, bool) {
 	// address_risk.scam_radar.initial_days: 0 disables Scam Radar entirely
 	// (spec P2.0 Q2): no BigQuery even when a source already has a cursor;
 	// the corpora stored so far stay readable.
@@ -272,30 +337,24 @@ func (s *dailyBQSyncer) sync(ctx context.Context) (stablecoinRun, bool) {
 		return stablecoinRun{errCode: "unavailable"}, true
 	}
 	now := s.now().UTC()
-	if now.Before(s.retryAfter) {
+	if !opts.ignoreBackoff && now.Before(s.retryAfter) {
 		return stablecoinRun{}, false
 	}
 	today := civil.DateOf(now)
-	var start civil.Date
-	newFrom := ""
-	if st.Cursor == "" {
-		start = today.AddDays(-s.initialDays)
-		newFrom = start.String()
-	} else {
-		cur, err := civil.ParseDate(st.Cursor)
-		if err != nil {
-			return stablecoinRun{errCode: "bad_state"}, true
-		}
-		start = cur.AddDays(1)
+	start, newFrom, err := s.startDate(st, today)
+	if err != nil {
+		return stablecoinRun{errCode: "bad_state"}, true
+	}
+	if newFrom == "" {
 		if !start.Before(today) || (!start.Before(today.AddDays(-1)) && now.Before(dayStart(today).Add(stablecoinFinality))) {
 			return stablecoinRun{}, false
 		}
-		if s.minWindowDays > 1 && today.DaysSince(start) < s.minWindowDays {
+		if !opts.ignoreMinWindow && s.minWindowDays > 1 && today.DaysSince(start) < s.minWindowDays {
 			return stablecoinRun{}, false
 		}
 	}
 
-	end, ok, err := safeEndForJob(ctx, s.job, now, start)
+	candEnd, ok, err := safeEndForJob(ctx, s.job, now, start)
 	if err != nil {
 		slog.Warn(tag+" bigquery ready", "source", sourceID, "error", err)
 		s.applyUnbilledBackoff(now)
@@ -304,22 +363,12 @@ func (s *dailyBQSyncer) sync(ctx context.Context) (stablecoinRun, bool) {
 	if !ok {
 		return stablecoinRun{start: start, errCode: "source not caught up"}, true
 	}
-	if !start.Before(end) {
+	end, nothingToDo, errCode := s.resolveWindow(start, candEnd, newFrom, opts)
+	if nothingToDo {
 		return stablecoinRun{}, false
 	}
-	if s.minWindowDays > 1 && newFrom == "" && end.DaysSince(start) < s.minWindowDays {
-		return stablecoinRun{}, false
-	}
-	maxWin := s.maxWindowDays
-	if maxWin <= 0 {
-		maxWin = stablecoinMaxWindowDays
-	}
-	if end.DaysSince(start) > maxWin {
-		if s.chunkCatchUp {
-			end = start.AddDays(maxWin)
-		} else {
-			return stablecoinRun{start: start, end: end, errCode: "gap too large"}, true
-		}
+	if errCode != "" {
+		return stablecoinRun{start: start, end: end, errCode: errCode}, true
 	}
 
 	maxBytes := int64(dailySyncIncrementalMaxBytes)
@@ -358,14 +407,7 @@ func (s *dailyBQSyncer) sync(ctx context.Context) (stablecoinRun, bool) {
 		return stablecoinRun{start: start, end: end, errCode: "over_budget"}, true
 	}
 	if s.dryRunSizedCap {
-		sized := int64(math.Ceil(float64(est) * 1.25))
-		if sized < 1<<30 {
-			sized = 1 << 30
-		}
-		if s.hardCapBytes > 0 && sized > s.hardCapBytes {
-			sized = s.hardCapBytes
-		}
-		maxBytes = sized
+		maxBytes = dryRunSizedReservation(est, s.hardCapBytes)
 	}
 
 	var resID string

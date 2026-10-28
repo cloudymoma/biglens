@@ -31,6 +31,7 @@ export interface BtcBQEstimateResponse {
   budget_used_bytes: number;
   budget_limit_bytes: number;
   fits_budget: boolean;
+  fits_hard_cap?: boolean;
   nothing_to_do: boolean;
 }
 
@@ -96,6 +97,7 @@ export interface BtcMetaCosts {
 
 export interface BtcMetaBigQuery {
   jobs: boolean;
+  coin_age_enabled?: boolean;
   data_available: boolean;
   project: string;
   cadence_days: number;

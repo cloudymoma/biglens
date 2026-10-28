@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -13,6 +14,11 @@ import (
 	"time"
 
 	"cloud.google.com/go/civil"
+)
+
+var (
+	errBtcCoinAgeDisabled = errors.New("btc_coinage is disabled: set bitcoin.bigquery.coin_age.enabled: true in conf.yaml")
+	errBtcGapTooLarge     = errors.New("gap_too_large")
 )
 
 const (
@@ -51,6 +57,7 @@ type BtcBQEstimateResponse struct {
 	BudgetUsedBytes  int64  `json:"budget_used_bytes"`
 	BudgetLimitBytes int64  `json:"budget_limit_bytes"`
 	FitsBudget       bool   `json:"fits_budget"`
+	FitsHardCap      bool   `json:"fits_hard_cap"`
 	NothingToDo      bool   `json:"nothing_to_do"`
 }
 
@@ -103,19 +110,6 @@ func btcNextCheckAt(job string, settings btcSettings, cursor string, now, lastTi
 		next = base.Add(time.Duration(ticks) * btcScheduleCadence)
 	}
 	return next.UTC()
-}
-
-// btcSyncReservation is the MaximumBytesBilled cap, and budget reservation, a
-// dryRunSizedCap syncer uses for a dry-run estimate (see dailyBQSyncer.sync).
-func btcSyncReservation(est, hardCap int64) int64 {
-	sized := int64(math.Ceil(float64(est) * 1.25))
-	if sized < 1<<30 {
-		sized = 1 << 30
-	}
-	if hardCap > 0 && sized > hardCap {
-		sized = hardCap
-	}
-	return sized
 }
 
 func loadBtcLastRun(ctx context.Context, store *riskStore, job string) (btcJobLastRun, bool) {
@@ -376,15 +370,11 @@ func (r *btcBQRunner) executeSync(ctx context.Context, job, trigger string) {
 		})
 		return
 	}
+	var opts dailySyncOpts
 	if trigger == "manual" {
-		syncer.retryAfter = time.Time{}
-		// Run now fetches every settled day not yet synced; cadence_days only
-		// paces the schedule. The job is single-flight, so nothing else reads
-		// the syncer while it is overridden.
-		if saved := syncer.minWindowDays; saved > 1 {
-			syncer.minWindowDays = 0
-			defer func() { syncer.minWindowDays = saved }()
-		}
+		// Run now bypasses backoff and fetches every settled day not yet
+		// synced; cadence_days only paces the schedule.
+		opts = dailySyncOpts{ignoreBackoff: true, ignoreMinWindow: true}
 	}
 	t0 := r.now()
 	timeout := syncer.timeout
@@ -394,11 +384,13 @@ func (r *btcBQRunner) executeSync(ctx context.Context, job, trigger string) {
 	tctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	run, didWork := syncer.sync(tctx)
+	run, didWork := syncer.syncWithOpts(tctx, opts)
 	bctx, bCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer bCancel()
 
-	if didWork && run.errCode != "" {
+	// "source not caught up" means BigQuery has not ingested past window_end + 6h
+	// yet: an unbilled wait that must not overwrite sync_state.last_error.
+	if didWork && run.errCode != "" && run.errCode != "source not caught up" {
 		if err := r.store.setSyncError(bctx, job, run.errCode); err != nil {
 			slog.Error(job+" sync state", "source", job, "error", err)
 		}
@@ -411,8 +403,6 @@ func (r *btcBQRunner) executeSync(ctx context.Context, job, trigger string) {
 	case run.errCode == "over_budget":
 		result = "budget_paused"
 	case run.errCode == "source not caught up":
-		// BigQuery has not ingested past window_end + 6h yet: an unbilled
-		// check that happens every day before ≈ 06:30 UTC.
 		result = "no_new_day"
 	case run.errCode != "":
 		result = "error"
@@ -421,12 +411,21 @@ func (r *btcBQRunner) executeSync(ctx context.Context, job, trigger string) {
 	default:
 		result = "ok"
 	}
-	r.recordLastRun(bctx, job, btcJobLastRun{
-		At:          r.now().UTC().Format(time.RFC3339),
-		Trigger:     trigger,
-		Result:      result,
-		BytesBilled: run.billed,
-	})
+	if trigger == "manual" && (!didWork || run.errCode == "source not caught up") {
+		// An unbilled "source not caught up" wait (when the public dataset is
+		// late) does not count against the 5-minute manual cooldown.
+		r.mu.Lock()
+		delete(r.lastManualAt, job)
+		r.mu.Unlock()
+	}
+	if didWork || trigger != "schedule" {
+		r.recordLastRun(bctx, job, btcJobLastRun{
+			At:          r.now().UTC().Format(time.RFC3339),
+			Trigger:     trigger,
+			Result:      result,
+			BytesBilled: run.billed,
+		})
+	}
 	if trigger == "manual" && result == "ok" && job == btcOnchainJobID {
 		// btc_coinage refreshes holder metrics in Store (onChange). After a
 		// manual btc_onchain run, roll the holder state forward now instead
@@ -505,6 +504,9 @@ func (r *btcBQRunner) estimate(ctx context.Context, job string) (BtcBQEstimateRe
 	if r == nil || r.store == nil {
 		return BtcBQEstimateResponse{}, fmt.Errorf("runner unavailable")
 	}
+	if job == btcCoinageJobID && !r.settings.CoinAgeEnabled {
+		return BtcBQEstimateResponse{}, errBtcCoinAgeDisabled
+	}
 	syncer, ok := r.syncers[job]
 	if !ok || syncer == nil || syncer.job == nil {
 		return BtcBQEstimateResponse{}, fmt.Errorf("unknown job %q", job)
@@ -516,15 +518,9 @@ func (r *btcBQRunner) estimate(ctx context.Context, job string) (BtcBQEstimateRe
 	if err != nil {
 		return BtcBQEstimateResponse{}, err
 	}
-	var start civil.Date
-	if st.Cursor == "" {
-		start = today.AddDays(-syncer.initialDays)
-	} else {
-		cur, err := civil.ParseDate(st.Cursor)
-		if err != nil {
-			return BtcBQEstimateResponse{}, fmt.Errorf("bad cursor %q", st.Cursor)
-		}
-		start = cur.AddDays(1)
+	start, newFrom, err := syncer.startDate(st, today)
+	if err != nil {
+		return BtcBQEstimateResponse{}, fmt.Errorf("bad cursor %q", st.Cursor)
 	}
 	bSt, err := r.budget.status(ctx, now)
 	if err != nil {
@@ -537,18 +533,18 @@ func (r *btcBQRunner) estimate(ctx context.Context, job string) (BtcBQEstimateRe
 		BudgetUsedBytes:  bSt.SettledBytes + bSt.ReservedBytes,
 		BudgetLimitBytes: bSt.BudgetBytes,
 	}
-	if !start.Before(candEnd) {
+	end, nothingToDo, errCode := syncer.resolveWindow(start, candEnd, newFrom, dailySyncOpts{
+		ignoreBackoff:   true,
+		ignoreMinWindow: true,
+	})
+	if errCode == "gap too large" {
+		return BtcBQEstimateResponse{}, fmt.Errorf("%w: window %s..%s exceeds max %d days", errBtcGapTooLarge, start, end.AddDays(-1), syncer.maxWindowDays)
+	}
+	if nothingToDo {
 		out.FitsBudget = true
+		out.FitsHardCap = true
 		out.NothingToDo = true
 		return out, nil
-	}
-	end := candEnd
-	maxWin := syncer.maxWindowDays
-	if maxWin <= 0 {
-		maxWin = stablecoinMaxWindowDays
-	}
-	if end.DaysSince(start) > maxWin {
-		end = start.AddDays(maxWin)
 	}
 	estBytes, err := syncer.job.DryRun(ctx, start, end)
 	if err != nil {
@@ -559,7 +555,8 @@ func (r *btcBQRunner) estimate(ctx context.Context, job string) (BtcBQEstimateRe
 	out.WindowTo = end.AddDays(-1).String()
 	out.EstimatedBytes = estBytes
 	out.EstimatedUSD = bytesToUSD(estBytes)
-	out.ReserveBytes = btcSyncReservation(estBytes, syncer.hardCapBytes)
+	out.ReserveBytes = dryRunSizedReservation(estBytes, syncer.hardCapBytes)
+	out.FitsHardCap = fitsHardCap
 	out.FitsBudget = fitsHardCap && out.ReserveBytes <= bSt.RemainingBytes
 	return out, nil
 }
@@ -599,6 +596,18 @@ func checkBtcBQPostGuards(w http.ResponseWriter, r *http.Request) (string, bool)
 	return job, true
 }
 
+func writeBtcEstimateError(w http.ResponseWriter, job string, err error) {
+	switch {
+	case errors.Is(err, errBtcCoinAgeDisabled):
+		writeError(w, err.Error(), http.StatusConflict)
+	case errors.Is(err, errBtcGapTooLarge):
+		writeError(w, err.Error(), http.StatusConflict)
+	default:
+		slog.Warn("bitcoin bigquery estimate failed", "job", job, "error", err)
+		writeError(w, "dry-run estimate failed", http.StatusBadGateway)
+	}
+}
+
 func (h *APIHandler) BitcoinBQEstimate(w http.ResponseWriter, r *http.Request) {
 	if h.btc == nil {
 		writeError(w, "bitcoin dashboard disabled", http.StatusNotFound)
@@ -617,8 +626,7 @@ func (h *APIHandler) BitcoinBQEstimate(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	est, err := runner.estimate(ctx, job)
 	if err != nil {
-		slog.Warn("bitcoin bigquery estimate failed", "job", job, "error", err)
-		writeError(w, "dry-run estimate failed", http.StatusBadGateway)
+		writeBtcEstimateError(w, job, err)
 		return
 	}
 	writeJSON(w, est)
@@ -636,6 +644,10 @@ func (h *APIHandler) BitcoinBQRun(w http.ResponseWriter, r *http.Request) {
 	runner := h.btc.bqRunner
 	if runner == nil {
 		writeError(w, "BigQuery runner unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if job == btcCoinageJobID && !runner.settings.CoinAgeEnabled {
+		writeError(w, errBtcCoinAgeDisabled.Error(), http.StatusConflict)
 		return
 	}
 	var req struct {
@@ -687,8 +699,7 @@ func (h *APIHandler) BitcoinBQRun(w http.ResponseWriter, r *http.Request) {
 	est, err := runner.estimate(ctx, job)
 	if err != nil {
 		abortRunning()
-		slog.Warn("bitcoin bigquery run preflight estimate failed", "job", job, "error", err)
-		writeError(w, "dry-run estimate failed", http.StatusBadGateway)
+		writeBtcEstimateError(w, job, err)
 		return
 	}
 	if est.NothingToDo {
@@ -702,14 +713,12 @@ func (h *APIHandler) BitcoinBQRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, "estimate changed by more than 10%; please run estimate again", http.StatusConflict)
 		return
 	}
+	if !est.FitsHardCap {
+		abortRunning()
+		writeError(w, "hard_cap_exceeded: estimated scan exceeds the 256 GiB per-run safety cap", http.StatusConflict)
+		return
+	}
 	if !est.FitsBudget {
-		_ = runner.store.setSyncError(ctx, job, "over_budget")
-		runner.recordLastRun(ctx, job, btcJobLastRun{
-			At:          now.Format(time.RFC3339),
-			Trigger:     "manual",
-			Result:      "budget_paused",
-			BytesBilled: 0,
-		})
 		abortRunning()
 		writeError(w, "over_budget: estimated run exceeds remaining monthly budget", http.StatusConflict)
 		return

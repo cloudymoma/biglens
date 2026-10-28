@@ -275,22 +275,66 @@ func TestBtcBQEstimateRunAndAbuseGuards(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 6. An estimate over the 256 GiB per-run hard cap is refused (409,
-	// budget_paused) before any billed query.
+	// 6. An estimate over the 256 GiB per-run hard cap is refused (409
+	// hard_cap_exceeded) before any billed query, without leaving the job
+	// stuck in budget_paused or overwriting last_run.
 	overBytes := int64(40<<20 + 300<<30)
 	rollup.setDryRun(40<<20, 300<<30)
 	recOver := post(h.BitcoinBQRun, runURL, fmt.Sprintf(`{"confirmed_estimate_bytes": %d}`, overBytes))
-	if recOver.Code != http.StatusConflict || !strings.Contains(recOver.Body.String(), "over_budget") {
-		t.Fatalf("over-cap run = %d (%s), want 409 over_budget", recOver.Code, recOver.Body.String())
+	if recOver.Code != http.StatusConflict || !strings.Contains(recOver.Body.String(), "hard_cap_exceeded") {
+		t.Fatalf("over-cap run = %d (%s), want 409 hard_cap_exceeded", recOver.Code, recOver.Body.String())
 	}
-	if stOver := meta().Statuses[btcOnchainJobID]; stOver.State != "budget_paused" || stOver.LastRunResult != "budget_paused" || stOver.LastRunTrigger != "manual" {
-		t.Errorf("status after refusal = %+v, want budget_paused / manual", stOver)
+	if stOver := meta().Statuses[btcOnchainJobID]; stOver.State != "ready" || stOver.LastRunResult != "" {
+		t.Errorf("status after hard-cap refusal = %+v, want ready with no last_run recorded", stOver)
 	}
+	// Refusing a run over the remaining monthly budget returns 409 over_budget
+	// and also leaves sync_state / last_run untouched (no query ran).
+	rollup.setDryRun(40<<20, 600<<20)
+	resHold, err := h.btc.bqRunner.budget.reserve(ctx, btcCoinageJobID, 2048<<30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recBudget := post(h.BitcoinBQRun, runURL, confirmed)
+	if recBudget.Code != http.StatusConflict || !strings.Contains(recBudget.Body.String(), "over_budget") {
+		t.Fatalf("over-budget run = %d (%s), want 409 over_budget", recBudget.Code, recBudget.Body.String())
+	}
+	if stBudget := meta().Statuses[btcOnchainJobID]; stBudget.State != "ready" || stBudget.LastRunResult != "" {
+		t.Errorf("status after budget refusal = %+v, want ready (not stuck in budget_paused)", stBudget)
+	}
+	_ = h.btc.bqRunner.budget.settle(ctx, resHold, 0)
 	if _, _, fetch := rollup.calls(); fetch != 0 {
 		t.Fatalf("fetch calls before any accepted run = %d, want 0", fetch)
 	}
-	rollup.setDryRun(40<<20, 600<<20)
-	_ = store.setSyncError(ctx, btcOnchainJobID, "")
+
+	// 6b. With the schedule off, a billed failure record does not leave the job
+	// showing "retrying" forever; and coin_age.enabled: false blocks manual
+	// runs of btc_coinage.
+	if err := flags.recordFailure(ctx, btcOnchainJobID, syncFailureRecord{
+		At:          clock,
+		Message:     "contiguity_hole",
+		BilledBytes: 30 << 20,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if stNoRetry := meta().Statuses[btcOnchainJobID]; stNoRetry.State != "ready" || stNoRetry.NextRunAfter != "" {
+		t.Errorf("schedule off with failure record = %+v, want state=ready and empty next_run_after", stNoRetry)
+	}
+	_ = flags.clear(ctx, btcOnchainJobID)
+
+	h.btc.bqRunner.settings.CoinAgeEnabled = false
+	for _, target := range []string{
+		"/api/opendata/bitcoin/bigquery/estimate?job=btc_coinage",
+		"/api/opendata/bitcoin/bigquery/run?job=btc_coinage",
+	} {
+		recDis := post(h.BitcoinBQEstimate, target, `{}`)
+		if strings.Contains(target, "/run") {
+			recDis = post(h.BitcoinBQRun, target, `{"confirmed_estimate_bytes": 1}`)
+		}
+		if recDis.Code != http.StatusConflict || !strings.Contains(recDis.Body.String(), "btc_coinage is disabled") {
+			t.Fatalf("%s with coin_age.enabled:false = %d (%s), want 409 disabled", target, recDis.Code, recDis.Body.String())
+		}
+	}
+	h.btc.bqRunner.settings.CoinAgeEnabled = true
 
 	// 7. A manual run works with the schedule off; a concurrent second run gets
 	// 409; another run within 5 minutes gets 429.
@@ -403,13 +447,14 @@ func TestBtcBQCoinageManualRunBypassesCadence(t *testing.T) {
 	seedBtcCursor(t, store, btcCoinageJobID, "2025-10-19", "2026-10-15", clock)
 
 	// The schedule keeps the weekly cadence (each run scans ~100 GiB however
-	// short the window): not due, so not even a Ready probe.
+	// short the window): not due, so not even a Ready probe, and no last_run
+	// is recorded for an idle hourly tick.
 	runner.runScheduled(ctx, btcCoinageJobID)
 	if coinAge.readyCalls != 0 || coinAge.dryRunCalls != 0 || coinAge.fetchCalls != 0 {
 		t.Fatalf("scheduled run before cadence: ready=%d dry=%d fetch=%d, want 0, 0, 0", coinAge.readyCalls, coinAge.dryRunCalls, coinAge.fetchCalls)
 	}
-	if lr, _ := runner.getLastRun(btcCoinageJobID); lr.Result != "no_new_day" || lr.Trigger != "schedule" {
-		t.Errorf("scheduled last run = %+v, want no_new_day / schedule", lr)
+	if lr, ok := runner.getLastRun(btcCoinageJobID); ok {
+		t.Errorf("scheduled idle tick recorded last run = %+v, want none", lr)
 	}
 
 	// Run now previews and fetches every settled day not yet synced.
@@ -432,7 +477,30 @@ func TestBtcBQCoinageManualRunBypassesCadence(t *testing.T) {
 		t.Errorf("manual last run = %+v, want ok / manual / 98 GiB", lr)
 	}
 	if got := runner.syncers[btcCoinageJobID].minWindowDays; got != 7 {
-		t.Errorf("coinage minWindowDays after manual run = %d, want 7 (cadence restored for the schedule)", got)
+		t.Errorf("coinage minWindowDays after manual run = %d, want 7 (cadence preserved for the schedule)", got)
+	}
+
+	// A subsequent hourly scheduled tick that does nothing must NOT overwrite
+	// the manual "ok · 98 GiB" last_run in memory or SQLite.
+	runner.runScheduled(ctx, btcCoinageJobID)
+	if lr, _ := runner.getLastRun(btcCoinageJobID); lr.Result != "ok" || lr.Trigger != "manual" || lr.BytesBilled != 98<<30 {
+		t.Errorf("last run after idle scheduled tick = %+v, want manual ok (98 GiB) preserved", lr)
+	}
+	if lrDB, ok := loadBtcLastRun(ctx, store, btcCoinageJobID); !ok || lrDB.Result != "ok" || lrDB.Trigger != "manual" || lrDB.BytesBilled != 98<<30 {
+		t.Errorf("SQLite last run after idle scheduled tick = %+v (%v), want manual ok (98 GiB) preserved", lrDB, ok)
+	}
+
+	// If the cursor is more than 731 days old, estimate() rejects it with
+	// errBtcGapTooLarge just like syncWithOpts(), instead of showing a clamped
+	// window that the run would refuse.
+	if _, err := store.db.ExecContext(ctx, `UPDATE sync_state SET cursor = '2020-01-01' WHERE source = ?`, btcCoinageJobID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.estimate(ctx, btcCoinageJobID); err == nil || !strings.Contains(err.Error(), "gap_too_large") {
+		t.Fatalf("coinage estimate with >731d gap = %v, want errBtcGapTooLarge", err)
+	}
+	if _, err := store.db.ExecContext(ctx, `UPDATE sync_state SET cursor = '2026-10-18' WHERE source = ?`, btcCoinageJobID); err != nil {
+		t.Fatal(err)
 	}
 
 	// With the schedule on, the next coin-age check is the first hourly tick
@@ -457,11 +525,19 @@ func TestBtcBQSourceNotCaughtUpIsNoNewDay(t *testing.T) {
 	seedBtcCursor(t, store, btcOnchainJobID, "2025-10-19", "2026-10-17", clock)
 
 	// BigQuery has not ingested past 2026-10-19 06:00 UTC yet: an unbilled,
-	// expected daily wait that must not read as an error or count as a failure.
-	runner.runScheduled(ctx, btcOnchainJobID)
+	// expected daily wait that must not read as an error, overwrite LastError,
+	// or count against the 5-minute manual cooldown.
+	runner.lastManualAt[btcOnchainJobID] = clock
+	runner.executeSync(ctx, btcOnchainJobID, "manual")
 	lr, ok := runner.getLastRun(btcOnchainJobID)
 	if !ok || lr.Result != "no_new_day" || lr.BytesBilled != 0 {
 		t.Fatalf("last run = %+v, want no_new_day with 0 bytes billed", lr)
+	}
+	if st, err := store.getSyncState(ctx, btcOnchainJobID); err != nil || st.LastError != "" {
+		t.Errorf("sync_state.last_error = %q (%v), want empty (source not caught up must not overwrite last_error)", st.LastError, err)
+	}
+	if _, cooled := runner.lastManualAt[btcOnchainJobID]; cooled {
+		t.Errorf("lastManualAt still set after 'source not caught up'; want manual cooldown cleared")
 	}
 	if recs, _ := runner.flags.failures(ctx, btcOnchainJobID); len(recs) != 0 {
 		t.Errorf("failures = %+v, want none for an unbilled readiness check", recs)

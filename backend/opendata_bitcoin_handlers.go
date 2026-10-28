@@ -87,6 +87,7 @@ type BtcMetaCosts struct {
 
 type BtcMetaBigQuery struct {
 	Jobs             bool                   `json:"jobs"`
+	CoinAgeEnabled   bool                   `json:"coin_age_enabled"`
 	DataAvailable    bool                   `json:"data_available"`
 	Project          string                 `json:"project"`
 	CadenceDays      int                    `json:"cadence_days"`
@@ -265,6 +266,7 @@ func (h *APIHandler) BitcoinMeta(w http.ResponseWriter, r *http.Request) {
 		Providers: providers,
 		BigQuery: BtcMetaBigQuery{
 			Jobs:             s.settings.Jobs,
+			CoinAgeEnabled:   s.settings.CoinAgeEnabled,
 			DataAvailable:    dataAvailable,
 			Project:          s.projectID,
 			CadenceDays:      s.settings.CadenceDays,
