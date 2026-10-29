@@ -10,7 +10,9 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"gopkg.in/natefinch/lumberjack.v2"
@@ -69,7 +71,8 @@ func main() {
 		Compress:   true,
 	}, nil))
 
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	bq, err := NewBQClient(ctx, cfg)
 	if err != nil {
 		slog.Error("failed to initialize BigQuery", "error", err)
@@ -139,6 +142,7 @@ func main() {
 		go runAddressRiskSync(ctx, time.Hour, api.btc.prices.syncOnce, mktSnap.syncOnce, api.btc.nodes.hourlyTick)
 		if rstore != nil && bq != nil {
 			api.btc.bqRunner = newBtcBQRunnerFromClient(api.btc.settings, rstore, bq, api.btc.prices)
+			api.btc.bqRunner.recoverStaleOnce(ctx)
 			if bqJobs := api.btc.bqRunner.scheduledJobs(); len(bqJobs) > 0 {
 				go runAddressRiskSync(ctx, time.Hour, bqJobs...)
 			}
@@ -196,6 +200,7 @@ func main() {
 					slog.Warn("stablecoin bigquery recover stale reservations", "error", err)
 				}
 			}
+			api.stable.bqRunner.recoverFn(ctx)
 			if bqJobs := api.stable.bqRunner.scheduledJobs(); len(bqJobs) > 0 {
 				go runAddressRiskSync(ctx, time.Hour, bqJobs...)
 			}
@@ -331,8 +336,31 @@ func main() {
 		IdleTimeout:  120 * time.Second,
 	}
 
+	shutdownDone := make(chan struct{})
+	go func() {
+		defer close(shutdownDone)
+		<-ctx.Done()
+		stop()
+		if api.btc != nil && api.btc.bqRunner != nil {
+			api.btc.bqRunner.Cancel()
+		}
+		if api.stable != nil && api.stable.bqRunner != nil {
+			api.stable.bqRunner.Cancel()
+		}
+		sctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		_ = server.Shutdown(sctx)
+	}()
+
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("listen: %s\n", err)
+	}
+	<-shutdownDone
+	if api.btc != nil && api.btc.bqRunner != nil {
+		api.btc.bqRunner.Shutdown()
+	}
+	if api.stable != nil && api.stable.bqRunner != nil {
+		api.stable.bqRunner.Shutdown()
 	}
 }
 

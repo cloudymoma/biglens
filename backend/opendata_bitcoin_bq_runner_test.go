@@ -55,7 +55,7 @@ func (f *fakeBtcRunnerRollupSource) DryRunRollup(context.Context, civil.Date, ci
 	return f.dryRollup, nil
 }
 
-func (f *fakeBtcRunnerRollupSource) FetchBlocks(_ context.Context, _, _ civil.Date, maxBytes int64) ([]btcBlockRow, int64, error) {
+func (f *fakeBtcRunnerRollupSource) FetchBlocks(ctx context.Context, _, _ civil.Date, maxBytes int64) ([]btcBlockRow, int64, error) {
 	f.mu.Lock()
 	f.fetchCalls++
 	f.lastMaxBytes = maxBytes
@@ -66,7 +66,11 @@ func (f *fakeBtcRunnerRollupSource) FetchBlocks(_ context.Context, _, _ civil.Da
 		close(hit)
 	}
 	if blk != nil {
-		<-blk
+		select {
+		case <-blk:
+		case <-ctx.Done():
+			return nil, 0, ctx.Err()
+		}
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -215,6 +219,28 @@ func TestBtcBQEstimateRunAndAbuseGuards(t *testing.T) {
 	if recNonLoop.Code != http.StatusForbidden {
 		t.Fatalf("non-loopback estimate = %d, want 403", recNonLoop.Code)
 	}
+	// DNS-rebinding guard (Item 8): loopback RemoteAddr with a non-loopback Host
+	// or Origin is rejected with 403 before touching the runner.
+	for _, tc := range []struct {
+		name, host, origin string
+	}{
+		{"rebound Host", "evil.example:1983", ""},
+		{"rebound Origin", "localhost:1983", "http://evil.example:1983"},
+	} {
+		req := httptest.NewRequest(http.MethodPost, estimateURL, strings.NewReader("{}"))
+		req.RemoteAddr = "127.0.0.1:54321"
+		req.Host = tc.host
+		if tc.origin != "" {
+			req.Header.Set("Origin", tc.origin)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-BigLens-Action", "bitcoin-bq")
+		rec := httptest.NewRecorder()
+		h.BitcoinBQEstimate(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("%s = %d (%s), want 403", tc.name, rec.Code, rec.Body.String())
+		}
+	}
 	for _, tc := range []struct {
 		name, target, remote, contentType, action string
 	}{
@@ -254,6 +280,20 @@ func TestBtcBQEstimateRunAndAbuseGuards(t *testing.T) {
 	}
 	if ready, dry, fetch := rollup.calls(); ready != 0 || fetch != 0 || dry != 2 {
 		t.Fatalf("estimate source calls: ready=%d dryRun=%d fetch=%d, want 0, 2, 0", ready, dry, fetch)
+	}
+	// Loopback Host variants (127.0.0.1 and [::1]) also pass the DNS-rebinding guard.
+	for _, host := range []string{"127.0.0.1:1983", "[::1]:1983"} {
+		req := httptest.NewRequest(http.MethodPost, estimateURL, strings.NewReader("{}"))
+		req.RemoteAddr = "127.0.0.1:54321"
+		req.Host = host
+		req.Header.Set("Origin", "http://"+host)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-BigLens-Action", "bitcoin-bq")
+		rec := httptest.NewRecorder()
+		h.BitcoinBQEstimate(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("Host %s estimate = %d (%s), want 200", host, rec.Code, rec.Body.String())
+		}
 	}
 
 	// 4. "Estimate changed" (> +10%) gets 409 and runs nothing.
@@ -525,10 +565,24 @@ func TestBtcBQSourceNotCaughtUpIsNoNewDay(t *testing.T) {
 	seedBtcCursor(t, store, btcOnchainJobID, "2025-10-19", "2026-10-17", clock)
 
 	// BigQuery has not ingested past 2026-10-19 06:00 UTC yet: an unbilled,
-	// expected daily wait that must not read as an error, overwrite LastError,
-	// or count against the 5-minute manual cooldown.
-	runner.lastManualAt[btcOnchainJobID] = clock
-	runner.executeSync(ctx, btcOnchainJobID, "manual")
+	// expected daily wait that must not read as an error or overwrite LastError,
+	// and shortens the 5-minute manual cooldown to 1 minute (btcManualNoOpCooldown)
+	// so repeated Run calls are still rate-limited while the dataset is late.
+	h := newTestBitcoinHandler(t)
+	h.bq = nil
+	h.btc.now = func() time.Time { return clock }
+	h.btc.read = newBtcReadStore(store, settings, h.btc.now)
+	rollup.setDryRun(40<<20, 600<<20)
+	h.btc.bqRunner = runner
+
+	const runURL = "/api/opendata/bitcoin/bigquery/run?job=btc_onchain"
+	body := fmt.Sprintf(`{"confirmed_estimate_bytes": %d}`, int64((40+600)<<20))
+	rec1 := stableBQPost(t, h.BitcoinBQRun, runURL, "127.0.0.1:1234", "application/json", "bitcoin-bq", body)
+	if rec1.Code != http.StatusAccepted {
+		t.Fatalf("first manual run = %d (%s), want 202", rec1.Code, rec1.Body.String())
+	}
+	runner.Wait()
+
 	lr, ok := runner.getLastRun(btcOnchainJobID)
 	if !ok || lr.Result != "no_new_day" || lr.BytesBilled != 0 {
 		t.Fatalf("last run = %+v, want no_new_day with 0 bytes billed", lr)
@@ -536,14 +590,26 @@ func TestBtcBQSourceNotCaughtUpIsNoNewDay(t *testing.T) {
 	if st, err := store.getSyncState(ctx, btcOnchainJobID); err != nil || st.LastError != "" {
 		t.Errorf("sync_state.last_error = %q (%v), want empty (source not caught up must not overwrite last_error)", st.LastError, err)
 	}
-	if _, cooled := runner.lastManualAt[btcOnchainJobID]; cooled {
-		t.Errorf("lastManualAt still set after 'source not caught up'; want manual cooldown cleared")
+	// Item 5: repeating Run immediately (or after 10s) is rate-limited with 429,
+	// preventing a loop from spamming Ready + dry-run queries while dataset is late.
+	clock = clock.Add(10 * time.Second)
+	recImmediate := stableBQPost(t, h.BitcoinBQRun, runURL, "127.0.0.1:1234", "application/json", "bitcoin-bq", body)
+	if recImmediate.Code != http.StatusTooManyRequests {
+		t.Fatalf("repeat run 10s after 'source not caught up' = %d (%s), want 429", recImmediate.Code, recImmediate.Body.String())
 	}
+	// After the 1-minute no-op cooldown (without waiting the full 5 minutes), Run is allowed again.
+	clock = clock.Add(btcManualNoOpCooldown)
+	recRetry := stableBQPost(t, h.BitcoinBQRun, runURL, "127.0.0.1:1234", "application/json", "bitcoin-bq", body)
+	if recRetry.Code != http.StatusAccepted {
+		t.Fatalf("repeat run after 1m no-op cooldown = %d (%s), want 202", recRetry.Code, recRetry.Body.String())
+	}
+	runner.Wait()
+
 	if recs, _ := runner.flags.failures(ctx, btcOnchainJobID); len(recs) != 0 {
 		t.Errorf("failures = %+v, want none for an unbilled readiness check", recs)
 	}
-	if _, dry, fetch := rollup.calls(); dry != 0 || fetch != 0 {
-		t.Errorf("dry=%d fetch=%d, want 0 and 0 before the source catches up", dry, fetch)
+	if _, _, fetch := rollup.calls(); fetch != 0 {
+		t.Errorf("fetch=%d, want 0 before the source catches up", fetch)
 	}
 }
 
@@ -621,6 +687,7 @@ func TestBtcBQRoutesCrossOriginProtection(t *testing.T) {
 		"/api/opendata/bitcoin/bigquery/run?job=btc_onchain",
 	} {
 		req := httptest.NewRequest(http.MethodPost, target, strings.NewReader(`{"confirmed_estimate_bytes": 1}`))
+		req.Host = "localhost:1983"
 		req.RemoteAddr = "127.0.0.1:1234"
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("X-BigLens-Action", "bitcoin-bq")
@@ -631,4 +698,169 @@ func TestBtcBQRoutesCrossOriginProtection(t *testing.T) {
 			t.Errorf("cross-site POST %s = %d, want 403", target, rec.Code)
 		}
 	}
+}
+
+func TestBtcBQManualStaleReservationRecoveryShutdownStoppedAndMonthReset(t *testing.T) {
+	ctx := context.Background()
+
+	newSettingsAndSources := func() (btcSettings, *fakeBtcRunnerRollupSource, *fakeBtcRunnerCoinAgeSource) {
+		settings := (BitcoinConfig{}).settings()
+		settings.Jobs = false
+		settings.BudgetBytes = 200 << 30
+		rollup := &fakeBtcRunnerRollupSource{
+			ready:        true,
+			dryBlocks:    40 << 20,
+			dryRollup:    600 << 20,
+			blocks:       btcRunnerDayBlocks("2026-10-27"),
+			rollup:       []btcRollupRawRow{validTestRollupRow("2026-10-27", 2)},
+			billedBlocks: 30 << 20,
+			billedRollup: 500 << 20,
+		}
+		coinAge := &fakeBtcRunnerCoinAgeSource{
+			ready:  true,
+			dry:    100 << 30,
+			billed: 95 << 30,
+			rows:   btcRunnerCoinAgeRows("2026-10-27"),
+		}
+		return settings, rollup, coinAge
+	}
+
+	t.Run("stale_reservation_cleanup_when_schedule_off", func(t *testing.T) {
+		store := newTestRiskStore(t)
+		clock := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+		nowFn := func() time.Time { return clock }
+		settings, rollup, coinAge := newSettingsAndSources()
+		runner := newBtcBQRunner(settings, store, rollup, coinAge, nil, nowFn)
+		seedBtcCursor(t, store, btcCoinageJobID, "2025-10-28", "2026-10-26", clock)
+
+		resID, err := runner.budget.reserve(ctx, btcCoinageJobID, 125<<30)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := runner.budget.attachJob(ctx, resID, "job-crashed-coinage"); err != nil {
+			t.Fatal(err)
+		}
+		runner.jobLookup = func(jobID string) (int64, bool, error) {
+			if jobID == "job-crashed-coinage" {
+				return 50 << 30, true, nil
+			}
+			return 0, false, nil
+		}
+		// Advance past the 45-minute coinage reservation TTL without any scheduled tick.
+		clock = clock.Add(60 * time.Minute)
+		est, err := runner.estimate(ctx, btcCoinageJobID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !est.FitsBudget || est.BudgetUsedBytes != 50<<30 {
+			t.Fatalf("estimate after stale reservation expiry with jobs:false = %+v, want fits_budget=true and budget_used_bytes=50 GiB", est)
+		}
+	})
+
+	t.Run("shutdown_cancels_manual_run_and_settles_reservation", func(t *testing.T) {
+		store := newTestRiskStore(t)
+		clock := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+		nowFn := func() time.Time { return clock }
+		settings, rollup, coinAge := newSettingsAndSources()
+		runner := newBtcBQRunner(settings, store, rollup, coinAge, nil, nowFn)
+		seedBtcCursor(t, store, btcOnchainJobID, "2025-10-28", "2026-10-26", clock)
+
+		h := newTestBitcoinHandler(t)
+		h.bq = nil
+		h.btc.now = nowFn
+		h.btc.settings = settings
+		h.btc.read = newBtcReadStore(store, settings, nowFn)
+		h.btc.bqRunner = runner
+
+		hit, unblock := rollup.gate()
+		const estURL = "/api/opendata/bitcoin/bigquery/estimate?job=btc_onchain"
+		const runURL = "/api/opendata/bitcoin/bigquery/run?job=btc_onchain"
+		body := fmt.Sprintf(`{"confirmed_estimate_bytes": %d}`, int64((40+600)<<20))
+		recRun := stableBQPost(t, h.BitcoinBQRun, runURL, "127.0.0.1:1234", "application/json", "bitcoin-bq", body)
+		if recRun.Code != http.StatusAccepted {
+			t.Fatalf("manual run status = %d (%s), want 202", recRun.Code, recRun.Body.String())
+		}
+		<-hit
+		shutdownDone := make(chan struct{})
+		go func() {
+			runner.Shutdown()
+			close(shutdownDone)
+		}()
+		select {
+		case <-shutdownDone:
+		case <-time.After(3 * time.Second):
+			close(unblock)
+			<-shutdownDone
+			t.Fatal("runner.Shutdown() timed out waiting for manual run cancellation")
+		}
+		if runner.isRunning(btcOnchainJobID) {
+			t.Fatal("runner still reports btc_onchain running after Shutdown()")
+		}
+		bSt, err := runner.budget.status(ctx, clock)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bSt.ReservedBytes != 0 {
+			t.Fatalf("reserved bytes after Shutdown() = %d, want 0 (reservation settled on cancel)", bSt.ReservedBytes)
+		}
+		if recEstAfter := stableBQPost(t, h.BitcoinBQEstimate, estURL, "127.0.0.1:1234", "application/json", "bitcoin-bq", ""); recEstAfter.Code != http.StatusServiceUnavailable {
+			t.Fatalf("estimate after Shutdown() = %d, want 503", recEstAfter.Code)
+		}
+		if recAfterShutdown := stableBQPost(t, h.BitcoinBQRun, runURL, "127.0.0.1:1234", "application/json", "bitcoin-bq", body); recAfterShutdown.Code != http.StatusServiceUnavailable {
+			t.Fatalf("run after Shutdown() = %d, want 503", recAfterShutdown.Code)
+		}
+	})
+
+	t.Run("stopped_job_preserves_last_run_on_scheduled_tick", func(t *testing.T) {
+		store := newTestRiskStore(t)
+		clock := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+		nowFn := func() time.Time { return clock }
+		settings, rollup, coinAge := newSettingsAndSources()
+		runner := newBtcBQRunner(settings, store, rollup, coinAge, nil, nowFn)
+		seedBtcCursor(t, store, btcOnchainJobID, "2025-10-28", "2026-10-26", clock)
+
+		stopRun := btcJobLastRun{
+			At:          "2026-10-28T12:00:00Z",
+			Trigger:     "schedule",
+			Result:      "stopped",
+			BytesBilled: 530 << 20,
+		}
+		runner.recordLastRun(ctx, btcOnchainJobID, stopRun)
+		if err := runner.flags.stop(ctx, btcOnchainJobID, "stopped after 4 billed failures"); err != nil {
+			t.Fatal(err)
+		}
+		clock = clock.Add(time.Hour)
+		runner.runScheduled(ctx, btcOnchainJobID)
+		if lr, ok := runner.getLastRun(btcOnchainJobID); !ok || lr.At != stopRun.At || lr.BytesBilled != stopRun.BytesBilled {
+			t.Fatalf("last run after scheduled tick on stopped job = %+v, want original stop run %+v preserved", lr, stopRun)
+		}
+	})
+
+	t.Run("budget_paused_resets_next_month_after_idle_manual_run", func(t *testing.T) {
+		store := newTestRiskStore(t)
+		clock := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+		nowFn := func() time.Time { return clock }
+		settings, rollup, coinAge := newSettingsAndSources()
+		settings.Jobs = true
+		rsOn := newBtcReadStore(store, settings, nowFn)
+		runner := newBtcBQRunner(settings, store, rollup, coinAge, nil, nowFn)
+
+		// Seed cursor to 2026-10-15 (>= 7 cadence days before Oct 28) and exceed
+		// the 200 GiB monthly budget in October so executeSync records over_budget in 2026-10.
+		seedBtcCursor(t, store, btcCoinageJobID, "2025-10-28", "2026-10-15", clock)
+		coinAge.dry = 190 << 30 // 190 GiB * 1.25 = 237.5 GiB > 200 GiB budget
+		runner.executeSync(ctx, btcCoinageJobID, "schedule")
+		if stOct, err := rsOn.jobStatus(ctx, btcCoinageJobID); err != nil || stOct.State != "budget_paused" {
+			t.Fatalf("October status after over_budget = %+v (%v), want budget_paused", stOct, err)
+		}
+		// Advance to Nov 1: a manual run that does no work (cursor caught up to Oct 31)
+		// records a November LastRunAt, but budget_paused must still clear in November.
+		seedBtcCursor(t, store, btcCoinageJobID, "2025-10-28", "2026-10-31", clock)
+		_ = store.setSyncError(ctx, btcCoinageJobID, "over_budget")
+		clock = time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+		runner.executeSync(ctx, btcCoinageJobID, "manual")
+		if stNov, err := rsOn.jobStatus(ctx, btcCoinageJobID); err != nil || stNov.State != "ready" {
+			t.Fatalf("November status after idle manual run = %+v (%v), want ready (not stuck in budget_paused)", stNov, err)
+		}
+	})
 }

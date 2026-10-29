@@ -547,7 +547,7 @@ export default function BigQueryJobsPanel({
               <div className="flex justify-between gap-2">
                 <dt className={cls.muted}>Budget after this run</dt>
                 <dd className={`font-mono ${cls.text}`}>
-                  {fmtBytesGiB(pendingEst.budget_used_bytes + pendingEst.estimated_bytes)} /{' '}
+                  {fmtBytesGiB(pendingEst.budget_used_bytes + pendingEst.reserve_bytes)} /{' '}
                   {(pendingEst.budget_limit_bytes / GIB).toFixed(0)} GiB
                 </dd>
               </div>

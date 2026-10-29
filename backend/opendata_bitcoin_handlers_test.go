@@ -415,6 +415,7 @@ func TestBitcoinHandlersCannotStartJobs(t *testing.T) {
 			t.Errorf("POST %s from LAN = %d, want 403", tc.target, lanRec.Code)
 		}
 		bare := httptest.NewRequest(http.MethodPost, tc.target, strings.NewReader(`{"confirmed_estimate_bytes": 1}`))
+		bare.Host = "localhost:1983"
 		bare.RemoteAddr = "127.0.0.1:1234"
 		bare.Header.Set("Content-Type", "application/json")
 		bareRec := httptest.NewRecorder()

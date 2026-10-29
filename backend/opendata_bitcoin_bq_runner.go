@@ -22,8 +22,9 @@ var (
 )
 
 const (
-	btcManualCooldown  = 5 * time.Minute
-	btcScheduleCadence = time.Hour
+	btcManualCooldown     = 5 * time.Minute
+	btcManualNoOpCooldown = time.Minute
+	btcScheduleCadence    = time.Hour
 	// btcSettleDelay is how long after 00:00 UTC the previous UTC day becomes
 	// fetchable: Job A and Job B wait until BigQuery has ingested past
 	// window_end + 6h (MTP-11 timestamp slack), plus the shared finality margin.
@@ -154,6 +155,8 @@ type btcBQRunner struct {
 	lastLoopTick time.Time
 	lastRun      map[string]btcJobLastRun
 	jobLookup    func(jobID string) (int64, bool, error)
+	runCtx       context.Context
+	cancel       context.CancelFunc
 	wg           sync.WaitGroup
 }
 
@@ -217,6 +220,7 @@ func newBtcBQRunner(settings btcSettings, store *riskStore, rollupSrc btcRollupQ
 		failurePolicy:  btcJobFailurePolicy(btcCoinageJobID),
 		stopFlags:      flags,
 	}
+	runCtx, cancel := context.WithCancel(context.Background())
 	return &btcBQRunner{
 		settings:     settings,
 		store:        store,
@@ -228,6 +232,8 @@ func newBtcBQRunner(settings btcSettings, store *riskStore, rollupSrc btcRollupQ
 		running:      map[string]bool{},
 		lastManualAt: map[string]time.Time{},
 		lastRun:      map[string]btcJobLastRun{},
+		runCtx:       runCtx,
+		cancel:       cancel,
 	}
 }
 
@@ -254,6 +260,38 @@ func (r *btcBQRunner) Wait() {
 		return
 	}
 	r.wg.Wait()
+}
+
+func (r *btcBQRunner) Cancel() {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.cancel != nil {
+		r.cancel()
+	}
+}
+
+func (r *btcBQRunner) Shutdown() {
+	if r == nil {
+		return
+	}
+	r.Cancel()
+	r.wg.Wait()
+}
+
+func (r *btcBQRunner) manualCtx() context.Context {
+	if r == nil {
+		return context.Background()
+	}
+	r.mu.Lock()
+	ctx := r.runCtx
+	r.mu.Unlock()
+	if ctx == nil {
+		return context.Background()
+	}
+	return ctx
 }
 
 func (r *btcBQRunner) isRunning(job string) bool {
@@ -363,11 +401,13 @@ func (r *btcBQRunner) executeSync(ctx context.Context, job, trigger string) {
 		}
 	}()
 	if _, stopped, _ := r.flags.stopped(ctx, job); stopped {
-		r.recordLastRun(ctx, job, btcJobLastRun{
-			At:      r.now().UTC().Format(time.RFC3339),
-			Trigger: trigger,
-			Result:  "stopped",
-		})
+		if trigger != "schedule" {
+			r.recordLastRun(ctx, job, btcJobLastRun{
+				At:      r.now().UTC().Format(time.RFC3339),
+				Trigger: trigger,
+				Result:  "stopped",
+			})
+		}
 		return
 	}
 	var opts dailySyncOpts
@@ -394,6 +434,11 @@ func (r *btcBQRunner) executeSync(ctx context.Context, job, trigger string) {
 		if err := r.store.setSyncError(bctx, job, run.errCode); err != nil {
 			slog.Error(job+" sync state", "source", job, "error", err)
 		}
+		if run.errCode == "over_budget" {
+			_ = r.store.setBtcKV(bctx, "over_budget_month:"+job, r.now().UTC().Format("2006-01"))
+		}
+	} else if didWork && run.errCode == "" {
+		_ = r.store.deleteBtcKV(bctx, "over_budget_month:"+job)
 	}
 	_, stoppedNow, _ := r.flags.stopped(bctx, job)
 	var result string
@@ -412,10 +457,12 @@ func (r *btcBQRunner) executeSync(ctx context.Context, job, trigger string) {
 		result = "ok"
 	}
 	if trigger == "manual" && (!didWork || run.errCode == "source not caught up") {
-		// An unbilled "source not caught up" wait (when the public dataset is
-		// late) does not count against the 5-minute manual cooldown.
+		// Shorten the 5-minute manual cooldown to 1 minute when no billed
+		// query ran (e.g. "source not caught up"), so a late public dataset
+		// doesn't lock the button for 5 minutes while still rate-limiting
+		// repeated Ready and dry-run probes.
 		r.mu.Lock()
-		delete(r.lastManualAt, job)
+		r.lastManualAt[job] = r.now().UTC().Add(btcManualNoOpCooldown - btcManualCooldown)
 		r.mu.Unlock()
 	}
 	if didWork || trigger != "schedule" {
@@ -522,6 +569,7 @@ func (r *btcBQRunner) estimate(ctx context.Context, job string) (BtcBQEstimateRe
 	if err != nil {
 		return BtcBQEstimateResponse{}, fmt.Errorf("bad cursor %q", st.Cursor)
 	}
+	r.recoverStaleOnce(ctx)
 	bSt, err := r.budget.status(ctx, now)
 	if err != nil {
 		return BtcBQEstimateResponse{}, err
@@ -578,8 +626,8 @@ func checkBtcBQPostGuards(w http.ResponseWriter, r *http.Request) (string, bool)
 		writeError(w, "method not allowed", http.StatusMethodNotAllowed)
 		return "", false
 	}
-	// Loopback only from RemoteAddr; ignore X-Forwarded-For / X-Real-IP.
-	if !isLoopbackRemoteAddr(r.RemoteAddr) {
+	// Loopback only (RemoteAddr + Host/Origin); ignore X-Forwarded-For / X-Real-IP.
+	if !isLoopbackRequest(r) {
 		writeError(w, "forbidden: BigQuery actions are restricted to loopback requests (127.0.0.1 / ::1)", http.StatusForbidden)
 		return "", false
 	}
@@ -622,6 +670,10 @@ func (h *APIHandler) BitcoinBQEstimate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, "BigQuery runner unavailable", http.StatusServiceUnavailable)
 		return
 	}
+	if runner.manualCtx().Err() != nil {
+		writeError(w, "server shutting down", http.StatusServiceUnavailable)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	est, err := runner.estimate(ctx, job)
@@ -644,6 +696,10 @@ func (h *APIHandler) BitcoinBQRun(w http.ResponseWriter, r *http.Request) {
 	runner := h.btc.bqRunner
 	if runner == nil {
 		writeError(w, "BigQuery runner unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if runner.manualCtx().Err() != nil {
+		writeError(w, "server shutting down", http.StatusServiceUnavailable)
 		return
 	}
 	if job == btcCoinageJobID && !runner.settings.CoinAgeEnabled {
@@ -725,10 +781,16 @@ func (h *APIHandler) BitcoinBQRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	runner.mu.Lock()
+	if runner.runCtx != nil && runner.runCtx.Err() != nil {
+		runner.running[job] = false
+		runner.mu.Unlock()
+		writeError(w, "server shutting down", http.StatusServiceUnavailable)
+		return
+	}
 	runner.lastManualAt[job] = now
+	runner.wg.Add(1)
 	runner.mu.Unlock()
 
-	runner.wg.Add(1)
 	go func() {
 		defer runner.wg.Done()
 		defer func() {
@@ -736,7 +798,7 @@ func (h *APIHandler) BitcoinBQRun(w http.ResponseWriter, r *http.Request) {
 			runner.running[job] = false
 			runner.mu.Unlock()
 		}()
-		runner.executeSync(context.Background(), job, "manual")
+		runner.executeSync(runner.manualCtx(), job, "manual")
 	}()
 
 	w.Header().Set("Content-Type", "application/json")

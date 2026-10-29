@@ -438,6 +438,7 @@ func stableBQPost(t *testing.T, fn http.HandlerFunc, target, remoteAddr, content
 		rd = bytes.NewReader(nil)
 	}
 	req := httptest.NewRequest(http.MethodPost, target, rd)
+	req.Host = "localhost:1983"
 	req.RemoteAddr = remoteAddr
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
@@ -508,6 +509,17 @@ func TestStableBQEstimateRunAndAbuseGuards(t *testing.T) {
 	th.StablecoinBQEstimate(recNonLoop, reqNonLoop)
 	if recNonLoop.Code != http.StatusForbidden {
 		t.Fatalf("non-loopback estimate = %d, want 403", recNonLoop.Code)
+	}
+	// DNS-rebinding guard: loopback RemoteAddr with a non-loopback Host or Origin -> 403.
+	reqRebind := httptest.NewRequest(http.MethodPost, "/api/opendata/stablecoin/bigquery/estimate?job=stable_eth", nil)
+	reqRebind.RemoteAddr = "127.0.0.1:54321"
+	reqRebind.Host = "evil.example:1983"
+	reqRebind.Header.Set("Content-Type", "application/json")
+	reqRebind.Header.Set("X-BigLens-Action", "stablecoin-bq")
+	recRebind := httptest.NewRecorder()
+	th.StablecoinBQEstimate(recRebind, reqRebind)
+	if recRebind.Code != http.StatusForbidden {
+		t.Fatalf("DNS-rebound Host estimate = %d, want 403", recRebind.Code)
 	}
 	if rec := stableBQPost(t, th.StablecoinBQEstimate, "/api/opendata/stablecoin/bigquery/estimate?job=stable_eth", "127.0.0.1:1234", "application/json", "", ""); rec.Code != http.StatusBadRequest {
 		t.Fatalf("missing action header = %d, want 400", rec.Code)

@@ -64,8 +64,9 @@ test('Bitcoin jobs panel renders schedule status with conf.yaml snippets, the bu
   assert.ok(
     panelSrc.includes('nothingToDoDayByJob[jobId] === settledThrough') &&
       panelSrc.includes('bigquery.coin_age_enabled === false') &&
-      panelSrc.includes('Disabled in conf.yaml'),
-    'BigQueryJobsPanel must tie nothing_to_do to settledThrough so it clears at 06:30 UTC, and disable Run now when coin_age.enabled is false',
+      panelSrc.includes('Disabled in conf.yaml') &&
+      panelSrc.includes('pendingEst.budget_used_bytes + pendingEst.reserve_bytes'),
+    'BigQueryJobsPanel must tie nothing_to_do to settledThrough so it clears at 06:30 UTC, disable Run now when coin_age.enabled is false, and compute Budget after this run with reserve_bytes',
   );
 });
 

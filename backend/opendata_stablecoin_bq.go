@@ -11,6 +11,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -1348,6 +1349,8 @@ type stableBQRunner struct {
 	lastLoopTick time.Time
 	lastRun      map[string]stableJobLastRun
 	recoverFn    func(context.Context)
+	runCtx       context.Context
+	cancel       context.CancelFunc
 	wg           sync.WaitGroup
 }
 
@@ -1406,6 +1409,7 @@ func newStableBQRunner(settings stableSettings, store *riskStore, ethSrc stableE
 		failurePolicy:  stableJobFailurePolicy(),
 		stopFlags:      flags,
 	}
+	runCtx, cancel := context.WithCancel(context.Background())
 	return &stableBQRunner{
 		settings:     settings,
 		store:        store,
@@ -1416,6 +1420,8 @@ func newStableBQRunner(settings stableSettings, store *riskStore, ethSrc stableE
 		running:      map[string]bool{},
 		lastManualAt: map[string]time.Time{},
 		lastRun:      map[string]stableJobLastRun{},
+		runCtx:       runCtx,
+		cancel:       cancel,
 	}
 }
 
@@ -1424,6 +1430,38 @@ func (r *stableBQRunner) Wait() {
 		return
 	}
 	r.wg.Wait()
+}
+
+func (r *stableBQRunner) Cancel() {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.cancel != nil {
+		r.cancel()
+	}
+}
+
+func (r *stableBQRunner) Shutdown() {
+	if r == nil {
+		return
+	}
+	r.Cancel()
+	r.wg.Wait()
+}
+
+func (r *stableBQRunner) manualCtx() context.Context {
+	if r == nil {
+		return context.Background()
+	}
+	r.mu.Lock()
+	ctx := r.runCtx
+	r.mu.Unlock()
+	if ctx == nil {
+		return context.Background()
+	}
+	return ctx
 }
 
 func (r *stableBQRunner) isRunning(job string) bool {
@@ -1497,11 +1535,13 @@ func (r *stableBQRunner) executeSync(ctx context.Context, job, trigger string) {
 		}
 	}()
 	if _, stopped, _ := r.flags.stopped(ctx, job); stopped {
-		r.recordLastRun(ctx, job, stableJobLastRun{
-			At:      r.now().UTC().Format(time.RFC3339),
-			Trigger: trigger,
-			Result:  "stopped",
-		})
+		if trigger != "schedule" {
+			r.recordLastRun(ctx, job, stableJobLastRun{
+				At:      r.now().UTC().Format(time.RFC3339),
+				Trigger: trigger,
+				Result:  "stopped",
+			})
+		}
 		return
 	}
 	if trigger == "manual" {
@@ -1626,6 +1666,9 @@ func (r *stableBQRunner) estimate(ctx context.Context, job string) (StableBQEsti
 			return StableBQEstimateResponse{}, fmt.Errorf("bad cursor %q", st.Cursor)
 		}
 		start = cur.AddDays(1)
+	}
+	if r.recoverFn != nil {
+		r.recoverFn(ctx)
 	}
 	bSt, err := r.budget.status(ctx, now)
 	if err != nil {
@@ -1868,6 +1911,19 @@ func (h *APIHandler) StablecoinOnchain(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, v)
 }
 
+func isLoopbackHost(hostPort string) bool {
+	host := strings.TrimSpace(hostPort)
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.TrimPrefix(strings.TrimSuffix(host, "]"), "[")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
 func isLoopbackRemoteAddr(remoteAddr string) bool {
 	host, _, err := net.SplitHostPort(strings.TrimSpace(remoteAddr))
 	if err != nil {
@@ -1878,13 +1934,26 @@ func isLoopbackRemoteAddr(remoteAddr string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+func isLoopbackRequest(r *http.Request) bool {
+	if r == nil || !isLoopbackRemoteAddr(r.RemoteAddr) || !isLoopbackHost(r.Host) {
+		return false
+	}
+	if origin := strings.TrimSpace(r.Header.Get("Origin")); origin != "" {
+		u, err := url.Parse(origin)
+		if err != nil || !isLoopbackHost(u.Host) {
+			return false
+		}
+	}
+	return true
+}
+
 func checkStableBQPostGuards(w http.ResponseWriter, r *http.Request) (string, bool) {
 	if r.Method != http.MethodPost {
 		writeError(w, "method not allowed", http.StatusMethodNotAllowed)
 		return "", false
 	}
-	// Loopback only from RemoteAddr; ignore X-Forwarded-For / X-Real-IP.
-	if !isLoopbackRemoteAddr(r.RemoteAddr) {
+	// Loopback only (RemoteAddr + Host/Origin); ignore X-Forwarded-For / X-Real-IP.
+	if !isLoopbackRequest(r) {
 		writeError(w, "forbidden: BigQuery actions are restricted to loopback requests (127.0.0.1 / ::1)", http.StatusForbidden)
 		return "", false
 	}
@@ -1914,6 +1983,10 @@ func (h *APIHandler) StablecoinBQEstimate(w http.ResponseWriter, r *http.Request
 		writeError(w, "BigQuery runner unavailable", http.StatusServiceUnavailable)
 		return
 	}
+	if runner.manualCtx().Err() != nil {
+		writeError(w, "server shutting down", http.StatusServiceUnavailable)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	est, err := runner.estimate(ctx, job)
@@ -1936,6 +2009,10 @@ func (h *APIHandler) StablecoinBQRun(w http.ResponseWriter, r *http.Request) {
 	runner := h.stable.bqRunner
 	if runner == nil {
 		writeError(w, "BigQuery runner unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if runner.manualCtx().Err() != nil {
+		writeError(w, "server shutting down", http.StatusServiceUnavailable)
 		return
 	}
 	var req struct {
@@ -2019,13 +2096,19 @@ func (h *APIHandler) StablecoinBQRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	runner.mu.Lock()
+	if runner.runCtx != nil && runner.runCtx.Err() != nil {
+		runner.running[job] = false
+		runner.mu.Unlock()
+		writeError(w, "server shutting down", http.StatusServiceUnavailable)
+		return
+	}
 	runner.lastManualAt[job] = now
+	runner.wg.Add(1)
 	runner.mu.Unlock()
 	if h.cache != nil {
 		h.cache.Delete("stablecoin:meta")
 	}
 
-	runner.wg.Add(1)
 	go func() {
 		defer runner.wg.Done()
 		defer func() {
@@ -2036,7 +2119,7 @@ func (h *APIHandler) StablecoinBQRun(w http.ResponseWriter, r *http.Request) {
 				h.cache.Delete("stablecoin:meta")
 			}
 		}()
-		runner.executeSync(context.Background(), job, "manual")
+		runner.executeSync(runner.manualCtx(), job, "manual")
 	}()
 
 	w.Header().Set("Content-Type", "application/json")

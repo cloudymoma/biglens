@@ -728,8 +728,16 @@ func (r *btcReadStoreImpl) jobStatus(ctx context.Context, job string) (BtcBQStat
 	// even when !jobOn. Schedule-only states (budget_paused, retrying) apply
 	// only while the schedule is enabled, and an over_budget pause from a
 	// previous UTC month clears automatically when the monthly budget resets.
-	sameMonthOverBudget := st.LastError == "over_budget" &&
-		(out.LastRunAt == "" || strings.HasPrefix(out.LastRunAt, now.Format("2006-01")))
+	curMonth := now.Format("2006-01")
+	sameMonthOverBudget := false
+	if st.LastError == "over_budget" {
+		if obMonth, ok, _ := r.store.getBtcKV(ctx, "over_budget_month:"+job); ok && obMonth != "" {
+			sameMonthOverBudget = obMonth == curMonth
+		} else {
+			sameMonthOverBudget = out.LastRunAt == "" ||
+				(out.LastRunResult == "budget_paused" && strings.HasPrefix(out.LastRunAt, curMonth))
+		}
+	}
 	switch {
 	case stopped:
 		out.State = "stopped"
