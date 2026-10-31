@@ -100,6 +100,13 @@ export interface EurMarketStats {
   nativeSub: string;
 }
 
+export const sumVerifiedNativeOnchain = (
+  rows: { verified: boolean; tier?: string; onchain_total_native: number | null }[],
+): { total: number | null; chains: number } => {
+  const v = rows.filter(r => r.verified && r.tier !== 'bridged' && r.onchain_total_native !== null);
+  return { total: v.length ? v.reduce((s, r) => s + (r.onchain_total_native ?? 0), 0) : null, chains: v.length };
+};
+
 export const computeEurMarketStats = (
   rows: { core?: string; numeraire: string; circulating_native: number | null; circulating_usd: number | null }[],
 ): EurMarketStats => {

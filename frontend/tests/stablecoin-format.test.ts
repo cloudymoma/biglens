@@ -135,3 +135,24 @@ test("PegTab renders missing minutes_ge_100 as '—', never 0 (L10)", () => {
   assert.ok(!pegSrc.includes('minutes_ge_100 ?? 0'), 'PegTab must not fall back minutes_ge_100 to 0');
   assert.ok(pegSrc.includes("minutes_ge_100 ?? '—'"), "PegTab must fall back minutes_ge_100 to '—'");
 });
+
+test('H4: SupplyTab onchainSum excludes bridged tier rows to prevent double-counting L2 bridged tokens', async () => {
+  const mod = (await import('../src/opendata/stablecoin/format.ts')) as Record<string, unknown>;
+  assert.equal(typeof mod.sumVerifiedNativeOnchain, 'function', 'format.ts must export sumVerifiedNativeOnchain');
+  const sumVerifiedNativeOnchain = mod.sumVerifiedNativeOnchain as (
+    rows: { verified: boolean; tier?: string; onchain_total_native: number | null }[],
+  ) => { total: number | null; chains: number };
+
+  const res = sumVerifiedNativeOnchain([
+    { verified: true, tier: 'native', onchain_total_native: 30_000_000_000 },
+    { verified: true, tier: 'native', onchain_total_native: 2_500_000_000 },
+    { verified: true, tier: 'bridged', onchain_total_native: 400_000_000 },
+    { verified: false, tier: 'native', onchain_total_native: 999_000_000 },
+  ]);
+  assert.equal(res.chains, 2);
+  assert.equal(res.total, 32_500_000_000);
+
+  const dir = dirname(fileURLToPath(import.meta.url));
+  const supplySrc = readFileSync(join(dir, '../src/opendata/stablecoin/SupplyTab.tsx'), 'utf8');
+  assert.ok(supplySrc.includes('sumVerifiedNativeOnchain('), 'SupplyTab must use sumVerifiedNativeOnchain');
+});

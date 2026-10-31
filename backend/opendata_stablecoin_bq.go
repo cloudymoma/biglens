@@ -124,6 +124,7 @@ type stableTronTransferAggRow struct {
 	BurnedRaw     string                    `bigquery:"burned_raw"`
 	OverflowRows  int64                     `bigquery:"overflow_rows"`
 	TopTransfers  []stableTronTopTransferBQ `bigquery:"top_transfers"`
+	Events        []stableTronLogRow        `bigquery:"events"`
 }
 
 type stableTronLogRow struct {
@@ -213,48 +214,9 @@ WHERE block_timestamp >= TIMESTAMP(@start_date) AND block_timestamp < TIMESTAMP(
   AND topics[SAFE_OFFSET(0)] IN (` + topics + `)`
 }
 
-func stableTronTransfersSQL() string {
-	return `
-WITH raw AS (
-  SELECT DATE(block_timestamp) AS d,
-         FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ', block_timestamp) AS ts,
-         transaction_hash AS tx_hash,
-         log_index,
-         LOWER(SUBSTR(topics[SAFE_OFFSET(1)], 27, 40)) AS src_hex20,
-         LOWER(SUBSTR(topics[SAFE_OFFSET(2)], 27, 40)) AS dst_hex20,
-         (LENGTH(data) >= 66 AND SUBSTR(data, 3, 48) = REPEAT('0', 48) AND SUBSTR(data, 51, 1) < '8') AS safe_u63,
-         IF(LENGTH(data) >= 66 AND SUBSTR(data, 3, 48) = REPEAT('0', 48) AND SUBSTR(data, 51, 1) < '8',
-            CAST(CAST(CONCAT('0x', SUBSTR(data, 51, 16)) AS INT64) AS BIGNUMERIC),
-            NULL) AS q
-  FROM ` + scamTronLogsTable + `
-  WHERE block_timestamp >= TIMESTAMP(@start_date) AND block_timestamp < TIMESTAMP(@end_date)
-    AND address = '` + tronUSDTLogAddress + `'
-    AND topics[SAFE_OFFSET(0)] = '` + topicERC20Transfer + `'
-    AND NOT removed
-),
-x AS (
-  SELECT *, (src_hex20 = REPEAT('0', 40) OR dst_hex20 = REPEAT('0', 40)) AS is_supply
-  FROM raw
-)
-SELECT FORMAT_DATE('%Y-%m-%d', d) AS day,
-       COUNTIF(NOT is_supply AND safe_u63) AS transfers,
-       COUNTIF(NOT is_supply AND safe_u63 AND q = 0) AS zero_value,
-       CAST(IFNULL(SUM(IF(is_supply OR NOT safe_u63, 0, q)), 0) AS STRING) AS volume_raw,
-       APPROX_COUNT_DISTINCT(IF(NOT is_supply AND safe_u63 AND q > 0, src_hex20, NULL)) AS senders,
-       APPROX_COUNT_DISTINCT(IF(NOT is_supply AND safe_u63 AND q > 0, dst_hex20, NULL)) AS receivers,
-       COUNTIF(NOT is_supply AND safe_u63 AND q >= 1000000000000) AS ge_1m_count,
-       CAST(IFNULL(SUM(IF(NOT is_supply AND safe_u63 AND q >= 1000000000000, q, 0)), 0) AS STRING) AS ge_1m_volume_raw,
-       CAST(IFNULL(SUM(IF(src_hex20 = REPEAT('0', 40) AND safe_u63, q, 0)), 0) AS STRING) AS minted_raw,
-       CAST(IFNULL(SUM(IF(dst_hex20 = REPEAT('0', 40) AND safe_u63, q, 0)), 0) AS STRING) AS burned_raw,
-       COUNTIF(NOT safe_u63) AS overflow_rows,
-       ARRAY_AGG(IF(is_supply OR NOT safe_u63, NULL, STRUCT(tx_hash, log_index, ts, src_hex20, dst_hex20, CAST(q AS STRING) AS amount_raw))
-                 IGNORE NULLS ORDER BY q DESC LIMIT 20) AS top_transfers
-FROM x
-GROUP BY day`
-}
-
-func stableTronEventsSQL() string {
+func stableTronSQL() string {
 	topics := strings.Join([]string{
+		"'" + topicERC20Transfer + "'",
 		"'" + topicUSDTIssue + "'",
 		"'" + topicUSDTRedeem + "'",
 		"'" + topicUSDTDeprecate + "'",
@@ -264,20 +226,52 @@ func stableTronEventsSQL() string {
 		"'" + topicOwnershipTransferred + "'",
 	}, ", ")
 	return `
-SELECT FORMAT_DATE('%Y-%m-%d', DATE(block_timestamp)) AS day,
-       transaction_hash AS tx_hash,
-       log_index AS log_index,
-       block_number AS block_number,
-       FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ', block_timestamp) AS ts,
-       LOWER(IFNULL(topics[SAFE_OFFSET(0)], '')) AS topic0,
-       LOWER(IFNULL(topics[SAFE_OFFSET(1)], '')) AS topic1,
-       LOWER(IFNULL(topics[SAFE_OFFSET(2)], '')) AS topic2,
-       LOWER(IFNULL(data, '')) AS data
-FROM ` + scamTronLogsTable + `
-WHERE block_timestamp >= TIMESTAMP(@start_date) AND block_timestamp < TIMESTAMP(@end_date)
-  AND address = '` + tronUSDTLogAddress + `'
-  AND topics[SAFE_OFFSET(0)] IN (` + topics + `)
-  AND NOT removed`
+WITH raw AS (
+  SELECT FORMAT_DATE('%Y-%m-%d', DATE(block_timestamp)) AS day,
+         FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%SZ', block_timestamp) AS ts,
+         transaction_hash AS tx_hash,
+         log_index AS log_index,
+         block_number AS block_number,
+         LOWER(IFNULL(topics[SAFE_OFFSET(0)], '')) AS topic0,
+         LOWER(IFNULL(topics[SAFE_OFFSET(1)], '')) AS topic1,
+         LOWER(IFNULL(topics[SAFE_OFFSET(2)], '')) AS topic2,
+         LOWER(IFNULL(data, '')) AS data,
+         (LOWER(IFNULL(topics[SAFE_OFFSET(0)], '')) = '` + topicERC20Transfer + `') AS is_transfer,
+         LOWER(SUBSTR(IFNULL(topics[SAFE_OFFSET(1)], ''), 27, 40)) AS src_hex20,
+         LOWER(SUBSTR(IFNULL(topics[SAFE_OFFSET(2)], ''), 27, 40)) AS dst_hex20,
+         (LOWER(IFNULL(topics[SAFE_OFFSET(0)], '')) = '` + topicERC20Transfer + `'
+          AND LENGTH(data) >= 66 AND SUBSTR(data, 3, 48) = REPEAT('0', 48) AND SUBSTR(data, 51, 1) < '8') AS safe_u63,
+         IF(LOWER(IFNULL(topics[SAFE_OFFSET(0)], '')) = '` + topicERC20Transfer + `'
+            AND LENGTH(data) >= 66 AND SUBSTR(data, 3, 48) = REPEAT('0', 48) AND SUBSTR(data, 51, 1) < '8',
+            CAST(CAST(CONCAT('0x', SUBSTR(data, 51, 16)) AS INT64) AS BIGNUMERIC),
+            NULL) AS q
+  FROM ` + scamTronLogsTable + `
+  WHERE block_timestamp >= TIMESTAMP(@start_date) AND block_timestamp < TIMESTAMP(@end_date)
+    AND address = '` + tronUSDTLogAddress + `'
+    AND topics[SAFE_OFFSET(0)] IN (` + topics + `)
+    AND NOT removed
+),
+x AS (
+  SELECT *, (is_transfer AND (src_hex20 = REPEAT('0', 40) OR dst_hex20 = REPEAT('0', 40))) AS is_supply
+  FROM raw
+)
+SELECT day AS day,
+       COUNTIF(is_transfer AND NOT is_supply AND safe_u63) AS transfers,
+       COUNTIF(is_transfer AND NOT is_supply AND safe_u63 AND q = 0) AS zero_value,
+       CAST(IFNULL(SUM(IF(NOT is_transfer OR is_supply OR NOT safe_u63, 0, q)), 0) AS STRING) AS volume_raw,
+       APPROX_COUNT_DISTINCT(IF(is_transfer AND NOT is_supply AND safe_u63 AND q > 0, src_hex20, NULL)) AS senders,
+       APPROX_COUNT_DISTINCT(IF(is_transfer AND NOT is_supply AND safe_u63 AND q > 0, dst_hex20, NULL)) AS receivers,
+       COUNTIF(is_transfer AND NOT is_supply AND safe_u63 AND q >= 1000000000000) AS ge_1m_count,
+       CAST(IFNULL(SUM(IF(is_transfer AND NOT is_supply AND safe_u63 AND q >= 1000000000000, q, 0)), 0) AS STRING) AS ge_1m_volume_raw,
+       CAST(IFNULL(SUM(IF(is_transfer AND src_hex20 = REPEAT('0', 40) AND safe_u63, q, 0)), 0) AS STRING) AS minted_raw,
+       CAST(IFNULL(SUM(IF(is_transfer AND dst_hex20 = REPEAT('0', 40) AND safe_u63, q, 0)), 0) AS STRING) AS burned_raw,
+       COUNTIF(is_transfer AND NOT safe_u63) AS overflow_rows,
+       ARRAY_AGG(IF(NOT is_transfer OR is_supply OR NOT safe_u63, NULL, STRUCT(tx_hash, log_index, ts, src_hex20, dst_hex20, CAST(q AS STRING) AS amount_raw))
+                 IGNORE NULLS ORDER BY q DESC LIMIT 20) AS top_transfers,
+       ARRAY_AGG(IF(is_transfer, NULL, STRUCT(day, tx_hash, log_index, block_number, ts, topic0, topic1, topic2, data))
+                 IGNORE NULLS ORDER BY block_number ASC, log_index ASC) AS events
+FROM x
+GROUP BY day`
 }
 
 func stableApplyQueryLabels(q *bigquery.Query, jobLabel string) {
@@ -404,10 +398,8 @@ func (s bqStableEthSource) FetchLogs(ctx context.Context, start, end civil.Date,
 
 type stableTronSource interface {
 	Ready(ctx context.Context, end civil.Date) (bool, error)
-	DryRunTransfers(ctx context.Context, start, end civil.Date) (int64, error)
-	DryRunEvents(ctx context.Context, start, end civil.Date) (int64, error)
-	FetchTransfers(ctx context.Context, start, end civil.Date, maxBytes int64) ([]stableTronTransferAggRow, int64, error)
-	FetchEvents(ctx context.Context, start, end civil.Date, maxBytes int64) ([]stableTronLogRow, int64, error)
+	DryRun(ctx context.Context, start, end civil.Date) (int64, error)
+	Fetch(ctx context.Context, start, end civil.Date, maxBytes int64) ([]stableTronTransferAggRow, int64, error)
 }
 
 type bqStableTronSource struct {
@@ -422,20 +414,12 @@ func (s bqStableTronSource) Ready(ctx context.Context, end civil.Date) (bool, er
 	return !t.Before(dayStart(end).Add(stablecoinFinality)), nil
 }
 
-func (s bqStableTronSource) DryRunTransfers(ctx context.Context, start, end civil.Date) (int64, error) {
-	return stableDryRunQuery(ctx, s.client, stableTronTransfersSQL(), stableTronJobID, windowParams(start, end))
+func (s bqStableTronSource) DryRun(ctx context.Context, start, end civil.Date) (int64, error) {
+	return stableDryRunQuery(ctx, s.client, stableTronSQL(), stableTronJobID, windowParams(start, end))
 }
 
-func (s bqStableTronSource) DryRunEvents(ctx context.Context, start, end civil.Date) (int64, error) {
-	return stableDryRunQuery(ctx, s.client, stableTronEventsSQL(), stableTronJobID, windowParams(start, end))
-}
-
-func (s bqStableTronSource) FetchTransfers(ctx context.Context, start, end civil.Date, maxBytes int64) ([]stableTronTransferAggRow, int64, error) {
-	return stableRunQuery[stableTronTransferAggRow](ctx, s.client, stableTronTransfersSQL(), stableTronJobID, windowParams(start, end), maxBytes)
-}
-
-func (s bqStableTronSource) FetchEvents(ctx context.Context, start, end civil.Date, maxBytes int64) ([]stableTronLogRow, int64, error) {
-	return stableRunQuery[stableTronLogRow](ctx, s.client, stableTronEventsSQL(), stableTronJobID, windowParams(start, end), maxBytes)
+func (s bqStableTronSource) Fetch(ctx context.Context, start, end civil.Date, maxBytes int64) ([]stableTronTransferAggRow, int64, error) {
+	return stableRunQuery[stableTronTransferAggRow](ctx, s.client, stableTronSQL(), stableTronJobID, windowParams(start, end), maxBytes)
 }
 
 type stableJobPayload struct {
@@ -853,28 +837,11 @@ func (j *stableTronJob) Ready(ctx context.Context, end civil.Date) (bool, error)
 }
 
 func (j *stableTronJob) DryRun(ctx context.Context, start, end civil.Date) (int64, error) {
-	bA, err := j.src.DryRunTransfers(ctx, start, end)
-	if err != nil {
-		return 0, err
-	}
-	bB, err := j.src.DryRunEvents(ctx, start, end)
-	if err != nil {
-		return 0, err
-	}
-	return bA + bB, nil
+	return j.src.DryRun(ctx, start, end)
 }
 
 func (j *stableTronJob) Run(ctx context.Context, start, end civil.Date, maxBytes int64) (dailyResult, int64, error) {
-	rowsA, billedA, err := j.src.FetchTransfers(ctx, start, end, maxBytes)
-	if err != nil {
-		return dailyResult{}, billedA, err
-	}
-	rem := maxBytes - billedA
-	if rem < 1<<20 {
-		rem = maxBytes
-	}
-	rowsB, billedB, err := j.src.FetchEvents(ctx, start, end, rem)
-	totalBilled := billedA + billedB
+	rowsA, totalBilled, err := j.src.Fetch(ctx, start, end, maxBytes)
 	if err != nil {
 		return dailyResult{}, totalBilled, err
 	}
@@ -883,6 +850,7 @@ func (j *stableTronJob) Run(ctx context.Context, start, end civil.Date, maxBytes
 	perDay := map[string]int64{}
 	dailyMap := map[string]*stableOnchainDailyRow{}
 	var largeTransfers []StableLargeTransfer
+	var rowsB []stableTronLogRow
 
 	for _, r := range rowsA {
 		if r.OverflowRows > 0 {
@@ -890,6 +858,7 @@ func (j *stableTronJob) Run(ctx context.Context, start, end civil.Date, maxBytes
 				msg: fmt.Sprintf("amount_overflow on %s: %d TRON USDT transfer rows exceeded int64 safe bound", r.Day, r.OverflowRows),
 			}
 		}
+		rowsB = append(rowsB, r.Events...)
 		perDay[r.Day] = r.Transfers
 		dailyMap[r.Day] = &stableOnchainDailyRow{
 			Day:           r.Day,
@@ -1285,14 +1254,24 @@ func stableJobStatus(ctx context.Context, store *riskStore, settings stableSetti
 	} else {
 		activeRecs = recs
 	}
+	curMonth := now.UTC().Format("2006-01")
+	sameMonthOverBudget := false
+	if st.LastError == "over_budget" {
+		if obMonth, ok, _ := store.getStableKV(ctx, "over_budget_month:"+job); ok && obMonth != "" {
+			sameMonthOverBudget = obMonth == curMonth
+		} else {
+			sameMonthOverBudget = out.LastRunAt == "" ||
+				(out.LastRunResult == "budget_paused" && strings.HasPrefix(out.LastRunAt, curMonth))
+		}
+	}
 	switch {
 	case stopped:
 		out.State = "stopped"
 		out.StopReason = reason
 		out.Failures = len(activeRecs)
-	case st.LastError == "over_budget":
+	case jobOn && sameMonthOverBudget:
 		out.State = "budget_paused"
-	case len(activeRecs) > 0:
+	case jobOn && len(activeRecs) > 0:
 		out.State = "retrying"
 		out.Failures = len(activeRecs)
 		last := activeRecs[len(activeRecs)-1]
@@ -1559,10 +1538,17 @@ func (r *stableBQRunner) executeSync(ctx context.Context, job, trigger string) {
 	bctx, bCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer bCancel()
 
-	if didWork && run.errCode != "" {
+	// "source not caught up" means BigQuery has not ingested past window_end + 6h
+	// yet: an unbilled wait that must not overwrite sync_state.last_error.
+	if didWork && run.errCode != "" && run.errCode != "source not caught up" {
 		if err := r.store.setSyncError(bctx, job, run.errCode); err != nil {
 			slog.Error(job+" sync state", "source", job, "error", err)
 		}
+		if run.errCode == "over_budget" {
+			_ = r.store.setStableKV(bctx, "over_budget_month:"+job, r.now().UTC().Format("2006-01"))
+		}
+	} else if didWork && run.errCode == "" {
+		_ = r.store.deleteStableKV(bctx, "over_budget_month:"+job)
 	}
 	_, stoppedNow, _ := r.flags.stopped(bctx, job)
 	var result string
@@ -1571,6 +1557,8 @@ func (r *stableBQRunner) executeSync(ctx context.Context, job, trigger string) {
 		result = "stopped"
 	case run.errCode == "over_budget":
 		result = "budget_paused"
+	case run.errCode == "source not caught up":
+		result = "no_new_day"
 	case run.errCode != "":
 		result = "error"
 	case !didWork:
@@ -1578,12 +1566,14 @@ func (r *stableBQRunner) executeSync(ctx context.Context, job, trigger string) {
 	default:
 		result = "ok"
 	}
-	r.recordLastRun(bctx, job, stableJobLastRun{
-		At:          r.now().UTC().Format(time.RFC3339),
-		Trigger:     trigger,
-		Result:      result,
-		BytesBilled: run.billed,
-	})
+	if didWork || trigger != "schedule" {
+		r.recordLastRun(bctx, job, stableJobLastRun{
+			At:          r.now().UTC().Format(time.RFC3339),
+			Trigger:     trigger,
+			Result:      result,
+			BytesBilled: run.billed,
+		})
+	}
 	if didWork {
 		slog.Info(job+" sync",
 			"source", job,
@@ -2080,17 +2070,7 @@ func (h *APIHandler) StablecoinBQRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !est.FitsBudget {
-		_ = runner.store.setSyncError(ctx, job, "over_budget")
-		runner.recordLastRun(ctx, job, stableJobLastRun{
-			At:          now.Format(time.RFC3339),
-			Trigger:     "manual",
-			Result:      "budget_paused",
-			BytesBilled: 0,
-		})
 		abortRunning()
-		if h.cache != nil {
-			h.cache.Delete("stablecoin:meta")
-		}
 		writeError(w, "over_budget: estimated run exceeds remaining monthly budget", http.StatusConflict)
 		return
 	}

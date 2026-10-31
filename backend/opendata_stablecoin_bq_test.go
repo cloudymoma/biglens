@@ -60,8 +60,8 @@ func TestStableSQLResultTypesMatchStructs(t *testing.T) {
 	}{
 		{"stable_eth transfers", stableEthTransfersSQL(), reflect.TypeFor[stableEthTransferAggRow]()},
 		{"stable_eth logs", stableEthLogsSQL(), reflect.TypeFor[stableEthLogRow]()},
-		{"stable_tron transfers", stableTronTransfersSQL(), reflect.TypeFor[stableTronTransferAggRow]()},
-		{"stable_tron events", stableTronEventsSQL(), reflect.TypeFor[stableTronLogRow]()},
+		{"stable_tron combined", stableTronSQL(), reflect.TypeFor[stableTronTransferAggRow]()},
+		{"stable_tron events", stableTronSQL(), reflect.TypeFor[stableTronLogRow]()},
 	}
 
 	for _, tc := range cases {
@@ -260,35 +260,85 @@ type fakeStableTronSource struct {
 	transfers     []stableTronTransferAggRow
 	logs          []stableTronLogRow
 	dryA          int64
-	dryB          int64
 	billedA       int64
-	billedB       int64
+	dryRunCalls   int
+	fetchCalls    int
 	lastMaxBytesA int64
-	lastMaxBytesB int64
 }
 
 func (f *fakeStableTronSource) Ready(_ context.Context, _ civil.Date) (bool, error) {
 	return f.ready, nil
 }
-func (f *fakeStableTronSource) DryRunTransfers(_ context.Context, _, _ civil.Date) (int64, error) {
+func (f *fakeStableTronSource) DryRun(_ context.Context, _, _ civil.Date) (int64, error) {
+	f.dryRunCalls++
 	if f.dryA > 0 {
 		return f.dryA, nil
 	}
 	return 1 << 30, nil
 }
-func (f *fakeStableTronSource) DryRunEvents(_ context.Context, _, _ civil.Date) (int64, error) {
-	if f.dryB > 0 {
-		return f.dryB, nil
-	}
-	return 1 << 30, nil
-}
-func (f *fakeStableTronSource) FetchTransfers(_ context.Context, _, _ civil.Date, maxBytes int64) ([]stableTronTransferAggRow, int64, error) {
+func (f *fakeStableTronSource) Fetch(_ context.Context, _, _ civil.Date, maxBytes int64) ([]stableTronTransferAggRow, int64, error) {
+	f.fetchCalls++
 	f.lastMaxBytesA = maxBytes
-	return f.transfers, f.billedA, nil
+	out := make([]stableTronTransferAggRow, len(f.transfers))
+	copy(out, f.transfers)
+	if len(f.logs) > 0 {
+		byDay := map[string]int{}
+		for i := range out {
+			byDay[out[i].Day] = i
+		}
+		for _, lg := range f.logs {
+			if idx, ok := byDay[lg.Day]; ok {
+				out[idx].Events = append(out[idx].Events, lg)
+			} else {
+				byDay[lg.Day] = len(out)
+				out = append(out, stableTronTransferAggRow{
+					Day:    lg.Day,
+					Events: []stableTronLogRow{lg},
+				})
+			}
+		}
+	}
+	return out, f.billedA, nil
 }
-func (f *fakeStableTronSource) FetchEvents(_ context.Context, _, _ civil.Date, maxBytes int64) ([]stableTronLogRow, int64, error) {
-	f.lastMaxBytesB = maxBytes
-	return f.logs, f.billedB, nil
+
+func TestStableTronSingleLogsScan(t *testing.T) {
+	sql := stableTronSQL()
+	if got := strings.Count(sql, scamTronLogsTable); got != 1 {
+		t.Errorf("stableTronSQL references %s %d times, want 1:\n%s", scamTronLogsTable, got, sql)
+	}
+
+	ctx := context.Background()
+	store := newTestRiskStore(t)
+	d0 := civil.Date{Year: 2026, Month: 10, Day: 18}
+	d1 := civil.Date{Year: 2026, Month: 10, Day: 19}
+
+	src := &fakeStableTronSource{
+		ready:   true,
+		dryA:    600 << 20,
+		billedA: 550 << 20,
+		transfers: []stableTronTransferAggRow{
+			{
+				Day:       "2026-10-18",
+				Transfers: 1_800_000,
+				VolumeRaw: "12000000000000000",
+				MintedRaw: "0",
+				BurnedRaw: "0",
+			},
+		},
+	}
+	job := &stableTronJob{store: store, src: src, minTransfers: stableTronUSDTMinDailyTransfers}
+	if _, err := job.DryRun(ctx, d0, d1); err != nil {
+		t.Fatalf("DryRun: %v", err)
+	}
+	if src.dryRunCalls != 1 {
+		t.Errorf("stable_tron DryRun queries = %d, want 1 single scan of TRON logs", src.dryRunCalls)
+	}
+	if _, _, err := job.Run(ctx, d0, d1, 10<<30); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if src.fetchCalls != 1 {
+		t.Errorf("stable_tron Run queries = %d, want 1 single scan of TRON logs", src.fetchCalls)
+	}
 }
 
 func TestStableTronJobReconciliationAndOverflowGuard(t *testing.T) {
@@ -328,7 +378,6 @@ func TestStableTronJobReconciliationAndOverflowGuard(t *testing.T) {
 			},
 		},
 		billedA: 600 << 20,
-		billedB: 200 << 20,
 	}
 
 	job := &stableTronJob{store: store, src: src, minTransfers: stableTronUSDTMinDailyTransfers}
@@ -682,10 +731,8 @@ func TestStableBQSyncersUseDryRunSizedCap(t *testing.T) {
 	}
 	tronSrc := &fakeStableTronSource{
 		ready:   true,
-		dryA:    3_000_000_000,
-		dryB:    456_789_012,
+		dryA:    estTotal,
 		billedA: 2_800_000_000,
-		billedB: 400_000_000,
 		transfers: []stableTronTransferAggRow{
 			{Day: "2026-10-18", Transfers: 1_800_000, VolumeRaw: "1000000000000"},
 		},
@@ -705,22 +752,17 @@ func TestStableBQSyncersUseDryRunSizedCap(t *testing.T) {
 	runner.executeSync(ctx, stableEthJobID, "scheduled")
 	runner.executeSync(ctx, stableTronJobID, "scheduled")
 
-	for _, tc := range []struct {
-		job  string
-		gotA int64
-		gotB int64
-	}{
-		{stableEthJobID, ethSrc.lastMaxBytesA, ethSrc.lastMaxBytesB},
-		{stableTronJobID, tronSrc.lastMaxBytesA, tronSrc.lastMaxBytesB},
-	} {
-		if tc.gotA < wantMin || tc.gotA < 1<<30 {
-			t.Errorf("%s query maxBytes = %d, want >= %d (est*1.25) and >= %d (1 GiB)",
-				tc.job, tc.gotA, wantMin, int64(1<<30))
-		}
-		wantRem := tc.gotA - 2_800_000_000
-		if tc.gotB != wantRem {
-			t.Errorf("%s second query maxBytes = %d, want remaining cap %d", tc.job, tc.gotB, wantRem)
-		}
+	if ethSrc.lastMaxBytesA < wantMin || ethSrc.lastMaxBytesA < 1<<30 {
+		t.Errorf("stable_eth query maxBytes = %d, want >= %d (est*1.25) and >= %d (1 GiB)",
+			ethSrc.lastMaxBytesA, wantMin, int64(1<<30))
+	}
+	wantEthRem := ethSrc.lastMaxBytesA - 2_800_000_000
+	if ethSrc.lastMaxBytesB != wantEthRem {
+		t.Errorf("stable_eth second query maxBytes = %d, want remaining cap %d", ethSrc.lastMaxBytesB, wantEthRem)
+	}
+	if tronSrc.lastMaxBytesA < wantMin || tronSrc.lastMaxBytesA < 1<<30 {
+		t.Errorf("stable_tron query maxBytes = %d, want >= %d (est*1.25) and >= %d (1 GiB)",
+			tronSrc.lastMaxBytesA, wantMin, int64(1<<30))
 	}
 
 	// Small dry-run estimate (< 1 GiB) still gets at least the 1 GiB floor.
@@ -732,4 +774,91 @@ func TestStableBQSyncersUseDryRunSizedCap(t *testing.T) {
 	if ethSrc.lastMaxBytesA != 1<<30 {
 		t.Errorf("small dry-run maxBytes = %d, want 1 GiB floor (%d)", ethSrc.lastMaxBytesA, int64(1<<30))
 	}
+}
+
+func TestStableBQSourceNotCaughtUpAndBudgetPausedReset(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("source_not_caught_up_preserves_last_error_and_records_no_new_day", func(t *testing.T) {
+		clock := time.Date(2026, 10, 19, 13, 0, 0, 0, time.UTC)
+		store := newTestRiskStore(t)
+		if err := ensureSyncRow(ctx, store.db, stableEthJobID); err != nil {
+			t.Fatal(err)
+		}
+		if err := updateSyncWatermarksTx(ctx, store.db, stableEthJobID, "2026-07-21", "2026-10-17", 10, clock); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.setSyncError(ctx, stableEthJobID, "prior_transient_error"); err != nil {
+			t.Fatal(err)
+		}
+
+		ethSrc := &fakeStableEthSource{ready: false}
+		tronSrc := &fakeStableTronSource{ready: true}
+		settings := (StablecoinConfig{BigQuery: StablecoinBigQueryConfig{Jobs: true}}).settings()
+		runner := newStableBQRunner(settings, store, ethSrc, tronSrc, func() time.Time { return clock })
+
+		runner.executeSync(ctx, stableEthJobID, "manual")
+
+		st := stableJobStatus(ctx, store, settings, newStableStopFlags(store), runner, clock, stableEthJobID)
+		if st.LastError != "prior_transient_error" {
+			t.Fatalf("LastError = %q, want prior_transient_error preserved when source not caught up", st.LastError)
+		}
+		if st.LastRunResult != "no_new_day" {
+			t.Fatalf("LastRunResult = %q, want no_new_day when source not caught up", st.LastRunResult)
+		}
+	})
+
+	t.Run("budget_paused_gated_on_schedule_and_resets_next_month", func(t *testing.T) {
+		clock := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+		th, _, _ := newStablePegTestHandler(t, StablecoinConfig{}, &clock)
+		store := th.stable.store
+		if err := ensureSyncRow(ctx, store.db, stableEthJobID); err != nil {
+			t.Fatal(err)
+		}
+		if err := updateSyncWatermarksTx(ctx, store.db, stableEthJobID, "2026-07-21", "2026-10-26", 10, clock); err != nil {
+			t.Fatal(err)
+		}
+
+		ethSrc := &fakeStableEthSource{ready: true, dryA: 600 << 30, dryB: 1 << 20}
+		tronSrc := &fakeStableTronSource{ready: true}
+		th.stable.bqRunner = newStableBQRunner(th.stable.settings, store, ethSrc, tronSrc, func() time.Time { return clock })
+
+		// 1. Pre-run manual refusal over budget (schedule off) must NOT leave job stuck in budget_paused.
+		recOver := stableBQPost(t, th.StablecoinBQRun, "/api/opendata/stablecoin/bigquery/run?job=stable_eth", "127.0.0.1:1234", "application/json", "stablecoin-bq", `{"confirmed_estimate_bytes": 650000000000}`)
+		if recOver.Code != http.StatusConflict {
+			t.Fatalf("over-budget manual run = %d, want 409", recOver.Code)
+		}
+		flags := newStableStopFlags(store)
+		stRefused := stableJobStatus(ctx, store, th.stable.settings, flags, th.stable.bqRunner, clock, stableEthJobID)
+		if stRefused.State != "ready" {
+			t.Fatalf("state after manual pre-run budget refusal = %q, want ready (not stuck in budget_paused)", stRefused.State)
+		}
+
+		// 2. Scheduled run hits over_budget in October -> budget_paused while schedule is on, ready when schedule is off, and resets in November.
+		th.stable.settings.Jobs = true
+		th.stable.bqRunner.settings.Jobs = true
+		th.stable.bqRunner.executeSync(ctx, stableEthJobID, "schedule")
+
+		stOctOn := stableJobStatus(ctx, store, th.stable.settings, flags, th.stable.bqRunner, clock, stableEthJobID)
+		if stOctOn.State != "budget_paused" {
+			t.Fatalf("October state with schedule on = %q, want budget_paused", stOctOn.State)
+		}
+
+		offSettings := th.stable.settings
+		offSettings.Jobs = false
+		stOctOff := stableJobStatus(ctx, store, offSettings, flags, th.stable.bqRunner, clock, stableEthJobID)
+		if stOctOff.State != "ready" {
+			t.Fatalf("October state with schedule off = %q, want ready", stOctOff.State)
+		}
+
+		// Advance into November and run an idle manual check (source not caught up): budget_paused must clear.
+		clock = time.Date(2026, 11, 1, 2, 0, 0, 0, time.UTC)
+		ethSrc.ready = false
+		th.stable.bqRunner.executeSync(ctx, stableEthJobID, "manual")
+
+		stNov := stableJobStatus(ctx, store, th.stable.settings, flags, th.stable.bqRunner, clock, stableEthJobID)
+		if stNov.State != "ready" {
+			t.Fatalf("November state after monthly reset = %q, want ready (not stuck in budget_paused)", stNov.State)
+		}
+	})
 }

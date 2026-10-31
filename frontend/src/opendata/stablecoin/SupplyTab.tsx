@@ -5,7 +5,7 @@ import { usePolling } from '../common/usePolling';
 import { fetchStableSupply } from './api';
 import { ASSET_COLOR, axisStyle, baseOption, chrome, colorOf, tipHtml } from './charts';
 import type { StableAsset, StableRange } from './deeplink';
-import { computeEurMarketStats, fmtDateTime, fmtMoney, fmtNative } from './format';
+import { computeEurMarketStats, fmtDateTime, fmtMoney, fmtNative, sumVerifiedNativeOnchain } from './format';
 import SignalMatrix from './SignalMatrix';
 import type { Theme } from './signals';
 import { cx } from './styles';
@@ -19,11 +19,6 @@ import { ColdState, CsvButton, ErrorNote, Panel, SegmentedControl, Sources, Stat
 
 type Source = 'issuer' | 'aggregator';
 
-const onchainSum = (rows: StableSupplyRow[]): { total: number | null; chains: number } => {
-  const v = rows.filter(r => r.verified && r.onchain_total_native !== null);
-  return { total: v.length ? v.reduce((s, r) => s + (r.onchain_total_native ?? 0), 0) : null, chains: v.length };
-};
-
 // delta7d is a chain's 7-day change in native units from its current supply
 // and its 7-day percentage change.
 const delta7d = (r: StableSupplyRow): number | null => {
@@ -33,7 +28,7 @@ const delta7d = (r: StableSupplyRow): number | null => {
 };
 
 function Definitions({ a, matrix }: { a: StableSupplyAsset; matrix: StableMatrixRow[] }) {
-  const on = onchainSum(a.chains);
+  const on = sumVerifiedNativeOnchain(a.chains);
   const agg = a.reconcile.aggregator;
   const s12 = matrix.find(r => r.asset === a.asset)?.signals.find(s => s.id === 'S12')?.state;
   return (

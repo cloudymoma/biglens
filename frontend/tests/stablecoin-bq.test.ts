@@ -190,4 +190,62 @@ test('M8: README Stablecoins section documents the BigQuery jobs panel, Run now,
   );
 });
 
+test('R5.1: usePolling recovers when mounted in a hidden tab (including intervalMs === 0)', async () => {
+  const mod = (await import('../src/opendata/common/usePolling.ts')) as Record<string, unknown>;
+  assert.equal(typeof mod.startPollingDriver, 'function', 'usePolling must export startPollingDriver');
+  const startPollingDriver = mod.startPollingDriver as (opts: {
+    intervalMs: number;
+    isHidden: () => boolean;
+    subscribeVisibility: (cb: () => void) => () => void;
+    setIntervalFn: (cb: () => void, ms: number) => number;
+    clearIntervalFn: (id: number) => void;
+    onRun: () => void;
+  }) => () => void;
+
+  let hidden = true;
+  let visCb: (() => void) | null = null;
+  let runs = 0;
+
+  const stop = startPollingDriver({
+    intervalMs: 0,
+    isHidden: () => hidden,
+    subscribeVisibility: cb => {
+      visCb = cb;
+      return () => {
+        visCb = null;
+      };
+    },
+    setIntervalFn: () => 1,
+    clearIntervalFn: () => {},
+    onRun: () => {
+      runs += 1;
+    },
+  });
+
+  assert.equal(runs, 0, 'must skip initial fetch while tab is hidden');
+  hidden = false;
+  visCb?.();
+  assert.equal(runs, 1, 'must fire initial fetch immediately when hidden tab becomes visible');
+  // Subsequent visibility toggles on a one-shot (intervalMs === 0) poll must not re-fetch endlessly.
+  hidden = true;
+  visCb?.();
+  hidden = false;
+  visCb?.();
+  assert.equal(runs, 1, 'intervalMs === 0 must not re-run after initial fetch has completed');
+  stop();
+});
+
+test('R5.2: StablecoinDashboard polls /meta every 5s in-place while BQ runs without re-keying refreshTick every 5s', () => {
+  const dashSrc = readFileSync(new URL('../src/opendata/stablecoin/StablecoinDashboard.tsx', import.meta.url), 'utf8');
+  assert.ok(
+    !dashSrc.includes('window.setInterval(() => {\n      setRefreshTick'),
+    'StablecoinDashboard must not bump refreshTick on a 5s setInterval while BQ runs',
+  );
+  assert.ok(
+    dashSrc.includes('bqRunning ? 5_000 : 60_000') && dashSrc.includes('wasBqRunningRef.current && !running'),
+    'StablecoinDashboard must poll /meta at 5s in-place while running and bump refreshTick once on completion',
+  );
+});
+
+
 

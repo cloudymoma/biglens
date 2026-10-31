@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { CircleDollarSign, Moon, RefreshCw, Sun } from 'lucide-react';
 import { usePolling } from '../common/usePolling';
 import type { SourceStatus } from '../common/types';
@@ -73,7 +73,10 @@ export default function StablecoinDashboard() {
     [view.tab]: true,
   }));
   const [refreshTick, setRefreshTick] = useState(0);
+  const [metaTick, setMetaTick] = useState(0);
   const [jobsPanelOpen, setJobsPanelOpen] = useState(false);
+  const [bqRunning, setBqRunning] = useState(false);
+  const wasBqRunningRef = useRef(false);
 
   // Deep links (§7.3): the view lives in the query string, written with
   // replaceState whenever it changes (an external-system sync, no state set).
@@ -88,18 +91,21 @@ export default function StablecoinDashboard() {
 
   // The ticker polls /live every 60 s; usePolling skips runs while the
   // browser tab is hidden (§7.1). While a BigQuery job is running, /meta
-  // polls every 5 s until running becomes false.
+  // polls every 5 s under the same key (keeping existing UI data mounted)
+  // until running becomes false, then reloads the tabs once.
+  const fetchMeta = useCallback(async () => {
+    const meta = await fetchStableMeta();
+    const running = Object.values(meta.bigquery.statuses ?? {}).some(s => Boolean(s.running));
+    if (wasBqRunningRef.current && !running) {
+      setRefreshTick(t => t + 1);
+    }
+    wasBqRunningRef.current = running;
+    setBqRunning(running);
+    return meta;
+  }, []);
   const livePoll = usePolling(fetchStableLive, 60_000, `stable-live-${refreshTick}`);
   const liveWarm = `${livePoll.data && !livePoll.data.warming_up ? 's1' : 's0'}-${livePoll.data && !livePoll.data.peg_warming_up ? 'p1' : 'p0'}`;
-  const metaPoll = usePolling(fetchStableMeta, 60_000, `stable-meta-${refreshTick}-${liveWarm}`);
-  const metaBqRunning = Object.values(metaPoll.data?.bigquery.statuses ?? {}).some(s => Boolean(s.running));
-  useEffect(() => {
-    if (!metaBqRunning) return;
-    const id = window.setInterval(() => {
-      setRefreshTick(t => t + 1);
-    }, 5_000);
-    return () => window.clearInterval(id);
-  }, [metaBqRunning]);
+  const metaPoll = usePolling(fetchMeta, bqRunning ? 5_000 : 60_000, `stable-meta-${refreshTick}-${metaTick}-${liveWarm}`);
   const [overviewRange, setOverviewRange] = useState<StableRange>(() => effectiveRange('overview', view.range) ?? '90d');
   const overviewPoll = usePolling(
     () => fetchStableOverview(overviewRange),
@@ -247,7 +253,7 @@ export default function StablecoinDashboard() {
               bigquery={metaPoll.data?.bigquery}
               asOf={metaPoll.data?.as_of || updated}
               onClose={() => setJobsPanelOpen(false)}
-              onRefreshMeta={() => setRefreshTick(t => t + 1)}
+              onRefreshMeta={() => setMetaTick(t => t + 1)}
             />
           )}
 
