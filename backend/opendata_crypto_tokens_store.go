@@ -365,18 +365,24 @@ ORDER BY asset DESC, network ASC, tier ASC`)
 	}
 	defer rs.Close()
 	var (
-		out  []TokenSupplyRow
-		asOf time.Time
+		out        []TokenSupplyRow
+		asOf       time.Time
+		hasInvalid bool
 	)
 	for rs.Next() {
 		var r TokenSupplyRow
 		if err := rs.Scan(&r.Asset, &r.Network, &r.NetworkLabel, &r.Contract, &r.Tier, &r.Label, &r.Supply, &r.UpdatedAt); err != nil {
 			return nil, time.Time{}, err
 		}
-		if t, err := time.Parse(time.RFC3339, r.UpdatedAt); err == nil && t.After(asOf) {
+		if t, err := time.Parse(time.RFC3339, r.UpdatedAt); err != nil {
+			hasInvalid = true
+		} else if asOf.IsZero() || t.Before(asOf) {
 			asOf = t
 		}
 		out = append(out, r)
+	}
+	if hasInvalid {
+		asOf = time.Time{}
 	}
 	return out, asOf, rs.Err()
 }
@@ -427,18 +433,24 @@ ORDER BY market_cap_usd DESC, symbol ASC`)
 	}
 	defer rs.Close()
 	var (
-		out  []TokenMarketRow
-		asOf time.Time
+		out        []TokenMarketRow
+		asOf       time.Time
+		hasInvalid bool
 	)
 	for rs.Next() {
 		var r TokenMarketRow
 		if err := rs.Scan(&r.Address, &r.Symbol, &r.PriceUSD, &r.HoldersCount, &r.Volume24hUSD, &r.MarketCapUSD, &r.UpdatedAt); err != nil {
 			return nil, time.Time{}, err
 		}
-		if t, err := time.Parse(time.RFC3339, r.UpdatedAt); err == nil && t.After(asOf) {
+		if t, err := time.Parse(time.RFC3339, r.UpdatedAt); err != nil {
+			hasInvalid = true
+		} else if asOf.IsZero() || t.Before(asOf) {
 			asOf = t
 		}
 		out = append(out, r)
+	}
+	if hasInvalid {
+		asOf = time.Time{}
 	}
 	return out, asOf, rs.Err()
 }

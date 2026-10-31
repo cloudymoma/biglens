@@ -169,6 +169,123 @@ func TestCryptoTokensLive_CacheAndStaleFallback(t *testing.T) {
 	}
 }
 
+func TestCryptoTokensLivePartialRefreshDoesNotMaskStaleChain(t *testing.T) {
+	store, err := openRiskStore(filepath.Join(t.TempDir(), "security.db"))
+	if err != nil {
+		t.Fatalf("openRiskStore: %v", err)
+	}
+	defer store.db.Close()
+
+	var tronFail atomic.Bool
+	var tronHits atomic.Int32
+
+	evmSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":"0x000000000000000000000000000000000000000000000000000009184e72a000"}`))
+	}))
+	defer evmSrv.Close()
+
+	tronSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tronHits.Add(1)
+		if tronFail.Load() {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		w.Write([]byte(`{"result":{"result":true},"constant_result":["0000000000000000000000000000000000000000000000000012df50686c0000"]}`))
+	}))
+	defer tronSrv.Close()
+
+	solSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"value":{"data":{"parsed":{"info":{"decimals":6,"supply":"5000000000000000"}}}}}}`))
+	}))
+	defer solSrv.Close()
+
+	llamaSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		coins := make(map[string]any, len(majorTokenCatalog))
+		for _, m := range majorTokenCatalog {
+			coins["ethereum:"+m.Address] = map[string]any{"price": 1.0, "symbol": m.Symbol}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"coins": coins})
+	}))
+	defer llamaSrv.Close()
+
+	bsSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"is_scam":false,"reputation":"ok","token":{"holders_count":"100","volume_24h":"1000","circulating_market_cap":"10000"}}`))
+	}))
+	defer bsSrv.Close()
+
+	origLlama := defillamaCoinsURL
+	origTron := tronGridBaseURL
+	origLim := tronGridLimiter
+	defillamaCoinsURL = llamaSrv.URL
+	tronGridBaseURL = tronSrv.URL
+	tronGridLimiter = rateLimiterUnlimited()
+	defer func() {
+		defillamaCoinsURL = origLlama
+		tronGridBaseURL = origTron
+		tronGridLimiter = origLim
+	}()
+
+	rs := newAddressRiskService(store, []string{evmSrv.URL})
+	rs.chainRPCs = map[string][]string{
+		"eth":  {evmSrv.URL},
+		"arb":  {evmSrv.URL},
+		"op":   {evmSrv.URL},
+		"base": {evmSrv.URL},
+		"sol":  {solSrv.URL},
+	}
+	rs.blockscoutURLs = map[string]string{"eth": bsSrv.URL}
+	h := &APIHandler{cache: NewCache(time.Minute), risk: rs}
+
+	// 1. Seed initial full cache aged past TTL (20 minutes old).
+	rec1 := httptest.NewRecorder()
+	h.CryptoTokensLive(rec1, httptest.NewRequest("GET", "/api/opendata/crypto/tokens/live", nil))
+	var initial CryptoTokensLiveData
+	if err := json.NewDecoder(rec1.Body).Decode(&initial); err != nil {
+		t.Fatalf("decode initial: %v", err)
+	}
+	past := time.Now().UTC().Add(-20 * time.Minute)
+	if err := store.upsertTokenSupplyCache(context.Background(), initial.SupplyMatrix, past); err != nil {
+		t.Fatalf("upsertTokenSupplyCache: %v", err)
+	}
+
+	// 2. Refresh while TRON fails: EVM + Solana rows update to now in SQLite, while TRON stays at `past`.
+	tronFail.Store(true)
+	h.cache = NewCache(time.Minute)
+	rec2 := httptest.NewRecorder()
+	h.CryptoTokensLive(rec2, httptest.NewRequest("GET", "/api/opendata/crypto/tokens/live", nil))
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("status 2 = %d", rec2.Code)
+	}
+
+	// 3. After the 30s degraded in-memory cache expires (or server restarts),
+	// the next request must still see TRON's SQLite row as expired (`past`),
+	// retry supply refresh, and report TRON as stale while it continues failing.
+	h.cache = NewCache(time.Minute)
+	beforeTron := tronHits.Load()
+	rec3 := httptest.NewRecorder()
+	h.CryptoTokensLive(rec3, httptest.NewRequest("GET", "/api/opendata/crypto/tokens/live", nil))
+	if rec3.Code != http.StatusOK {
+		t.Fatalf("status 3 = %d", rec3.Code)
+	}
+	var got3 CryptoTokensLiveData
+	if err := json.NewDecoder(rec3.Body).Decode(&got3); err != nil {
+		t.Fatalf("decode 3: %v", err)
+	}
+	if tronHits.Load() == beforeTron {
+		t.Fatalf("expected TRON supply to be retried because its SQLite row is still 20m old; got 0 TRON hits")
+	}
+	var tronRow *TokenSupplyRow
+	for i := range got3.SupplyMatrix {
+		if got3.SupplyMatrix[i].Network == "tron" {
+			tronRow = &got3.SupplyMatrix[i]
+			break
+		}
+	}
+	if tronRow == nil || !tronRow.Stale || tronRow.Error == "" {
+		t.Fatalf("expected TRON supply row to remain marked stale/error, got %+v", tronRow)
+	}
+}
+
 // TestRefreshMarketPulseNoStablecoinDollarFallback: a missing stablecoin price
 // must stay unknown (JSON null, stale) instead of being assumed to be $1, and
 // the last-good price from the previous rows must still apply. Asserted on the

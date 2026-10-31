@@ -878,39 +878,50 @@ func (h *APIHandler) loadPricesByDay(ctx context.Context, days int) map[string]o
 // back deterministically to the most recent prior date (or earliest available
 // date) when a single day is missing. Returns hasAny=false when no prices exist.
 func resolveDayPrices(pricesByDay map[string]onchainPriceDay) (func(day string) (float64, float64), bool) {
-	if len(pricesByDay) == 0 {
-		return func(string) (float64, float64) { return 0, 0 }, false
-	}
-	days := make([]string, 0, len(pricesByDay))
-	for d := range pricesByDay {
-		days = append(days, d)
-	}
-	sort.Strings(days)
+	fn, hasAny := resolveDayPricesWithExact(pricesByDay)
+	return func(day string) (float64, float64) {
+		eth, btc, _, _ := fn(day)
+		return eth, btc
+	}, hasAny
+}
 
-	var fallbackETH, fallbackBTC float64
-	for _, d := range days {
-		p := pricesByDay[d]
+func resolveDayPricesWithExact(pricesByDay map[string]onchainPriceDay) (func(day string) (eth, btc float64, ethExact, btcExact bool), bool) {
+	if len(pricesByDay) == 0 {
+		return func(string) (float64, float64, bool, bool) { return 0, 0, false, false }, false
+	}
+	var ethDays, btcDays []string
+	for d, p := range pricesByDay {
 		if p.EthUSD != nil && *p.EthUSD > 0 {
-			fallbackETH = *p.EthUSD
+			ethDays = append(ethDays, d)
 		}
 		if p.BtcUSD != nil && *p.BtcUSD > 0 {
-			fallbackBTC = *p.BtcUSD
+			btcDays = append(btcDays, d)
 		}
 	}
-	if fallbackETH == 0 && fallbackBTC == 0 {
-		return func(string) (float64, float64) { return 0, 0 }, false
+	if len(ethDays) == 0 && len(btcDays) == 0 {
+		return func(string) (float64, float64, bool, bool) { return 0, 0, false, false }, false
 	}
-	return func(day string) (float64, float64) {
-		eth, btc := fallbackETH, fallbackBTC
-		if p, ok := pricesByDay[day]; ok {
-			if p.EthUSD != nil && *p.EthUSD > 0 {
-				eth = *p.EthUSD
-			}
-			if p.BtcUSD != nil && *p.BtcUSD > 0 {
-				btc = *p.BtcUSD
-			}
+	sort.Strings(ethDays)
+	sort.Strings(btcDays)
+
+	lookup := func(days []string, valFn func(string) float64, day string) (float64, bool) {
+		if len(days) == 0 {
+			return 0, false
 		}
-		return eth, btc
+		idx := sort.SearchStrings(days, day)
+		if idx < len(days) && days[idx] == day {
+			return valFn(day), true
+		}
+		if idx > 0 {
+			return valFn(days[idx-1]), false
+		}
+		return valFn(days[0]), false
+	}
+
+	return func(day string) (float64, float64, bool, bool) {
+		eth, ethExact := lookup(ethDays, func(d string) float64 { return *pricesByDay[d].EthUSD }, day)
+		btc, btcExact := lookup(btcDays, func(d string) float64 { return *pricesByDay[d].BtcUSD }, day)
+		return eth, btc, ethExact, btcExact
 	}, true
 }
 
@@ -940,17 +951,23 @@ func tokenPriceUSD(meta majorTokenMeta, ethUSD, btcUSD, wstethRatio float64) flo
 }
 
 func rollupMajorTokens(daily []TokenDailyRow, majorRows []tokenMajorDailyRow, pricesByDay map[string]onchainPriceDay, wstethRatio float64) ([]TokenDailyRow, string) {
-	priceFn, hasPrices := resolveDayPrices(pricesByDay)
+	priceFn, hasPrices := resolveDayPricesWithExact(pricesByDay)
 	type dayUSD struct {
 		stable, eth, btc float64
 	}
 	byDay := make(map[string]*dayUSD, len(daily))
+	fallbackDays := make(map[string]bool)
 	for _, m := range majorRows {
 		meta, ok := majorTokenByAddr[strings.ToLower(m.TokenAddress)]
 		if !ok {
 			continue
 		}
-		ethP, btcP := priceFn(m.Day)
+		ethP, btcP, ethExact, btcExact := priceFn(m.Day)
+		if hasPrices {
+			if (meta.Category == "eth" && !ethExact) || (meta.Category == "btc" && !btcExact) {
+				fallbackDays[m.Day] = true
+			}
+		}
 		usd := m.VolumeToken * tokenPriceUSD(meta, ethP, btcP, wstethRatio)
 		d := byDay[m.Day]
 		if d == nil {
@@ -978,6 +995,8 @@ func rollupMajorTokens(daily []TokenDailyRow, majorRows []tokenMajorDailyRow, pr
 	var warn string
 	if !hasPrices && len(majorRows) > 0 {
 		warn = "onchain_prices: ETH/BTC USD prices unavailable; wrapped ETH/BTC USD volume is shown as $0"
+	} else if len(fallbackDays) > 0 {
+		warn = fmt.Sprintf("onchain_prices: %d day(s) missing exact ETH/BTC USD close; carried forward nearest available price", len(fallbackDays))
 	}
 	return out, warn
 }

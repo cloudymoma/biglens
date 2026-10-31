@@ -199,3 +199,62 @@ func TestEthStartBlockLB(t *testing.T) {
 		t.Errorf("2024-01-01 ethStartBlockLB = %d, want in (15537394, 18908895]", got2024)
 	}
 }
+
+func TestResolveDayPricesNearestPriorAndWarning(t *testing.T) {
+	f64 := func(v float64) *float64 { return &v }
+	prices := map[string]onchainPriceDay{
+		"2026-10-10": {Day: "2026-10-10", EthUSD: f64(2000), BtcUSD: f64(60000)},
+		"2026-10-15": {Day: "2026-10-15", EthUSD: f64(3000), BtcUSD: f64(75000)},
+	}
+	priceFn, hasAny := resolveDayPrices(prices)
+	if !hasAny {
+		t.Fatal("expected hasAny = true")
+	}
+	// Missing intermediate historical day must use nearest prior date (2026-10-10), not newest (2026-10-15).
+	if eth, btc := priceFn("2026-10-12"); eth != 2000 || btc != 60000 {
+		t.Fatalf("priceFn(2026-10-12) = (%v, %v), want (2000, 60000)", eth, btc)
+	}
+	// Day before earliest stored date falls back to earliest available date (2026-10-10).
+	if eth, btc := priceFn("2026-10-08"); eth != 2000 || btc != 60000 {
+		t.Fatalf("priceFn(2026-10-08) = (%v, %v), want (2000, 60000)", eth, btc)
+	}
+	// Exact date uses exact stored price.
+	if eth, btc := priceFn("2026-10-15"); eth != 3000 || btc != 75000 {
+		t.Fatalf("priceFn(2026-10-15) = (%v, %v), want (3000, 75000)", eth, btc)
+	}
+
+	var wethAddr string
+	for _, m := range majorTokenCatalog {
+		if m.Category == "eth" && m.Symbol != "wstETH" {
+			wethAddr = m.Address
+			break
+		}
+	}
+	if wethAddr == "" {
+		t.Fatal("missing ETH major token in majorTokenCatalog")
+	}
+	daily := []TokenDailyRow{
+		{Date: "2026-10-12"},
+		{Date: "2026-10-15"},
+	}
+	major := []tokenMajorDailyRow{
+		{Day: "2026-10-12", TokenAddress: wethAddr, VolumeToken: 10},
+		{Day: "2026-10-15", TokenAddress: wethAddr, VolumeToken: 10},
+	}
+	rolled, warn := rollupMajorTokens(daily, major, prices, 1.22)
+	if rolled[0].EthTokenUSD != 20000 {
+		t.Errorf("2026-10-12 EthTokenUSD = %v, want 20000 (prior day $2000)", rolled[0].EthTokenUSD)
+	}
+	if rolled[1].EthTokenUSD != 30000 {
+		t.Errorf("2026-10-15 EthTokenUSD = %v, want 30000 (exact day $3000)", rolled[1].EthTokenUSD)
+	}
+	if warn == "" {
+		t.Errorf("expected non-empty warning when missing historical price day used fallback")
+	}
+
+	// When all priced days are exact, warn must be empty.
+	_, exactWarn := rollupMajorTokens(daily[1:], major[1:], prices, 1.22)
+	if exactWarn != "" {
+		t.Errorf("expected empty warning when all prices are exact, got %q", exactWarn)
+	}
+}

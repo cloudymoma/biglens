@@ -6,6 +6,47 @@ export interface PollingResult<T> {
   error: string;
 }
 
+export interface PollingDriverOptions {
+  intervalMs: number;
+  isHidden: () => boolean;
+  subscribeVisibility: (cb: () => void) => () => void;
+  setIntervalFn: (cb: () => void, ms: number) => number;
+  clearIntervalFn: (id: number) => void;
+  onRun: () => void;
+}
+
+export function startPollingDriver(opts: PollingDriverOptions): () => void {
+  let hasRun = false;
+
+  const tryRun = () => {
+    if (opts.isHidden()) {
+      return;
+    }
+    hasRun = true;
+    opts.onRun();
+  };
+
+  tryRun();
+
+  const unsubscribeVisibility = opts.subscribeVisibility(() => {
+    if (!opts.isHidden() && !hasRun) {
+      tryRun();
+    }
+  });
+
+  if (opts.intervalMs <= 0) {
+    return () => {
+      unsubscribeVisibility();
+    };
+  }
+
+  const id = opts.setIntervalFn(tryRun, opts.intervalMs);
+  return () => {
+    unsubscribeVisibility();
+    opts.clearIntervalFn(id);
+  };
+}
+
 export function usePolling<T>(
   fetcher: () => Promise<T>,
   intervalMs: number,
@@ -28,9 +69,6 @@ export function usePolling<T>(
     let cancelled = false;
 
     const run = () => {
-      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
-        return;
-      }
       fetcherRef
         .current()
         .then(d => {
@@ -58,16 +96,24 @@ export function usePolling<T>(
         });
     };
 
-    run();
-    if (intervalMs <= 0) {
-      return () => {
-        cancelled = true;
-      };
-    }
-    const id = window.setInterval(run, intervalMs);
+    const cleanupDriver = startPollingDriver({
+      intervalMs,
+      isHidden: () => typeof document !== 'undefined' && document.visibilityState === 'hidden',
+      subscribeVisibility: cb => {
+        if (typeof document === 'undefined') {
+          return () => {};
+        }
+        document.addEventListener('visibilitychange', cb);
+        return () => document.removeEventListener('visibilitychange', cb);
+      },
+      setIntervalFn: (cb, ms) => window.setInterval(cb, ms),
+      clearIntervalFn: id => window.clearInterval(id),
+      onRun: run,
+    });
+
     return () => {
       cancelled = true;
-      window.clearInterval(id);
+      cleanupDriver();
     };
   }, [intervalMs, key, enabled]);
 

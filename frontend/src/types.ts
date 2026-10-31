@@ -1811,6 +1811,8 @@ export interface GasAllTime {
 
 export interface GasPulseChain {
   meta: GasChainMeta;
+  window_start?: string;
+  window_end?: string;
   hours: GasHourRow[];
   stats: GasStats;
   error?: string;

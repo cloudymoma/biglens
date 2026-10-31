@@ -153,4 +153,26 @@ func TestTokenSupplyAndMarketCache(t *testing.T) {
 	if err != nil || len(gotMarkets) != 1 || gotMarkets[0].HoldersCount != 9495898 || mAsOf.IsZero() {
 		t.Fatalf("loadTokenMarketCache = %+v, asOf=%v, err=%v", gotMarkets, mAsOf, err)
 	}
+
+	// Partial updates must report the OLDEST row's updated_at so stale entries are retried.
+	newer := now.Add(15 * time.Minute)
+	if err := store.upsertTokenSupplyCache(ctx, []TokenSupplyRow{
+		{Asset: "USDC", Network: "eth", NetworkLabel: "Ethereum", Contract: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", Tier: "native", Label: "USDC", Supply: 35000000000},
+	}, newer); err != nil {
+		t.Fatalf("upsertTokenSupplyCache newer: %v", err)
+	}
+	_, minSupplyAsOf, err := store.loadTokenSupplyCache(ctx)
+	if err != nil || !minSupplyAsOf.Equal(now) {
+		t.Fatalf("loadTokenSupplyCache partial asOf = %v, want oldest %v (err=%v)", minSupplyAsOf, now, err)
+	}
+
+	if err := store.upsertTokenMarketCache(ctx, []TokenMarketRow{
+		{Address: "0xdac17f958d2ee523a2206206994597c13d831ec7", Symbol: "USDT", PriceUSD: btcFloatPtr(1.0), HoldersCount: 5000000, Volume24hUSD: 30000000000, MarketCapUSD: 120000000000},
+	}, newer); err != nil {
+		t.Fatalf("upsertTokenMarketCache newer: %v", err)
+	}
+	_, minMarketAsOf, err := store.loadTokenMarketCache(ctx)
+	if err != nil || !minMarketAsOf.Equal(now) {
+		t.Fatalf("loadTokenMarketCache partial asOf = %v, want oldest %v (err=%v)", minMarketAsOf, now, err)
+	}
 }
