@@ -412,6 +412,10 @@ func fetchBTCBalances(ctx context.Context, addr string, heads payHeads) []payBal
 	defer cancel()
 
 	row := payBalanceRow{Label: "BTC", Contract: "", Tier: tierNative}
+	if heads.Finalized == 0 {
+		row.Error = "unavailable"
+		return []payBalanceRow{row}
+	}
 
 	var (
 		addrRaw, txsRaw   []byte

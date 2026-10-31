@@ -924,6 +924,9 @@ func fetchTronTransactionsPage(ctx context.Context, addr string, onlyFrom bool, 
 }
 
 func convertTronTRC20Row(r tronTRC20Row, asset, addr string, onlyNonRegistry bool) (payTx, bool) {
+	if !strings.EqualFold(strings.TrimSpace(r.Type), "Transfer") {
+		return payTx{}, false
+	}
 	from, ok1 := normalizeTronAddr(r.From)
 	to, ok2 := normalizeTronAddr(r.To)
 	contract, ok3 := normalizeTronAddr(r.TokenInfo.Address)

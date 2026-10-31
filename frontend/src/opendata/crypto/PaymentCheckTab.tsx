@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
   AddressRiskChain,
   PaymentAsset,
@@ -12,6 +12,7 @@ import { ErrorBanner } from '../../dashboards/shared';
 import { Panel } from './shared';
 import {
   detectAddressFamily,
+  historyMissingLatestTx,
   historySourceId,
   isValidAddressForChain,
   networksForAssetAndFamily,
@@ -284,53 +285,93 @@ function PaymentCheckSession({
 
   const liveCtrlRef = useRef<AbortController | null>(null);
   const histCtrlRef = useRef<AbortController | null>(null);
+  const histReqIdRef = useRef<number>(0);
+  const histInFlightRef = useRef<boolean>(false);
+  const aliveRef = useRef<boolean>(true);
   const lastSeenLatestHashRef = useRef<string | undefined>(undefined);
+  const missingRetryHashRef = useRef<string>('');
   const historyNeedsRetryRef = useRef<boolean>(false);
+  const historyRef = useRef<PaymentHistoryResponse | null>(null);
 
   const pollMs =
     live?.latest && live.latest.level !== 'FINALIZED' ? FAST_POLL_MS : SLOW_POLL_MS;
 
-  const checkHistorySourceErr = (h: PaymentHistoryResponse): boolean => {
+  const checkHistorySourceErr = useCallback((h: PaymentHistoryResponse): boolean => {
     const src = h.sources.find(s => s.id === historySourceId(h.network));
     return src?.status === 'error';
-  };
+  }, []);
 
-  const retryHistory = () => {
-    histCtrlRef.current?.abort();
+  const runHistoryFetch = useCallback(
+    (opts: { reportError: boolean; forceAbort: boolean; onSuccess?: () => void }) => {
+      if (histInFlightRef.current && !opts.forceAbort) {
+        return;
+      }
+      histCtrlRef.current?.abort();
+      const ctrl = new AbortController();
+      histCtrlRef.current = ctrl;
+      const reqId = ++histReqIdRef.current;
+      histInFlightRef.current = true;
+      fetchPaymentHistory(params, ctrl.signal)
+        .then(h => {
+          if (!aliveRef.current || ctrl.signal.aborted || histReqIdRef.current !== reqId) return;
+          histInFlightRef.current = false;
+          const hasErr = checkHistorySourceErr(h);
+          historyNeedsRetryRef.current = hasErr;
+          historyRef.current = h;
+          setHistory(h);
+          setHistoryError('');
+          setHistoryLoading(false);
+          if (!hasErr && opts.onSuccess) {
+            opts.onSuccess();
+          }
+        })
+        .catch(e => {
+          if (!aliveRef.current || ctrl.signal.aborted || histReqIdRef.current !== reqId) return;
+          histInFlightRef.current = false;
+          historyNeedsRetryRef.current = true;
+          setHistoryLoading(false);
+          if (opts.reportError || !historyRef.current) {
+            const d = e.response?.data;
+            setHistoryError(typeof d === 'string' && d ? d : e.message || '7d history failed');
+          }
+        });
+    },
+    [params, checkHistorySourceErr],
+  );
+
+  const runLiveFetch = useCallback(() => {
+    liveCtrlRef.current?.abort();
     const ctrl = new AbortController();
-    histCtrlRef.current = ctrl;
-    setHistoryLoading(true);
-    setHistoryError('');
-    fetchPaymentHistory(params, ctrl.signal)
-      .then(h => {
-        if (ctrl.signal.aborted) return;
-        const hasErr = checkHistorySourceErr(h);
-        historyNeedsRetryRef.current = hasErr;
-        setHistory(h);
-        setHistoryError('');
-        setHistoryLoading(false);
-        if (!hasErr) {
-          liveCtrlRef.current?.abort();
-          const lCtrl = new AbortController();
-          liveCtrlRef.current = lCtrl;
-          fetchPaymentLive(params, lCtrl.signal)
-            .then(d => {
-              if (!lCtrl.signal.aborted) {
-                lastSeenLatestHashRef.current = d.latest?.tx_hash ?? '';
-                setLive(d);
-                setLiveError('');
-              }
-            })
-            .catch(() => {});
+    liveCtrlRef.current = ctrl;
+    fetchPaymentLive(params, ctrl.signal)
+      .then(d => {
+        if (!aliveRef.current || ctrl.signal.aborted) return;
+        const prevHash = lastSeenLatestHashRef.current;
+        const nextHash = d.latest?.tx_hash ?? '';
+        const isNewHash = prevHash !== undefined && Boolean(nextHash) && nextHash !== prevHash;
+        const missingFromLoadedHistory =
+          Boolean(nextHash) &&
+          missingRetryHashRef.current !== nextHash &&
+          historyMissingLatestTx(historyRef.current, d.latest);
+        if (isNewHash || missingFromLoadedHistory) {
+          missingRetryHashRef.current = nextHash;
+          runHistoryFetch({ reportError: false, forceAbort: isNewHash });
         }
+        lastSeenLatestHashRef.current = nextHash;
+        setLive(d);
+        setLiveError('');
       })
       .catch(e => {
-        if (ctrl.signal.aborted) return;
-        historyNeedsRetryRef.current = true;
+        if (!aliveRef.current || ctrl.signal.aborted) return;
         const d = e.response?.data;
-        setHistoryError(typeof d === 'string' && d ? d : e.message || '7d history failed');
-        setHistoryLoading(false);
+        setLiveError(typeof d === 'string' && d ? d : e.message || 'live check failed');
       });
+  }, [params, runHistoryFetch]);
+
+  const retryHistory = () => {
+    setHistoryLoading(true);
+    setHistoryError('');
+    runHistoryFetch({ reportError: true, forceAbort: true, onSuccess: runLiveFetch });
   };
 
   // Initial load + first-screen alert backfill (review-2 #2):
@@ -339,67 +380,17 @@ function PaymentCheckSession({
   // cache and computes complete 7-day lookalike alerts without showing a
   // loading state.
   useEffect(() => {
-    let alive = true;
-
-    const loadLive = () => {
-      liveCtrlRef.current?.abort();
-      const ctrl = new AbortController();
-      liveCtrlRef.current = ctrl;
-      fetchPaymentLive(params, ctrl.signal)
-        .then(d => {
-          if (!alive || ctrl.signal.aborted) return;
-          const prevHash = lastSeenLatestHashRef.current;
-          const nextHash = d.latest?.tx_hash ?? '';
-          if (prevHash !== undefined && nextHash && nextHash !== prevHash) {
-            // A new incoming transfer appeared in /live — refresh 7d history (§5.9).
-            loadHistory(false);
-          }
-          lastSeenLatestHashRef.current = nextHash;
-          setLive(d);
-          setLiveError('');
-        })
-        .catch(e => {
-          if (!alive || ctrl.signal.aborted) return;
-          const d = e.response?.data;
-          setLiveError(typeof d === 'string' && d ? d : e.message || 'live check failed');
-        });
-    };
-
-    const loadHistory = (isFirstForParams: boolean) => {
-      histCtrlRef.current?.abort();
-      const ctrl = new AbortController();
-      histCtrlRef.current = ctrl;
-      fetchPaymentHistory(params, ctrl.signal)
-        .then(h => {
-          if (!alive || ctrl.signal.aborted) return;
-          const hasErr = checkHistorySourceErr(h);
-          historyNeedsRetryRef.current = hasErr;
-          setHistory(h);
-          setHistoryError('');
-          setHistoryLoading(false);
-          if (isFirstForParams && !hasErr) {
-            // Silent /live backfill now that backend pay:hist cache is warm (review-2 #2).
-            loadLive();
-          }
-        })
-        .catch(e => {
-          if (!alive || ctrl.signal.aborted) return;
-          historyNeedsRetryRef.current = true;
-          const d = e.response?.data;
-          setHistoryError(typeof d === 'string' && d ? d : e.message || '7d history failed');
-          setHistoryLoading(false);
-        });
-    };
-
-    loadLive();
-    loadHistory(true);
+    aliveRef.current = true;
+    runLiveFetch();
+    runHistoryFetch({ reportError: false, forceAbort: true, onSuccess: runLiveFetch });
 
     return () => {
-      alive = false;
+      aliveRef.current = false;
+      histInFlightRef.current = false;
       liveCtrlRef.current?.abort();
       histCtrlRef.current?.abort();
     };
-  }, [params]);
+  }, [runLiveFetch, runHistoryFetch]);
 
   // Adaptive polling for /live: 5s while latest is not FINALIZED, 30s otherwise.
   // Pauses when the tab is hidden and refreshes immediately when visible again.
@@ -413,35 +404,26 @@ function PaymentCheckSession({
       liveCtrlRef.current = ctrl;
       fetchPaymentLive(params, ctrl.signal)
         .then(d => {
-          if (!alive || ctrl.signal.aborted) return;
+          if (!alive || !aliveRef.current || ctrl.signal.aborted) return;
           const prevHash = lastSeenLatestHashRef.current;
           const nextHash = d.latest?.tx_hash ?? '';
+          const isNewHash = prevHash !== undefined && Boolean(nextHash) && nextHash !== prevHash;
           const shouldRefreshHistory =
             historyNeedsRetryRef.current ||
-            (prevHash !== undefined && Boolean(nextHash) && nextHash !== prevHash);
+            isNewHash ||
+            historyMissingLatestTx(historyRef.current, d.latest);
           if (shouldRefreshHistory) {
-            histCtrlRef.current?.abort();
-            const hCtrl = new AbortController();
-            histCtrlRef.current = hCtrl;
-            fetchPaymentHistory(params, hCtrl.signal)
-              .then(h => {
-                if (alive && !hCtrl.signal.aborted) {
-                  historyNeedsRetryRef.current = checkHistorySourceErr(h);
-                  setHistory(h);
-                  setHistoryError('');
-                  setHistoryLoading(false);
-                }
-              })
-              .catch(() => {
-                historyNeedsRetryRef.current = true;
-              });
+            if (isNewHash) {
+              missingRetryHashRef.current = nextHash;
+            }
+            runHistoryFetch({ reportError: false, forceAbort: isNewHash });
           }
           lastSeenLatestHashRef.current = nextHash;
           setLive(d);
           setLiveError('');
         })
         .catch(e => {
-          if (!alive || ctrl.signal.aborted) return;
+          if (!alive || !aliveRef.current || ctrl.signal.aborted) return;
           const d = e.response?.data;
           setLiveError(typeof d === 'string' && d ? d : e.message || 'live check failed');
         });
@@ -465,7 +447,7 @@ function PaymentCheckSession({
         document.removeEventListener('visibilitychange', onVis);
       }
     };
-  }, [params, pollMs]);
+  }, [params, pollMs, runHistoryFetch]);
 
   if (liveError && !live) {
     return <ErrorBanner message={liveError} />;

@@ -1437,3 +1437,190 @@ func TestPaymentCheckLiveEIP7702NoAlertForEOAOrFailure(t *testing.T) {
 		})
 	}
 }
+
+func TestPaymentCheckLiveInvalidatesStaleHistoryCacheOnNewTx(t *testing.T) {
+	nowSec := time.Now().Unix()
+	var serveNewTx atomic.Bool
+
+	rpcSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Method string            `json:"method"`
+			Params []json.RawMessage `json:"params"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		switch req.Method {
+		case "eth_getBlockByNumber":
+			var tag string
+			_ = json.Unmarshal(req.Params[0], &tag)
+			switch tag {
+			case "latest":
+				fmt.Fprintf(w, `{"jsonrpc":"2.0","id":1,"result":{"number":"0x64","timestamp":"0x%x"}}`, nowSec)
+			case "safe":
+				fmt.Fprintf(w, `{"jsonrpc":"2.0","id":1,"result":{"number":"0x5a","timestamp":"0x%x"}}`, nowSec-120)
+			case "finalized":
+				fmt.Fprintf(w, `{"jsonrpc":"2.0","id":1,"result":{"number":"0x50","timestamp":"0x%x"}}`, nowSec-600)
+			}
+		case "eth_call":
+			fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"result":"0x0000000000000000000000000000000000000000000000000000000000000000"}`)
+		case "eth_getLogs":
+			if serveNewTx.Load() {
+				fmt.Fprintf(w, `{"jsonrpc":"2.0","id":1,"result":[{
+					"address":"0xdac17f958d2ee523a2206206994597c13d831ec7",
+					"topics":[%q,%q,%q],
+					"data":"0x0000000000000000000000000000000000000000000000000000000005f5e100",
+					"blockNumber":"0x63",
+					"blockTimestamp":"0x%x",
+					"transactionHash":"0xnew_arrival"
+				}]}`,
+					erc20TransferTopic,
+					"0x"+pad32EVMAddr(handlerTestEVMPayer),
+					"0x"+pad32EVMAddr(handlerTestEVMAddr),
+					nowSec-5,
+				)
+				return
+			}
+			fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"result":[]}`)
+		}
+	}))
+	defer rpcSrv.Close()
+
+	var bsTokCalls atomic.Int32
+	bsSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("action") == "tokentx" {
+			bsTokCalls.Add(1)
+			if serveNewTx.Load() {
+				fmt.Fprintf(w, `{"status":"1","message":"OK","result":[{
+					"hash":"0xnew_arrival",
+					"from":%q,
+					"to":%q,
+					"value":"100000000",
+					"timeStamp":"%d",
+					"contractAddress":"0xdac17f958d2ee523a2206206994597c13d831ec7",
+					"blockNumber":"99",
+					"tokenSymbol":"USDT",
+					"tokenDecimal":"6"
+				}]}`, handlerTestEVMPayer, handlerTestEVMAddr, nowSec-5)
+				return
+			}
+		}
+		fmt.Fprint(w, `{"status":"1","message":"OK","result":[]}`)
+	}))
+	defer bsSrv.Close()
+
+	h := newTestPaymentAPIHandler(t, map[string][]string{"eth": {rpcSrv.URL}}, map[string]string{"eth": bsSrv.URL})
+	q := "asset=USDT&network=eth&address=" + handlerTestEVMAddr
+
+	// 1. Initial /history warms 60s pay:hist cache with empty txs.
+	recH1 := httptest.NewRecorder()
+	h.PaymentCheckHistory(recH1, httptest.NewRequest(http.MethodGet, "/api/opendata/crypto/payment-check/history?"+q, nil))
+	var h1 payHistoryResponse
+	if err := json.Unmarshal(recH1.Body.Bytes(), &h1); err != nil {
+		t.Fatalf("unmarshal h1: %v", err)
+	}
+	if len(h1.Txs) != 0 || bsTokCalls.Load() != 1 {
+		t.Fatalf("initial history len=%d bsTokCalls=%d, want 0, 1", len(h1.Txs), bsTokCalls.Load())
+	}
+
+	// 2. New transfer arrives within 60s TTL; /live sees 0xnew_arrival and must invalidate pay:hist.
+	serveNewTx.Store(true)
+	liveResp := payLive(t, h, q)
+	if liveResp.Latest == nil || liveResp.Latest.TxHash != "0xnew_arrival" {
+		t.Fatalf("live Latest = %+v, want 0xnew_arrival", liveResp.Latest)
+	}
+
+	// 3. Immediate follow-up /history (triggered by frontend seeing nextHash != prevHash)
+	// must NOT serve the stale 60s empty cache.
+	recH2 := httptest.NewRecorder()
+	h.PaymentCheckHistory(recH2, httptest.NewRequest(http.MethodGet, "/api/opendata/crypto/payment-check/history?"+q, nil))
+	var h2 payHistoryResponse
+	if err := json.Unmarshal(recH2.Body.Bytes(), &h2); err != nil {
+		t.Fatalf("unmarshal h2: %v", err)
+	}
+	if len(h2.Txs) != 1 || h2.Txs[0].TxHash != "0xnew_arrival" {
+		t.Fatalf("follow-up history Txs = %+v, want [0xnew_arrival] instead of stale 60s cache", h2.Txs)
+	}
+
+	// 4. Subsequent /live + /history when 0xnew_arrival is ALREADY in pay:hist must keep the cache intact.
+	callsAfterRefill := bsTokCalls.Load()
+	_ = payLive(t, h, q)
+	recH3 := httptest.NewRecorder()
+	h.PaymentCheckHistory(recH3, httptest.NewRequest(http.MethodGet, "/api/opendata/crypto/payment-check/history?"+q, nil))
+	if bsTokCalls.Load() != callsAfterRefill {
+		t.Fatalf("expected pay:hist cache hit when latest tx is already in history; bsTokCalls went %d -> %d", callsAfterRefill, bsTokCalls.Load())
+	}
+}
+
+func TestPaymentCheckLiveTruncatedHistoryDoesNotEvictCache(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	nowSec := now.Unix()
+	var includeBrandNew atomic.Bool
+
+	rpcSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Method string            `json:"method"`
+			Params []json.RawMessage `json:"params"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		switch req.Method {
+		case "eth_getBlockByNumber":
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":1,"result":{"number":"0x64","timestamp":"0x%x"}}`, nowSec)
+		case "eth_call":
+			fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"result":"0x0000000000000000000000000000000000000000000000000000000000000000"}`)
+		case "eth_getLogs":
+			if includeBrandNew.Load() {
+				fmt.Fprintf(w, `{"jsonrpc":"2.0","id":1,"result":[
+					{
+						"address":"0xdac17f958d2ee523a2206206994597c13d831ec7",
+						"topics":[%q,%q,%q],
+						"data":"0x0000000000000000000000000000000000000000000000000000000005f5e100",
+						"blockNumber":"0x63",
+						"blockTimestamp":"0x%x",
+						"transactionHash":"0xbrand_new"
+					}
+				]}`, erc20TransferTopic, "0x"+pad32EVMAddr(handlerTestEVMPayer), "0x"+pad32EVMAddr(handlerTestEVMAddr), nowSec-10)
+				return
+			}
+			// Return a log at nowSec-600: inside the 7d window, but OLDER than the 1,000-row truncated cutoff (nowSec-300).
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":1,"result":[
+				{
+					"address":"0xdac17f958d2ee523a2206206994597c13d831ec7",
+					"topics":[%q,%q,%q],
+					"data":"0x0000000000000000000000000000000000000000000000000000000005f5e100",
+					"blockNumber":"0x50",
+					"blockTimestamp":"0x%x",
+					"transactionHash":"0xolder_than_truncation"
+				}
+			]}`, erc20TransferTopic, "0x"+pad32EVMAddr(handlerTestEVMPayer), "0x"+pad32EVMAddr(handlerTestEVMAddr), nowSec-600)
+		}
+	}))
+	defer rpcSrv.Close()
+
+	bsSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"status":"1","message":"OK","result":[]}`)
+	}))
+	defer bsSrv.Close()
+
+	h := newTestPaymentAPIHandler(t, map[string][]string{"eth": {rpcSrv.URL}}, map[string]string{"eth": bsSrv.URL})
+	histKey := "pay:hist:eth:USDT:" + handlerTestEVMAddr
+	h.cache.SetWithTTL(histKey, &cachedPayHistory{
+		txs: []payTx{
+			{TxHash: "0xrow1", Timestamp: time.Unix(nowSec-60, 0).UTC().Format(time.RFC3339)},
+			{TxHash: "0xrow1000", Timestamp: time.Unix(nowSec-300, 0).UTC().Format(time.RFC3339)},
+		},
+		scope: payHistoryScope{Truncated: true},
+		since: now.Add(-payHistoryWindow).Format(time.RFC3339),
+	}, payHistoryCacheTTL)
+
+	q := "asset=USDT&network=eth&address=" + handlerTestEVMAddr
+	_ = payLive(t, h, q)
+	if _, ok := h.cache.Get(histKey); !ok {
+		t.Fatalf("expected truncated pay:hist cache to NOT be evicted by unsettled tx older than 1000th row")
+	}
+
+	// Brand-new tx newer than oldest truncated row MUST still evict pay:hist.
+	includeBrandNew.Store(true)
+	_ = payLive(t, h, q)
+	if _, ok := h.cache.Get(histKey); ok {
+		t.Fatalf("expected truncated pay:hist cache to be evicted when a brand-new tx arrives after truncation cutoff")
+	}
+}

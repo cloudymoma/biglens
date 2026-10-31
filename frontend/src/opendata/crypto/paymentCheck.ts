@@ -3,12 +3,13 @@ import type {
   PaymentFinalityLevel,
   PaymentNetwork,
   PaymentTokenTier,
+  PaymentTx,
 } from '../../types';
 import {
   detectAddressFamily,
   isValidAddressForChain,
   type AddressFamily,
-} from './addressRiskTools';
+} from './addressRiskTools.ts';
 
 export { detectAddressFamily, isValidAddressForChain, type AddressFamily };
 
@@ -436,6 +437,43 @@ export function historySourceId(network: PaymentNetwork): string {
   if (network === 'btc') return 'mempool';
   if (network === 'sol') return 'solana_rpc';
   return network === 'tron' ? 'trongrid' : 'blockscout';
+}
+
+export function historyMissingLatestTx(
+  history:
+    | {
+        since: string;
+        txs: Array<Pick<PaymentTx, 'tx_hash' | 'timestamp'>>;
+        scope?: { truncated?: boolean };
+      }
+    | null
+    | undefined,
+  latest: Pick<PaymentTx, 'tx_hash' | 'timestamp'> | null | undefined,
+): boolean {
+  if (!history || !latest?.tx_hash) return false;
+  if (latest.timestamp) {
+    const latestMs = Date.parse(latest.timestamp);
+    if (Number.isFinite(latestMs)) {
+      if (history.since) {
+        const sinceMs = Date.parse(history.since);
+        if (Number.isFinite(sinceMs) && latestMs < sinceMs) {
+          return false;
+        }
+      }
+      if (history.scope?.truncated && history.txs.length > 0) {
+        let oldestMs = Infinity;
+        for (const tx of history.txs) {
+          const ms = Date.parse(tx.timestamp);
+          if (Number.isFinite(ms) && ms < oldestMs) oldestMs = ms;
+        }
+        if (Number.isFinite(oldestMs) && latestMs <= oldestMs) {
+          return false;
+        }
+      }
+    }
+  }
+  const needle = latest.tx_hash.toLowerCase();
+  return !history.txs.some(tx => tx.tx_hash.toLowerCase() === needle);
 }
 
 export function fmtAsOf(iso: string): string {

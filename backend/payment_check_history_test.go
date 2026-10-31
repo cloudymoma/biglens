@@ -873,6 +873,98 @@ func TestFetchTronRecent(t *testing.T) {
 	}
 }
 
+func TestTronTRC20IgnoresNonTransferEvents(t *testing.T) {
+	const (
+		usdtContract = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
+		merchantAddr = "TFp3Ls4mH7cjP2c9mG3tZ6uX8vW1nK2jR9"
+		attackerAddr = "TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7"
+	)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/accounts/" + merchantAddr + "/transactions/trc20":
+			if r.URL.Query().Get("contract_address") == "" {
+				w.Write([]byte(`{"data":[],"success":true,"meta":{}}`))
+				return
+			}
+			rows := []map[string]any{
+				{
+					"transaction_id":  "tx_spoof_approval_in",
+					"block_timestamp": int64(1759600050000),
+					"from":            attackerAddr,
+					"to":              merchantAddr,
+					"type":            "Approval",
+					"value":           "100000000000",
+					"token_info": map[string]any{
+						"symbol":   "USDT",
+						"address":  usdtContract,
+						"decimals": 6,
+					},
+				},
+				{
+					"transaction_id":  "tx_approval_out",
+					"block_timestamp": int64(1759600040000),
+					"from":            merchantAddr,
+					"to":              attackerAddr,
+					"type":            "Approval",
+					"value":           "115792089237316195423570985008687907853269984665640564039457584007913129639935",
+					"token_info": map[string]any{
+						"symbol":   "USDT",
+						"address":  usdtContract,
+						"decimals": 6,
+					},
+				},
+				{
+					"transaction_id":  "tx_real_transfer_in",
+					"block_timestamp": int64(1759600000000),
+					"from":            attackerAddr,
+					"to":              merchantAddr,
+					"type":            "Transfer",
+					"value":           "25000000",
+					"token_info": map[string]any{
+						"symbol":   "USDT",
+						"address":  usdtContract,
+						"decimals": 6,
+					},
+				},
+			}
+			b, _ := json.Marshal(map[string]any{"data": rows, "success": true, "meta": map[string]any{}})
+			w.Write(b)
+		case "/v1/accounts/" + merchantAddr + "/transactions":
+			w.Write([]byte(`{"data":[],"success":true,"meta":{}}`))
+		case "/walletsolidity/getnowblock":
+			w.Write([]byte(`{"block_header":{"raw_data":{"number":86844300,"timestamp":1759600100000}}}`))
+		default:
+			w.Write([]byte(`{}`))
+		}
+	}))
+	defer srv.Close()
+
+	orig, origLim := tronGridBaseURL, tronGridLimiter
+	tronGridBaseURL = srv.URL
+	tronGridLimiter = rateLimiterUnlimited()
+	defer func() {
+		tronGridBaseURL = orig
+		tronGridLimiter = origLim
+	}()
+
+	recent, err := fetchTronRecent(context.Background(), "USDT", merchantAddr)
+	if err != nil {
+		t.Fatalf("fetchTronRecent: %v", err)
+	}
+	if len(recent) != 1 || recent[0].TxHash != "tx_real_transfer_in" {
+		t.Fatalf("fetchTronRecent returned %+v, want only tx_real_transfer_in", recent)
+	}
+
+	hist, _, err := fetchTronHistory(context.Background(), "USDT", merchantAddr, time.Unix(1759500000, 0).UTC())
+	if err != nil {
+		t.Fatalf("fetchTronHistory: %v", err)
+	}
+	if len(hist) != 1 || hist[0].TxHash != "tx_real_transfer_in" {
+		t.Fatalf("fetchTronHistory returned %+v, want only tx_real_transfer_in", hist)
+	}
+}
+
 func TestFetchTronHistoryNineSlowRequestsSucceed(t *testing.T) {
 	const tronAddr = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
 	origLimiter := tronGridLimiter

@@ -223,3 +223,45 @@ func TestSortPayTxsDescUnconfirmedFirstAndRegression(t *testing.T) {
 			evmTxs[0].TxHash, evmTxs[1].TxHash)
 	}
 }
+
+func TestFetchBTCBalancesFailsLoudWithoutFinalizedHead(t *testing.T) {
+	const (
+		selfAddr = "bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"
+		sender   = "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh"
+	)
+	origMempool, origDefault := mempoolBaseURL, defaultMempoolURLForFailover
+	defer func() {
+		mempoolBaseURL = origMempool
+		defaultMempoolURLForFailover = origDefault
+	}()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/blocks":
+			// Head fetch fails, leaving heads = payHeads{} (Finalized == 0).
+			w.WriteHeader(http.StatusBadGateway)
+		case "/api/address/" + selfAddr:
+			w.Write([]byte(`{"chain_stats":{"funded_txo_sum":100000000,"spent_txo_sum":0},"mempool_stats":{"funded_txo_sum":0,"spent_txo_sum":0}}`))
+		case "/api/address/" + selfAddr + "/txs":
+			// Deeply finalized UTXO (block 800000), only 1 tx on the address.
+			w.Write([]byte(`[{"txid":"tx_deep_final","status":{"confirmed":true,"block_height":800000,"block_time":1700000000},"vin":[{"sequence":4294967295,"prevout":{"scriptpubkey_address":"` + sender + `","value":100000000}}],"vout":[{"scriptpubkey_address":"` + selfAddr + `","value":100000000}]}]`))
+		default:
+			w.Write([]byte(`[]`))
+		}
+	}))
+	defer srv.Close()
+	mempoolBaseURL = srv.URL
+	defaultMempoolURLForFailover = "https://mempool.space"
+
+	h := newTestPaymentAPIHandler(t, nil, nil)
+	resp := payLive(t, h, "asset=BTC&network=btc&address="+selfAddr)
+	if len(resp.Balance) != 1 {
+		t.Fatalf("len(Balance) = %d, want 1", len(resp.Balance))
+	}
+	if resp.Balance[0].Error == "" || resp.BalanceError == "" {
+		t.Fatalf("expected loud BTC balance error when finalized head is unknown (0), got row=%+v balanceError=%q", resp.Balance[0], resp.BalanceError)
+	}
+	if resp.Balance[0].Finalized != "" {
+		t.Fatalf("Finalized = %q, want empty string (must never misreport finalized BTC as 0 when heads failed)", resp.Balance[0].Finalized)
+	}
+}

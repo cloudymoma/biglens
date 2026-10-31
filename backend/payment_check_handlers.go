@@ -247,6 +247,50 @@ func isWithinAlertWindow(ts string, now time.Time) bool {
 	return now.Sub(t) <= payAlertWindow
 }
 
+func effectiveHistoryCutoff(entry *cachedPayHistory) (string, bool) {
+	if entry == nil {
+		return "", false
+	}
+	if entry.scope.Truncated && len(entry.txs) > 0 {
+		var oldest time.Time
+		for i := range entry.txs {
+			t, err := time.Parse(time.RFC3339, entry.txs[i].Timestamp)
+			if err != nil {
+				continue
+			}
+			if oldest.IsZero() || t.Before(oldest) {
+				oldest = t
+			}
+		}
+		if !oldest.IsZero() {
+			return oldest.UTC().Format(time.RFC3339), true
+		}
+	}
+	return entry.since, false
+}
+
+func isTxExpectedInHistory(tx payTx, histCutoff string, truncatedStrict bool, now time.Time) bool {
+	if tx.TxHash == "" {
+		return false
+	}
+	if tx.Timestamp == "" {
+		return true
+	}
+	txTime, err := time.Parse(time.RFC3339, tx.Timestamp)
+	if err != nil {
+		return false
+	}
+	if histCutoff != "" {
+		if cutoffTime, err := time.Parse(time.RFC3339, histCutoff); err == nil {
+			if truncatedStrict {
+				return txTime.After(cutoffTime)
+			}
+			return !txTime.Before(cutoffTime)
+		}
+	}
+	return now.Sub(txTime) <= payHistoryWindow
+}
+
 func parsePaymentCheckParams(w http.ResponseWriter, r *http.Request) (asset, network, addr string, ok bool) {
 	if r.Method != http.MethodGet {
 		writeError(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -289,6 +333,9 @@ func (h *APIHandler) PaymentCheckLive(w http.ResponseWriter, r *http.Request) {
 		recentTxs     []payTx
 		recentErr     error
 		histTxs       []payTx
+		histCutoff    string
+		histTruncated bool
+		hasHistCache  bool
 		freezeStates  []issuerFreezeState
 		freezeErrCode string
 		ownOFACHit    bool
@@ -336,13 +383,16 @@ func (h *APIHandler) PaymentCheckLive(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 
+	histKey := "pay:hist:" + network + ":" + asset + ":" + addr
+
 	// 3. Non-blocking read of 7-day history cache (never fetches history synchronously)
 	g.Go(func() error {
 		if h.cache != nil {
-			histKey := "pay:hist:" + network + ":" + asset + ":" + addr
 			if cached, ok := h.cache.Get(histKey); ok {
 				if entry, ok := cached.(*cachedPayHistory); ok {
 					histTxs = clonePayTxs(entry.txs)
+					histCutoff, histTruncated = effectiveHistoryCutoff(entry)
+					hasHistCache = true
 				}
 			}
 		}
@@ -386,6 +436,30 @@ func (h *APIHandler) PaymentCheckLive(w http.ResponseWriter, r *http.Request) {
 	})
 
 	_ = g.Wait()
+
+	if hasHistCache && h.cache != nil && (len(unsettledTxs) > 0 || len(recentTxs) > 0) {
+		histHashes := make(map[string]struct{}, len(histTxs))
+		for i := range histTxs {
+			histHashes[strings.ToLower(histTxs[i].TxHash)] = struct{}{}
+		}
+		staleHist := false
+		for _, list := range [][]payTx{unsettledTxs, recentTxs} {
+			for i := range list {
+				if isTxExpectedInHistory(list[i], histCutoff, histTruncated, now) {
+					if _, exists := histHashes[strings.ToLower(list[i].TxHash)]; !exists {
+						staleHist = true
+						break
+					}
+				}
+			}
+			if staleHist {
+				break
+			}
+		}
+		if staleHist {
+			h.cache.Delete(histKey)
+		}
+	}
 
 	candidates := mergeTxs(unsettledTxs, recentTxs, histTxs)
 	classifyPayTxs(candidates, network, heads, now.Unix())
@@ -619,7 +693,7 @@ func (h *APIHandler) PaymentCheckHistory(w http.ResponseWriter, r *http.Request)
 	defer cancel()
 
 	now := time.Now().UTC()
-	since := now.Add(-payHistoryWindow)
+	since := now.Add(-payHistoryWindow).Truncate(time.Second)
 	bsURL := h.payBlockscoutURL(network)
 	rpcs := h.payRPCs(network)
 	store := h.payRiskStore()
