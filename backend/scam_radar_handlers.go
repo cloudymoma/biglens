@@ -74,7 +74,7 @@ type scamRadarResponse struct {
 	Coverage     map[string]riskSource `json:"coverage"` // scam_eth / scam_tron / scam_btc / tron_stablecoin_logs / scam_fake_token_deployers
 	KPIs         scamRadarKPIs         `json:"kpis"`
 	Trend        []scamTrendPoint      `json:"trend"`         // 30 days, zero-filled with has_data
-	FakeTokens   []scamFakeToken       `json:"fake_tokens"`   // last 7 days Top 10
+	FakeTokens   []scamFakeToken       `json:"fake_tokens"`   // active in last 7 days, Top 10 by cumulative retained transfers
 	BTCRBF       *scamRBF              `json:"btc_rbf"`       // latest settled day
 	TopDeployers []scamDeployer        `json:"top_deployers"` // serial counterfeit deployers, top 5 by contracts
 	Empty        bool                  `json:"empty"`

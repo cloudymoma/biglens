@@ -319,9 +319,9 @@ export default function ScamRadarPanel({ onInspect }: { onInspect: (address: str
                 <div className="flex items-baseline justify-between mb-2">
                   <span className="inline-flex items-center gap-1.5 text-xs font-medium text-zinc-200">
                     <ChainIcon chain="eth" size={13} />
-                    <span>Top fake stablecoin contracts (last 7d, ETH)</span>
+                    <span>Top fake stablecoin contracts (active last 7d, ETH)</span>
                   </span>
-                  <span className="text-[11px] text-zinc-500">non-official contracts using USDT/USDC symbols</span>
+                  <span className="text-[11px] text-zinc-500">cumulative totals (90d retention) · non-official USDT/USDC symbols</span>
                 </div>
                 {ethErr ? (
                   <p className="text-xs text-amber-300 font-mono py-4">
@@ -336,8 +336,8 @@ export default function ScamRadarPanel({ onInspect }: { onInspect: (address: str
                         <tr>
                           <th className="py-1 pr-3 font-normal">Contract</th>
                           <th className="pr-3 font-normal">Symbol</th>
-                          <th className="pr-3 font-normal text-right">Transfers</th>
-                          <th className="pr-3 font-normal text-right">Recipients</th>
+                          <th className="pr-3 font-normal text-right" title="Cumulative transfers across the 90-day retention window">Transfers (90d)</th>
+                          <th className="pr-3 font-normal text-right" title="Cumulative sum of daily distinct recipients across the 90-day retention window">Recipient-days (90d)</th>
                           <th className="font-normal text-right">Last seen</th>
                         </tr>
                       </thead>

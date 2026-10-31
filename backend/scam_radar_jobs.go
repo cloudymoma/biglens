@@ -68,34 +68,55 @@ WITH t AS (
     AND NOT removed
 ),
 real AS (
-  SELECT DISTINCT day, src, dst FROM t WHERE q != '0'
+  SELECT day,
+         src,
+         SUBSTR(dst, 3, 4) AS pfx,
+         RIGHT(dst, 4) AS sfx,
+         MIN(dst) AS min_dst,
+         MAX(dst) AS max_dst
+  FROM t
+  WHERE q != '0'
+  GROUP BY 1, 2, 3, 4
 ),
 day_transfers AS (
   SELECT day, COUNT(*) AS transfers, COUNTIF(q = '0') AS zero_value FROM t GROUP BY day
 ),
-matched AS (
+pairs AS (
   SELECT z.day AS day,
+         z.src AS victim,
          z.dst AS lookalike,
-         r.dst AS imitated,
-         COUNT(*) AS hits,
-         COUNT(DISTINCT z.src) AS victims
+         IF(z.dst != r.min_dst, r.min_dst, r.max_dst) AS imitated
   FROM t z
   JOIN real r
-    ON z.day = r.day AND z.src = r.src AND z.dst != r.dst
-   AND SUBSTR(z.dst, 3, 4) = SUBSTR(r.dst, 3, 4)
-   AND RIGHT(z.dst, 4) = RIGHT(r.dst, 4)
+    ON z.day = r.day AND z.src = r.src
+   AND SUBSTR(z.dst, 3, 4) = r.pfx
+   AND RIGHT(z.dst, 4) = r.sfx
+   AND (z.dst != r.min_dst OR z.dst != r.max_dst)
   WHERE z.q = '0'
-  GROUP BY 1, 2, 3
+),
+day_victims AS (
+  SELECT day, COUNT(DISTINCT victim) AS day_victims FROM pairs GROUP BY day
+),
+matched AS (
+  SELECT day,
+         lookalike,
+         MIN(imitated) AS imitated,
+         COUNT(*) AS hits,
+         COUNT(DISTINCT victim) AS victims
+  FROM pairs
+  GROUP BY 1, 2
 )
 SELECT dt.day AS day,
        IFNULL(m.lookalike, '') AS lookalike,
        IFNULL(m.imitated, '') AS imitated,
        IFNULL(m.hits, 0) AS hits,
        IFNULL(m.victims, 0) AS victims,
+       IFNULL(dv.day_victims, 0) AS day_victims,
        dt.transfers AS transfers,
        dt.zero_value AS zero_value
 FROM day_transfers dt
-LEFT JOIN matched m USING (day)`
+LEFT JOIN matched m USING (day)
+LEFT JOIN day_victims dv USING (day)`
 
 	// R2: ETH counterfeit USDT/USDC token contracts (spec P2.2). tokens_latest
 	// (SQD) has one row per contract; ANY_VALUE ignores NULL creators.
@@ -203,30 +224,42 @@ uniq_addrs AS (
     SELECT DISTINCT imitated_hex AS hex FROM cand
   )
 ),
-matched AS (
+matched_cands AS (
   SELECT c.day,
+         c.victim,
          lk.addr58 AS lookalike58,
-         im.addr58 AS imitated58,
-         COUNT(*) AS hits,
-         COUNT(DISTINCT c.victim) AS victims
+         im.addr58 AS imitated58
   FROM cand c
   JOIN uniq_addrs lk ON c.lookalike_hex = lk.hex
   JOIN uniq_addrs im ON c.imitated_hex = im.hex
   WHERE lk.addr58 != im.addr58
     AND SUBSTR(lk.addr58, 2, 4) = SUBSTR(im.addr58, 2, 4)
     AND RIGHT(lk.addr58, 4) = RIGHT(im.addr58, 4)
-  GROUP BY 1, 2, 3
+),
+day_victims AS (
+  SELECT day, COUNT(DISTINCT victim) AS day_victims FROM matched_cands GROUP BY day
+),
+matched AS (
+  SELECT day,
+         lookalike58,
+         MIN(imitated58) AS imitated58,
+         COUNT(*) AS hits,
+         COUNT(DISTINCT victim) AS victims
+  FROM matched_cands
+  GROUP BY 1, 2
 )
 SELECT dt.day AS day,
        IFNULL(m.lookalike58, '') AS lookalike58,
        IFNULL(m.imitated58, '') AS imitated58,
        IFNULL(m.hits, 0) AS hits,
        IFNULL(m.victims, 0) AS victims,
+       IFNULL(dv.day_victims, 0) AS day_victims,
        IFNULL(dc.candidates, 0) AS candidates,
        dt.transfers AS transfers
 FROM day_transfers dt
 LEFT JOIN day_cands dc USING (day)
-LEFT JOIN matched m USING (day)`
+LEFT JOIN matched m USING (day)
+LEFT JOIN day_victims dv USING (day)`
 
 	// R4: TRON USDT freeze / unfreeze / destroy logs (spec P2.2). Reuses the
 	// topicUSDT* constants from address_risk_stablecoin.go; on TRON the target
@@ -292,13 +325,14 @@ ORDER BY 1`
 )
 
 type ethPoisonRow struct {
-	Day       string `bigquery:"day"`
-	Lookalike string `bigquery:"lookalike"`
-	Imitated  string `bigquery:"imitated"`
-	Hits      int64  `bigquery:"hits"`
-	Victims   int64  `bigquery:"victims"`
-	Transfers int64  `bigquery:"transfers"`  // official USDT/USDC transfers scanned that day
-	ZeroValue int64  `bigquery:"zero_value"` // of which zero-value (quantity = '0')
+	Day        string `bigquery:"day"`
+	Lookalike  string `bigquery:"lookalike"`
+	Imitated   string `bigquery:"imitated"`
+	Hits       int64  `bigquery:"hits"`
+	Victims    int64  `bigquery:"victims"`
+	DayVictims int64  `bigquery:"day_victims"` // distinct victims poisoned on day across all pairs
+	Transfers  int64  `bigquery:"transfers"`   // official USDT/USDC transfers scanned that day
+	ZeroValue  int64  `bigquery:"zero_value"`  // of which zero-value (quantity = '0')
 }
 
 type ethFakeTokenRow struct {
@@ -345,6 +379,7 @@ type tronPoisonRow struct {
 	Imitated58  string `bigquery:"imitated58"`
 	Hits        int64  `bigquery:"hits"`
 	Victims     int64  `bigquery:"victims"`
+	DayVictims  int64  `bigquery:"day_victims"` // distinct victims poisoned on day across all pairs
 	Candidates  int64  `bigquery:"candidates"`
 	Transfers   int64  `bigquery:"transfers"` // official TRON USDT Transfer logs scanned that day
 }
@@ -615,7 +650,11 @@ func (j *bqDailyJob) runEth(ctx context.Context, start, end civil.Date, maxBytes
 				LastSeen:  r.Day,
 			})
 			b.Stats["eth_poison_hits"] += float64(r.Hits)
-			b.Stats["eth_poison_victims"] += float64(r.Victims)
+			if r.DayVictims > 0 {
+				b.Stats["eth_poison_victims"] = float64(r.DayVictims)
+			} else if float64(r.Victims) > b.Stats["eth_poison_victims"] {
+				b.Stats["eth_poison_victims"] = float64(r.Victims)
+			}
 			if seenLookalikes[r.Day] == nil {
 				seenLookalikes[r.Day] = map[string]bool{}
 			}
@@ -638,7 +677,15 @@ func (j *bqDailyJob) runEth(ctx context.Context, start, end civil.Date, maxBytes
 		slog.Warn("scam_radar guard bypassed (allow_zero_candidates)", "source", j.id, "warning", err.Error())
 	}
 
-	billed2, err := j.runner.Query(ctx, scamEthFakeTokenSQL, start, end, maxBytes, func(next func(dst any) bool) error {
+	rem2 := maxBytes
+	if maxBytes > 0 {
+		rem2 = maxBytes - billed1
+		if rem2 <= 0 {
+			return dailyResult{}, billed1, fmt.Errorf("scam_eth exceeded per-run byte cap (%d billed of %d)", billed1, maxBytes)
+		}
+	}
+
+	billed2, err := j.runner.Query(ctx, scamEthFakeTokenSQL, start, end, rem2, func(next func(dst any) bool) error {
 		var r ethFakeTokenRow
 		for next(&r) {
 			b := byDay[r.Day]
@@ -676,9 +723,17 @@ func (j *bqDailyJob) runEth(ctx context.Context, start, end civil.Date, maxBytes
 		return dailyResult{}, billed1 + billed2, err
 	}
 
+	rem3 := maxBytes
+	if maxBytes > 0 {
+		rem3 = maxBytes - billed1 - billed2
+		if rem3 <= 0 {
+			return dailyResult{}, billed1 + billed2, fmt.Errorf("scam_eth exceeded per-run byte cap (%d billed of %d)", billed1+billed2, maxBytes)
+		}
+	}
+
 	// Serial-deployer snapshot (full tokens_latest aggregate, not windowed).
 	var deployers []fakeTokenDeployerRow
-	billed3, err := j.runner.Query(ctx, scamEthFakeTokenDeployersSQL, start, end, maxBytes, func(next func(dst any) bool) error {
+	billed3, err := j.runner.Query(ctx, scamEthFakeTokenDeployersSQL, start, end, rem3, func(next func(dst any) bool) error {
 		var r fakeTokenDeployerBQRow
 		for next(&r) {
 			d, err := decodeFakeTokenDeployerRow(r)
@@ -738,7 +793,11 @@ func (j *bqDailyJob) runTronPoison(ctx context.Context, start, end civil.Date, m
 				LastSeen:  r.Day,
 			})
 			b.Stats["tron_poison_hits"] += float64(r.Hits)
-			b.Stats["tron_poison_victims"] += float64(r.Victims)
+			if r.DayVictims > 0 {
+				b.Stats["tron_poison_victims"] = float64(r.DayVictims)
+			} else if float64(r.Victims) > b.Stats["tron_poison_victims"] {
+				b.Stats["tron_poison_victims"] = float64(r.Victims)
+			}
 			if seenLookalikes[r.Day] == nil {
 				seenLookalikes[r.Day] = map[string]bool{}
 			}

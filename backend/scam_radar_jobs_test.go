@@ -213,11 +213,25 @@ func TestScamRadarSQLPartitionFiltersAndMaxBytes(t *testing.T) {
 		if len(runner.queryCalls) == 0 {
 			t.Fatalf("%s made 0 query calls", j.ID())
 		}
-		for _, c := range runner.queryCalls {
-			if c.maxBytes != wantCap {
-				t.Errorf("%s query maxBytes = %d, want %d", j.ID(), c.maxBytes, wantCap)
+		for i, c := range runner.queryCalls {
+			want := wantCap - int64(i)*runner.billed
+			if c.maxBytes != want {
+				t.Errorf("%s query[%d] maxBytes = %d, want %d", j.ID(), i, c.maxBytes, want)
 			}
 		}
+	}
+
+	// If scam_eth's first query exhausts the per-run cap, subsequent queries must not run.
+	runnerExhausted := healthyScamRunner("2026-10-05")
+	runnerExhausted.billed = 10 << 30
+	ethJob := newScamRadarJobsWithRunner(runnerExhausted)[0]
+	if _, billed, err := ethJob.Run(context.Background(), start, end, 10<<30); err == nil {
+		t.Errorf("scam_eth expected error when query 1 exhausts maxBytes, got nil")
+	} else if billed != 10<<30 {
+		t.Errorf("scam_eth billed = %d, want %d", billed, int64(10<<30))
+	}
+	if len(runnerExhausted.queryCalls) != 1 {
+		t.Errorf("scam_eth queryCalls after exhausting cap = %d, want 1", len(runnerExhausted.queryCalls))
 	}
 }
 
@@ -914,5 +928,58 @@ func TestScamEthRejectsMalformedDeployerRows(t *testing.T) {
 		if _, _, err := scamJobByID(t, runner, scamEthSourceID).Run(ctx, day, day.AddDays(1), dailySyncIncrementalMaxBytes); err == nil {
 			t.Errorf("%s: Run = nil error, want the row rejected", name)
 		}
+	}
+}
+
+func TestScamRadarPoisonDeduplicatesDailyVictimsAcrossPairs(t *testing.T) {
+	for name, sql := range map[string]string{
+		"ETH R1":  scamEthPoisonSQL,
+		"TRON R3": scamTronPoisonSQL,
+	} {
+		if !strings.Contains(sql, "AS day_victims") {
+			t.Errorf("%s SQL must compute distinct daily victims (day_victims) instead of summing per-pair victims:\n%s", name, sql)
+		}
+		matchedIdx := strings.Index(sql, "matched AS (")
+		if matchedIdx < 0 || strings.Contains(sql[matchedIdx:], "GROUP BY 1, 2, 3") {
+			t.Errorf("%s SQL must group matched rows by (day, lookalike), not (day, lookalike, imitated):\n%s", name, sql)
+		}
+	}
+
+	ctx := context.Background()
+	day := civil.Date{Year: 2026, Month: time.October, Day: 5}
+	d := day.String()
+	runner := healthyScamRunner(d)
+	// Two lookalike bots poison overlapping victims on the same day:
+	// Bot 1 poisons {V1, V2, V3} (3 victims), Bot 2 poisons {V2, V3, V4} (3 victims).
+	// Distinct daily victims = 4, NOT 3 + 3 = 6.
+	runner.ethPoison = []ethPoisonRow{
+		{Day: d, Lookalike: "0x111199999999999999999999999999999999aaaa", Imitated: "0x111100000000000000000000000000000000aaaa", Hits: 5, Victims: 3, DayVictims: 4, Transfers: 800000, ZeroValue: 250000},
+		{Day: d, Lookalike: "0x222299999999999999999999999999999999bbbb", Imitated: "0x222200000000000000000000000000000000bbbb", Hits: 4, Victims: 3, DayVictims: 4, Transfers: 800000, ZeroValue: 250000},
+	}
+	runner.tronPoison = []tronPoisonRow{
+		{Day: d, Lookalike58: "TTZAH6Yw11111111111111111111jk9747", Imitated58: "TTZAHWEr22222222222222222222jk9747", Hits: 6, Victims: 3, DayVictims: 4, Candidates: 130000, Transfers: 2100000},
+		{Day: d, Lookalike58: "TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7", Imitated58: "TLa2f999999999999999999999995wYjU7", Hits: 2, Victims: 3, DayVictims: 4, Candidates: 130000, Transfers: 2100000},
+	}
+
+	ethRes, _, err := scamJobByID(t, runner, scamEthSourceID).Run(ctx, day, day.AddDays(1), dailySyncIncrementalMaxBytes)
+	if err != nil {
+		t.Fatalf("eth Run: %v", err)
+	}
+	if got := ethRes.Days[0].Stats["eth_poison_victims"]; got != 4 {
+		t.Errorf("eth_poison_victims = %v, want 4 distinct victims (not 6 summed across pairs)", got)
+	}
+	if got := ethRes.Days[0].Stats["eth_poison_hits"]; got != 9 {
+		t.Errorf("eth_poison_hits = %v, want 9", got)
+	}
+
+	tronRes, _, err := scamJobByID(t, runner, scamTronSourceID).Run(ctx, day, day.AddDays(1), dailySyncIncrementalMaxBytes)
+	if err != nil {
+		t.Fatalf("tron Run: %v", err)
+	}
+	if got := tronRes.Days[0].Stats["tron_poison_victims"]; got != 4 {
+		t.Errorf("tron_poison_victims = %v, want 4 distinct victims (not 6 summed across pairs)", got)
+	}
+	if got := tronRes.Days[0].Stats["tron_poison_hits"]; got != 8 {
+		t.Errorf("tron_poison_hits = %v, want 8", got)
 	}
 }
