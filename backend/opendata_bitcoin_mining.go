@@ -511,6 +511,7 @@ func (h *APIHandler) buildBtcMiningData(ctx context.Context, r *http.Request, pe
 		return d
 	}
 
+	today := now.Format("2006-01-02")
 	hashpriceSeries := make([]BtcHashpricePoint, 0, len(hrPoints))
 	for _, hp := range hrPoints {
 		diff := diffForDate(hp.Date)
@@ -531,7 +532,7 @@ func (h *APIHandler) buildBtcMiningData(ctx context.Context, r *http.Request, pe
 		if c, ok := priceByDay[hp.Date]; ok && c > 0 {
 			p := c
 			dayPrice = &p
-		} else if priceUSD != nil {
+		} else if hp.Date == today && priceUSD != nil {
 			dayPrice = priceUSD
 		}
 		btcPH, usdPH := hashpricePerPH(rewBTC, diff, dayPrice)

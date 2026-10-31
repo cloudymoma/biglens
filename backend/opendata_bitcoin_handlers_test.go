@@ -695,8 +695,15 @@ func TestBitcoinBaselineEndpoint(t *testing.T) {
 	}
 	h.btc.starter = newBtcBaselineRunner(store, h.btc.settings, fakeSrc, func() time.Time { return now })
 
+	newLoopbackBaselinePost := func(body string) *http.Request {
+		req := httptest.NewRequest(http.MethodPost, "/api/opendata/bitcoin/onchain/baseline", strings.NewReader(body))
+		req.RemoteAddr = "127.0.0.1:12345"
+		req.Host = "localhost:1983"
+		return req
+	}
+
 	// Dry run mints a token.
-	dryReq := httptest.NewRequest(http.MethodPost, "/api/opendata/bitcoin/onchain/baseline", strings.NewReader(`{"action":"dry_run"}`))
+	dryReq := newLoopbackBaselinePost(`{"action":"dry_run"}`)
 	dryRec := httptest.NewRecorder()
 	h.BitcoinBaseline(dryRec, dryReq)
 	if dryRec.Code != http.StatusOK {
@@ -712,7 +719,7 @@ func TestBitcoinBaselineEndpoint(t *testing.T) {
 
 	// Confirm with the token builds the baseline and returns status.
 	confBody := `{"action":"confirm","token":"` + plan.Token + `"}`
-	confReq := httptest.NewRequest(http.MethodPost, "/api/opendata/bitcoin/onchain/baseline", strings.NewReader(confBody))
+	confReq := newLoopbackBaselinePost(confBody)
 	confRec := httptest.NewRecorder()
 	h.BitcoinBaseline(confRec, confReq)
 	if confRec.Code != http.StatusOK {
@@ -727,11 +734,62 @@ func TestBitcoinBaselineEndpoint(t *testing.T) {
 	}
 
 	// Reusing the same token returns 400 Bad Request.
-	reuseReq := httptest.NewRequest(http.MethodPost, "/api/opendata/bitcoin/onchain/baseline", strings.NewReader(confBody))
+	reuseReq := newLoopbackBaselinePost(confBody)
 	reuseRec := httptest.NewRecorder()
 	h.BitcoinBaseline(reuseRec, reuseReq)
 	if reuseRec.Code != http.StatusBadRequest {
 		t.Fatalf("POST confirm reuse = %d, want 400", reuseRec.Code)
+	}
+}
+
+func TestBitcoinBaselineRejectsNonLoopbackPost(t *testing.T) {
+	store := openTestRiskStore(t)
+	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+
+	h := newTestBitcoinHandler(t)
+	h.btc.now = func() time.Time { return now }
+	h.btc.settings.Jobs = true
+	h.btc.settings.BaselineAllowUI = true
+	h.btc.read = newBtcReadStore(store, h.btc.settings, h.btc.now)
+	fakeSrc := &fakeBaselineSource{
+		dryBytes: 687 * (1 << 30),
+		billed:   687 * (1 << 30),
+		rows:     []btcUTXOBaselineRow{{CreateDay: "2026-10-14", Sats: 2_000_000_000_000_000, UTXOs: 100}},
+	}
+	h.btc.starter = newBtcBaselineRunner(store, h.btc.settings, fakeSrc, func() time.Time { return now })
+
+	cases := []struct {
+		name   string
+		remote string
+		host   string
+		origin string
+		xff    string
+	}{
+		{name: "remote LAN IP with spoofed XFF", remote: "192.168.1.50:54321", host: "localhost:1983", xff: "127.0.0.1"},
+		{name: "DNS-rebound Host header", remote: "127.0.0.1:54321", host: "evil.example:1983"},
+		{name: "cross-origin Origin header", remote: "127.0.0.1:54321", host: "localhost:1983", origin: "http://evil.example"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/opendata/bitcoin/onchain/baseline", strings.NewReader(`{"action":"dry_run"}`))
+			req.RemoteAddr = tc.remote
+			req.Host = tc.host
+			if tc.origin != "" {
+				req.Header.Set("Origin", tc.origin)
+			}
+			if tc.xff != "" {
+				req.Header.Set("X-Forwarded-For", tc.xff)
+			}
+			rec := httptest.NewRecorder()
+			h.BitcoinBaseline(rec, req)
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("status = %d (%s), want 403 Forbidden", rec.Code, rec.Body.String())
+			}
+		})
+	}
+	if fakeSrc.dryCalls != 0 {
+		t.Errorf("fakeSrc.dryCalls = %d, want 0 after rejected non-loopback POSTs", fakeSrc.dryCalls)
 	}
 }
 

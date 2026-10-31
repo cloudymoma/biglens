@@ -308,6 +308,7 @@ func (h *APIHandler) buildBitcoinValuation(ctx context.Context, rangeKey string,
 						realizedBlocked = hr.Blocked
 						continue
 					}
+					realizedBlocked = ""
 					fullSeries[i].RealizedPriceUSD = hr.RealizedPriceUSD
 					fullSeries[i].STHRealizedPriceUSD = hr.STHRealizedPrice
 					fullSeries[i].LTHRealizedPriceUSD = hr.LTHRealizedPrice
@@ -376,7 +377,7 @@ func (h *APIHandler) buildBitcoinValuation(ctx context.Context, rangeKey string,
 				}
 			}
 		}
-		if cov.Complete {
+		if cov.Complete && realizedBlocked == "" {
 			for i := n - 1; i >= 0; i-- {
 				if fullSeries[i].RealizedPriceUSD != nil {
 					latest.RealizedPriceUSD = fullSeries[i].RealizedPriceUSD

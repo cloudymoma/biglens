@@ -134,6 +134,59 @@ func TestBitcoinMiningHashprice(t *testing.T) {
 	}
 }
 
+func TestBitcoinMiningHashpriceHistoricalDoesNotUseSpotFallback(t *testing.T) {
+	_, cleanup := newBtcMiningTestServer(t)
+	defer cleanup()
+
+	h := newTestBitcoinHandler(t)
+	h.btc.now = func() time.Time { return time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC) }
+	// Seed historical close for 2026-10-14 ($40,000), leave 2026-10-15 missing, while live spot on 2026-10-16 is $82,064.
+	h.btc.prices.putRows(context.Background(), []btcPriceDay{
+		{Day: "2026-10-14", Close: 40_000.0, Source: "coinbase"},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/opendata/bitcoin/mining?period=1y", nil)
+	rec := httptest.NewRecorder()
+	h.BitcoinMining(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var got BtcMiningData
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	byDate := make(map[string]BtcHashpricePoint, len(got.Hashprice))
+	for _, pt := range got.Hashprice {
+		byDate[pt.Date] = pt
+	}
+
+	pt14, ok := byDate["2026-10-14"]
+	if !ok || pt14.USDPerPHDay == nil {
+		t.Fatalf("2026-10-14 hashprice = %+v, want non-nil USDPerPHDay from stored close", pt14)
+	}
+	want14 := pt14.BTCPerPHDay * 40_000.0
+	if math.Abs(*pt14.USDPerPHDay-want14) > 0.05 {
+		t.Errorf("2026-10-14 USDPerPHDay = %.2f, want %.2f (from $40k close)", *pt14.USDPerPHDay, want14)
+	}
+
+	pt15, ok := byDate["2026-10-15"]
+	if !ok {
+		t.Fatalf("missing 2026-10-15 BTC hashprice point")
+	}
+	if pt15.BTCPerPHDay <= 0 {
+		t.Errorf("2026-10-15 BTCPerPHDay = %v, want > 0", pt15.BTCPerPHDay)
+	}
+	if pt15.USDPerPHDay != nil {
+		t.Errorf("2026-10-15 unpriced historical day USDPerPHDay = %.2f, want nil (must not substitute today's spot)", *pt15.USDPerPHDay)
+	}
+
+	pt16, ok := byDate["2026-10-16"]
+	if !ok || pt16.USDPerPHDay == nil {
+		t.Fatalf("2026-10-16 (today) hashprice = %+v, want spot-backed USDPerPHDay", pt16)
+	}
+}
+
 func TestBitcoinMiningRibbon(t *testing.T) {
 	_, cleanup := newBtcMiningTestServer(t)
 	defer cleanup()

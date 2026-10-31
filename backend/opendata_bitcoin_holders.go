@@ -221,7 +221,12 @@ func holderMetrics(day string, gen int64, u utxoState, prices map[string]float64
 			continue
 		}
 		// Coins created before earliest priced day (2010-08-18) have pc == 0 per §6.4.
+		// A transient negative day+1 bucket from a midnight timestamp inversion uses closeT
+		// when tomorrow's UTC daily candle has not closed yet.
 		pc := prices[cDay]
+		if cDay > day && pc <= 0 {
+			pc = closeT
+		}
 		btc := float64(sats) / 1e8
 		valUSD := btc * pc
 		realizedCapUSD += valUSD
@@ -262,10 +267,48 @@ func holderMetrics(day string, gen int64, u utxoState, prices map[string]float64
 		out.MVRV = &mvrv
 	}
 	if supplySats > 0 {
+		if profitSats < 0 {
+			profitSats = 0
+		} else if profitSats > supplySats {
+			profitSats = supplySats
+		}
 		profPct := float64(profitSats) / float64(supplySats) * 100.0
 		out.SupplyInProfitPct = &profPct
 	}
 	return out
+}
+
+func priceCoveredThrough(prices map[string]float64) string {
+	if len(prices) == 0 || prices[btcPriceCoverageStart] <= 0 {
+		return ""
+	}
+	start, err := civil.ParseDate(btcPriceCoverageStart)
+	if err != nil {
+		return ""
+	}
+	maxDay := btcPriceCoverageStart
+	for d, p := range prices {
+		if p > 0 && d > maxDay {
+			maxDay = d
+		}
+	}
+	maxDate, err := civil.ParseDate(maxDay)
+	if err != nil {
+		return ""
+	}
+	last := ""
+	for cur := start; !cur.After(maxDate); cur = cur.AddDays(1) {
+		ds := cur.String()
+		if prices[ds] <= 0 {
+			break
+		}
+		last = ds
+	}
+	return last
+}
+
+func isDayPriceComplete(day, coveredThrough string) bool {
+	return coveredThrough != "" && day >= btcPriceCoverageStart && day <= coveredThrough
 }
 
 func blockHolderDayMetrics(hm *BtcHolderDay, reason string) {
@@ -318,11 +361,10 @@ func (m *btcHolderMaintenance) run(ctx context.Context) error {
 	}
 
 	var closePrices map[string]float64
-	var priceComplete bool
 	if m.prices != nil {
 		closePrices = m.prices.closes("", "")
-		priceComplete = m.prices.priceCoverage().Complete
 	}
+	coveredThrough := priceCoveredThrough(closePrices)
 
 	matrixByDay, err := m.store.loadBtcSpentMatrixByRange(ctx, "", "")
 	if err != nil {
@@ -335,7 +377,7 @@ func (m *btcHolderMaintenance) run(ctx context.Context) error {
 
 	var coinageUpdates []BtcCoinageDay
 	for d, spent := range matrixByDay {
-		coinageUpdates = append(coinageUpdates, coinageMetrics(d, spent, closePrices, priceComplete))
+		coinageUpdates = append(coinageUpdates, coinageMetrics(d, spent, closePrices, isDayPriceComplete(d, coveredThrough)))
 	}
 
 	// Check raw baseline_pending first: never roll forward over a pending baseline.
@@ -348,34 +390,140 @@ func (m *btcHolderMaintenance) run(ctx context.Context) error {
 		if err := json.Unmarshal([]byte(rawPend), &pend); err != nil || pend.Generation <= 0 || pend.AsOf == "" {
 			return fmt.Errorf("invalid baseline_pending payload: %q", rawPend)
 		}
-		return m.applyPendingBaseline(ctx, pend, matrixByDay, onchainByDay, closePrices, priceComplete, coinageUpdates)
+		return m.applyPendingBaseline(ctx, pend, matrixByDay, onchainByDay, closePrices, coveredThrough, coinageUpdates)
 	}
 
-	// If price history is now complete and any existing holder rows were previously
-	// blocked by price_history_incomplete, recompute from the active baseline generation.
-	if priceComplete {
-		var blockedCnt int64
-		_ = m.store.db.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM btc_holder_daily WHERE payload LIKE '%"price_history_incomplete"%'`,
-		).Scan(&blockedCnt)
-		if blockedCnt > 0 {
-			if pend, ok := m.activeBaselineRef(ctx); ok {
-				return m.applyPendingBaseline(ctx, pend, matrixByDay, onchainByDay, closePrices, priceComplete, coinageUpdates)
+	if err := m.rollForwardExisting(ctx, matrixByDay, onchainByDay, closePrices, coveredThrough, coinageUpdates); err != nil {
+		return err
+	}
+	if coveredThrough != "" {
+		return m.unblockPriceIncompleteHolders(ctx, matrixByDay, onchainByDay, closePrices, coveredThrough)
+	}
+	return nil
+}
+
+// unblockPriceIncompleteHolders recomputes any btc_holder_daily rows previously
+// blocked by price_history_incomplete by walking backward from the live UTXO
+// state at utxo_state_as_of over still-retained spent-by-age matrix days. It
+// never rewrites btc_utxo_state or halts the holder engine when older matrix
+// days past retention have already been pruned.
+func (m *btcHolderMaintenance) unblockPriceIncompleteHolders(
+	ctx context.Context,
+	matrixByDay map[string]map[string]int64,
+	onchainByDay map[string]BtcOnchainDay,
+	closePrices map[string]float64,
+	coveredThrough string,
+) error {
+	asOf, err := m.store.getBtcUTXOStateAsOf(ctx)
+	if err != nil || asOf == "" {
+		return err
+	}
+	asOfDate, err := civil.ParseDate(asOf)
+	if err != nil {
+		return nil
+	}
+
+	upperDay := asOf
+	if coveredThrough < upperDay {
+		upperDay = coveredThrough
+	}
+	reachableFloor := asOf
+	if len(matrixByDay) > 0 {
+		minMat := ""
+		for d := range matrixByDay {
+			if minMat == "" || d < minMat {
+				minMat = d
+			}
+		}
+		if md, err := civil.ParseDate(minMat); err == nil {
+			if f := md.AddDays(-1).String(); f < reachableFloor {
+				reachableFloor = f
 			}
 		}
 	}
+	if upperDay < reachableFloor {
+		return nil
+	}
 
-	return m.rollForwardExisting(ctx, matrixByDay, onchainByDay, closePrices, priceComplete, coinageUpdates)
-}
-
-func (m *btcHolderMaintenance) activeBaselineRef(ctx context.Context) (btcPendingBaseline, bool) {
-	if rawMeta, ok, _ := m.store.getBtcKV(ctx, "baseline_meta"); ok && rawMeta != "" {
-		var saved BtcBaselineStatus
-		if json.Unmarshal([]byte(rawMeta), &saved) == nil && saved.Generation > 0 && saved.AsOf != "" {
-			return btcPendingBaseline{Generation: saved.Generation, AsOf: saved.AsOf}, true
+	rows, err := m.store.db.QueryContext(ctx,
+		`SELECT payload FROM btc_holder_daily WHERE day >= ? AND day <= ? AND payload LIKE '%"price_history_incomplete"%'`,
+		reachableFloor, upperDay,
+	)
+	if err != nil {
+		return err
+	}
+	blockedSet := make(map[string]bool)
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			rows.Close()
+			return err
+		}
+		var hd BtcHolderDay
+		if json.Unmarshal([]byte(p), &hd) == nil &&
+			hd.Blocked == "price_history_incomplete" &&
+			isDayPriceComplete(hd.Date, coveredThrough) &&
+			closePrices[hd.Date] > 0 {
+			blockedSet[hd.Date] = true
 		}
 	}
-	return btcPendingBaseline{}, false
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if len(blockedSet) == 0 {
+		return nil
+	}
+
+	genStr, _, _ := m.store.getBtcKV(ctx, btcUTXOStateGenerationKey)
+	gen, _ := strconv.ParseInt(genStr, 10, 64)
+	if gen <= 0 {
+		if latestGen, ok, _ := m.store.latestBtcBaselineGeneration(ctx); ok {
+			gen = latestGen
+		} else {
+			gen = 1
+		}
+	}
+
+	uCur, err := m.store.loadBtcUTXOState(ctx)
+	if err != nil || len(uCur) == 0 {
+		return err
+	}
+
+	var holderUpdates []BtcHolderDay
+	for cur := asOfDate; len(blockedSet) > 0; cur = cur.AddDays(-1) {
+		dStr := cur.String()
+		if bErr := checkBucketSigns(uCur, dStr); bErr != nil {
+			break
+		}
+		oc, hasOC := onchainByDay[dStr]
+		if blockedSet[dStr] {
+			hm := holderMetrics(dStr, gen, uCur, closePrices, isDayPriceComplete(dStr, coveredThrough))
+			if hasOC {
+				if warn, iErr := checkIssuanceBound(oc.ClaimedIssuanceSats, oc.ScheduledIssuanceSats); iErr != nil {
+					blockHolderDayMetrics(&hm, iErr.Error())
+				} else if warn != "" {
+					hm.Warnings = append(hm.Warnings, warn)
+				}
+			}
+			holderUpdates = append(holderUpdates, hm)
+			delete(blockedSet, dStr)
+		}
+		spent, hasMat := matrixByDay[dStr]
+		if len(blockedSet) == 0 || !hasOC || !hasMat {
+			break
+		}
+		prevState := uCur.clone()
+		applyDay(prevState, dStr, spent, oc.CreatedSats, false)
+		if checkSupplyIdentity(prevState.totalSats(), uCur.totalSats(), oc.CoinbaseSats, oc.FeesSats, oc.OpretValueSats) != nil {
+			break
+		}
+		uCur = prevState
+	}
+
+	if len(holderUpdates) == 0 {
+		return nil
+	}
+	return m.store.applyHolderMaintenanceTx(ctx, nil, "", gen, false, holderUpdates, nil, m.now().UTC())
 }
 
 func (m *btcHolderMaintenance) minSyncedCursor(ctx context.Context) string {
@@ -405,7 +553,7 @@ func (m *btcHolderMaintenance) applyPendingBaseline(
 	matrixByDay map[string]map[string]int64,
 	onchainByDay map[string]BtcOnchainDay,
 	closePrices map[string]float64,
-	priceComplete bool,
+	coveredThrough string,
 	coinageUpdates []BtcCoinageDay,
 ) error {
 	baseMap, err := m.store.loadBtcBaselineGeneration(ctx, pend.Generation)
@@ -422,6 +570,20 @@ func (m *btcHolderMaintenance) applyPendingBaseline(
 	initDate := t0Date.AddDays(-1)
 	initDayStr := initDate.String()
 
+	targetCursor := m.minSyncedCursor(ctx)
+	_, hasInitOC := onchainByDay[initDayStr]
+	_, hasInitMat := matrixByDay[initDayStr]
+	if !hasInitOC || (!hasInitMat && targetCursor < initDayStr) {
+		// Provisional snapshot at T0-1 so the UI has immediate data while keeping
+		// baseline_pending set until both rollup and coin-age cover T0-1.
+		uProv := initFromBaseline(baseMap, pend.AsOf, nil)
+		hm := holderMetrics(initDayStr, pend.Generation, uProv, closePrices, isDayPriceComplete(initDayStr, coveredThrough))
+		if bErr := checkBucketSigns(uProv, initDayStr); bErr != nil {
+			blockHolderDayMetrics(&hm, bErr.Error())
+		}
+		return m.store.applyHolderMaintenanceTx(ctx, &uProv, initDayStr, pend.Generation, false, []BtcHolderDay{hm}, coinageUpdates, m.now().UTC())
+	}
+
 	uInit := initFromBaseline(baseMap, pend.AsOf, matrixByDay[initDayStr])
 
 	holderByDay := make(map[string]BtcHolderDay)
@@ -430,7 +592,7 @@ func (m *btcHolderMaintenance) applyPendingBaseline(
 	uBack := uInit.clone()
 	for cur := initDate; ; cur = cur.AddDays(-1) {
 		dStr := cur.String()
-		hm := holderMetrics(dStr, pend.Generation, uBack, closePrices, priceComplete)
+		hm := holderMetrics(dStr, pend.Generation, uBack, closePrices, isDayPriceComplete(dStr, coveredThrough))
 		if bErr := checkBucketSigns(uBack, dStr); bErr != nil {
 			blockHolderDayMetrics(&hm, bErr.Error())
 		}
@@ -465,7 +627,6 @@ func (m *btcHolderMaintenance) applyPendingBaseline(
 	uFwd := uInit.clone()
 	finalAsOf := initDayStr
 	var haltedDay, haltReason, haltDetail string
-	targetCursor := m.minSyncedCursor(ctx)
 	if targetCursor >= pend.AsOf {
 		if targetDate, err := civil.ParseDate(targetCursor); err == nil {
 			for cur := t0Date; !cur.After(targetDate); cur = cur.AddDays(1) {
@@ -480,7 +641,7 @@ func (m *btcHolderMaintenance) applyPendingBaseline(
 				applyDay(uFwd, dStr, spent, oc.CreatedSats, true)
 				nextSum := uFwd.totalSats()
 
-				hm := holderMetrics(dStr, pend.Generation, uFwd, closePrices, priceComplete)
+				hm := holderMetrics(dStr, pend.Generation, uFwd, closePrices, isDayPriceComplete(dStr, coveredThrough))
 				sErr := checkSupplyIdentity(prevSum, nextSum, oc.CoinbaseSats, oc.FeesSats, oc.OpretValueSats)
 				if sErr != nil {
 					blockHolderDayMetrics(&hm, sErr.Error())
@@ -525,7 +686,7 @@ func (m *btcHolderMaintenance) rollForwardExisting(
 	matrixByDay map[string]map[string]int64,
 	onchainByDay map[string]BtcOnchainDay,
 	closePrices map[string]float64,
-	priceComplete bool,
+	coveredThrough string,
 	coinageUpdates []BtcCoinageDay,
 ) error {
 	asOf, err := m.store.getBtcUTXOStateAsOf(ctx)
@@ -579,7 +740,7 @@ func (m *btcHolderMaintenance) rollForwardExisting(
 		applyDay(u, dStr, spent, oc.CreatedSats, true)
 		nextSum := u.totalSats()
 
-		hm := holderMetrics(dStr, gen, u, closePrices, priceComplete)
+		hm := holderMetrics(dStr, gen, u, closePrices, isDayPriceComplete(dStr, coveredThrough))
 		sErr := checkSupplyIdentity(prevSum, nextSum, oc.CoinbaseSats, oc.FeesSats, oc.OpretValueSats)
 		if sErr != nil {
 			blockHolderDayMetrics(&hm, sErr.Error())

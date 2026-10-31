@@ -12,19 +12,21 @@ import (
 )
 
 const (
-	btcMarketsVenueKeyFmt  = "opendata:bitcoin:markets:venue:%s"
-	btcMarketsCGBitcoinKey = "opendata:bitcoin:markets:cg_bitcoin"
-	btcMarketsCGSpotKey    = "opendata:bitcoin:markets:cg_spot"
-	btcMarketsCGDerivKey   = "opendata:bitcoin:markets:cg_deriv"
-	btcMarketsCFTCKey      = "opendata:bitcoin:markets:cftc"
-	btcMarketsOKXRubikKey  = "opendata:bitcoin:markets:okx_rubik"
+	btcMarketsVenueKeyFmt    = "opendata:bitcoin:markets:venue:%s"
+	btcMarketsCGBitcoinKey   = "opendata:bitcoin:markets:cg_bitcoin"
+	btcMarketsCGSpotKey      = "opendata:bitcoin:markets:cg_spot"
+	btcMarketsCGDerivKey     = "opendata:bitcoin:markets:cg_deriv"
+	btcMarketsCFTCKey        = "opendata:bitcoin:markets:cftc"
+	btcMarketsOKXRubikKey    = "opendata:bitcoin:markets:okx_rubik"
+	btcMarketsDeribitDVOLKey = "opendata:bitcoin:markets:deribit_dvol"
 
-	btcMarketsVenueTTL     = 60 * time.Second
-	btcMarketsCGBitcoinTTL = 5 * time.Minute
-	btcMarketsCGSpotTTL    = 10 * time.Minute
-	btcMarketsCGDerivTTL   = 30 * time.Minute
-	btcMarketsOKXRubikTTL  = 1 * time.Hour
-	btcMarketsCFTCTTL      = 12 * time.Hour
+	btcMarketsVenueTTL       = 60 * time.Second
+	btcMarketsCGBitcoinTTL   = 5 * time.Minute
+	btcMarketsCGSpotTTL      = 10 * time.Minute
+	btcMarketsCGDerivTTL     = 30 * time.Minute
+	btcMarketsOKXRubikTTL    = 1 * time.Hour
+	btcMarketsDeribitDVOLTTL = 1 * time.Hour
+	btcMarketsCFTCTTL        = 12 * time.Hour
 )
 
 var btcMarketsDefaultCaveats = []string{
@@ -160,17 +162,18 @@ func (h *APIHandler) buildMarketsData(ctx context.Context) BtcMarketsData {
 	}
 
 	var (
-		wg          sync.WaitGroup
-		cgBtcVal    any
-		cgBtcSrc    SourceStatus
-		cgSpotVal   any
-		cgSpotSrc   SourceStatus
-		cgDerivVal  any
-		cgDerivSrc  SourceStatus
-		cftcVal     any
-		cftcSrc     SourceStatus
-		okxRubikVal any
-		okxRubikSrc SourceStatus
+		wg             sync.WaitGroup
+		cgBtcVal       any
+		cgBtcSrc       SourceStatus
+		cgSpotVal      any
+		cgSpotSrc      SourceStatus
+		cgDerivVal     any
+		cgDerivSrc     SourceStatus
+		cftcVal        any
+		cftcSrc        SourceStatus
+		okxRubikVal    any
+		okxRubikSrc    SourceStatus
+		deribitDVOLVal any
 	)
 
 	type directResult struct {
@@ -240,6 +243,18 @@ func (h *APIHandler) buildMarketsData(ctx context.Context) BtcMarketsData {
 			return pts, ""
 		})
 	})
+	runBounded(&wg, func() {
+		deribitDVOLVal, _ = h.btcCachedSource(ctx, btcMarketsDeribitDVOLKey, btcMarketsDeribitDVOLTTL, "deribit", func(c context.Context) (any, string) {
+			pts, code := fetchDeribitDVOL(c, btcDeribitBaseURL, now, 365)
+			if code != "" {
+				return nil, code
+			}
+			if len(pts) == 0 {
+				return nil, "empty_response"
+			}
+			return pts, ""
+		})
+	})
 	wg.Wait()
 
 	cgBtc, _ := cgBtcVal.(*BtcCGBitcoin)
@@ -247,6 +262,7 @@ func (h *APIHandler) buildMarketsData(ctx context.Context) BtcMarketsData {
 	cgDeriv, _ := cgDerivVal.(*BtcCGDerivativesSummary)
 	cot, _ := cftcVal.(*BtcCFTCSummary)
 	okxRubik, _ := okxRubikVal.([]BtcOKXRubikPoint)
+	cachedDVOL, _ := deribitDVOLVal.([]BtcDVOLPoint)
 
 	// Determine reference BTC spot price and market cap.
 	var refPriceUSD float64
@@ -328,10 +344,13 @@ func (h *APIHandler) buildMarketsData(ctx context.Context) BtcMarketsData {
 			if cot != nil && cot.AsOfReportDate != "" {
 				cmeSrc.AsOf = cot.AsOfReportDate
 			}
-			if cot != nil && cot.TotalCMERegBTC > 0 {
-				row.OIBTC = btcFloatPtr(cot.TotalCMERegBTC)
-				if refPriceUSD > 0 {
-					row.OIUSD = btcFloatPtr(cot.TotalCMERegBTC * refPriceUSD)
+			if cot != nil {
+				cmeVenueBTC := cot.CMEOIBTC + cot.CMEMicroOIBTC
+				if cmeVenueBTC > 0 {
+					row.OIBTC = btcFloatPtr(cmeVenueBTC)
+					if refPriceUSD > 0 {
+						row.OIUSD = btcFloatPtr(cmeVenueBTC * refPriceUSD)
+					}
 				}
 			}
 			row.Sources = []SourceStatus{cmeSrc}
@@ -563,6 +582,9 @@ func (h *APIHandler) buildMarketsData(ctx context.Context) BtcMarketsData {
 	})
 
 	// DVOL latest, RV30 and VRP.
+	if len(dvolSeries) == 0 && len(cachedDVOL) > 0 {
+		dvolSeries = cachedDVOL
+	}
 	var dvolLatest, rv30Ptr, vrpPtr *float64
 	if len(dvolSeries) > 0 {
 		dvolLatest = btcFloatPtr(dvolSeries[len(dvolSeries)-1].Close)

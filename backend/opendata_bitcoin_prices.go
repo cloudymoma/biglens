@@ -156,10 +156,13 @@ func (s *btcPriceSyncer) syncOnce(ctx context.Context) {
 	s.ensureLoaded(ctx)
 
 	s.mu.RLock()
-	var earliest, latestExchange string
+	var earliest, latestCoinbase, latestExchange string
 	for d, r := range s.byDay {
 		if earliest == "" || d < earliest {
 			earliest = d
+		}
+		if r.Source == "coinbase" && d > latestCoinbase {
+			latestCoinbase = d
 		}
 		if (r.Source == "coinbase" || r.Source == "kraken") && d > latestExchange {
 			latestExchange = d
@@ -181,17 +184,33 @@ func (s *btcPriceSyncer) syncOnce(ctx context.Context) {
 		}
 	}
 
-	// 2. Daily candles from 2015-07-20 (or latestExchange + 1 day) through yesterday UTC.
+	// 2. Daily candles from 2015-07-20 through yesterday UTC.
+	// When Coinbase is enabled, start from latestCoinbase + 1 and advance only
+	// across contiguous stored days so a trailing-720d Kraken fallback cannot
+	// strand an older gap before Kraken's window.
 	yesterday := civil.DateOf(s.now().UTC()).AddDays(-1)
 	startDate, _ := civil.ParseDate(btcPriceCoinbaseStart)
-	if latestExchange != "" {
-		if d, err := civil.ParseDate(latestExchange); err == nil {
+	baseCursor := latestExchange
+	if s.settings.Providers["coinbase"] {
+		baseCursor = latestCoinbase
+	}
+	if baseCursor != "" {
+		if d, err := civil.ParseDate(baseCursor); err == nil {
 			next := d.AddDays(1)
 			if next.After(startDate) {
 				startDate = next
 			}
 		}
 	}
+	s.mu.RLock()
+	for !startDate.After(yesterday) {
+		if r, ok := s.byDay[startDate.String()]; ok && r.Close > 0 {
+			startDate = startDate.AddDays(1)
+		} else {
+			break
+		}
+	}
+	s.mu.RUnlock()
 	if startDate.After(yesterday) {
 		return
 	}
@@ -243,7 +262,8 @@ func (s *btcPriceSyncer) fetchBlockchainBootstrap(ctx context.Context) []btcPric
 func (s *btcPriceSyncer) fetchCoinMetricsBootstrap(ctx context.Context) []btcPriceDay {
 	nextURL := s.coinmetricsURL
 	var out []btcPriceDay
-	for page := 0; page < 4 && nextURL != ""; page++ {
+	const maxPages = 20
+	for page := 0; page < maxPages && nextURL != ""; page++ {
 		var payload struct {
 			Data []struct {
 				Time     string `json:"time"`
@@ -252,8 +272,8 @@ func (s *btcPriceSyncer) fetchCoinMetricsBootstrap(ctx context.Context) []btcPri
 			NextPageURL string `json:"next_page_url"`
 		}
 		if code := btcGetJSON(ctx, nextURL, btcDefaultMaxBody, &payload); code != "" {
-			slog.Warn("btc prices: coinmetrics bootstrap failed", "code", code)
-			break
+			slog.Warn("btc prices: coinmetrics bootstrap failed", "code", code, "page", page+1)
+			return nil
 		}
 		for _, r := range payload.Data {
 			if len(r.Time) < 10 || r.PriceUSD == "" {
@@ -274,6 +294,10 @@ func (s *btcPriceSyncer) fetchCoinMetricsBootstrap(ctx context.Context) []btcPri
 			})
 		}
 		nextURL = payload.NextPageURL
+	}
+	if nextURL != "" {
+		slog.Warn("btc prices: coinmetrics bootstrap exceeded page cap", "max_pages", maxPages)
+		return nil
 	}
 	return out
 }

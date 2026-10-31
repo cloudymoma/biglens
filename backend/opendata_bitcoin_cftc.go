@@ -4,21 +4,28 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"regexp"
 	"sort"
 	"strings"
 )
 
 var btcCFTCTFFBaseURL = "https://publicreporting.cftc.gov/resource/gpe5-46if.json"
 
+var cftcUnitsBTCRe = regexp.MustCompile(`(?:^|[^0-9./])([0-9]+(?:\.[0-9]+)?)\s+BITCOINS?\b`)
+
 // btcCFTCContractSizes maps CFTC market names and contract codes to BTC per contract (§6.2, Task 4.2).
 var btcCFTCContractSizes = map[string]float64{
-	"BITCOIN - CHICAGO MERCANTILE EXCHANGE":       5.0,
-	"MICRO BITCOIN - CHICAGO MERCANTILE EXCHANGE": 0.1,
-	"BITCOIN NANO - COINBASE DERIVATIVES, LLC":    0.01,
-	"BITCOIN - COINBASE DERIVATIVES, LLC":         0.01,
-	"133741":                                      5.0,
-	"133742":                                      0.1,
-	"133001":                                      0.01,
+	"BITCOIN - CHICAGO MERCANTILE EXCHANGE":               5.0,
+	"MICRO BITCOIN - CHICAGO MERCANTILE EXCHANGE":         0.1,
+	"NANO BITCOIN - COINBASE DERIVATIVES, LLC":            0.01,
+	"NANO BITCOIN PERP STYLE - COINBASE DERIVATIVES, LLC": 0.01,
+	"BITCOIN NANO - COINBASE DERIVATIVES, LLC":            0.01,
+	"BITCOIN - COINBASE DERIVATIVES, LLC":                 1.0,
+	"133741":                                              5.0,
+	"133742":                                              0.1,
+	"133001":                                              0.01,
+	"133LM1":                                              0.01,
+	"133LM4":                                              0.01,
 }
 
 // BtcCFTCWeekPoint represents one weekly CFTC Traders in Financial Futures report row converted to BTC.
@@ -63,24 +70,31 @@ type cftcRawTFFRow struct {
 }
 
 func resolveCFTCContractSizeBTC(name, code, units string) (float64, bool) {
-	upperName := strings.ToUpper(strings.TrimSpace(name))
-	if sz, ok := btcCFTCContractSizes[upperName]; ok {
-		return sz, true
+	normName := strings.Join(strings.Fields(strings.ToUpper(name)), " ")
+	if strings.Contains(normName, "BITCOIN CASH") ||
+		strings.Contains(normName, "BITCOIN SV") ||
+		strings.Contains(normName, "BITCOIN GOLD") ||
+		strings.Contains(normName, "BITCOIN DIAMOND") {
+		return 0, false
+	}
+	upperUnits := strings.ToUpper(units)
+	if m := cftcUnitsBTCRe.FindStringSubmatch(upperUnits); len(m) == 2 {
+		if sz, ok := parseBtcFloat(m[1]); ok && sz > 0 {
+			return sz, true
+		}
 	}
 	trimmedCode := strings.TrimSpace(code)
 	if sz, ok := btcCFTCContractSizes[trimmedCode]; ok {
 		return sz, true
 	}
-	upperUnits := strings.ToUpper(units)
+	if sz, ok := btcCFTCContractSizes[normName]; ok {
+		return sz, true
+	}
 	switch {
-	case strings.Contains(upperUnits, "5 BITCOIN"):
-		return 5.0, true
-	case strings.Contains(upperUnits, "0.10 BITCOIN"), strings.Contains(upperUnits, "0.1 BITCOIN"):
+	case strings.Contains(normName, "NANO BITCOIN"), strings.Contains(normName, "BITCOIN NANO"):
+		return 0.01, true
+	case strings.Contains(normName, "MICRO BITCOIN"):
 		return 0.1, true
-	case strings.Contains(upperUnits, "0.01 BITCOIN"):
-		return 0.01, true
-	case strings.Contains(upperName, "NANO BITCOIN"), strings.Contains(upperName, "BITCOIN NANO"), strings.Contains(upperName, "COINBASE"):
-		return 0.01, true
 	default:
 		return 0, false
 	}
@@ -94,7 +108,7 @@ func fetchCFTCBitcoin(ctx context.Context, weeks int) (*BtcCFTCSummary, string) 
 	u := btcCFTCTFFBaseURL
 	if !strings.Contains(u, "?") && strings.HasPrefix(u, "https://publicreporting.cftc.gov") {
 		q := url.Values{}
-		q.Set("$where", "upper(market_and_exchange_names) like '%BITCOIN%'")
+		q.Set("$where", "upper(market_and_exchange_names) like '%BITCOIN%' AND upper(market_and_exchange_names) not like '%BITCOIN CASH%'")
 		q.Set("$order", "report_date_as_yyyy_mm_dd DESC")
 		q.Set("$limit", fmt.Sprintf("%d", weeks*12))
 		u = u + "?" + q.Encode()
@@ -103,6 +117,9 @@ func fetchCFTCBitcoin(ctx context.Context, weeks int) (*BtcCFTCSummary, string) 
 	var rows []cftcRawTFFRow
 	if code := btcGetJSON(ctx, u, btcDefaultMaxBody, &rows); code != "" {
 		return nil, code
+	}
+	if len(rows) == 0 {
+		return nil, "empty_response"
 	}
 
 	latestByMarket := make(map[string]BtcCFTCWeekPoint)
@@ -150,13 +167,17 @@ func fetchCFTCBitcoin(ctx context.Context, weeks int) (*BtcCFTCSummary, string) 
 		if date > asOfDate {
 			asOfDate = date
 		}
-		key := strings.ToUpper(pt.MarketName)
+		upperMarket := strings.ToUpper(pt.MarketName)
+		key := pt.ContractCode + "|" + upperMarket
 		if prev, exists := latestByMarket[key]; !exists || pt.ReportDate > prev.ReportDate {
 			latestByMarket[key] = pt
 		}
-		if sz == 5.0 {
+		if pt.ContractCode == "133741" || (upperMarket == "BITCOIN - CHICAGO MERCANTILE EXCHANGE" && sz == 5.0) {
 			cmeHistory = append(cmeHistory, pt)
 		}
+	}
+	if asOfDate == "" {
+		return nil, "empty_response"
 	}
 
 	sort.Slice(cmeHistory, func(i, j int) bool {
@@ -167,16 +188,21 @@ func fetchCFTCBitcoin(ctx context.Context, weeks int) (*BtcCFTCSummary, string) 
 	}
 
 	var latestList []BtcCFTCWeekPoint
-	var cmeOIBTC, microOIBTC, cdeOIBTC float64
+	var cmeOIBTC, microOIBTC, cdeOIBTC, totalRegBTC float64
 	for _, pt := range latestByMarket {
+		if pt.ReportDate != asOfDate {
+			continue
+		}
 		latestList = append(latestList, pt)
-		switch pt.ContractSizeBTC {
-		case 5.0:
-			cmeOIBTC += pt.OpenInterestBTC
-		case 0.1:
-			microOIBTC += pt.OpenInterestBTC
-		case 0.01:
+		totalRegBTC += pt.OpenInterestBTC
+		upperMarket := strings.ToUpper(pt.MarketName)
+		switch {
+		case strings.Contains(upperMarket, "COINBASE") || strings.Contains(upperMarket, "LMX LABS") || pt.ContractCode == "133001" || pt.ContractCode == "133LM1" || pt.ContractCode == "133LM4":
 			cdeOIBTC += pt.OpenInterestBTC
+		case pt.ContractCode == "133741" || (strings.Contains(upperMarket, "CHICAGO MERCANTILE EXCHANGE") && pt.ContractSizeBTC == 5.0):
+			cmeOIBTC += pt.OpenInterestBTC
+		case strings.Contains(upperMarket, "CHICAGO MERCANTILE EXCHANGE") || pt.ContractCode == "133742":
+			microOIBTC += pt.OpenInterestBTC
 		}
 	}
 	sort.Slice(latestList, func(i, j int) bool {
@@ -188,7 +214,7 @@ func fetchCFTCBitcoin(ctx context.Context, weeks int) (*BtcCFTCSummary, string) 
 		CMEOIBTC:       cmeOIBTC,
 		CMEMicroOIBTC:  microOIBTC,
 		CDEOIBTC:       cdeOIBTC,
-		TotalCMERegBTC: cmeOIBTC + microOIBTC,
+		TotalCMERegBTC: totalRegBTC,
 		CMEHistory:     cmeHistory,
 		LatestByMarket: latestList,
 	}, ""

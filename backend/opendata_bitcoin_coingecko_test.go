@@ -305,4 +305,128 @@ func TestCFTCBitcoin(t *testing.T) {
 	if math.Abs(got.CDEOIBTC-1737.43) > 1e-6 {
 		t.Errorf("CDEOIBTC = %f, want 1737.43", got.CDEOIBTC)
 	}
+	if math.Abs(got.TotalCMERegBTC-(103760.0+2840.0+1737.43)) > 1e-6 {
+		t.Errorf("TotalCMERegBTC = %f, want %f (CME + Micro + CDE)", got.TotalCMERegBTC, 103760.0+2840.0+1737.43)
+	}
+}
+
+func TestCFTCBitcoinBugFixes(t *testing.T) {
+	// 1. Substring "5 BITCOIN" must not match "0.5 BITCOIN" or "0.05 BITCOIN",
+	// and Coinbase institutional 1 BTC contract ("(1 BITCOIN)") must resolve to 1.0 BTC.
+	if sz, ok := resolveCFTCContractSizeBTC("HALF BITCOIN - SOME EXCHANGE", "999001", "(CONTRACTS OF 0.5 BITCOIN)"); !ok || math.Abs(sz-0.5) > 1e-9 {
+		t.Errorf("resolveCFTCContractSizeBTC(0.5 BITCOIN) = (%v, %v), want (0.5, true)", sz, ok)
+	}
+	if sz, ok := resolveCFTCContractSizeBTC("TWENTIETH BITCOIN - SOME EXCHANGE", "999002", "(0.05 BITCOIN)"); !ok || math.Abs(sz-0.05) > 1e-9 {
+		t.Errorf("resolveCFTCContractSizeBTC(0.05 BITCOIN) = (%v, %v), want (0.05, true)", sz, ok)
+	}
+	if sz, ok := resolveCFTCContractSizeBTC("BITCOIN - COINBASE DERIVATIVES, LLC", "133002", "(1 BITCOIN)"); !ok || math.Abs(sz-1.0) > 1e-9 {
+		t.Errorf("resolveCFTCContractSizeBTC(Coinbase BTI 1 BTC) = (%v, %v), want (1.0, true)", sz, ok)
+	}
+
+	// 2. Stale discontinued contracts from older report dates must not pollute current OI totals,
+	// and 1 BTC Coinbase contracts must be included in CDEOIBTC and TotalCMERegBTC.
+	payload := `[
+		{"market_and_exchange_names":"BITCOIN - CHICAGO MERCANTILE EXCHANGE","cftc_contract_market_code":"133741","report_date_as_yyyy_mm_dd":"2026-10-13T00:00:00.000","contract_units":"(CONTRACTS OF 5 BITCOIN)","open_interest_all":"100"},
+		{"market_and_exchange_names":"BITCOIN - COINBASE DERIVATIVES, LLC","cftc_contract_market_code":"133002","report_date_as_yyyy_mm_dd":"2026-10-13T00:00:00.000","contract_units":"(1 BITCOIN)","open_interest_all":"50"},
+		{"market_and_exchange_names":"BITCOIN NANO - COINBASE DERIVATIVES, LLC","cftc_contract_market_code":"133001","report_date_as_yyyy_mm_dd":"2026-10-13T00:00:00.000","contract_units":"(0.01 BITCOIN)","open_interest_all":"1000"},
+		{"market_and_exchange_names":"OLD DELISTED BITCOIN - CHICAGO MERCANTILE EXCHANGE","cftc_contract_market_code":"999741","report_date_as_yyyy_mm_dd":"2025-12-01T00:00:00.000","contract_units":"(CONTRACTS OF 5 BITCOIN)","open_interest_all":"9000"}
+	]`
+	returnEmpty := true
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if returnEmpty {
+			_, _ = w.Write([]byte(`[]`))
+			return
+		}
+		_, _ = w.Write([]byte(payload))
+	}))
+	defer srv.Close()
+
+	prev := btcCFTCTFFBaseURL
+	btcCFTCTFFBaseURL = srv.URL
+	defer func() { btcCFTCTFFBaseURL = prev }()
+
+	// 3. Empty [] Socrata response must return a non-empty error code so btcCachedSource
+	// does NOT cache an empty summary for 12 hours.
+	h := newTestBitcoinHandler(t)
+	val1, src1 := h.btcCachedSource(context.Background(), btcMarketsCFTCKey, btcMarketsCFTCTTL, "cftc", func(c context.Context) (any, string) {
+		return fetchCFTCBitcoin(c, 52)
+	})
+	if val1 != nil || src1.Status == "ok" {
+		t.Fatalf("empty CFTC response returned (%+v, %+v), want nil and error status (not cached 12h)", val1, src1)
+	}
+
+	// Next call after Socrata recovers must immediately fetch fresh data (not stuck on cached empty).
+	returnEmpty = false
+	val2, src2 := h.btcCachedSource(context.Background(), btcMarketsCFTCKey, btcMarketsCFTCTTL, "cftc", func(c context.Context) (any, string) {
+		return fetchCFTCBitcoin(c, 52)
+	})
+	if src2.Status != "ok" || val2 == nil {
+		t.Fatalf("recovered CFTC response returned (%+v, %+v), want ok", val2, src2)
+	}
+	got := val2.(*BtcCFTCSummary)
+	// Current 2026-10-13 contracts only: CME 100*5=500 BTC, CDE 50*1 + 1000*0.01 = 60 BTC.
+	// Stale 2025-12-01 delisted contract (9000*5=45,000 BTC) must be excluded.
+	if math.Abs(got.CMEOIBTC-500.0) > 1e-6 {
+		t.Errorf("CMEOIBTC = %f, want 500.0 (excluding stale 2025-12-01 contract)", got.CMEOIBTC)
+	}
+	if math.Abs(got.CDEOIBTC-60.0) > 1e-6 {
+		t.Errorf("CDEOIBTC = %f, want 60.0 (50*1 + 1000*0.01)", got.CDEOIBTC)
+	}
+	if math.Abs(got.TotalCMERegBTC-560.0) > 1e-6 {
+		t.Errorf("TotalCMERegBTC = %f, want 560.0 (500 + 60)", got.TotalCMERegBTC)
+	}
+	if len(got.LatestByMarket) != 3 {
+		t.Errorf("len(LatestByMarket) = %d, want 3 active contracts on %s", len(got.LatestByMarket), got.AsOfReportDate)
+	}
+}
+
+func TestCFTCBitcoinLive2026Payload(t *testing.T) {
+	// CFTC's live TFF dataset mislabels Coinbase's Bitcoin Cash perp ("133LM5") with contract_units "(1 Bitcoin)".
+	// It must be rejected as non-BTC, and fractional units like "(1/100 Bitcoin)" must never match "100".
+	if sz, ok := resolveCFTCContractSizeBTC("BITCOIN CASH PERP STYLE - COINBASE DERIVATIVES, LLC", "133LM5", "(1 Bitcoin)"); ok || sz != 0 {
+		t.Errorf("resolveCFTCContractSizeBTC(BITCOIN CASH) = (%v, %v), want (0, false)", sz, ok)
+	}
+	if sz, ok := resolveCFTCContractSizeBTC("Nano Bitcoin  - COINBASE DERIVATIVES, LLC", "133LM1", "(1/100 Bitcoin)"); !ok || math.Abs(sz-0.01) > 1e-9 {
+		t.Errorf("resolveCFTCContractSizeBTC(1/100 Bitcoin without X) = (%v, %v), want (0.01, true)", sz, ok)
+	}
+
+	// Exact 2026-10-27 Socrata rows returned by upper(market_and_exchange_names) like '%BITCOIN%'.
+	livePayload := `[
+		{"market_and_exchange_names":"BITCOIN - CHICAGO MERCANTILE EXCHANGE","cftc_contract_market_code":"133741","report_date_as_yyyy_mm_dd":"2026-10-27T00:00:00.000","contract_units":"(5 Bitcoins)","open_interest_all":"20791"},
+		{"market_and_exchange_names":"MICRO BITCOIN - CHICAGO MERCANTILE EXCHANGE","cftc_contract_market_code":"133742","report_date_as_yyyy_mm_dd":"2026-10-27T00:00:00.000","contract_units":"(Bitcoin X $0.10)","open_interest_all":"30883"},
+		{"market_and_exchange_names":"Nano Bitcoin  - COINBASE DERIVATIVES, LLC","cftc_contract_market_code":"133LM1","report_date_as_yyyy_mm_dd":"2026-10-27T00:00:00.000","contract_units":"(1/100 X Bitcoin = $300)","open_interest_all":"121384"},
+		{"market_and_exchange_names":"NANO BITCOIN PERP STYLE - COINBASE DERIVATIVES, LLC","cftc_contract_market_code":"133LM4","report_date_as_yyyy_mm_dd":"2026-10-27T00:00:00.000","contract_units":"(1/100 X Bitcoin)","open_interest_all":"186914"},
+		{"market_and_exchange_names":"BITCOIN CASH PERP STYLE - COINBASE DERIVATIVES, LLC","cftc_contract_market_code":"133LM5","report_date_as_yyyy_mm_dd":"2026-10-27T00:00:00.000","contract_units":"(1 Bitcoin)","open_interest_all":"2522"}
+	]`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(livePayload))
+	}))
+	defer srv.Close()
+
+	prev := btcCFTCTFFBaseURL
+	btcCFTCTFFBaseURL = srv.URL
+	defer func() { btcCFTCTFFBaseURL = prev }()
+
+	got, code := fetchCFTCBitcoin(context.Background(), 52)
+	if code != "" {
+		t.Fatalf("fetchCFTCBitcoin code = %q, want empty", code)
+	}
+	const wantCME = 20791 * 5.0
+	const wantMicro = 30883 * 0.1
+	const wantCDE = 121384*0.01 + 186914*0.01 // 3082.98 BTC (excluding 2522 BCH contracts)
+	if math.Abs(got.CMEOIBTC-wantCME) > 1e-6 {
+		t.Errorf("CMEOIBTC = %f, want %f", got.CMEOIBTC, wantCME)
+	}
+	if math.Abs(got.CMEMicroOIBTC-wantMicro) > 1e-6 {
+		t.Errorf("CMEMicroOIBTC = %f, want %f", got.CMEMicroOIBTC, wantMicro)
+	}
+	if math.Abs(got.CDEOIBTC-wantCDE) > 1e-6 {
+		t.Errorf("CDEOIBTC = %f, want %f (Bitcoin Cash 133LM5 must be excluded)", got.CDEOIBTC, wantCDE)
+	}
+	if math.Abs(got.TotalCMERegBTC-(wantCME+wantMicro+wantCDE)) > 1e-6 {
+		t.Errorf("TotalCMERegBTC = %f, want %f", got.TotalCMERegBTC, wantCME+wantMicro+wantCDE)
+	}
+	if len(got.LatestByMarket) != 4 {
+		t.Errorf("len(LatestByMarket) = %d, want 4 BTC contracts (got %+v)", len(got.LatestByMarket), got.LatestByMarket)
+	}
 }

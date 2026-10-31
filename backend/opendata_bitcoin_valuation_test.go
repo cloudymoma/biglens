@@ -238,7 +238,7 @@ func TestBitcoinValuationRealizedPriceGate(t *testing.T) {
 	store := openTestRiskStore(t)
 	h.btc.store = store
 	h.btc.read = newBtcReadStore(store, h.btc.settings, nil)
-	h.btc.prices = newBtcPriceSyncer(store, h.btc.settings, func() time.Time {
+	h.btc.prices = newBtcPriceSyncer(nil, h.btc.settings, func() time.Time {
 		return time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
 	})
 
@@ -307,6 +307,69 @@ func TestBitcoinValuationRealizedPriceGate(t *testing.T) {
 	}
 	if unlocked.Latest.MVRVDeltaPct == nil || math.Abs(*unlocked.Latest.MVRVDeltaPct-5.0) > 1e-6 {
 		t.Errorf("MVRVDeltaPct = %v, want +5.0%%", unlocked.Latest.MVRVDeltaPct)
+	}
+}
+
+func TestBitcoinValuationRealizedBlockedClearsAfterRecovery(t *testing.T) {
+	fngRaw, err := os.ReadFile("testdata/bitcoin/alternative_fng.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stubValuationUpstreams(t, []byte(`{"data":[]}`), fngRaw)
+
+	h := newTestBitcoinHandler(t)
+	store := openTestRiskStore(t)
+	h.btc.store = store
+	h.btc.read = newBtcReadStore(store, h.btc.settings, nil)
+	h.btc.prices = newBtcPriceSyncer(nil, h.btc.settings, func() time.Time {
+		return time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	})
+
+	rp := 41_500.0
+	sth := 68_500.0
+	lth := 29_500.0
+	mvrv := 2.05
+	if err := store.applyHolderMaintenanceTx(context.Background(), nil, "", 1, false, []BtcHolderDay{
+		{
+			Date:               "2026-10-14",
+			BaselineGeneration: 1,
+			SupplySats:         19_700_000 * 100_000_000,
+			SupplyBTC:          19_700_000,
+			Blocked:            "price_history_incomplete",
+		},
+		{
+			Date:               "2026-10-15",
+			BaselineGeneration: 1,
+			SupplySats:         19_700_000 * 100_000_000,
+			SupplyBTC:          19_700_000,
+			RealizedPriceUSD:   &rp,
+			STHRealizedPrice:   &sth,
+			LTHRealizedPrice:   &lth,
+			MVRV:               &mvrv,
+		},
+	}, nil, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+
+	seedTestPrices(t, h, "2010-08-18", "2026-10-15", func(_ int, _ civil.Date) float64 {
+		return 82_000.0
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/opendata/bitcoin/valuation?range=1y", nil)
+	rec := httptest.NewRecorder()
+	h.BitcoinValuation(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var out BtcValuationData
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Latest.RealizedPriceBlocked != "" {
+		t.Errorf("Latest.RealizedPriceBlocked = %q, want empty once newer holder day recovered", out.Latest.RealizedPriceBlocked)
+	}
+	if out.Latest.RealizedPriceUSD == nil || *out.Latest.RealizedPriceUSD != rp {
+		t.Errorf("Latest.RealizedPriceUSD = %v, want %v", out.Latest.RealizedPriceUSD, rp)
 	}
 }
 

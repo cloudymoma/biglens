@@ -423,6 +423,10 @@ func (h *APIHandler) BitcoinBaseline(w http.ResponseWriter, r *http.Request) {
 		writeError(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if !isLoopbackRequest(r) {
+		writeError(w, "forbidden: BigQuery actions are restricted to loopback requests (127.0.0.1 / ::1)", http.StatusForbidden)
+		return
+	}
 	if !s.settings.BaselineAllowUI {
 		writeError(w, "UTXO baseline UI trigger is disabled (set bitcoin.bigquery.utxo_baseline.allow_ui: true or use --bitcoin-utxo-baseline CLI)", http.StatusForbidden)
 		return

@@ -358,3 +358,140 @@ func TestBtcPriceCoverage(t *testing.T) {
 		}
 	})
 }
+
+func TestBtcPriceKrakenFallbackDoesNotStrandOlderGap(t *testing.T) {
+	var failCoinbase atomic.Bool
+	failCoinbase.Store(true)
+
+	cbSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if failCoinbase.Load() {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		startT, err1 := time.Parse(time.RFC3339, r.URL.Query().Get("start"))
+		endT, err2 := time.Parse(time.RFC3339, r.URL.Query().Get("end"))
+		if err1 != nil || err2 != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		var rows [][]float64
+		for d := startT; !d.After(endT); d = d.AddDate(0, 0, 1) {
+			rows = append(rows, []float64{float64(d.Unix()), 280, 295, 285, 290, 1000})
+		}
+		_ = json.NewEncoder(w).Encode(rows)
+	}))
+	defer cbSrv.Close()
+
+	// Simulate Kraken's trailing-window cap: only returns 2015-07-26..2015-07-29,
+	// leaving 2015-07-21..2015-07-25 missing on tick 1.
+	krSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var ohlc [][]any
+		for day := 26; day <= 29; day++ {
+			ts := time.Date(2015, 7, day, 0, 0, 0, 0, time.UTC).Unix()
+			ohlc = append(ohlc, []any{ts, "285.0", "295.0", "280.0", "290.0", "288.0", "500.0", 100})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error":  []string{},
+			"result": map[string]any{"XXBTZUSD": ohlc, "last": 0},
+		})
+	}))
+	defer krSrv.Close()
+
+	store := openTestRiskStore(t)
+	var seed []btcPriceDay
+	bootStart := civil.Date{Year: 2010, Month: 8, Day: 18}
+	bootEnd := civil.Date{Year: 2015, Month: 7, Day: 19}
+	for d := bootStart; !d.After(bootEnd); d = d.AddDays(1) {
+		seed = append(seed, btcPriceDay{Day: d.String(), Close: 100, Source: "blockchain_com"})
+	}
+	seed = append(seed, btcPriceDay{Day: "2015-07-20", Close: 280, Source: "coinbase"})
+	if err := store.upsertBtcPrices(context.Background(), seed, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	settings := BitcoinConfig{}.settings()
+	settings.Providers["blockchain_com"] = false
+	settings.Providers["coinmetrics"] = false
+	syncer := newBtcPriceSyncer(store, settings, func() time.Time {
+		return time.Date(2015, 7, 30, 12, 0, 0, 0, time.UTC)
+	})
+	syncer.coinbaseCandlesURL = cbSrv.URL
+	syncer.krakenOHLCURL = krSrv.URL
+	syncer.touch()
+
+	// Tick 1: Coinbase fails, Kraken fills trailing 2015-07-26..2015-07-29, leaving 2015-07-21..2015-07-25 open.
+	syncer.syncOnce(context.Background())
+	if cov := syncer.priceCoverage(); cov.Complete {
+		t.Fatalf("expected coverage incomplete after trailing-only Kraken fallback, got %+v", cov)
+	}
+
+	// Tick 2: Coinbase recovers and must backfill the stranded 2015-07-21..2015-07-25 gap.
+	failCoinbase.Store(false)
+	syncer.syncOnce(context.Background())
+
+	cov := syncer.priceCoverage()
+	if !cov.Complete {
+		t.Fatalf("expected complete price coverage after Coinbase recovery, got missing=%d ranges=%+v", cov.MissingDays, cov.MissingRanges)
+	}
+}
+
+func TestBtcPriceCoinMetricsBootstrapPage2Retry(t *testing.T) {
+	var failPage2 atomic.Bool
+	failPage2.Store(true)
+
+	var cmURL string
+	cmSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("page") == "2" {
+			if failPage2.Load() {
+				w.WriteHeader(http.StatusBadGateway)
+				return
+			}
+			var data []map[string]string
+			s := civil.Date{Year: 2013, Month: 1, Day: 1}
+			e := civil.Date{Year: 2015, Month: 7, Day: 19}
+			for d := s; !d.After(e); d = d.AddDays(1) {
+				data = append(data, map[string]string{"time": d.String() + "T00:00:00.000000000Z", "PriceUSD": "250.0"})
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
+			return
+		}
+		var data []map[string]string
+		s := civil.Date{Year: 2010, Month: 8, Day: 18}
+		e := civil.Date{Year: 2012, Month: 12, Day: 31}
+		for d := s; !d.After(e); d = d.AddDays(1) {
+			data = append(data, map[string]string{"time": d.String() + "T00:00:00.000000000Z", "PriceUSD": "10.0"})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data":          data,
+			"next_page_url": cmURL + "?page=2",
+		})
+	}))
+	defer cmSrv.Close()
+	cmURL = cmSrv.URL
+
+	store := openTestRiskStore(t)
+	settings := BitcoinConfig{}.settings()
+	settings.Providers["blockchain_com"] = false
+	settings.Providers["coinbase"] = false
+	settings.Providers["kraken"] = false
+	syncer := newBtcPriceSyncer(store, settings, func() time.Time {
+		return time.Date(2015, 7, 20, 12, 0, 0, 0, time.UTC)
+	})
+	syncer.coinmetricsURL = cmSrv.URL
+	syncer.touch()
+
+	// Tick 1: CoinMetrics page 1 succeeds, page 2 returns 502.
+	syncer.syncOnce(context.Background())
+	if cov := syncer.priceCoverage(); cov.Complete {
+		t.Fatalf("expected incomplete coverage when CoinMetrics page 2 failed")
+	}
+
+	// Tick 2: CoinMetrics page 2 recovers; bootstrap must retry and reach full 2010-08-18..2015-07-19 coverage.
+	failPage2.Store(false)
+	syncer.syncOnce(context.Background())
+
+	cov := syncer.priceCoverage()
+	if !cov.Complete {
+		t.Fatalf("expected complete bootstrap coverage after page 2 retry, got missing=%d ranges=%+v", cov.MissingDays, cov.MissingRanges)
+	}
+}

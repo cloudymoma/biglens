@@ -704,3 +704,417 @@ func TestMinSyncedCursorFallsBackToBtcSpentByAge(t *testing.T) {
 		t.Fatalf("minSyncedCursor without sync_state = %q, want 2026-10-15 from btc_spent_by_age", got)
 	}
 }
+
+func TestMaintenancePriceUnblockAfterMatrixPrunePreservesState(t *testing.T) {
+	ctx := context.Background()
+	store := openTestRiskStore(t)
+	settings := (BitcoinConfig{}).settings()
+	settings.Jobs = true
+
+	// Baseline at AsOf = 2026-10-13 (state after 2026-10-12: 10B sats).
+	t1 := time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)
+	budget := newBtcBudget(store, settings, func() time.Time { return t1 })
+	resID, err := budget.reserve(ctx, btcBaselineJobID, 1<<30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseRows := []btcUTXOBaselineRow{
+		{CreateDay: "2026-10-10", Sats: 4_000_000_000, UTXOs: 4},
+		{CreateDay: "2026-10-12", Sats: 6_000_000_000, UTXOs: 6},
+	}
+	if _, err := store.commitBtcBaseline(ctx, budget, settings, resID, "2026-10-13", baseRows, 1<<30, t1, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// Seed 2026-10-12, 2026-10-13, 2026-10-14: each day spends 500M from 2026-10-10 and issues 5B coinbase (created = 5.5B).
+	rollupInit := btcRollupPayload{
+		CoverageStart: 1,
+		Blocks: []btcBlockRow{
+			{Height: 1, TS: "2026-10-12T12:00:00Z", Date: "2026-10-12", Bits: "17021ef0", TransactionCount: 10, SubsidySats: 5_000_000_000},
+			{Height: 2, TS: "2026-10-13T12:00:00Z", Date: "2026-10-13", Bits: "17021ef0", TransactionCount: 10, SubsidySats: 5_000_000_000},
+			{Height: 3, TS: "2026-10-14T12:00:00Z", Date: "2026-10-14", Bits: "17021ef0", TransactionCount: 10, SubsidySats: 5_000_000_000},
+		},
+		Days: []BtcOnchainDay{
+			{Date: "2026-10-12", Blocks: 1, ScheduledIssuanceSats: 5_000_000_000, ClaimedIssuanceSats: 5_000_000_000, CoinbaseSats: 5_000_000_000, CreatedSats: 5_500_000_000},
+			{Date: "2026-10-13", Blocks: 1, ScheduledIssuanceSats: 5_000_000_000, ClaimedIssuanceSats: 5_000_000_000, CoinbaseSats: 5_000_000_000, CreatedSats: 5_500_000_000},
+			{Date: "2026-10-14", Blocks: 1, ScheduledIssuanceSats: 5_000_000_000, ClaimedIssuanceSats: 5_000_000_000, CoinbaseSats: 5_000_000_000, CreatedSats: 5_500_000_000},
+		},
+	}
+	if err := store.applyBtcRollupBatch(ctx, rollupInit, "2026-10-12", "2026-10-14", t1); err != nil {
+		t.Fatal(err)
+	}
+	caInit := btcCoinAgePayload{
+		Matrix: []btcSpentMatrixRow{
+			{SpendDay: "2026-10-12", CreateDay: "2026-10-10", Sats: 500_000_000, Inputs: 1},
+			{SpendDay: "2026-10-13", CreateDay: "2026-10-10", Sats: 500_000_000, Inputs: 1},
+			{SpendDay: "2026-10-14", CreateDay: "2026-10-10", Sats: 500_000_000, Inputs: 1},
+		},
+		Days: []BtcCoinageDay{
+			coinageMetrics("2026-10-12", map[string]int64{"2026-10-10": 500_000_000}, nil, false),
+			coinageMetrics("2026-10-13", map[string]int64{"2026-10-10": 500_000_000}, nil, false),
+			coinageMetrics("2026-10-14", map[string]int64{"2026-10-10": 500_000_000}, nil, false),
+		},
+	}
+	if err := store.applyBtcCoinAgeBatch(ctx, caInit, "2026-10-12", "2026-10-14", t1); err != nil {
+		t.Fatal(err)
+	}
+
+	// Seed complete prices through 2026-10-14 and run initial baseline handoff.
+	now := t1
+	ps := newBtcPriceSyncer(store, settings, func() time.Time { return now })
+	var pricePts []btcPriceDay
+	pStart, _ := time.Parse("2006-01-02", btcPriceCoverageStart)
+	pEnd, _ := time.Parse("2006-01-02", "2026-10-14")
+	for d := pStart; !d.After(pEnd); d = d.AddDate(0, 0, 1) {
+		pricePts = append(pricePts, btcPriceDay{Day: d.Format("2006-01-02"), Close: 60000, Source: "test"})
+	}
+	ps.putRows(ctx, pricePts)
+
+	maint := newBtcHolderMaintenance(store, ps, func() time.Time { return now })
+	if err := maint.run(ctx); err != nil {
+		t.Fatalf("initial maint.run: %v", err)
+	}
+	if asOf, _ := store.getBtcUTXOStateAsOf(ctx); asOf != "2026-10-14" {
+		t.Fatalf("asOf after initial run = %q, want 2026-10-14", asOf)
+	}
+
+	// Advance to 2026-10-16 07:05 UTC (after 06:30 UTC settlement): 2026-10-15 chain data
+	// lands and matrix retention prunes spend_day < 2026-10-14 (removing baseline
+	// T0-1=2026-10-12 and T0=2026-10-13), while 2026-10-15 price has not arrived yet
+	// (priceComplete == false, e.g. price provider outage).
+	now = time.Date(2026, 10, 16, 7, 5, 0, 0, time.UTC)
+	rollup15 := btcRollupPayload{
+		CoverageStart: 1,
+		Blocks: []btcBlockRow{
+			{Height: 4, TS: "2026-10-15T12:00:00Z", Date: "2026-10-15", Bits: "17021ef0", TransactionCount: 10, SubsidySats: 5_000_000_000},
+		},
+		Days: []BtcOnchainDay{
+			{Date: "2026-10-15", Blocks: 1, ScheduledIssuanceSats: 5_000_000_000, ClaimedIssuanceSats: 5_000_000_000, CoinbaseSats: 5_000_000_000, CreatedSats: 5_500_000_000},
+		},
+	}
+	if err := store.applyBtcRollupBatch(ctx, rollup15, "2026-10-12", "2026-10-15", now); err != nil {
+		t.Fatal(err)
+	}
+	ca15 := btcCoinAgePayload{
+		Matrix: []btcSpentMatrixRow{
+			{SpendDay: "2026-10-15", CreateDay: "2026-10-10", Sats: 500_000_000, Inputs: 1},
+		},
+		Days: []BtcCoinageDay{
+			coinageMetrics("2026-10-15", map[string]int64{"2026-10-10": 500_000_000}, nil, false),
+		},
+	}
+	if err := store.applyBtcCoinAgeBatch(ctx, ca15, "2026-10-12", "2026-10-15", now); err != nil {
+		t.Fatal(err)
+	}
+	pruneFn := pruneBtcCoinAge(store, 2, func() string {
+		asOf, _ := store.getBtcUTXOStateAsOf(ctx)
+		return asOf
+	})
+	if err := pruneFn(ctx, btcSettledEnd(now)); err != nil {
+		t.Fatalf("pruneBtcCoinAge: %v", err)
+	}
+
+	// Run maintenance while 2026-10-15 price is still missing -> rolls state to 2026-10-15 (25B sats),
+	// writes 2026-10-15 holder row with Blocked="price_history_incomplete".
+	if err := maint.run(ctx); err != nil {
+		t.Fatalf("post-midnight maint.run: %v", err)
+	}
+	if asOf, _ := store.getBtcUTXOStateAsOf(ctx); asOf != "2026-10-15" {
+		t.Fatalf("asOf after post-midnight roll = %q, want 2026-10-15", asOf)
+	}
+
+	// Next hour: 2026-10-15 price arrives -> priceComplete becomes true.
+	now = time.Date(2026, 10, 16, 8, 5, 0, 0, time.UTC)
+	ps.putRows(ctx, []btcPriceDay{{Day: "2026-10-15", Close: 65000, Source: "test"}})
+	if err := maint.run(ctx); err != nil {
+		t.Fatalf("unblock maint.run: %v", err)
+	}
+
+	// Live UTXO state must stay at 2026-10-15 (25B sats), engine must not halt,
+	// and 2026-10-15 holder row must be unblocked.
+	asOf, err := store.getBtcUTXOStateAsOf(ctx)
+	if err != nil || asOf != "2026-10-15" {
+		t.Fatalf("utxo_state_as_of after price unblock = %q, want 2026-10-15 (err=%v)", asOf, err)
+	}
+	uState, err := store.loadBtcUTXOState(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if uState.totalSats() != 25_000_000_000 {
+		t.Fatalf("uState totalSats = %d, want 25,000,000,000", uState.totalSats())
+	}
+	if rawStatus, hasStatus, _ := store.getBtcKV(ctx, btcHolderEngineStatusKey); hasStatus && rawStatus != "" {
+		t.Fatalf("expected holder engine to remain healthy, got status=%s", rawStatus)
+	}
+	rs := newBtcReadStore(store, settings, func() time.Time { return now })
+	hDays, err := rs.holderDays(ctx, "2026-10-15", "2026-10-15")
+	if err != nil || len(hDays) != 1 {
+		t.Fatalf("holderDays(2026-10-15) = %+v, err=%v", hDays, err)
+	}
+	if hDays[0].Blocked != "" || hDays[0].RealizedCapUSD == nil || hDays[0].MVRV == nil {
+		t.Fatalf("expected 2026-10-15 holder row unblocked with realized cap & MVRV, got %+v", hDays[0])
+	}
+
+	// Verify subsequent day 2026-10-16 continues rolling forward cleanly to 30B sats.
+	now = time.Date(2026, 10, 17, 7, 5, 0, 0, time.UTC)
+	ps.putRows(ctx, []btcPriceDay{{Day: "2026-10-16", Close: 66000, Source: "test"}})
+	rollup16 := btcRollupPayload{
+		CoverageStart: 1,
+		Blocks: []btcBlockRow{
+			{Height: 5, TS: "2026-10-16T12:00:00Z", Date: "2026-10-16", Bits: "17021ef0", TransactionCount: 10, SubsidySats: 5_000_000_000},
+		},
+		Days: []BtcOnchainDay{
+			{Date: "2026-10-16", Blocks: 1, ScheduledIssuanceSats: 5_000_000_000, ClaimedIssuanceSats: 5_000_000_000, CoinbaseSats: 5_000_000_000, CreatedSats: 5_500_000_000},
+		},
+	}
+	if err := store.applyBtcRollupBatch(ctx, rollup16, "2026-10-12", "2026-10-16", now); err != nil {
+		t.Fatal(err)
+	}
+	ca16 := btcCoinAgePayload{
+		Matrix: []btcSpentMatrixRow{
+			{SpendDay: "2026-10-16", CreateDay: "2026-10-10", Sats: 500_000_000, Inputs: 1},
+		},
+		Days: []BtcCoinageDay{
+			coinageMetrics("2026-10-16", map[string]int64{"2026-10-10": 500_000_000}, nil, false),
+		},
+	}
+	if err := store.applyBtcCoinAgeBatch(ctx, ca16, "2026-10-12", "2026-10-16", now); err != nil {
+		t.Fatal(err)
+	}
+	if err := maint.run(ctx); err != nil {
+		t.Fatalf("2026-10-16 maint.run: %v", err)
+	}
+	if asOf, _ := store.getBtcUTXOStateAsOf(ctx); asOf != "2026-10-16" {
+		t.Fatalf("utxo_state_as_of after 2026-10-16 roll = %q, want 2026-10-16", asOf)
+	}
+}
+
+func TestMaintenancePerDayPriceFrontierPreservesHistoricalSOPRAndUnblocks(t *testing.T) {
+	ctx := context.Background()
+	store := openTestRiskStore(t)
+	now := time.Date(2026, 10, 16, 0, 5, 0, 0, time.UTC) // just after midnight: 2026-10-15 candle not fetched yet
+	seedMaintenanceChain(t, store, now)
+
+	settings := (BitcoinConfig{}).settings()
+	settings.Jobs = true
+	budget := newBtcBudget(store, settings, func() time.Time { return now })
+	resID, err := budget.reserve(ctx, btcBaselineJobID, 1<<30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseRows := []btcUTXOBaselineRow{
+		{CreateDay: "2026-10-10", Sats: 4_000_000_000, UTXOs: 4},
+		{CreateDay: "2026-10-14", Sats: 6_000_000_000, UTXOs: 6},
+	}
+	if _, err := store.commitBtcBaseline(ctx, budget, settings, resID, "2026-10-15", baseRows, 1<<30, now, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// Run 1 with no prices -> both 2026-10-14 and 2026-10-15 blocked.
+	ps := newBtcPriceSyncer(store, settings, func() time.Time { return now })
+	maint := newBtcHolderMaintenance(store, ps, func() time.Time { return now })
+	if err := maint.run(ctx); err != nil {
+		t.Fatalf("run 1: %v", err)
+	}
+
+	// Seed contiguous prices from 2010-08-18 through 2026-10-14 ONLY (2026-10-15 still missing at 00:05 UTC).
+	var pricePts []btcPriceDay
+	pStart, _ := time.Parse("2006-01-02", btcPriceCoverageStart)
+	pEnd, _ := time.Parse("2006-01-02", "2026-10-14")
+	for d := pStart; !d.After(pEnd); d = d.AddDate(0, 0, 1) {
+		pricePts = append(pricePts, btcPriceDay{Day: d.Format("2006-01-02"), Close: 60000, Source: "test"})
+	}
+	ps.putRows(ctx, pricePts)
+
+	// Run 2 at 2026-10-16 00:05 UTC: 2026-10-14 MUST have valid SOPR and unblocked holder metrics
+	// even though 2026-10-15 candle has not arrived yet.
+	if err := maint.run(ctx); err != nil {
+		t.Fatalf("run 2: %v", err)
+	}
+	rs := newBtcReadStore(store, settings, func() time.Time { return now })
+	caDays, err := rs.coinageDays(ctx, "2026-10-14", "2026-10-15")
+	if err != nil || len(caDays) != 2 {
+		t.Fatalf("coinageDays = %+v, err=%v", caDays, err)
+	}
+	if caDays[0].Blocked != "" || caDays[0].SOPR == nil {
+		t.Fatalf("2026-10-14 coinage wiped after midnight = %+v, want unblocked SOPR", caDays[0])
+	}
+	if caDays[1].Blocked != "price_history_incomplete" || caDays[1].SOPR != nil {
+		t.Fatalf("2026-10-15 coinage = %+v, want price_history_incomplete", caDays[1])
+	}
+	hDays, err := rs.holderDays(ctx, "2026-10-14", "2026-10-15")
+	if err != nil || len(hDays) != 2 {
+		t.Fatalf("holderDays = %+v, err=%v", hDays, err)
+	}
+	if hDays[0].Blocked != "" || hDays[0].RealizedCapUSD == nil {
+		t.Fatalf("2026-10-14 holder = %+v, want unblocked", hDays[0])
+	}
+	if hDays[1].Blocked != "price_history_incomplete" {
+		t.Fatalf("2026-10-15 holder = %+v, want price_history_incomplete", hDays[1])
+	}
+}
+
+func TestHolderMetricsMidnightInversionMissingTomorrowPrice(t *testing.T) {
+	u := utxoState{
+		"2026-01-01": 800_000_000,  // 8 BTC LTH (>=155d) @ $70,000
+		"2026-10-15": 500_000_000,  // 5 BTC STH @ $65,000
+		"2026-10-16": -100_000_000, // -1 BTC midnight timestamp inversion (2026-10-16 candle not closed yet)
+	}
+	prices := map[string]float64{
+		"2026-01-01": 70000,
+		"2026-10-15": 65000,
+	}
+	hm := holderMetrics("2026-10-15", 1, u, prices, true)
+	if hm.RealizedCapUSD == nil || math.Abs(*hm.RealizedCapUSD-820_000) > 1e-6 {
+		t.Fatalf("RealizedCapUSD = %v, want 820000 (8*70k + 4*65k)", hm.RealizedCapUSD)
+	}
+	if hm.STHRealizedPrice == nil || math.Abs(*hm.STHRealizedPrice-65_000) > 1e-6 {
+		t.Fatalf("STHRealizedPrice = %v, want 65000", hm.STHRealizedPrice)
+	}
+	if hm.SupplyInProfitPct == nil || *hm.SupplyInProfitPct < 0 || math.Abs(*hm.SupplyInProfitPct-0) > 1e-9 {
+		t.Fatalf("SupplyInProfitPct = %v, want 0.0 (never negative)", hm.SupplyInProfitPct)
+	}
+}
+
+func TestUnblockPriceIncompleteStopsAtMissingMatrixDay(t *testing.T) {
+	ctx := context.Background()
+	store := openTestRiskStore(t)
+	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+
+	// Pre-retention blocked holder row at 2026-10-12 (true state had older coins, not reconstructed across pruned 2026-10-14).
+	oldBlocked := BtcHolderDay{
+		Date:               "2026-10-12",
+		BaselineGeneration: 1,
+		SupplySats:         5_000_000_000,
+		SupplyBTC:          50,
+		Blocked:            "price_history_incomplete",
+	}
+	liveState := utxoState{
+		"2026-10-10": 5_000_000_000,
+		"2026-10-13": 5_000_000_000,
+		"2026-10-14": 5_000_000_000,
+		"2026-10-15": 5_000_000_000,
+	}
+	if err := store.applyHolderMaintenanceTx(ctx, &liveState, "2026-10-15", 1, false, []BtcHolderDay{oldBlocked}, nil, now); err != nil {
+		t.Fatal(err)
+	}
+
+	// Rollup has 2026-10-13..2026-10-15 with CreatedSats == CoinbaseSats (0 net spend difference),
+	// while btc_spent_by_age ONLY retains 2026-10-15 (2026-10-13 and 2026-10-14 were pruned, even if 2026-10-14 had intraday self-spends or 0 spends).
+	rollup := btcRollupPayload{
+		CoverageStart: 1,
+		Days: []BtcOnchainDay{
+			{Date: "2026-10-13", Blocks: 1, ScheduledIssuanceSats: 5_000_000_000, ClaimedIssuanceSats: 5_000_000_000, CoinbaseSats: 5_000_000_000, CreatedSats: 5_000_000_000},
+			{Date: "2026-10-14", Blocks: 1, ScheduledIssuanceSats: 5_000_000_000, ClaimedIssuanceSats: 5_000_000_000, CoinbaseSats: 5_000_000_000, CreatedSats: 5_000_000_000},
+			{Date: "2026-10-15", Blocks: 1, ScheduledIssuanceSats: 5_000_000_000, ClaimedIssuanceSats: 5_000_000_000, CoinbaseSats: 5_000_000_000, CreatedSats: 5_000_000_000},
+		},
+	}
+	if err := store.applyBtcRollupBatch(ctx, rollup, "2026-10-13", "2026-10-15", now); err != nil {
+		t.Fatal(err)
+	}
+	ca := btcCoinAgePayload{
+		Matrix: []btcSpentMatrixRow{
+			{SpendDay: "2026-10-15", CreateDay: "2026-10-15", Sats: 0, Inputs: 1},
+		},
+	}
+	if err := store.applyBtcCoinAgeBatch(ctx, ca, "2026-10-15", "2026-10-15", now); err != nil {
+		t.Fatal(err)
+	}
+
+	settings := (BitcoinConfig{}).settings()
+	ps := newBtcPriceSyncer(store, settings, func() time.Time { return now })
+	var pricePts []btcPriceDay
+	pStart, _ := time.Parse("2006-01-02", btcPriceCoverageStart)
+	pEnd, _ := time.Parse("2006-01-02", "2026-10-15")
+	for d := pStart; !d.After(pEnd); d = d.AddDate(0, 0, 1) {
+		pricePts = append(pricePts, btcPriceDay{Day: d.Format("2006-01-02"), Close: 60000, Source: "test"})
+	}
+	ps.putRows(ctx, pricePts)
+
+	maint := newBtcHolderMaintenance(store, ps, func() time.Time { return now })
+	if err := maint.run(ctx); err != nil {
+		t.Fatalf("maint.run: %v", err)
+	}
+
+	// Because matrix retention only covers 2026-10-15 (reachable floor = 2026-10-14),
+	// 2026-10-12 is unreachable and must NOT be stepped across missing matrix day 2026-10-14.
+	rs := newBtcReadStore(store, settings, func() time.Time { return now })
+	hDays, err := rs.holderDays(ctx, "2026-10-12", "2026-10-12")
+	if err != nil || len(hDays) != 1 {
+		t.Fatalf("holderDays(2026-10-12) = %+v, err=%v", hDays, err)
+	}
+	if hDays[0].Blocked != "price_history_incomplete" {
+		t.Fatalf("expected unreachable pre-retention row 2026-10-12 to not be overwritten across missing matrix day, got %+v", hDays[0])
+	}
+}
+
+func TestPendingBaselineWaitsToClearUntilInitDaySynced(t *testing.T) {
+	ctx := context.Background()
+	store := openTestRiskStore(t)
+	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+
+	settings := (BitcoinConfig{}).settings()
+	settings.Jobs = true
+	budget := newBtcBudget(store, settings, func() time.Time { return now })
+	resID, err := budget.reserve(ctx, btcBaselineJobID, 1<<30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseRows := []btcUTXOBaselineRow{
+		{CreateDay: "2026-10-10", Sats: 4_000_000_000, UTXOs: 4},
+		{CreateDay: "2026-10-14", Sats: 6_000_000_000, UTXOs: 6},
+	}
+	if _, err := store.commitBtcBaseline(ctx, budget, settings, resID, "2026-10-15", baseRows, 1<<30, now, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// Step 1: manual btc_onchain runs first (btc_coinage not run yet -> matrixByDay empty).
+	rollupPayload := btcRollupPayload{
+		CoverageStart: 1,
+		Days: []BtcOnchainDay{
+			{Date: "2026-10-14", Blocks: 1, ScheduledIssuanceSats: 5_000_000_000, ClaimedIssuanceSats: 5_000_000_000, CoinbaseSats: 5_010_000_000, FeesSats: 10_000_000, CreatedSats: 6_000_000_000},
+			{Date: "2026-10-15", Blocks: 1, ScheduledIssuanceSats: 5_000_000_000, ClaimedIssuanceSats: 5_000_000_000, CoinbaseSats: 5_000_000_000, CreatedSats: 5_500_000_000},
+		},
+	}
+	if err := store.applyBtcRollupBatch(ctx, rollupPayload, "2026-10-14", "2026-10-15", now); err != nil {
+		t.Fatal(err)
+	}
+
+	maint := newBtcHolderMaintenance(store, nil, func() time.Time { return now })
+	if err := maint.run(ctx); err != nil {
+		t.Fatalf("maint.run before coinage: %v", err)
+	}
+	if _, hasPend, _ := store.getBtcKV(ctx, btcBaselinePendingKey); !hasPend {
+		t.Fatalf("baseline_pending was cleared before btc_coinage synced initDay 2026-10-14")
+	}
+
+	// Step 2: manual btc_coinage runs -> now initDay 2026-10-14 has both rollup and matrix,
+	// so backward reconstruction (2026-10-13) and forward roll (2026-10-15) both run and clear pending.
+	caPayload := btcCoinAgePayload{
+		Matrix: []btcSpentMatrixRow{
+			{SpendDay: "2026-10-14", CreateDay: "2026-10-10", Sats: 1_000_000_000, Inputs: 1},
+			{SpendDay: "2026-10-15", CreateDay: "2026-10-10", Sats: 500_000_000, Inputs: 1},
+		},
+		Days: []BtcCoinageDay{
+			coinageMetrics("2026-10-14", map[string]int64{"2026-10-10": 1_000_000_000}, nil, false),
+			coinageMetrics("2026-10-15", map[string]int64{"2026-10-10": 500_000_000}, nil, false),
+		},
+	}
+	if err := store.applyBtcCoinAgeBatch(ctx, caPayload, "2026-10-14", "2026-10-15", now); err != nil {
+		t.Fatal(err)
+	}
+	if err := maint.run(ctx); err != nil {
+		t.Fatalf("maint.run after coinage: %v", err)
+	}
+	if _, hasPend, _ := store.getBtcKV(ctx, btcBaselinePendingKey); hasPend {
+		t.Fatalf("expected baseline_pending cleared once both rollup and coinage cover initDay")
+	}
+	rs := newBtcReadStore(store, settings, func() time.Time { return now })
+	hDays, err := rs.holderDays(ctx, "2026-10-13", "2026-10-15")
+	if err != nil || len(hDays) != 3 {
+		t.Fatalf("holderDays = %+v (len=%d), want 3 days [2026-10-13..2026-10-15]", hDays, len(hDays))
+	}
+	if hDays[0].SupplySats != 5_000_000_000 || hDays[1].SupplySats != 10_000_000_000 || hDays[2].SupplySats != 15_000_000_000 {
+		t.Fatalf("supplies = [%d, %d, %d], want [5B, 10B, 15B]", hDays[0].SupplySats, hDays[1].SupplySats, hDays[2].SupplySats)
+	}
+}

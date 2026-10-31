@@ -690,3 +690,63 @@ func TestBtcBasisExcludesNearExpiryUnderTwoDays(t *testing.T) {
 		t.Fatalf("deribit BasisPoints = %+v, want only BTC-25DEC26", dbOut.BasisPoints)
 	}
 }
+
+func TestMarketsDeribitDVOLAndVRP(t *testing.T) {
+	_ = startMarketsTestUpstream(t)
+	h := newTestBitcoinHandler(t)
+	now := time.Date(2026, 10, 17, 1, 0, 0, 0, time.UTC)
+	h.btc.now = func() time.Time { return now }
+
+	// Seed 40 days of BTC prices so 30d realized volatility (RV30) is populated.
+	var priceSeed []btcPriceDay
+	for i := 40; i >= 0; i-- {
+		d := now.AddDate(0, 0, -i).Format("2006-01-02")
+		closePx := 75_000.0 + float64(40-i)*150.0
+		if i%2 == 0 {
+			closePx += 400.0
+		}
+		priceSeed = append(priceSeed, btcPriceDay{
+			Day:    d,
+			Close:  closePx,
+			Source: "coinbase",
+		})
+	}
+	h.btc.prices.putRows(context.Background(), priceSeed)
+	h.btc.prices.lastSync = time.Now()
+
+	rec := httptest.NewRecorder()
+	h.BitcoinMarkets(rec, httptest.NewRequest(http.MethodGet, "/api/opendata/bitcoin/markets", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var data BtcMarketsData
+	if err := json.Unmarshal(rec.Body.Bytes(), &data); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(data.DVOL) != 3 {
+		t.Fatalf("len(DVOL) = %d, want 3 candles from Deribit DVOL", len(data.DVOL))
+	}
+	if data.DVOLLatest == nil || math.Abs(*data.DVOLLatest-53.6) > 1e-6 {
+		t.Fatalf("DVOLLatest = %v, want 53.6", data.DVOLLatest)
+	}
+	if data.RV30 == nil {
+		t.Fatalf("RV30 = nil, want > 0")
+	}
+	wantVRP := *data.DVOLLatest - *data.RV30
+	if data.VRP == nil || math.Abs(*data.VRP-wantVRP) > 1e-6 {
+		t.Fatalf("VRP = %v, want %f (DVOL - RV30)", data.VRP, wantVRP)
+	}
+
+	// Daily snapshotter must also persist DVOL and VRP into btc_market_daily.
+	store := newTestRiskStore(t)
+	h.btc.store = store
+	snap := newBtcMarketSnapshotter(h, store, func() time.Time { return now })
+	snap.syncOnce(context.Background())
+	rows, err := store.loadBtcMarketDaily(context.Background(), 30)
+	if err != nil {
+		t.Fatalf("loadBtcMarketDaily: %v", err)
+	}
+	if len(rows) != 1 || rows[0].DVOL == nil || math.Abs(*rows[0].DVOL-53.6) > 1e-6 || rows[0].VRP == nil {
+		t.Fatalf("btc_market_daily row = %+v, want DVOL=53.6 and non-nil VRP", rows)
+	}
+}
