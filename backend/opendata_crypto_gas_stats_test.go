@@ -108,11 +108,30 @@ func TestComputeGasStats(t *testing.T) {
 	}
 }
 
-// The badge ranks the latest complete hour against the same 72h series.
+// The badge ranks the latest complete hour against the same 72h series using
+// strict lower-tail rank so ties at a protocol floor stay P0 (quiet) instead of
+// inflating to P90+ (congested).
 func TestComputeGasStatsPercentile(t *testing.T) {
 	s := computeGasStats([]GasHourRow{{HourUTC: "a", Primary: nf(5)}, {HourUTC: "b", Primary: nf(1)}, {HourUTC: "c", Primary: nf(3)}})
-	if s.Percentile != 67 {
-		t.Errorf("percentile = %d, want 67 (2 of 3 hours at or below the latest)", s.Percentile)
+	if s.Percentile != 50 {
+		t.Errorf("percentile = %d, want 50 (median of 3 distinct hours)", s.Percentile)
+	}
+}
+
+func TestComputeGasStatsFloorTies(t *testing.T) {
+	var hours []GasHourRow
+	for i := 0; i < 68; i++ {
+		hours = append(hours, GasHourRow{HourUTC: "floor", Primary: nf(0.01)})
+	}
+	for i := 0; i < 3; i++ {
+		hours = append(hours, GasHourRow{HourUTC: "spike", Primary: nf(0.50)})
+	}
+	// Latest hour returns to the 0.01 gwei protocol floor.
+	hours = append(hours, GasHourRow{HourUTC: "latest", Primary: nf(0.01)})
+
+	s := computeGasStats(hours)
+	if s.Percentile != 0 {
+		t.Fatalf("floor-tied latest hour percentile = P%d, want P0 (quiet)", s.Percentile)
 	}
 }
 

@@ -87,6 +87,8 @@ func gasFetchContext(r *http.Request) (context.Context, context.CancelFunc) {
 
 type GasPulseChain struct {
 	Meta         GasChainMeta `json:"meta"`
+	WindowStart  string       `json:"window_start,omitempty"`
+	WindowEnd    string       `json:"window_end,omitempty"`
 	Hours        []GasHourRow `json:"hours"`
 	Stats        GasStats     `json:"stats"`
 	Error        string       `json:"error,omitempty"`
@@ -150,7 +152,21 @@ func buildGasPulse(start, end time.Time, series map[string]gasSeriesResult,
 	}
 	for _, id := range gasChainOrder {
 		res := series[id]
-		c := GasPulseChain{Meta: gasChainMetas[id], Hours: fillGasHours(res.rows, start)}
+		cStart := start
+		if id == gasChainSol && len(res.rows) == gasWindowHours && res.rows[0].HourUTC != "" {
+			if parsed, err := time.Parse(gasHourLayout, res.rows[0].HourUTC); err == nil {
+				cStart = parsed.UTC()
+			}
+		}
+		cEnd := cStart.Add(gasWindowHours * time.Hour)
+		c := GasPulseChain{
+			Meta:  gasChainMetas[id],
+			Hours: fillGasHours(res.rows, cStart),
+		}
+		if !cStart.Equal(start) {
+			c.WindowStart = cStart.Format(gasHourLayout)
+			c.WindowEnd = cEnd.Format(gasHourLayout)
+		}
 		c.Stats = computeGasStats(c.Hours)
 		if res.err != nil {
 			c.Error = res.err.Error()
@@ -178,10 +194,10 @@ func buildGasPulse(start, end time.Time, series map[string]gasSeriesResult,
 
 func (h *APIHandler) gasSeries(r *http.Request, chain string, start, end time.Time) ([]GasHourRow, error) {
 	// Solana is MONTH-partitioned on block_timestamp: narrowing the window below
-	// 72h scans the same monthly partition (~0.2–0.4 GB), so cache for 4 hours.
+	// 72h scans the same monthly partition (~0.2–0.4 GB), so cache its filled 72h
+	// series for 4 hours under a stable key rather than truncating end to 4h.
 	if chain == gasChainSol {
-		solBucket := end.Truncate(gasSolSeriesTTL).Format("2006010215")
-		key := fmt.Sprintf(gasSeriesKeyFm, chain, solBucket)
+		key := fmt.Sprintf(gasSeriesKeyFm, chain, "4h")
 		if cached, ok := h.cache.Get(key); ok {
 			return cached.([]GasHourRow), nil
 		}
@@ -192,14 +208,14 @@ func (h *APIHandler) gasSeries(r *http.Request, chain string, start, end time.Ti
 			if err != nil {
 				return nil, fmt.Errorf("%s 72h query: %w", chain, err)
 			}
-			_, mergedRows := mergeRollingGasHours(nil, rows, start, end)
-			byHr, _ := mergeRollingGasHours(nil, mergedRows, start, end)
+			byHr, _ := mergeRollingGasHours(nil, rows, start, end)
 			ttl := gasSolSeriesTTL
 			if _, complete := rollingEffectiveEnd(byHr, start, end); !complete {
 				ttl = gasSeriesIncompleteTTL
 			}
-			h.cache.SetWithTTL(key, rows, ttl)
-			return rows, nil
+			filled := fillGasHours(rows, start)
+			h.cache.SetWithTTL(key, filled, ttl)
+			return filled, nil
 		})
 		if err != nil {
 			return nil, err

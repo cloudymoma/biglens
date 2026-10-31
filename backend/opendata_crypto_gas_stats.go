@@ -92,13 +92,15 @@ func computeGasStats(hours []GasHourRow) GasStats {
 	if s.Samples == 0 {
 		return s
 	}
-	atOrBelow := 0
-	for _, v := range vals {
-		if v <= s.Latest {
-			atOrBelow++
+	if s.Samples > 1 && s.MaxValue > s.MinValue {
+		below := 0
+		for _, v := range vals {
+			if v < s.Latest {
+				below++
+			}
 		}
+		s.Percentile = int(math.Round(float64(below) * 100 / float64(s.Samples-1)))
 	}
-	s.Percentile = int(math.Round(float64(atOrBelow) * 100 / float64(s.Samples)))
 	sorted := slices.Sorted(slices.Values(vals))
 	s.Median = gasQuantile(sorted, 0.5)
 	s.P90 = gasQuantile(sorted, 0.9)

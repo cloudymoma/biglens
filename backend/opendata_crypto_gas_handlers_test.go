@@ -359,3 +359,64 @@ func TestMergeRollingGasHours(t *testing.T) {
 		t.Errorf("rollingEffectiveEnd(missing latest hour) = (%v, %v), want (%v, false)", effEnd, complete, wantEff)
 	}
 }
+
+func TestSolana4hCachePreservesFull72hSeriesAcrossHourlyAdvance(t *testing.T) {
+	start1 := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	end1 := start1.Add(72 * time.Hour) // 2026-10-04 12:00 UTC
+
+	cols := []bqCol{
+		{"hour_utc", "STRING"},
+		{"tx_count", "INTEGER"},
+		{"band_low", "FLOAT"},
+		{"primary_val", "FLOAT"},
+		{"band_high", "FLOAT"},
+		{"load_val", "FLOAT"},
+		{"total_fee", "FLOAT"},
+	}
+	var bqRows [][]any
+	for i := 0; i < 72; i++ {
+		hr := start1.Add(time.Duration(i) * time.Hour).Format(gasHourLayout)
+		bqRows = append(bqRows, []any{hr, "1000", nil, "5000", nil, "1000", "0.5"})
+	}
+	fake := &scriptedBQ{
+		respond: func(sql string) bqScript {
+			return bqScript{cols: cols, rows: bqRows}
+		},
+	}
+	h := newScriptedBQHandler(t, fake)
+	r := httptest.NewRequest(http.MethodGet, "/api/opendata/crypto/gas-pulse", nil)
+
+	if _, err := h.gasSeries(r, gasChainSol, start1, end1); err != nil {
+		t.Fatalf("initial sol gasSeries: %v", err)
+	}
+
+	// Three hours later (2026-10-04 15:00 UTC): 4h cache must still serve without a
+	// second BQ scan AND buildGasPulse must retain all 72 complete Solana hours
+	// rather than leaving the newest 3 hours empty.
+	start2 := start1.Add(3 * time.Hour)
+	end2 := end1.Add(3 * time.Hour)
+	rows2, err := h.gasSeries(r, gasChainSol, start2, end2)
+	if err != nil {
+		t.Fatalf("cached sol gasSeries: %v", err)
+	}
+	if got := len(fake.sent()); got != 1 {
+		t.Fatalf("solana BQ queries within 4h TTL = %d, want 1", got)
+	}
+
+	pulse := buildGasPulse(start2, end2, map[string]gasSeriesResult{
+		gasChainSol: {rows: rows2},
+	}, nil, nil, nil, nil)
+	var sol GasPulseChain
+	for _, c := range pulse.Chains {
+		if c.Meta.ID == gasChainSol {
+			sol = c
+			break
+		}
+	}
+	if sol.Stats.Samples != 72 {
+		t.Fatalf("sol stats.samples after +3h window advance = %d, want 72 (no trailing empty buckets)", sol.Stats.Samples)
+	}
+	if !sol.Hours[71].Primary.Valid {
+		t.Fatalf("sol newest bucket Hours[71] = %+v, want valid reading", sol.Hours[71])
+	}
+}

@@ -38,7 +38,7 @@ export default function GasPulse72hView() {
     <div className="space-y-4">
       <div className="flex justify-end">
         <span className="text-[11px] text-zinc-600">
-          {data.window_start} → {data.window_end} UTC · complete hours · cached 1h
+          {chain.window_start ?? data.window_start} → {chain.window_end ?? data.window_end} UTC · complete hours · cached {chain.meta.id === 'sol' ? '4h' : '1h'}
         </span>
       </div>
       <ChainStrip chains={data.chains} selected={chain.meta.id} onSelect={setSelected} />
