@@ -5,6 +5,7 @@ import { ASSET_COLOR, axisStyle, baseOption, chrome, colorOf, HEAT_BINS, tipHtml
 import type { TipRow } from './charts';
 import type { StableAsset, StableRange } from './deeplink';
 import { fmtBps, fmtDateTime, fmtEurcBool, fmtPrice, fmtTimeHM } from './format';
+import { buildRelativePegSeries } from './pegSeries';
 import SignalChip from './SignalChip';
 import SignalMatrix from './SignalMatrix';
 import type { Theme } from './signals';
@@ -180,7 +181,7 @@ function Heatmap({ hm, label }: { hm: StablePegHeatmap | null; label: string }) 
 function relOption(theme: Theme, peg: StablePeg) {
   const ax = axisStyle(theme);
   const rel = peg.relative;
-  const daily = rel.series_resolution === '1d';
+  const { daily, medianData, uniswapData } = buildRelativePegSeries(rel);
   const base = baseOption(theme, 'USDC priced in USDT: median of the venues (including Uniswap) and the Uniswap v3 pool, in basis points from parity.');
   return {
     ...base,
@@ -202,14 +203,14 @@ function relOption(theme: Theme, peg: StablePeg) {
         type: 'line',
         showSymbol: false,
         color: ASSET_COLOR.usdc_usdt,
-        data: withGaps(rel.series.map(p => [p.ts, p.dev_bps] as [string, number | null]), p => p[0], daily ? 2 * 86_400_000 : 15 * 60_000, at => [at, null] as [string, number | null]),
+        data: medianData,
       },
       {
         name: 'Uniswap v3',
         type: 'line',
         showSymbol: false,
         color: ASSET_COLOR.uniswap,
-        data: withGaps(rel.uniswap_series.map(p => [p.ts, p.dev_bps] as [string, number | null]), p => p[0], daily ? 2 * 86_400_000 : 30 * 60_000, at => [at, null] as [string, number | null]),
+        data: uniswapData,
       },
     ],
   };
