@@ -7,6 +7,11 @@ import {
   CHART_TOOLTIP, AXIS_LABEL, SPLIT_LINE,
   fmtNum, shortHash, Panel,
 } from './shared';
+import {
+  barSupplyValue,
+  formatSupplySummary,
+  summarizeLiveSupply,
+} from './tokensLive';
 
 const NETWORK_ORDER = ['tron', 'eth', 'sol', 'arb', 'op', 'base'] as const;
 
@@ -49,141 +54,148 @@ export default function TokensLivePanel({
 
   const supplyMatrix = live.supply_matrix ?? [];
   const marketPulse = live.market_pulse ?? [];
+  const warnings = live.warnings ?? [];
 
   const netLabels = NETWORK_ORDER.map(net => {
     const found = supplyMatrix.find(r => r.network === net);
     return found?.network_label ?? net.toUpperCase();
   });
 
-  const sumSupply = (asset: string, net: string, tier: string) =>
-    supplyMatrix
-      .filter(r => r.asset === asset && r.network === net && r.tier === tier)
-      .reduce((acc, r) => acc + r.supply, 0);
+  const barSupply = (asset: string, net: string, tier: string) =>
+    barSupplyValue(supplyMatrix, asset, net, tier);
 
-  const totalUSDT = supplyMatrix.filter(r => r.asset === 'USDT').reduce((a, r) => a + r.supply, 0);
-  const totalUSDC = supplyMatrix.filter(r => r.asset === 'USDC').reduce((a, r) => a + r.supply, 0);
-  const totalEURC = supplyMatrix.filter(r => r.asset === 'EURC').reduce((a, r) => a + r.supply, 0);
+  const totals = summarizeLiveSupply(supplyMatrix);
   // Supply is in tokens: USD coins read as $, EURC as €.
   const unit = (seriesName: string) => (seriesName.startsWith('EURC') ? '€' : '$');
 
   return (
-    <div className="grid lg:grid-cols-2 gap-4">
-      <Panel
-        title="Live Cross-Chain Stablecoin Supply (USDT, USDC, EURC)"
-        note={`totalSupply() via keyless RPCs · USDT $${fmtNum(totalUSDT)} · USDC $${fmtNum(totalUSDC)} · EURC €${fmtNum(totalEURC)} · ${live.as_of ? ago(live.as_of) : 'live'}`}
-      >
-        <ReactECharts
-          style={{ height: 260 }}
-          option={{
-            tooltip: {
-              trigger: 'axis',
-              ...CHART_TOOLTIP,
-              formatter: (params: { axisValueLabel: string; marker: string; seriesName: string; value: number }[]) =>
-                [params[0]?.axisValueLabel ?? '', ...params
-                  .filter(p => p.value > 0)
-                  .map(p => `${p.marker}${p.seriesName}: ${unit(p.seriesName)}${fmtNum(p.value)}`)].join('<br/>'),
-            },
-            legend: { textStyle: { color: '#a1a1aa', fontSize: 11 }, top: 0 },
-            grid: { left: 64, right: 20, top: 32, bottom: 28 },
-            xAxis: { type: 'category', data: netLabels, axisLabel: AXIS_LABEL },
-            yAxis: {
-              type: 'value',
-              axisLabel: { ...AXIS_LABEL, formatter: (v: number) => fmtNum(v) },
-              splitLine: SPLIT_LINE,
-            },
-            series: [
-              {
-                name: 'USDT (native)',
-                type: 'bar',
-                stack: 'USDT',
-                data: NETWORK_ORDER.map(n => sumSupply('USDT', n, 'native')),
-                itemStyle: { color: '#22c55e' },
-              },
-              {
-                name: 'USDT (bridged)',
-                type: 'bar',
-                stack: 'USDT',
-                data: NETWORK_ORDER.map(n => sumSupply('USDT', n, 'bridged')),
-                itemStyle: { color: '#86efac' },
-              },
-              {
-                name: 'USDC (native)',
-                type: 'bar',
-                stack: 'USDC',
-                data: NETWORK_ORDER.map(n => sumSupply('USDC', n, 'native')),
-                itemStyle: { color: '#3b82f6' },
-              },
-              {
-                name: 'USDC (bridged)',
-                type: 'bar',
-                stack: 'USDC',
-                data: NETWORK_ORDER.map(n => sumSupply('USDC', n, 'bridged')),
-                itemStyle: { color: '#93c5fd' },
-              },
-              {
-                name: 'EURC (native)',
-                type: 'bar',
-                stack: 'EURC',
-                data: NETWORK_ORDER.map(n => sumSupply('EURC', n, 'native')),
-                itemStyle: { color: '#a855f7' },
-              },
-            ],
-          }}
-        />
-      </Panel>
-
-      <Panel
-        title="Live Token Market Pulse (Ethereum)"
-        note="DefiLlama spot USD price + Blockscout v2 holders, 24h volume &amp; circulating market cap"
-      >
-        <div className="overflow-y-auto max-h-[260px]">
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="text-zinc-500 text-left">
-                <th className="pb-2 font-medium">Token</th>
-                <th className="pb-2 font-medium text-right">Spot Price</th>
-                <th className="pb-2 font-medium text-right">Market Cap</th>
-                <th className="pb-2 font-medium text-right">24h Vol (API)</th>
-                <th className="pb-2 font-medium text-right">Holders</th>
-              </tr>
-            </thead>
-            <tbody className="font-mono">
-              {marketPulse.map(m => (
-                <tr key={m.address} className="border-t border-zinc-800/40 text-zinc-300">
-                  <td className="py-1.5">
-                    <span className="text-white font-semibold">{m.symbol}</span>
-                    <button
-                      type="button"
-                      onClick={() => onInspect?.(m.address, 'eth')}
-                      title={`${m.address} — inspect in Address Risk`}
-                      className="text-zinc-500 hover:text-white underline decoration-zinc-700 ml-2"
-                    >
-                      {shortHash(m.address)}
-                    </button>
-                    {m.stale && (
-                      <span className="ml-1.5 text-[10px] text-amber-400/80 font-sans">stale</span>
-                    )}
-                  </td>
-                  <td className="py-1.5 text-right text-white">
-                    {m.price_usd != null && m.price_usd > 0
-                      ? `$${m.price_usd >= 100 ? m.price_usd.toLocaleString(undefined, { maximumFractionDigits: 2 }) : m.price_usd.toFixed(4)}`
-                      : '—'}
-                  </td>
-                  <td className="py-1.5 text-right text-zinc-300">
-                    {m.market_cap_usd > 0 ? `$${fmtNum(m.market_cap_usd)}` : '—'}
-                  </td>
-                  <td className="py-1.5 text-right text-zinc-400">
-                    {m.volume_24h_usd > 0 ? `$${fmtNum(m.volume_24h_usd)}` : '—'}
-                  </td>
-                  <td className="py-1.5 text-right text-zinc-400">
-                    {m.holders_count > 0 ? fmtNum(m.holders_count) : '—'}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+    <div className="space-y-4">
+      {warnings.length > 0 && (
+        <div
+          role="status"
+          className="rounded-xl border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-300"
+        >
+          Live data warning: {warnings.join(' · ')}
         </div>
-      </Panel>
+      )}
+      <div className="grid lg:grid-cols-2 gap-4">
+        <Panel
+          title="Live Cross-Chain Stablecoin Supply (USDT, USDC, EURC)"
+          note={`totalSupply() via keyless RPCs · ${formatSupplySummary('USDT', '$', totals.USDT, fmtNum)} · ${formatSupplySummary('USDC', '$', totals.USDC, fmtNum)} · ${formatSupplySummary('EURC', '€', totals.EURC, fmtNum)} · ${live.as_of ? ago(live.as_of) : 'live'}`}
+        >
+          <ReactECharts
+            style={{ height: 260 }}
+            option={{
+              tooltip: {
+                trigger: 'axis',
+                ...CHART_TOOLTIP,
+                formatter: (params: { axisValueLabel: string; marker: string; seriesName: string; value: number | null }[]) =>
+                  [params[0]?.axisValueLabel ?? '', ...params
+                    .filter(p => p.value != null && p.value > 0)
+                    .map(p => `${p.marker}${p.seriesName}: ${unit(p.seriesName)}${fmtNum(p.value as number)}`)].join('<br/>'),
+              },
+              legend: { textStyle: { color: '#a1a1aa', fontSize: 11 }, top: 0 },
+              grid: { left: 64, right: 20, top: 32, bottom: 28 },
+              xAxis: { type: 'category', data: netLabels, axisLabel: AXIS_LABEL },
+              yAxis: {
+                type: 'value',
+                axisLabel: { ...AXIS_LABEL, formatter: (v: number) => fmtNum(v) },
+                splitLine: SPLIT_LINE,
+              },
+              series: [
+                {
+                  name: 'USDT (native)',
+                  type: 'bar',
+                  stack: 'USDT',
+                  data: NETWORK_ORDER.map(n => barSupply('USDT', n, 'native')),
+                  itemStyle: { color: '#22c55e' },
+                },
+                {
+                  name: 'USDT (bridged)',
+                  type: 'bar',
+                  stack: 'USDT',
+                  data: NETWORK_ORDER.map(n => barSupply('USDT', n, 'bridged')),
+                  itemStyle: { color: '#86efac' },
+                },
+                {
+                  name: 'USDC (native)',
+                  type: 'bar',
+                  stack: 'USDC',
+                  data: NETWORK_ORDER.map(n => barSupply('USDC', n, 'native')),
+                  itemStyle: { color: '#3b82f6' },
+                },
+                {
+                  name: 'USDC (bridged)',
+                  type: 'bar',
+                  stack: 'USDC',
+                  data: NETWORK_ORDER.map(n => barSupply('USDC', n, 'bridged')),
+                  itemStyle: { color: '#93c5fd' },
+                },
+                {
+                  name: 'EURC (native)',
+                  type: 'bar',
+                  stack: 'EURC',
+                  data: NETWORK_ORDER.map(n => barSupply('EURC', n, 'native')),
+                  itemStyle: { color: '#a855f7' },
+                },
+              ],
+            }}
+          />
+        </Panel>
+
+        <Panel
+          title="Live Token Market Pulse (Ethereum)"
+          note="DefiLlama spot USD price + Blockscout v2 holders, 24h volume &amp; circulating market cap"
+        >
+          <div className="overflow-y-auto max-h-[260px]">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-zinc-500 text-left">
+                  <th className="pb-2 font-medium">Token</th>
+                  <th className="pb-2 font-medium text-right">Spot Price</th>
+                  <th className="pb-2 font-medium text-right">Market Cap</th>
+                  <th className="pb-2 font-medium text-right">24h Vol (API)</th>
+                  <th className="pb-2 font-medium text-right">Holders</th>
+                </tr>
+              </thead>
+              <tbody className="font-mono">
+                {marketPulse.map(m => (
+                  <tr key={m.address} className="border-t border-zinc-800/40 text-zinc-300">
+                    <td className="py-1.5">
+                      <span className="text-white font-semibold">{m.symbol}</span>
+                      <button
+                        type="button"
+                        onClick={() => onInspect?.(m.address, 'eth')}
+                        title={`${m.address} — inspect in Address Risk`}
+                        className="text-zinc-500 hover:text-white underline decoration-zinc-700 ml-2"
+                      >
+                        {shortHash(m.address)}
+                      </button>
+                      {m.stale && (
+                        <span className="ml-1.5 text-[10px] text-amber-400/80 font-sans">stale</span>
+                      )}
+                    </td>
+                    <td className="py-1.5 text-right text-white">
+                      {m.price_usd != null && m.price_usd > 0
+                        ? `$${m.price_usd >= 100 ? m.price_usd.toLocaleString(undefined, { maximumFractionDigits: 2 }) : m.price_usd.toFixed(4)}`
+                        : '—'}
+                    </td>
+                    <td className="py-1.5 text-right text-zinc-300">
+                      {m.market_cap_usd > 0 ? `$${fmtNum(m.market_cap_usd)}` : '—'}
+                    </td>
+                    <td className="py-1.5 text-right text-zinc-400">
+                      {m.volume_24h_usd > 0 ? `$${fmtNum(m.volume_24h_usd)}` : '—'}
+                    </td>
+                    <td className="py-1.5 text-right text-zinc-400">
+                      {m.holders_count > 0 ? fmtNum(m.holders_count) : '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Panel>
+      </div>
     </div>
   );
 }
