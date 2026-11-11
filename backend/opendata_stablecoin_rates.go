@@ -154,8 +154,8 @@ func parseTreasuryBillCSV(body []byte) ([]stableRateObs, error) {
 		if err != nil {
 			return nil, fmt.Errorf("bad date %q", rec[dateCol])
 		}
-		v, err := strconv.ParseFloat(strings.TrimSpace(rec[valCol]), 64)
-		if err != nil {
+		v, ok := parseFiniteFloat(rec[valCol])
+		if !ok {
 			continue // N/A or empty: no published value that day
 		}
 		out = append(out, stableRateObs{Day: d.Format(time.DateOnly), Value: v})

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/url"
 	"sort"
 	"strconv"
@@ -243,7 +244,7 @@ func (s *btcPriceSyncer) fetchBlockchainBootstrap(ctx context.Context) []btcPric
 	}
 	var out []btcPriceDay
 	for _, pt := range payload.Values {
-		if pt.Y <= 0 {
+		if math.IsNaN(pt.Y) || math.IsInf(pt.Y, 0) || pt.Y <= 0 {
 			continue
 		}
 		day := time.Unix(pt.X, 0).UTC().Format("2006-01-02")
@@ -283,8 +284,8 @@ func (s *btcPriceSyncer) fetchCoinMetricsBootstrap(ctx context.Context) []btcPri
 			if day < btcPriceCoverageStart {
 				continue
 			}
-			v, err := strconv.ParseFloat(r.PriceUSD, 64)
-			if err != nil || v <= 0 {
+			v, ok := parseFiniteFloat(r.PriceUSD)
+			if !ok || v <= 0 {
 				continue
 			}
 			out = append(out, btcPriceDay{
@@ -417,12 +418,15 @@ func (s *btcPriceSyncer) fetchKrakenOHLC(ctx context.Context, from, to civil.Dat
 func parseAnyFloat(v any) *float64 {
 	switch x := v.(type) {
 	case string:
-		f, err := strconv.ParseFloat(x, 64)
-		if err != nil {
+		f, ok := parseFiniteFloat(x)
+		if !ok {
 			return nil
 		}
 		return &f
 	case float64:
+		if math.IsNaN(x) || math.IsInf(x, 0) {
+			return nil
+		}
 		return &x
 	default:
 		return nil

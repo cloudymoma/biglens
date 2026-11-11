@@ -71,12 +71,8 @@ type cmRawAssetResponse struct {
 }
 
 func parseCMFloat(s string) *float64 {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return nil
-	}
-	v, err := strconv.ParseFloat(s, 64)
-	if err != nil {
+	v, ok := parseFiniteFloat(s)
+	if !ok {
 		return nil
 	}
 	return &v
@@ -90,7 +86,7 @@ func parseCMInt(s string) *int64 {
 	if v, err := strconv.ParseInt(s, 10, 64); err == nil {
 		return &v
 	}
-	if f, err := strconv.ParseFloat(s, 64); err == nil {
+	if f, ok := parseFiniteFloat(s); ok && f >= -9e18 && f <= 9e18 {
 		iv := int64(f)
 		return &iv
 	}

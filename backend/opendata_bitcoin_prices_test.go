@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -493,5 +494,72 @@ func TestBtcPriceCoinMetricsBootstrapPage2Retry(t *testing.T) {
 	cov := syncer.priceCoverage()
 	if !cov.Complete {
 		t.Fatalf("expected complete bootstrap coverage after page 2 retry, got missing=%d ranges=%+v", cov.MissingDays, cov.MissingRanges)
+	}
+}
+
+func TestFloatParsersRejectNonFinite(t *testing.T) {
+	nonFinite := []string{"NaN", "Inf", "-Inf", "infinity", "+Inf", "NaN "}
+	for _, s := range nonFinite {
+		if v, ok := parseBtcFloat(s); ok {
+			t.Errorf("parseBtcFloat(%q) = %v, true; want rejected", s, v)
+		}
+		if p := parseCMFloat(s); p != nil {
+			t.Errorf("parseCMFloat(%q) = %v, want nil", s, *p)
+		}
+		if p := parseCMInt(s); p != nil {
+			t.Errorf("parseCMInt(%q) = %v, want nil", s, *p)
+		}
+		if p := parseAnyFloat(s); p != nil {
+			t.Errorf("parseAnyFloat(%q) = %v, want nil", s, *p)
+		}
+		if n := parseMempoolFlexInt64(s); n != 0 {
+			t.Errorf("parseMempoolFlexInt64(%q) = %d, want 0", s, n)
+		}
+		if p := stableParseDecimal(s); p != nil {
+			t.Errorf("stableParseDecimal(%q) = %v, want nil", s, *p)
+		}
+	}
+
+	for _, f := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		if p := parseAnyFloat(f); p != nil {
+			t.Errorf("parseAnyFloat(%v) = %v, want nil", f, *p)
+		}
+		if n := parseMempoolFlexInt64(f); n != 0 {
+			t.Errorf("parseMempoolFlexInt64(%v) = %d, want 0", f, n)
+		}
+	}
+
+	// CoinMetrics bootstrap price parser in opendata_bitcoin_prices.go must skip non-finite PriceUSD rows.
+	cmSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]string{
+				{"time": "2010-08-18T00:00:00Z", "PriceUSD": "Inf"},
+				{"time": "2010-08-19T00:00:00Z", "PriceUSD": "-Inf"},
+				{"time": "2010-08-20T00:00:00Z", "PriceUSD": "NaN"},
+				{"time": "2010-08-21T00:00:00Z", "PriceUSD": "infinity"},
+				{"time": "2010-08-22T00:00:00Z", "PriceUSD": "0.07"},
+			},
+		})
+	}))
+	defer cmSrv.Close()
+
+	store := openTestRiskStore(t)
+	syncer := newBtcPriceSyncer(store, BitcoinConfig{}.settings(), time.Now)
+	syncer.coinmetricsURL = cmSrv.URL
+	got := syncer.fetchCoinMetricsBootstrap(context.Background())
+	if len(got) != 1 || got[0].Day != "2010-08-22" || math.Abs(got[0].Close-0.07) > 1e-9 {
+		t.Fatalf("fetchCoinMetricsBootstrap = %+v, want only valid day 2010-08-22 (non-finite rejected)", got)
+	}
+
+	// Coinbase spot fetcher (ETH-USD in opendata_crypto_handlers.go) must reject non-finite amounts.
+	for _, s := range nonFinite {
+		spotSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]string{"amount": s}})
+		}))
+		spot, err := fetchSpotURL(context.Background(), spotSrv.URL)
+		spotSrv.Close()
+		if err == nil || spot != nil {
+			t.Errorf("fetchSpotURL(%q) = (%+v, %v), want error and nil", s, spot, err)
+		}
 	}
 }

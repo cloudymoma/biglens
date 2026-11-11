@@ -13,6 +13,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"math/big"
 	"net/http"
 	"strings"
@@ -86,6 +87,9 @@ func hexToFloat(h string) (float64, error) {
 		return 0, fmt.Errorf("bad hex quantity %q", h)
 	}
 	f, _ := new(big.Float).SetInt(n).Float64()
+	if math.IsNaN(f) || math.IsInf(f, 0) {
+		return 0, fmt.Errorf("non-finite hex quantity %q", h)
+	}
 	return f, nil
 }
 

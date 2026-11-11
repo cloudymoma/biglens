@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"regexp"
 	"slices"
@@ -1339,6 +1340,17 @@ func fetchSpot(ctx context.Context, base string) (*CryptoSpotData, error) {
 	return fetchSpotURL(ctx, fmt.Sprintf(spotURLFormat, base))
 }
 
+// parseFiniteFloat parses a decimal float string and rejects NaN or ±Inf.
+func parseFiniteFloat(s string) (float64, bool) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, false
+	}
+	v, err := strconv.ParseFloat(s, 64)
+	return v, err == nil && !math.IsNaN(v) && !math.IsInf(v, 0)
+}
+
+// fetchSpotURL decodes one Coinbase spot price payload, rejecting non-finite or non-positive amounts.
 func fetchSpotURL(ctx context.Context, url string) (*CryptoSpotData, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -1360,8 +1372,8 @@ func fetchSpotURL(ctx context.Context, url string) (*CryptoSpotData, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		return nil, fmt.Errorf("spot decode: %w", err)
 	}
-	price, err := strconv.ParseFloat(body.Data.Amount, 64)
-	if err != nil || price <= 0 {
+	price, ok := parseFiniteFloat(body.Data.Amount)
+	if !ok || price <= 0 {
 		return nil, fmt.Errorf("spot decode: bad amount %q", body.Data.Amount)
 	}
 	return &CryptoSpotData{

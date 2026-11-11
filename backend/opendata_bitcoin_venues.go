@@ -137,15 +137,7 @@ func btcFloatPtr(v float64) *float64 {
 }
 
 func parseBtcFloat(s string) (float64, bool) {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return 0, false
-	}
-	v, err := strconv.ParseFloat(s, 64)
-	if err != nil || math.IsNaN(v) || math.IsInf(v, 0) {
-		return 0, false
-	}
-	return v, true
+	return parseFiniteFloat(s)
 }
 
 // -----------------------------------------------------------------------------
@@ -639,7 +631,7 @@ func parseCoinbaseFundingIntervalHours(raw string) float64 {
 	if d, err := time.ParseDuration(raw); err == nil && d > 0 {
 		return d.Hours()
 	}
-	if secs, err := strconv.ParseFloat(strings.TrimSuffix(raw, "s"), 64); err == nil && secs > 0 {
+	if secs, ok := parseFiniteFloat(strings.TrimSuffix(raw, "s")); ok && secs > 0 {
 		return secs / 3600.0
 	}
 	return 1.0

@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"net/http"
 	"sort"
-	"strconv"
 	"time"
 )
 
@@ -492,11 +491,8 @@ func (s *stablecoinService) buildReserves(ctx context.Context, asset string, ass
 }
 
 func stableParseDecimal(s string) *float64 {
-	if s == "" {
-		return nil
-	}
-	v, err := strconv.ParseFloat(s, 64)
-	if err != nil {
+	v, ok := parseFiniteFloat(s)
+	if !ok {
 		return nil
 	}
 	return &v

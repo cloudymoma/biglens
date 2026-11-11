@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -614,8 +613,8 @@ func stableS6Raw(f stableAssetFacts, now time.Time) (stableRaw, bool) {
 	r.Inputs["threshold_method"], r.Inputs["history_count"], r.Inputs["lag_p90_days"] = th.Method, th.History, th.LagP90Days
 	r.Summary = fmt.Sprintf("Latest attestation recorded by BigLens: period ending %s (%d days ago, %s, %s)", latest.PeriodEnd, age, latest.Firm, latest.Type)
 	shortfall := false
-	if res, err1 := strconv.ParseFloat(latest.ReservesNative, 64); err1 == nil {
-		if liab, err2 := strconv.ParseFloat(latest.LiabilitiesNative, 64); err2 == nil {
+	if res, ok1 := parseFiniteFloat(latest.ReservesNative); ok1 {
+		if liab, ok2 := parseFiniteFloat(latest.LiabilitiesNative); ok2 {
 			r.Inputs["reserves_native"], r.Inputs["liabilities_native"] = latest.ReservesNative, latest.LiabilitiesNative
 			shortfall = res < liab
 		}

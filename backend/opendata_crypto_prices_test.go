@@ -740,6 +740,15 @@ func TestCryptoPricesHandlerJSON(t *testing.T) {
 	if last := body.Rows[6]; last["eth_usd"] != nil || last["btc_usd"] != nil {
 		t.Errorf("a day without prices must serialize null, got %v", last)
 	}
+
+	// CryptoPrices ignores unknown query params such as ?eth_usd=Inf and still emits finite JSON.
+	wInf := getPrices(t, s, "days=7&eth_usd=Inf")
+	if wInf.Code != http.StatusOK {
+		t.Fatalf("days=7&eth_usd=Inf status %d: %s", wInf.Code, wInf.Body.String())
+	}
+	if !json.Valid(wInf.Body.Bytes()) {
+		t.Fatalf("invalid JSON response for ?eth_usd=Inf: %s", wInf.Body.String())
+	}
 }
 
 // --- BigQuery source ---

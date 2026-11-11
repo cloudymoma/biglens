@@ -383,10 +383,10 @@ func fetchBlockscoutAddress(ctx context.Context, baseURL, addr string) (blocksco
 		if n, err := strconv.ParseInt(strings.TrimSpace(parsed.Token.HoldersCount), 10, 64); err == nil && n > 0 {
 			info.HoldersCount = n
 		}
-		if f, err := strconv.ParseFloat(strings.TrimSpace(parsed.Token.Volume24h), 64); err == nil && f > 0 {
+		if f, ok := parseFiniteFloat(parsed.Token.Volume24h); ok && f > 0 {
 			info.Volume24hUSD = f
 		}
-		if f, err := strconv.ParseFloat(strings.TrimSpace(parsed.Token.CirculatingMarketCap), 64); err == nil && f > 0 {
+		if f, ok := parseFiniteFloat(parsed.Token.CirculatingMarketCap); ok && f > 0 {
 			info.MarketCapUSD = f
 		}
 	}

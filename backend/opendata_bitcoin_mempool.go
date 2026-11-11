@@ -101,12 +101,12 @@ func fetchCoinbaseBTCStats(ctx context.Context) (*btcSpotStats, string) {
 	if code := btcGetJSON(ctx, btcCoinbaseStatsURL, btcDefaultMaxBody, &raw); code != "" {
 		return nil, code
 	}
-	last, err := strconv.ParseFloat(raw.Last, 64)
-	if err != nil || last <= 0 {
+	last, ok := parseFiniteFloat(raw.Last)
+	if !ok || last <= 0 {
 		return nil, "bad_response"
 	}
 	out := &btcSpotStats{PriceUSD: last}
-	if open, err := strconv.ParseFloat(raw.Open, 64); err == nil && open > 0 {
+	if open, ok := parseFiniteFloat(raw.Open); ok && open > 0 {
 		chg := (last/open - 1.0) * 100.0
 		out.Change24hPct = &chg
 	}
@@ -120,7 +120,7 @@ func fetchMempoolBTCPrice(ctx context.Context) (*float64, string) {
 	if code := btcGetJSON(ctx, btcMempoolEndpoint("/api/v1/prices"), btcDefaultMaxBody, &raw); code != "" {
 		return nil, code
 	}
-	if raw.USD <= 0 {
+	if math.IsNaN(raw.USD) || math.IsInf(raw.USD, 0) || raw.USD <= 0 {
 		return nil, "bad_response"
 	}
 	v := raw.USD
@@ -451,11 +451,13 @@ func parseMempoolFlexInt64(v any) int64 {
 		if n, err := strconv.ParseInt(x, 10, 64); err == nil {
 			return n
 		}
-		if f, err := strconv.ParseFloat(x, 64); err == nil {
+		if f, ok := parseFiniteFloat(x); ok && f >= -9e18 && f <= 9e18 {
 			return int64(math.Round(f))
 		}
 	case float64:
-		return int64(math.Round(x))
+		if !math.IsNaN(x) && !math.IsInf(x, 0) && x >= -9e18 && x <= 9e18 {
+			return int64(math.Round(x))
+		}
 	}
 	return 0
 }

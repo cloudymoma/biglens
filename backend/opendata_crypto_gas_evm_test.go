@@ -61,9 +61,9 @@ func TestHexToFloat(t *testing.T) {
 	if v, err := hexToFloat("0xf4b63"); err != nil || v != 1002339 {
 		t.Errorf("hexToFloat(0xf4b63) = %v, %v; want 1002339", v, err)
 	}
-	for _, bad := range []string{"", "0x", "f4b63", "0xzz"} {
-		if _, err := hexToFloat(bad); err == nil {
-			t.Errorf("hexToFloat(%q): expected an error", bad)
+	for _, bad := range []string{"", "0x", "f4b63", "0xzz", "0x" + strings.Repeat("f", 300)} {
+		if v, err := hexToFloat(bad); err == nil {
+			t.Errorf("hexToFloat(%q) = %v, nil: expected an error", bad, v)
 		}
 	}
 }
