@@ -30,9 +30,10 @@ export const fmtCompactSupply = (n: number): string =>
   : n >= 1e3 ? (n / 1e3).toFixed(1) + 'K'
   : String(Math.round(n * 100) / 100);
 
-// summarizeLiveSupply sums non-errored supply rows per asset. Rows carrying an
-// error are excluded and mark that asset's total as partial so a failed chain
-// RPC is never silently counted as zero.
+// summarizeLiveSupply sums non-errored finite supply rows per asset. Rows
+// carrying an error or non-finite supply are excluded and mark that asset's
+// total as partial so failed or malformed chain RPC data is never silently
+// treated as zero or complete.
 export function summarizeLiveSupply(rows: readonly TokenSupplyRow[]): LiveSupplyTotals {
   const out: LiveSupplyTotals = {
     USDT: emptySummary(),
@@ -43,7 +44,7 @@ export function summarizeLiveSupply(rows: readonly TokenSupplyRow[]): LiveSupply
   for (const r of rows) {
     if (!(ASSETS as readonly string[]).includes(r.asset)) continue;
     const entry = out[r.asset as LiveStableAsset];
-    if (r.error) {
+    if (r.error || !Number.isFinite(r.supply)) {
       entry.partial = true;
       entry.failedRows++;
       const netLabel = r.network_label || r.network;
@@ -52,7 +53,6 @@ export function summarizeLiveSupply(rows: readonly TokenSupplyRow[]): LiveSupply
       }
       continue;
     }
-    if (!Number.isFinite(r.supply)) continue;
     entry.total = (entry.total ?? 0) + r.supply;
     entry.knownRows++;
   }
