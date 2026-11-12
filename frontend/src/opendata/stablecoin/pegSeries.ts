@@ -20,15 +20,38 @@ export function normalizePegTimestamp(ts: string, daily: boolean): string {
   return ts.slice(0, 10);
 }
 
-/** Normalizes timestamps and collapses multiple daily readings to the latest point per UTC day. */
+function compareTimestamps(aTs: string, bTs: string): number {
+  const tA = Date.parse(aTs);
+  const tB = Date.parse(bTs);
+  if (!Number.isNaN(tA) && !Number.isNaN(tB)) return tA - tB;
+  if (aTs === bTs) return 0;
+  return aTs < bTs ? -1 : 1;
+}
+
+/** Normalizes timestamps to ascending chronological order, keeping the latest reading per UTC day on daily series. */
 export function normalizeSeriesTimestamps<T extends { ts: string }>(points: T[], daily: boolean): T[] {
-  if (!daily) return points;
-  const byDay = new Map<string, T>();
-  for (const p of points) {
-    const day = normalizePegTimestamp(p.ts, true);
-    byDay.set(day, p.ts === day ? p : { ...p, ts: day });
+  if (!daily) {
+    return [...points].sort((a, b) => compareTimestamps(a.ts, b.ts));
   }
-  return [...byDay.values()];
+  const byDay = new Map<string, { point: T; timeMs: number; index: number }>();
+  points.forEach((p, index) => {
+    const parsed = Date.parse(p.ts);
+    const day = Number.isNaN(parsed)
+      ? normalizePegTimestamp(p.ts, true)
+      : new Date(parsed).toISOString().slice(0, 10);
+    const timeMs = Number.isNaN(parsed) ? Number.NEGATIVE_INFINITY : parsed;
+    const prev = byDay.get(day);
+    if (!prev || timeMs > prev.timeMs || (timeMs === prev.timeMs && index >= prev.index)) {
+      byDay.set(day, {
+        point: p.ts === day ? p : { ...p, ts: day },
+        timeMs,
+        index,
+      });
+    }
+  });
+  return [...byDay.entries()]
+    .sort(([dayA, a], [dayB, b]) => compareTimestamps(dayA, dayB) || a.index - b.index)
+    .map(([, entry]) => entry.point);
 }
 
 function toPegChartData<T extends { ts: string; dev_bps: number | null }>(

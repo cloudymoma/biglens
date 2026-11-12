@@ -112,3 +112,55 @@ test('M17: PegTab relOption uses buildRelativePegSeries to plot aligned timestam
   assert.match(src, /data:\s*medianData/);
   assert.match(src, /data:\s*uniswapData/);
 });
+
+test('M17: normalizeSeriesTimestamps picks latest timestamp per day and sorts ascending on unordered input', async () => {
+  const { buildRelativePegSeries, normalizeSeriesTimestamps } = await import('../src/opendata/stablecoin/pegSeries.ts');
+
+  const outOfOrder = [
+    { ts: '2026-10-22T06:00:00Z', price: 0.9995, dev_bps: -5 },
+    { ts: '2026-10-21T23:50:00Z', price: 1.0003, dev_bps: 3 },
+    { ts: '2026-10-21T12:00:00Z', price: 1.0001, dev_bps: 1 },
+  ];
+  assert.deepEqual(normalizeSeriesTimestamps(outOfOrder, true), [
+    { ts: '2026-10-21', price: 1.0003, dev_bps: 3 },
+    { ts: '2026-10-22', price: 0.9995, dev_bps: -5 },
+  ]);
+
+  const built = buildRelativePegSeries({
+    series_resolution: '1d',
+    series: [
+      { ts: '2026-10-24', consensus: 1.0002, dev_bps: 2, disp_bps: 1, venues_used: 3 },
+      { ts: '2026-10-21', consensus: 1.0001, dev_bps: 1, disp_bps: 1, venues_used: 3 },
+    ],
+    uniswap_series: [
+      { ts: '2026-10-24T09:00:00Z', price: 1.0004, dev_bps: 4 },
+      { ts: '2026-10-21T23:50:00Z', price: 1.0003, dev_bps: 3 },
+      { ts: '2026-10-21T08:00:00Z', price: 1.0001, dev_bps: 1 },
+    ],
+  });
+  assert.deepEqual(built.medianData, [
+    ['2026-10-21', 1],
+    ['2026-10-21', null],
+    ['2026-10-24', 2],
+  ]);
+  assert.deepEqual(built.uniswapData, [
+    ['2026-10-21', 3],
+    ['2026-10-21', null],
+    ['2026-10-24', 4],
+  ]);
+
+  // Intraday points arriving out of order are also sorted ascending before gap detection.
+  assert.deepEqual(
+    normalizeSeriesTimestamps(
+      [
+        { ts: '2026-10-21T05:00:00Z', price: 1.0, dev_bps: 1 },
+        { ts: '2026-10-21T04:50:00Z', price: 1.0, dev_bps: -1 },
+      ],
+      false,
+    ),
+    [
+      { ts: '2026-10-21T04:50:00Z', price: 1.0, dev_bps: -1 },
+      { ts: '2026-10-21T05:00:00Z', price: 1.0, dev_bps: 1 },
+    ],
+  );
+});
